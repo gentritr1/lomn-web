@@ -1,0 +1,9 @@
+# local-only: game data, original binaries, test fixtures, build outputs
+/fixtures/
+/build*/
+*.exe
+*.dll
+*.blk
+*.bik
+*.mov
+.DS_Store
