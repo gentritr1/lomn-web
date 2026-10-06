@@ -1,0 +1,7 @@
+cmake_minimum_required(VERSION 3.28)
+project(spike CXX)
+set(CMAKE_CXX_STANDARD 17)
+find_package(Threads REQUIRED)
+find_package(Dawn REQUIRED)
+add_executable(triangle triangle.cpp)
+target_link_libraries(triangle PRIVATE dawn::webgpu_dawn)

@@ -1,0 +1,19 @@
+# Pinned toolchain and third-party inputs (spec §4.2). tools/toolchain.sh installs exactly these into .toolchain/
+# and verifies every download's sha256. Upgrades are separate, reviewed changes.
+EMSDK_VERSION=6.0.11
+DAWN_RELEASE=v20261002.154047
+DAWN_COMMIT=b1236a9bb4a47f1262bc3acb253bb1c2181e90dd
+DAWN_MACOS_URL=https://github.com/google/dawn/releases/download/v20261002.154047/Dawn-b1236a9bb4a47f1262bc3acb253bb1c2181e90dd-macos-latest-Release.tar.gz
+DAWN_MACOS_SHA256=fa453ded7d1f19e1d01885976f222cc00b5726053a1b026c24ff9d034ae1c0e1
+EMDAWNWEBGPU_URL=https://github.com/google/dawn/releases/download/v20261002.154047/emdawnwebgpu_pkg-v20261002.154047.zip
+EMDAWNWEBGPU_SHA256=6b14532b85c7f4d51154b6eeb6bd3fcf7735ad5c7cfd698d83985dd21a1c15c2
+DOCTEST_URL=https://raw.githubusercontent.com/doctest/doctest/v2.5.3/doctest/doctest.h
+DOCTEST_SHA256=cfd518a3ef90f67e1f3ba514df23fb3627437de1a2feeba78cf5062a40021421
+STB_IMAGE_WRITE_URL=https://raw.githubusercontent.com/nothings/stb/2c980bb59875b0d32144a71867fbdebb2f77cd20/stb_image_write.h
+STB_IMAGE_WRITE_SHA256=cbd5f0ad7a9cf4468affb36354a1d2338034f2c12473cf1a8e32053cb6914a05
+SDL3_TAG=release-3.4.18
+GHIDRA_VERSION=12.1.4
+JDK_MAJOR=21
+NODE_MIN_MAJOR=23
+PLAYWRIGHT_VERSION=1.63.0
+CMAKE_MIN=3.28
