@@ -27,9 +27,13 @@ All VERIFIED in the 2026-10-06/07 probes unless marked.
 
 ## 3. Constraints and non-goals
 
-- **Copyright.** Never host, bundle, cache server-side or upload game data or the original exe. The reconstructed engine is a derivative of LEGO/Saffire code: same posture as isle-portable (non-commercial, no assets, takedown-ready). LEGO's tolerance is revocable. **User acknowledgement of this risk is required before any public deploy.**
+- **Copyright.** Never host, bundle, cache server-side or upload game data or the original exe. The reconstructed engine is a derivative of LEGO/Saffire code: same posture as isle-portable (non-commercial, no assets, takedown-ready). LEGO's tolerance is revocable. **The user intends a fully public release (site + source), stated 2026-10-07.** Each publishing step (first deploy, making the repo public) is still confirmed by the user at that moment, together with the repo license choice.
 - **Target content:** vanilla **Beta 1.5.0** first. REBUILT is out of scope until a later spec (it depends on LOMNHook mod natives such as `BetterSaver`).
-- **Canonical binary:** `LOMN-Beta/native/LEGOBionicle.exe`, SHA-256 `09b55e62f78824607e31433ddfcea827ec836523afd8de3fcc9f3f3f4ec70f0f`. The installer's exe differs by 798 bytes (community patches); M0 classifies them, and each fix becomes a source-level flag.
+- **Binaries and data are never in the repo.**
+  - Every tool reads them from `$LOMN_DATA`, a local folder the user provides.
+  - The **canonical decomp input** is the `LEGOBionicle.exe` from the LOMN-Beta GitHub repo's `native/` folder. SHA-256 `09b55e62f78824607e31433ddfcea827ec836523afd8de3fcc9f3f3f4ec70f0f`, stored at `$LOMN_DATA/reference/LEGOBionicle.exe`.
+  - The **player's install** (Beta 1.5.0 installer) has an exe that differs by 798 bytes (community patches). Its SHA-256 is pinned in M0a, and classifying the patches happens later (§9).
+- **Accepted builds:** the BYO validator accepts a fixed set of SHA-256s (canonical + installer 1.5.0). REBUILT and unknown builds are rejected with a message naming the build.
 - **Platforms:** desktop browsers with WebGPU first. Mobile/touch is a non-goal until a later milestone (the game is keyboard/gamepad-centric).
 - **Non-goals for M0–M1:** gameplay, OSI script VM, audio, Bink/AVI video, saves, mod support, public launch.
 - **Process:** I never run the original exe myself; any run of the original game is user-launched (reference captures, trace mods).
@@ -54,28 +58,49 @@ All VERIFIED in the 2026-10-06/07 probes unless marked.
 ### 4.1 Reconstructed code
 - C++17, **functional (not byte-matching) reconstruction**, laid out by the original source paths (e.g. `src/Character/Bosses/GfMudBoss.cpp`). Matching isn't needed because the symbols are already our oracle for names; behaviour parity is proven by traces (§7).
 - `include/original/*.h` is **generated** from NB11 (class layouts, enums, method declarations) before anyone writes code, so every implementer codes against the original names.
-- **Keep the original semantics until parity passes:** the `CPoolHall` pool allocator (scripts may depend on reuse), 32-bit pointers (**wasm32 only**; OSI stores handles as 32-bit ints), x87 behaviour handled per §4.5. Refactors wait until a trace passes.
+- **Keep the original semantics until parity passes:** the `CPoolHall` pool allocator (scripts may depend on reuse), and x87 behaviour handled per §4.5. Refactors wait until a trace passes.
+- **Layout rule (resolves wasm32 vs 64-bit native):** the shipped target is **wasm32**, where the NB11 layouts hold. Generated `static_assert(sizeof(T) == <NB11 size>)` checks are compiled for the wasm32 target only. To make the same code also correct on the 64-bit native test build:
+  - File bytes are always **parsed field by field**, never `memcpy`'d into structs that contain pointers.
+  - Anything stored as a 32-bit integer by scripts or saves (OSI object handles) goes through a **32-bit handle table**, never a cast pointer.
+  - Consequently every L0–L2 suite runs **twice**: natively, and as wasm32 under Node with the null backend (§7). A test that passes on only one of them is a failure.
 
 ### 4.2 Platform layer
 - **SDL3** for window, keyboard/mouse/gamepad, audio (later) — native and Emscripten.
-- **`rhi.h`**: a small render interface with two backends: **WebGPU** (webgpu.h C API; browser via Emscripten `--use-port=emdawnwebgpu`, native via **Dawn**, both pinned to **one Dawn revision**; never Emscripten's legacy `-sUSE_WEBGPU`) and **null** (records calls; lets loaders and the shim run in tests without a GPU).
+- **`rhi.h`**: a small render interface with two backends:
+  - **WebGPU**, via the webgpu.h C API. The browser build uses Emscripten's `--use-port=emdawnwebgpu`, a remote port that needs **Emscripten ≥ 4.0.10** (Fable checked the port source). The native build uses **Dawn**. Both are pinned to **one Dawn release**; never Emscripten's legacy `-sUSE_WEBGPU`.
+  - **null**, which records calls so loaders and the shim run in tests without a GPU.
+- **Pins:** exact versions of emsdk, the Dawn release, SDL3, clang, CMake, Node and Playwright are recorded in `deps.lock` in M0b. CMake and the CI check refuse to build with anything else.
+- **Device hand-off (no Asyncify):** WebGPU device creation is async, but the game's `Direct3DCreate8`/`CreateDevice` are synchronous.
+  - JS requests the adapter and device **before `main()`** (Module `preRun`) and hands the device to the shim, which only wraps it.
+  - Native does the same synchronously via Dawn.
+  - M0b spikes this hand-off first, because importing a JS device through emdawnwebgpu is INFERRED, not yet proven.
 - **D3D8-subset shim** on top of `rhi.h`: implements only the `IDirect3D8`/`IDirect3DDevice8`/texture/buffer methods the game calls. M0 enumerates them from the vtable call sites. `CheckDeviceFormat`/`GetDeviceCaps` answer deterministically; per Fable the game probes `D3DFMT_D15S1/D24S8/D24X8` (UNVERIFIED by me), so depth = `depth24plus-stencil8`.
 - **Fixed-function → WGSL generator** (custom; nothing exists for D3D8→WebGPU, and DXVK-style projects target Vulkan, so we borrow semantics only):
   - Pipeline cache key = blend, depth/stencil, cull, vertex layout, texture-stage combiner enums only.
   - Alpha test, fog, lighting and light count are **uniform-driven branches**, which keeps the pipeline count to dozens, not thousands.
   - Pipelines are pre-warmed from a recorded state log.
-- **Uniforms/vertices:** one per-frame ring buffer with 256-byte-aligned dynamic offsets; bind groups cached per texture. Consecutive draws merge when `ScDxStates` reports no state change, since that cache is the natural batching boundary. `DrawPrimitiveUP` (HUD) streams into a ring vertex buffer.
+- **Uniforms/vertices:** one per-frame ring buffer with 256-byte-aligned dynamic offsets; bind groups cached per texture. `DrawPrimitiveUP` (HUD) streams into a ring vertex buffer.
+- **Draw merging** happens only when all three hold: identical render state (per `ScDxStates`), the same vertex/index buffer, and contiguous index ranges with the same transform. Anything else is a separate draw; the per-frame draw count is reported.
 - **Textures:** upload BC1–3 directly when the device has `texture-compression-bc`; otherwise CPU-decode DXT → RGBA8 (textures are small). Never encode ASTC.
 - **D3DX:** reimplement the 7 closed-source helpers. `MatrixLookAt`/`PerspectiveFov` must be bit-faithful, validated against recorded outputs. `.x` parsing (text + binary) replaces `d3dxof`/`D3DXLoadSkinMeshFromXof`. Images use `stb_image` (DDS via own small loader).
 - **Later milestones:** libavcodec for Bink and AVI, `Gc3DSound` mapped to WebAudio (EAX reverb approximated), printing → PNG download.
 
 ### 4.3 Files: BYO loader and VFS
-- Player picks the game folder (`<input webkitdirectory>`, drag-drop, or File System Access API).
-- **Validation is cheap:** SHA-256 of the exe and the `.blk` headers only, not 1.1 GB. Unknown builds are rejected with a clear message.
-- Files are copied once into **OPFS** in a worker, with a progress bar. A manifest marks completion, so revisits skip the copy.
+- **Chromium (File System Access API):**
+  - The player picks the folder with `showDirectoryPicker`.
+  - The handle is stored in IndexedDB, and permission is re-requested on revisit.
+  - **There is no copy**: files are read straight from the player's folder.
+- **Safari/Firefox fallback:**
+  - Files arrive via `<input webkitdirectory>` or drag-drop and are copied once into **OPFS** in a worker.
+  - The worker writes in chunks via `createSyncAccessHandle`, never whole-file `arrayBuffer()`, and shows a progress bar.
+  - A manifest marks completion, so revisits skip the copy.
+- **Quota first:** before any copy, call `navigator.storage.estimate()` and `persist()`. If free quota is below the data size (from the M0a census), stop with a visible message; never fail halfway.
+- **Validation is cheap:** SHA-256 of the exe plus the `.blk` headers only, not 1.1 GB, checked against the accepted set (§3).
 - **Sync I/O solution:** the engine keeps its synchronous file API over an **in-memory VFS**. Before boot, the bridge prefetches the boot set (`Main.blk`, `Base.osi`, language). Before each area switch, it prefetches that area's files asynchronously behind the game's own loading transition.
   - **Rejected:** Asyncify (≈2× code size, slow) and engine-in-worker (OffscreenCanvas WebGPU support uneven).
   - The per-area prefetch manifest is **generated** by logging VFS accesses in the native build.
+  - Prefetch streams in 8–64 MB chunks directly into the wasm heap, avoiding a 2× peak from JS buffer → `HEAPU8.set`.
+  - On an area switch, the previous area's buffers are released, except files shared with the next area.
 - Mounts: `Root/` → game data (read-only), `User/` → saves/settings in OPFS (export/import later).
 - **No pthreads through M3:** no COOP/COEP headers needed, Safari-safe; audio uses an AudioWorklet.
 
@@ -94,7 +119,9 @@ All VERIFIED in the 2026-10-06/07 probes unless marked.
 - Static files on Vercel. `index.html` uses `Cache-Control: max-age=0, must-revalidate` plus a Vercel CDN cache.
 - wasm/js/css get content-hashed names (a stamp step after Emscripten), served `public, max-age=31536000, immutable`, Brotli.
 - Verified after deploy with `curl -sI` per asset class (`x-vercel-cache`).
-- Build: `-O2` + `wasm-opt`, single module, initial memory 128–256 MB with growth.
+- Build: `-O2` + `wasm-opt`, single module.
+- Memory: initial size = boot set + largest area + engine overhead, all measured by the M0a census, not guessed. `MAXIMUM_MEMORY=2GB`. Growth without pthreads copies the heap, so it should be rare.
+- Licensing: `THIRD_PARTY.md` lists each dependency's license (SDL3 zlib, Dawn BSD-3, stb MIT/PD, zlib, Playwright Apache-2.0, later libavcodec LGPL, which carries a relinking obligation for a static wasm). The repo's own license is an **open question for the user** before it's published (isle-portable uses LGPL-3.0).
 - **Deploy is outward-facing → requires explicit user OK at that time.**
 
 ## 5. Custom tooling (decided)
@@ -127,70 +154,105 @@ All VERIFIED in the 2026-10-06/07 probes unless marked.
 
 ## 7. Testing (replaces manual emulator runs + screen recordings)
 
-Five layers. Each later layer needs the previous ones green.
+Five layers. L0–L3 gate every milestone; **L4 is not a gate for M0/M1** (it needs a fake-delta hook inside the original game, which comes with the LOMNHook trace mod in M3).
 
 | Layer | What | Runs where | Who runs it |
 |---|---|---|---|
-| L0 unit | Loaders, parsers, D3DX math, shader generator | native, `ctest` | Claude, every change (related tests) |
-| L1 contract | One `.x` from the VFS → shim → null backend (call log) and Dawn offscreen → PNG | native headless | Claude |
-| L2 deterministic replay | Engine in fake-delta mode with an input log: `--frames N --shot k… --trace` → PNGs + `metrics.json` + `trace.jsonl` | native headless | Claude |
-| L3 browser | Playwright with **one reused browser**: load the build, feed the fixture folder through the real BYO input, wait on `window.__lomn.state`, screenshot, read in-engine metrics, assert **zero game-data network requests** | Chromium (+ WebKit when supported) | Claude |
-| L4 parity vs original | Same input log replayed in the original game in fake-delta mode → reference frames/traces; compare state traces first, SSIM second | Original game on user's machine | **User launches** the capture; Claude compares |
+| L0 unit | Loaders, parsers, D3DX math, shader generator | native **and** wasm32-under-Node, `ctest` | Claude, every change (related tests only) |
+| L1 contract | One `.x` from the VFS → shim → null backend (call log); plus Dawn offscreen → PNG (native only) | native headless + wasm32/Node (null) | Claude |
+| L2 deterministic replay | Fake-delta mode + input log: `--frames N --shot k… --trace` → PNGs + `metrics.json` + `trace.jsonl` + null-backend call log | native headless + wasm32/Node (null) | Claude |
+| L3 browser | Playwright, `launchPersistentContext` with a fixed profile dir (so run 2+ hits the manifest/handle and skips the copy). Feeds the fixture through the real BYO input (`setInputFiles` with one directory path; Fable checked the docs), waits on `window.__lomn.state` (no fixed sleeps), screenshots, reads `window.__lomn.metrics`, checks network. WebGPU launch flags are pinned by the M0b spike; results are GPU-dependent and reported with the GPU name. | Chromium (+ WebKit when its WebGPU works) | Claude |
+| L4 parity vs original | Same input log in the original game in fake-delta mode → reference frames/traces; compare state traces first, SSIM second | Original game on the user's machine | **User launches**; Claude compares |
 
 - **Metrics rules:**
-  - Every fps/frame-time number is printed with its reconciliation (`frames counted` vs `window × expected rate`).
-  - The engine reports a script / physics / render / submit breakdown.
+  - Every fps/frame-time number is printed with its reconciliation (`frames counted` vs `window × expected rate`) and the engine's script/physics/render/submit breakdown.
   - **Thresholds are set only after the first measurement**, never invented in advance.
-- **Fixture data:** env var `LOMN_DATA` points at the user's local Beta 1.5.0 folder. It is never committed (`.gitignore` blocks `*.exe`, `*.blk`, `/fixtures/`, …).
+  - Image comparisons use an SSIM baseline measured first on the same machine (run twice, compare), because GPU readback is not guaranteed bit-identical.
+- **Fixture data:** `$LOMN_DATA` (§3), never committed.
+  - Tests that need it print `SKIPPED (no LOMN_DATA)` and return ctest skip code 77.
+  - The **fixture-free subset** is what `make check` gates on.
+  - There is no cloud CI holding game data. If the repo later goes public, GitHub Actions runs only the fixture-free subset.
+- **Negative tests:** each runner is also run against an empty fixture folder and must exit non-zero within its timeout.
 - **Per-function differential tests** (original x86 function in a sandboxed CPU emulator vs our C++) are **optional and need the user's OK**, because they execute original code. The preferred later oracle is the LOMNHook trace mod.
+
+### 7.1 Optimization loop ("make it work, then keep making it faster")
+
+1. **Correct first.** A change ships only when L0–L3 are green; speed never trades away a passing parity check.
+2. **Measure, don't guess.**
+   - Every L2/L3 run appends one line to `perf/history.jsonl`: commit, machine/GPU, scene, frames with reconciliation, p50/p95 frame time, the script/physics/render/submit breakdown, draw and pipeline counts, wasm size, first-load time, peak heap.
+   - The dashboard (0.5) charts it.
+3. **Target the biggest bar.** Each optimization names the breakdown bucket it targets and the expected change *before* it's built. It lands only if the re-measured number moves by more than run-to-run noise (noise measured by repeating the same run).
+4. **Regression guard.** `make check` compares the current run with the last accepted entry for the same machine and scene, and fails on a regression larger than measured noise.
+5. **Known levers, in order** (used only when a measurement points at them):
+   - draw merging and pipeline pre-warm
+   - texture/mesh pre-bake into OPFS
+   - `-O3` vs `-O2` + `wasm-opt` passes
+   - SIMD (`-msimd128`) for skinning/math
+   - streaming tuning
+   - threads (pthreads + COOP/COEP), only after M3 and only if the CPU bucket dominates
 
 ## 8. M0 and M1: scope and acceptance
 
-### M0 — Foundations
+Split into four plan-sized pieces: **M0a → M0b → M1a → M1b**. The first implementation plan covers **M0a + M0b only**; M1 is planned after M0's measurements (census, spikes) exist.
+
+### M0a — Decomp foundation and facts (stream 1)
 
 | # | Deliverable | Acceptance (observable) |
 |---|---|---|
-| 0.1 | `tools/decomp/`: cv.py, cvtypes2.py, Ghidra scripts, x87 post-pass, metrics; `make decomp` | From the canonical exe, one command produces the corpus (one file per original source path), `include/original/*.h`, `worklist.json`; a second run is byte-identical; printed metrics ≥ probe numbers (5,429 named, 473 structs, 1,817 members, 580 procs). |
-| 0.2 | Header generator | `include/original/*.h` compiles standalone with clang (`-fsyntax-only` on every header). |
-| 0.3 | D3D8 + import surface inventory | Table of every `IDirect3DDevice8`/`IDirect3D8` vtable slot called (address + caller count), and every import; committed as `docs/surface.md`. |
-| 0.4 | Build skeleton: CMake, pinned emsdk + one Dawn revision, SDL3; `rhi.h` with WebGPU + null backends | The same `rhi` code draws a triangle natively (headless PNG, centre pixel = expected colour) and in the browser (Playwright screenshot, same check). |
-| 0.5 | Frozen interfaces: `IFileSystem` (sync read, `Root/` + `User/` mounts), `rhi.h`, platform time/input | Header review by Claude; L0 tests use the null backend + memory VFS. |
-| 0.6 | Deterministic loop skeleton | `--frames 600 --shot 0,300,599` twice gives identical PNGs and traces; `metrics.json` frame count = 600. |
-| 0.7 | Harness: native runner + Playwright runner (one reused browser, state waits, no fixed sleeps) + trace/SSIM compare | Each runner exits non-zero on the first missing element; all CLI commands carry timeouts. |
-| 0.8 | Exe patch classification (repo exe vs installer exe, 798 bytes) | Each changed byte range mapped to a function and a named fix flag in `docs/patches.md`. |
-| 0.9 | Work queue + dashboard | `worklist.json` lists every function: address, name, original file, status (`decompiled` → `cleaned` → `ported` → `tested`); a static HTML page renders the counts. |
+| 0.1 | `tools/decomp/` (cv.py, cvtypes2.py, Ghidra scripts, x87 post-pass, metrics); `make decomp`, cached by exe SHA-256 (the full rerun is a periodic check, not every build) | From `$LOMN_DATA/reference/LEGOBionicle.exe`: corpus (one file per original source path), `include/original/*.h`, `worklist.json`, `metrics.json`. A second run gives a **normalised** corpus (timestamps/addresses-of-analysis noise stripped) that is `diff`-identical, and an identical `metrics.json`. Metrics ≥ probe: 5,429 named, 473 structs, 1,817 members, 580 procs. |
+| 0.2 | Header generator + layout asserts | `clang --target=wasm32 -std=c++17 -fsyntax-only` passes on every header; a ctest compiles generated `static_assert(sizeof(T)==N)` for every NB11 class (wasm32 only). |
+| 0.3 | Import + D3D8 surface inventory | `docs/surface.md`: every import, and every `IDirect3D8`/`IDirect3DDevice8` vtable slot called (slot, method name, caller count, caller list). Spot check: 5 random rows re-verified in Ghidra by the reviewer. |
+| 0.4 | M1 seed set | Call-graph reachability from the area loaders (`SwitchAreaWithTransition` et al.), BLK/`.x`/texture readers and the D3D8 call sites, tagged `m1-required` in `worklist.json`, with the count reported. |
+| 0.5 | Worklist rules + dashboard | `tools/worklist check` enforces: `ported` ⇒ the source file exists; `tested` ⇒ a named ctest exists and passes. A static HTML page renders the counts. The check runs in every review. |
+| 0.6 | Data census | `docs/census.md` from `$LOMN_DATA`: file counts and sizes by type, size of the boot set, size of each area's files, largest area. Feeds memory sizing (§4.6) and the quota check (§4.3). |
+| 0.7 | Installer exe hash | SHA-256 of the player-install exe recorded in the accepted-build list. |
 
-### M1 — Level viewer (first visible result)
+### M0b — Build, interfaces, harness (streams 2 + 4)
 
 | # | Deliverable | Acceptance (observable) |
 |---|---|---|
-| 1.1 | BYO loader page: folder pick / drag-drop → validation → OPFS copy with progress → manifest | On the fixture folder: unknown build rejected with a message; known build accepted; second visit skips the copy; Playwright network log shows **0 requests for game data**. |
-| 1.2 | Memory VFS + per-area prefetch; manifest generated by native access logging | Boot set + one area load from OPFS → VFS without blocking the main thread for longer than one frame (measured, reported). |
-| 1.3 | BLK reader (reconstructed), `.x` (text + binary) parser, DDS/TGA/BMP/JPG loaders, `D3DXLoadSkinMeshFromXof` + `CreateTextureFromFileInMemory[Ex]` reimpl | All `.x` files referenced by lev1 parse (count reported = count found); 0 unresolved texture references; L0 tests per format. |
-| 1.4 | Area composition: which files make up an area, taken from the reconstructed area loader (no guessing) | Every lev1 area loads its full object list; the count matches the decomp's loader logic. |
-| 1.5 | D3D8 shim + WGSL generator + pipeline cache + ring buffers + BC/RGBA texture policy | L1 contract test green; pipeline count and draw-call count per frame reported. |
-| 1.6 | Viewer UI: pick level → area, free-fly camera, wireframe/texture toggle | **User eyeball acceptance:** side-by-side screenshots of 3 lev1 areas vs the original game (user-captured, approximately matching viewpoint), approved by the user. fps reported with reconciliation on the user's Mac in Chrome; no fps threshold until measured. |
-| 1.7 | Preview deploy (optional, gated) | Only after the user explicitly OKs deploying and the copyright posture (§3); headers verified with `curl -sI`. |
+| 0.8 | Spikes, done first: (a) JS-acquired WebGPU device handed into emdawnwebgpu; (b) Playwright headless Chromium WebGPU launch flags; (c) `setInputFiles` directory + persistent profile | Each spike is a committed script whose output shows the success condition (device used for a clear-colour draw; `navigator.gpu` adapter name printed headless; file count seen by the page = file count on disk). |
+| 0.9 | Build skeleton: CMake, `deps.lock` pins, SDL3; `rhi.h` with **null backend first**, then WebGPU (Dawn native + emdawnwebgpu) | The same `rhi` code draws a triangle natively (headless PNG, centre pixel = expected colour ±2/255) and in the browser (Playwright screenshot, same check). |
+| 0.10 | Frozen interfaces: `IFileSystem` (sync read, `Root/`+`User/` mounts), `rhi.h`, platform time/input | The memory-VFS and null-backend L0 tests pass natively and under Node; Claude signs off the headers before streams 2/3 fork. |
+| 0.11 | Deterministic loop skeleton | `--frames 600 --shot 0,300,599` run twice: `trace.jsonl` and the null-backend call log are byte-identical; PNG SSIM between runs ≥ the measured same-machine baseline; `metrics.json` frames = 600. |
+| 0.12 | Harness: native runner, Playwright runner (one persistent context, state waits), trace/SSIM compare, `THIRD_PARTY.md` | Negative tests (§7) exit non-zero within timeout; every CLI call has an explicit timeout. |
+
+### M1a — Native level viewer (streams 2 + 3)
+
+| # | Deliverable | Acceptance (observable) |
+|---|---|---|
+| 1.1 | Memory VFS over `$LOMN_DATA` + native access logging → per-area prefetch manifest | Manifest lists every file each lev1 area opens; the boot set matches the census. |
+| 1.2 | Reconstructed BLK reader, `.x` (text + binary) parser, DDS/TGA/BMP/JPG, `D3DXLoadSkinMeshFromXof`, `CreateTextureFromFileInMemory[Ex]` | Per lev1 area: `referenced` (from loader resolution), `parsed` (vertex count > 0) and `failed` lists; acceptance `failed == []`; L0 tests per format. |
+| 1.3 | Area composition from the reconstructed area loader (seed set 0.4) | **Independent check:** the object/file list per area equals either a user-captured file-access log of the original game loading that area (user-run, one command) or the list from the level definition data. It is never compared against our own code. |
+| 1.4 | D3D8 shim + WGSL generator + pipeline cache + ring buffers + BC/RGBA policy | L1 contract green on both null and Dawn; per-frame pipeline count and draw count reported. |
+| 1.5 | Native viewer: pick area, free-fly camera, `--shot` | PNGs of 3 lev1 areas produced headless. |
+
+### M1b — Browser viewer (streams 3 + 4)
+
+| # | Deliverable | Acceptance (observable) |
+|---|---|---|
+| 1.6 | BYO page: Chromium handle path + Safari/Firefox OPFS fallback, quota check, validation, progress | Unknown/REBUILT build rejected with a named message; accepted build loads; revisit skips the picker/copy; quota-short case shows the message (simulated via the quota API). |
+| 1.7 | Network discipline | Every request URL is in the built-asset manifest, and total response bytes ≤ build size (Playwright). |
+| 1.8 | Browser viewer with `?hud=1` overlay showing fps + reconciliation + breakdown (also on `window.__lomn.metrics`) | **User eyeball acceptance:** side-by-side screenshots of 3 lev1 areas vs the original game (user-captured, approximately matching viewpoint), approved by the user. The fps readout is read by the user on their Mac in Chrome; thresholds are set after this measurement. |
+| 1.9 | Preview deploy (optional, gated) | Only after the user explicitly OKs deploying, the copyright posture (§3) and the repo license; headers verified with `curl -sI`. |
 
 ## 9. Roadmap after M1 (each gets its own spec)
 
 - **M2:** OSI VM (`ScOSIVirtualMachine`, 109 methods) runs `Base.osi` to the main menu: fonts, HUD, input.
-- **M3:** one playable area: character controller, collision, camera, BKD animation. Parity via L4 traces; LOMNHook trace mod.
+- **M3:** one playable area: character controller, collision, camera, BKD animation. Parity via L4 traces + LOMNHook trace mod (user-run). Classification of the 798 patched bytes into fix flags happens here, earlier only if a patch touches the loaders.
 - **M4:** audio, Bink/AVI video, saves (OPFS + export).
 - **M5:** full progression, bosses, AI.
 - **M6:** release hardening: browser matrix, performance, public URL.
 - **M7 (optional):** REBUILT content, gamepad polish, touch controls.
 
-## 10. Work split (Claude subagents, M0–M1)
+## 10. Work split (Claude subagents)
 
-Four streams, with interfaces frozen in M0 (0.5) before parallel work starts:
+1. **Decomp + headers + worklist + census** (M0a), which can start immediately.
+2. **RHI / shim / platform**: null backend (0.9) first, then WebGPU, then the shim (1.4).
+3. **VFS / BYO / loaders** (1.1–1.3, 1.6). Starts only after 0.9's **null backend implementation** and 0.10's frozen interfaces exist, not just the headers.
+4. **Harness** (0.8 spikes, 0.11, 0.12, 1.7) and integration of 1.5/1.8.
 
-1. **Decomp + headers + work queue** (0.1, 0.2, 0.3, 0.8, 0.9)
-2. **RHI / shim / platform** (0.4, 1.5)
-3. **VFS / BYO / loaders** against `rhi.h` + `IFileSystem` (1.1–1.4)
-4. **Harness / CI** (0.6, 0.7) and integration of 1.6
-
-**Integration contract test:** one `.x` from the VFS → shim → headless PNG. It must pass before streams 2 and 3 merge. Claude reviews every unit by re-running its acceptance check (not by reading the diff) and owns all merges.
+**Integration contract test:** one `.x` from the VFS → shim → headless PNG must pass before streams 2 and 3 merge. Claude reviews every unit by **re-running its acceptance check** (not by reading the diff), runs `tools/worklist check`, and owns all merges.
 
 ## 11. Risks
 
@@ -199,6 +261,8 @@ Four streams, with interfaces frozen in M0 (0.5) before parallel work starts:
 | Decompiled code for untyped classes (e.g. `GcCollisionCylinderSystem`) is slow to clean | Work queue prioritises by milestone need; layouts inferred from constructors/usage are recorded back into the headers. |
 | Float drift breaks physics parity | §4.5 rules; trace tolerances measured; deterministic mode. |
 | WebGPU feature gaps (Safari/Firefox) | Chromium first; WebKit in L3 when available; null backend keeps logic testable. |
-| OPFS quota / first-load time (~1 GB) | Measure in M1; pre-bake only if needed; clear progress UI. |
+| OPFS quota / first-load time (~1 GB) | Chromium reads the player's folder in place (no copy); fallback copy only after a quota check; census-based sizing; pre-bake only if measured load time demands it. |
 | Legal takedown | No assets, non-commercial, isle-portable posture, user-acknowledged before deploy. |
 | Reference captures need the user | Keep them few and scripted; one command per scenario. |
+| 64-bit native vs wasm32 behaviour differs | Layout rule (§4.1); every L0–L2 suite also runs as wasm32 under Node. |
+| Toolchain churn (Dawn/emdawnwebgpu/WebGPU headers) | One pinned Dawn release for both targets in `deps.lock`; upgrades are separate reviewed changes. |
