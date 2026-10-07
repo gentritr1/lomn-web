@@ -15,6 +15,11 @@ target_compile_options(lomn_core PRIVATE -Wall -Wextra)
 # PUBLIC: every target linking lomn_core inherits it.
 target_compile_options(lomn_core PUBLIC -ffp-contract=off)
 
+# M1a-1 data path (no GPU): SAGE blockfiles, lookup chain, SLB tables, binary .x meshes, DDS/TGA decoders.
+add_library(lomn_sage STATIC src/sage/blockfile.cpp)
+target_link_libraries(lomn_sage PUBLIC lomn_core)
+target_compile_options(lomn_sage PRIVATE -Wall -Wextra)
+
 if(EMSCRIPTEN)
   set(EMDAWN_PORT "--use-port=${LOMN_TOOLCHAIN_DIR}/emdawnwebgpu_pkg/emdawnwebgpu.port.py")
 else()
@@ -75,8 +80,8 @@ else()
 endif()
 
 # Unit tests: natively, and under Node when cross-compiled with emcmake (CMAKE_CROSSCOMPILING_EMULATOR=node).
-add_executable(lomn_tests tests/test_main.cpp tests/test_fs.cpp tests/test_rhi_null.cpp tests/test_loop.cpp)
-target_link_libraries(lomn_tests PRIVATE lomn_core)
+add_executable(lomn_tests tests/test_main.cpp tests/test_fs.cpp tests/test_rhi_null.cpp tests/test_loop.cpp tests/test_sage_blockfile.cpp)
+target_link_libraries(lomn_tests PRIVATE lomn_sage)
 target_include_directories(lomn_tests PRIVATE "${LOMN_TOOLCHAIN_DIR}/include")
 if(EMSCRIPTEN)
   target_link_options(lomn_tests PRIVATE -sNODERAWFS=1 -sALLOW_MEMORY_GROWTH=1)
