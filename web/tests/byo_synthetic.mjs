@@ -67,6 +67,30 @@ const gpuLiveHook = () => {
   GPUBuffer.prototype.destroy = function () { if (!this.__lomnGone) { this.__lomnGone = 1; live.buffers--; } return bd.call(this); };
 };
 
+// final I-1 (a, b, c): after the device is lost nothing that starts work works. The picker is disabled; a programmatic change event and a
+// direct showArea() are refused; the engine's own lomn_area_show refuses with a device-lost error; the page stays 'error', Reload visible.
+const afterLoss = async (p, label, st0, f0) => {
+  const r = await p.page.evaluate(async () => {
+    const L = window.__lomn, M = L.engine.M;
+    const pick = document.getElementById('area-picker');
+    const o = { pickerDisabled: pick.disabled, resetDisabled: document.getElementById('reset-camera').disabled };
+    o.engineShow = M._lomn_area_show();              // (c) the engine refuses (pre-fix: "no completed probe", which is not a loss error)
+    o.engineError = L.engine.lastError();
+    o.direct = await L.showArea('levt/stat');       // (b) the page refuses
+    pick.value = 'levt/stat';
+    pick.dispatchEvent(new Event('change'));         // (a) the picker's own handler, bypassing the disabled attribute
+    return o;
+  });
+  const flipped = await p.page.waitForFunction(() => window.__lomn.state !== 'error', null, { timeout: 3000 }).then(() => true, () => false);
+  const o = await p.page.evaluate(() => ({ state: window.__lomn.state, message: window.__lomn.message, frames: window.__lomn.metrics?.frames ?? -1, area: window.__lomn.load?.area,
+                                           reload: !document.getElementById('reload').hidden }));
+  check(r.pickerDisabled && r.resetDisabled, `final I-1 (b): ${label}: after the loss the area picker and the camera reset are disabled`, JSON.stringify(r));
+  check(r.engineShow === 0 && /device lost/i.test(r.engineError), `final I-1 (c): ${label}: lomn_area_show refuses on a lost device with a device-lost error`, `${r.engineShow}: ${r.engineError}`);
+  check(r.direct === false && !flipped && o.state === 'error' && o.reload && o.frames === f0 && o.area === 'levt/test',
+        `final I-1 (a): ${label}: a switch attempt after the loss is refused: showArea() false, state stays error, Reload visible, no frames`,
+        `direct ${r.direct}; left error ${flipped}; ${JSON.stringify(o)}; frames at loss ${f0}`);
+};
+
 // ---- fixtures ----
 fs.rmSync(work, { recursive: true, force: true });
 fs.mkdirSync(work, { recursive: true });
@@ -882,6 +906,38 @@ try {
     check(st.state === 'error' && /device lost|GPU/i.test(st.message) && reload, 'C1: GPU process crash -> state error with the reason and a Reload button',
           `${st.state}: ${st.message}; reload visible ${reload}; frames ${f0}`);
     summary.c1 = { state: st.state, message: st.message };
+    await afterLoss(p, 'C1', st, f0);
+    await p.page.close();
+  });
+  // final I-1 (b): the same loss lands while a switch is waiting for its prefetch reads (Blob.arrayBuffer held by the test): when the
+  // reads are released the switch must not flip the page to 'area-ready' on the dead device (pre-fix: it did, frozen, fps 0).
+  await section('I-1 loss during a switch', async () => {
+    const p = await open(base + '?size=1280x720&area=levt/test', `
+      window.__hold = null; const ab = Blob.prototype.arrayBuffer;
+      Blob.prototype.arrayBuffer = function () { const h = window.__hold; return h ? h.then(() => ab.call(this)) : ab.call(this); };`, { drop: false });
+    await waitState(p.page, ['area-ready'], 60000);
+    await waitFrames(p.page, 3);
+    p.w.expectGpuLoss = true;
+    // forgetCachedSet: the discovery rounds then really read (and wait on) the held arrayBuffer calls.
+    await p.page.evaluate(async () => {
+      await window.__lomn.forgetCachedSet('levt/stat');
+      window.__hold = new Promise((r) => { window.__release = r; });
+      window.__switch = window.__lomn.showArea('levt/stat');
+    });
+    const loading = await p.page.evaluate(() => window.__lomn.state);
+    const cdp = await p.page.context().newCDPSession(p.page);
+    await cdp.send('Browser.crashGpuProcess').catch(() => {});
+    const st = await waitState(p.page, ['area-ready'], 15000).catch(() => p.page.evaluate(() => ({ state: window.__lomn.state, message: window.__lomn.message })));
+    const f0 = await p.page.evaluate(() => window.__lomn.metrics?.frames ?? -1).catch(() => -1);
+    check(loading === 'loading-area' && st.state === 'error' && /device lost|GPU/i.test(st.message),
+          'I-1 setup: the GPU process crashed while the switch was waiting on its prefetch reads', `before the crash ${loading}; after ${st.state}: ${st.message}`);
+    await p.page.evaluate(() => window.__release());
+    const ret = await p.page.evaluate(() => window.__switch);
+    const o = await p.page.evaluate(() => ({ state: window.__lomn.state, message: window.__lomn.message, area: window.__lomn.load?.area, frames: window.__lomn.metrics?.frames ?? -1,
+                                              disabled: document.getElementById('area-picker').disabled, reload: !document.getElementById('reload').hidden }));
+    check(ret === false && o.state === 'error' && /device lost|GPU/i.test(o.message) && o.area === 'levt/test' && o.frames === f0 && o.disabled && o.reload,
+          'final I-1: a switch that finishes after the device was lost is refused: state stays error with the loss reason, the previous area stays recorded, the picker is disabled',
+          `returned ${ret}; ${JSON.stringify(o)}; frames at loss ${f0}`);
     await p.page.close();
   });
   // Review fix 2: every unspun page that showed an area (sampled as it closed) was NOT DROPPING against the display rate

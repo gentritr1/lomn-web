@@ -14,6 +14,7 @@ let engine = null;
 let builds = null;
 let busy = false;
 let starting = false;  // M4: one engine per page (a second pick while one starts is refused)
+let dead = false;      // the session ended (fail(): an error, a lost GPU device, no WebGPU): nothing that starts work may run again
 // M13: unfaithful or test-only switches need ?debug=1, so a pasted URL never silently renders differently.
 const debug = params.get('debug') === '1';
 
@@ -24,11 +25,16 @@ function setState(state, message = '') {
   $('message').textContent = message;
   $('message').dataset.state = state;
 }
-// Any failure that ends the session: the state, the reason, and a Reload button (nothing else can recover the page).
-function fail(err) {
+// Any failure that ends the session: the state, the reason, and a Reload button (nothing else can recover the page). Final review
+// I-1: it also disables every control that starts work (a lost device still hands out GPU objects, so a later area switch would
+// "succeed" on a dead loop and flip the page back to area-ready) and shows the folder choice no more.
+function fail(err, { reload = true } = {}) {
+  dead = true;
   L.error = String(err?.message ?? err);
   $('loading').hidden = true;
-  $('reload').hidden = false;
+  $('reload').hidden = !reload;
+  $('byo').hidden = true;
+  for (const id of ['area-picker', 'reset-camera', 'pick-dir', 'regrant']) $(id).disabled = true;
   setState('error', L.error);
 }
 const pickerMessage = 'Choose your BIONICLE: The Legend of Mata Nui (Beta 1.5.0) folder. Nothing is uploaded: the files are read on this computer.';
@@ -83,6 +89,7 @@ async function start() {
       $('regrant').textContent = `Allow access to "${handle.name}" again`;
       $('regrant').onclick = async () => {
         let granted;
+        if (dead) return;
         try {
           granted = (await handle.requestPermission({ mode: 'read' })) === 'granted';
         } catch (err) {
@@ -126,6 +133,7 @@ async function start() {
 }
 
 async function onPickDir() {
+  if (dead) return;
   try {
     const handle = await window.showDirectoryPicker({ id: 'lomn-install', mode: 'read' });
     await adoptHandle(handle);
@@ -145,7 +153,7 @@ async function adoptHandle(handle) {
 // Safari/Firefox path (also used by Chromium when the folder comes from the input): validate the File objects, check the
 // quota, copy into OPFS in a worker, then read from the copy.
 async function onInput(ev) {
-  if (busy) return;
+  if (busy || dead) return;
   busy = true;
   try {
     const src = filesSource(ev.target.files);
@@ -283,7 +291,7 @@ function onEngineState(state, detail) {
 
 // Area switch: the previous area keeps rendering under the loading overlay while the next one is prefetched.
 async function showArea(name) {
-  if (!engine || busy) return false;
+  if (!engine || busy || dead) return false;  // dead: the device was lost (or the session failed): keep the error state and its reason
   const [level, area] = String(name).split('/');
   if (!L.areas.some((a) => a.level === level && a.area === area)) return false;
   busy = true;
@@ -292,15 +300,18 @@ async function showArea(name) {
   $('loading').hidden = false;
   setState('loading-area', `Loading ${name}…`);
   try {
-    L.load = await engine.showArea(level, area);
+    const load = await engine.showArea(level, area);
+    // The device can be lost while the area's files are being read (the page is then in 'error' already): never flip it back.
+    if (dead) return false;
+    L.load = load;
     setState('area-ready', name);
     return true;
   } catch (err) {
-    fail(err);
+    if (!dead) fail(err);  // after a loss the first reason (the loss) stays
     return false;
   } finally {
     busy = false;
-    $('area-picker').disabled = false;
+    if (!dead) $('area-picker').disabled = false;
     $('loading').hidden = true;
   }
 }

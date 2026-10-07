@@ -318,6 +318,9 @@ EMSCRIPTEN_KEEPALIVE int lomn_area_probe() {
 EMSCRIPTEN_KEEPALIVE int lomn_area_show() {
   State& s = st();
   if (!s.dev) return s.error = "no device yet", 0;
+  // Final review I-1: on a lost device every Dawn create call still returns a handle, so upload() would "succeed" and re-arm
+  // has_area on a loop that is cancelled for good. Refuse, with the loss as the reason the page reports.
+  if (s.lost) return s.error = "GPU device lost: reload the page", 0;
   if (!s.probe_ok || !s.fs.misses().empty()) return s.error = "no completed probe", 0;
   const double t0 = emscripten_get_now();
   uint32_t failures = 0;
