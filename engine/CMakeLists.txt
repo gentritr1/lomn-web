@@ -19,6 +19,10 @@ target_compile_options(lomn_core PUBLIC -ffp-contract=off)
 add_library(lomn_sage STATIC src/sage/blockfile.cpp src/sage/blockchain.cpp src/sage/slb.cpp src/sage/xfile.cpp src/sage/image.cpp)
 target_link_libraries(lomn_sage PUBLIC lomn_core)
 target_compile_options(lomn_sage PRIVATE -Wall -Wextra)
+# M1a-2 first pixels: CPU mips, D3D-convention matrices, area loader + unlit renderer on rhi, the A7 synthetic scene.
+add_library(lomn_area STATIC src/view/mips.cpp src/view/math.cpp src/view/area.cpp src/view/synthetic.cpp)
+target_link_libraries(lomn_area PUBLIC lomn_sage)
+target_compile_options(lomn_area PRIVATE -Wall -Wextra)
 
 if(EMSCRIPTEN)
   set(EMDAWN_PORT "--use-port=${LOMN_TOOLCHAIN_DIR}/emdawnwebgpu_pkg/emdawnwebgpu.port.py")
@@ -89,8 +93,8 @@ else()
 endif()
 
 # Unit tests: natively, and under Node when cross-compiled with emcmake (CMAKE_CROSSCOMPILING_EMULATOR=node).
-add_executable(lomn_tests tests/test_main.cpp tests/test_fs.cpp tests/test_rhi_null.cpp tests/test_loop.cpp tests/test_sage_blockfile.cpp tests/test_sage_blockchain.cpp tests/test_sage_slb.cpp tests/test_sage_xfile.cpp tests/test_sage_image.cpp tests/test_rhi_mesh.cpp)
-target_link_libraries(lomn_tests PRIVATE lomn_sage)
+add_executable(lomn_tests tests/test_main.cpp tests/test_fs.cpp tests/test_rhi_null.cpp tests/test_loop.cpp tests/test_sage_blockfile.cpp tests/test_sage_blockchain.cpp tests/test_sage_slb.cpp tests/test_sage_xfile.cpp tests/test_sage_image.cpp tests/test_rhi_mesh.cpp tests/test_view_mips.cpp tests/test_view_area.cpp)
+target_link_libraries(lomn_tests PRIVATE lomn_area)
 target_include_directories(lomn_tests PRIVATE "${LOMN_TOOLCHAIN_DIR}/include")
 if(EMSCRIPTEN)
   target_link_options(lomn_tests PRIVATE -sNODERAWFS=1 -sALLOW_MEMORY_GROWTH=1)
