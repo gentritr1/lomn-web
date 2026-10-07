@@ -3,7 +3,7 @@
 //   functions.jsonl      {"addr","name","size","ok","lines"}
 //   calls.jsonl          {"from","to":[addrs]}   (direct calls only)
 //   vtable_uses.jsonl    {"addr","iface","method"} for every Xxx->lpVtbl->Method field access (typed COM vtables)
-// Decompiles in fixed, size-balanced contiguous chunks (one DecompInterface per core); results are sorted by entry address before
+// Decompiles in fixed, size-balanced contiguous chunks (8 fixed chunks, DECOMP_WORKERS overrides; each chunk has its own DecompInterface); results are sorted by entry address before
 // writing. Measured 2026-10-07 on 8 cores: ~210 s vs ~20 min sequential; three runs pairwise byte-identical. A work-stealing
 // pool (ParallelDecompiler) was NOT run-to-run deterministic: local-variable numbering depends on a worker's prior functions.
 // Decompiler payload limit raised to 1024 MB: GcLegoCamera::Process (37 KB) exceeds the 50 MB default.
@@ -17,6 +17,8 @@ import ghidra.program.model.listing.*;
 import ghidra.util.task.TaskMonitor;
 import java.nio.file.*; import java.util.*;
 public class ExportCorpus extends GhidraScript {
+  // Chunk boundaries are part of the output contract; changing this changes local-variable numbering in some functions.
+  static final int DEFAULT_CHUNKS = 8;
   static String esc(String s) { return s.replace("\\", "\\\\").replace("\"", "\\\""); }
   record R(Function f, boolean ok, String c, List<String> vt) {}
   static R toResult(Function f, DecompileResults r) {
@@ -47,7 +49,8 @@ public class ExportCorpus extends GhidraScript {
     // Deterministic parallelism: fixed contiguous chunks (by entry address, balanced by body size), each decompiled
     // in order by its own DecompInterface. A decompiler's output can depend on the functions it handled before
     // (local-variable numbering), so a work-stealing pool is NOT run-to-run deterministic; fixed chunks are.
-    int workers = System.getenv("DECOMP_WORKERS") == null ? Runtime.getRuntime().availableProcessors() : Integer.parseInt(System.getenv("DECOMP_WORKERS"));
+    int workers = System.getenv("DECOMP_WORKERS") == null ? DEFAULT_CHUNKS : Integer.parseInt(System.getenv("DECOMP_WORKERS"));
+    if (workers < 1) throw new IllegalArgumentException("DECOMP_WORKERS must be >= 1");
     long total = 0; for (Function f : funcs) total += f.getBody().getNumAddresses();
     List<List<Function>> chunks = new ArrayList<>(); List<Function> cur = new ArrayList<>(); long acc = 0, per = total / workers + 1;
     for (Function f : funcs) { cur.add(f); acc += f.getBody().getNumAddresses(); if (acc >= per && chunks.size() < workers - 1) { chunks.add(cur); cur = new ArrayList<>(); acc = 0; } }
