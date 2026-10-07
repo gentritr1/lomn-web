@@ -37,6 +37,12 @@ function fail(err, { reload = true } = {}) {
   for (const id of ['area-picker', 'reset-camera', 'pick-dir', 'regrant']) $(id).disabled = true;
   setState('error', L.error);
 }
+// An extra line in the persistent warning box (the box may already hold the unknown-data warning).
+function addWarning(text) {
+  const w = $('warning');
+  w.textContent = w.hidden || !w.textContent ? text : `${w.textContent} ${text}`;
+  w.hidden = false;
+}
 const pickerMessage = 'Choose your BIONICLE: The Legend of Mata Nui (Beta 1.5.0) folder. Nothing is uploaded: the files are read on this computer.';
 // I3/I6/I7: back to the folder choice with a reason (the picker button shown where the browser has one).
 function needFiles(reason) {
@@ -152,7 +158,16 @@ async function onPickDir() {
 async function adoptHandle(handle) {
   const src = await handleSource(handle, 'handle');
   const ok = await useSource(src, 'picked');
-  if (ok) await idbSet('install-handle', handle);
+  if (ok) {
+    // Final review m-3: the area is already starting; a failing IndexedDB write (quota, a foreign VersionError) only means the folder
+    // is not remembered for the next visit. Never an 'error' on a page that is rendering.
+    try {
+      await idbSet('install-handle', handle);
+    } catch (err) {
+      L.handleNotSaved = String(err?.message ?? err);
+      addWarning(`The game folder could not be saved in the browser (${L.handleNotSaved}): it will not be remembered, and you will be asked for it again next time.`);
+    }
+  }
   return ok;
 }
 

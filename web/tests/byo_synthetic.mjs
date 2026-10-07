@@ -955,6 +955,29 @@ try {
     await idbDeleteHandle(q.page);
     await q.page.close();
   });
+  // final m-3: the remembered-folder write failing (IndexedDB quota, a foreign VersionError) after a successful start is not a fatal
+  // error: the area keeps rendering, the page says the folder will not be remembered. The picker is stubbed to hand back an OPFS
+  // directory handle (what showDirectoryPicker returns), and IDBObjectStore.put throws for the 'install-handle' key.
+  await section('m-3 handle not saved', async () => {
+    const p = await open(base + '?size=1280x720&area=levt/test&pick=1', `
+      window.showDirectoryPicker = async () => (await navigator.storage.getDirectory()).getDirectoryHandle('lomn-install');
+      const put = IDBObjectStore.prototype.put;
+      IDBObjectStore.prototype.put = function (v, k) { if (k === 'install-handle') throw new DOMException('TEST: quota exceeded', 'QuotaExceededError'); return put.apply(this, arguments); };`);
+    await waitState(p.page, ['need-files']);
+    await p.page.click('#pick-dir');
+    await waitState(p.page, ['area-ready'], 60000);
+    const ok = await p.page.waitForFunction(() => window.__lomn.handleNotSaved !== undefined || window.__lomn.error, null, { timeout: 10000 }).then(() => true, () => false);
+    const o = await p.page.evaluate(() => ({ state: window.__lomn.state, error: window.__lomn.error ?? null, notSaved: window.__lomn.handleNotSaved ?? null,
+                                              reload: !document.getElementById('reload').hidden, warning: document.getElementById('warning').hidden ? '' : document.getElementById('warning').textContent }));
+    check(ok && o.state === 'area-ready' && !o.error && !o.reload && o.notSaved && /will not be remembered|not remember/i.test(o.warning),
+          'final m-3: a failing IndexedDB write of the folder handle is not fatal: area-ready, no error, no Reload, a warning',
+          `${JSON.stringify(o)}; settled ${ok}; page errors ${JSON.stringify(p.w.errors)}`);
+    await p.page.close();
+    const q = await open(base + '?pick=1', undefined, { drop: false });
+    await waitState(q.page, ['need-files']);
+    await idbDeleteHandle(q.page);
+    await q.page.close();
+  });
   // C1: a lost GPU device reaches the page: state 'error', a Reload button, the loop stopped (pre-fix: stays area-ready).
   await section('C1 device lost', async () => {
     // A source of its own (copy through the input), so the step does not depend on what earlier steps left behind.
