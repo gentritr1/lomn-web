@@ -2,6 +2,7 @@
 #include <initializer_list>
 
 #include "doctest.h"
+#include "lomn/sage/blockfile.h"
 #include "lomn/sage/xfile.h"
 #include "sage_test_util.h"
 
@@ -368,3 +369,69 @@ TEST_CASE("x: texture name x reference amplification is capped (both caps)") {
     CHECK(err.find("too many materials") != std::string::npos);
   }
 }
+
+TEST_CASE("x: a Mesh without MeshMaterialList has no materials and one subset with attrib_id 0") {
+  X x;
+  x.obj("Mesh").ints({3}).floats({0, 0, 0, 1, 0, 0, 0, 1, 0}).ints({1, 3, 0, 1, 2}).close();
+  XFile xf;
+  std::string err;
+  REQUIRE_MESSAGE(parse_x(x.b.data(), x.b.size(), xf, &err), err);
+  CHECK(xf.mesh.materials.empty());
+  REQUIRE(xf.mesh.subsets.size() == 1);
+  CHECK(xf.mesh.subsets[0].attrib_id == 0);
+  CHECK(xf.mesh.subsets[0].face_count == 1);
+}
+
+namespace {
+
+bool is_default(const XFile& f) {
+  const XMesh& m = f.mesh;
+  return f.mesh_count == 0 && m.positions.empty() && m.normals.empty() && m.colors.empty() && m.uvs.empty() && m.source_vertex.empty() &&
+         m.indices.empty() && m.triangle_attrib.empty() && m.subsets.empty() && m.materials.empty() && !m.has_colors && m.file_vertices == 0 &&
+         m.file_faces == 0;
+}
+
+}  // namespace
+
+TEST_CASE("x: any parse failure leaves a default-constructed XFile (no partial mesh)") {
+  XFile xf;
+  std::string err;
+  Bytes good = sample();
+  REQUIRE_MESSAGE(parse_x(good.data(), good.size(), xf, &err), err);
+  REQUIRE(xf.mesh_count == 1);
+  REQUIRE_FALSE(is_default(xf));
+  // A truncated file, parsed into the same (dirty) output.
+  CHECK_FALSE(parse_x(good.data(), good.size() - 1, xf, &err));
+  CHECK(is_default(xf));
+  // A failure inside decode_mesh, after vertices, colours and one material were already filled in.
+  REQUIRE(parse_x(good.data(), good.size(), xf, &err));
+  X bad;
+  bad.obj("Mesh").ints({3}).floats({0, 0, 0, 1, 0, 0, 0, 1, 0}).ints({1, 3, 0, 1, 2});
+  bad.obj("MeshMaterialList").ints({2, 1, 0});  // announces 2 materials, supplies 1
+  bad.obj("Material").floats({1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0}).close();
+  bad.close();
+  bad.close();
+  CHECK_FALSE(parse_x(bad.b.data(), bad.b.size(), xf, &err));
+  CHECK(err.find("material count") != std::string::npos);
+  CHECK(is_default(xf));
+  // A bad header too.
+  REQUIRE(parse_x(good.data(), good.size(), xf, &err));
+  Bytes junk(32, 'z');
+  CHECK_FALSE(parse_x(junk.data(), junk.size(), xf, &err));
+  CHECK(is_default(xf));
+}
+
+#ifndef __EMSCRIPTEN__
+// Native only: kMaxEntrySize + 1 bytes (64 MiB) is not worth allocating under wasm32; the check itself is a plain
+// size compare that both targets share.
+TEST_CASE("x: input larger than kMaxEntrySize is rejected before any parsing") {
+  XFile xf;
+  std::string err;
+  Bytes big(static_cast<size_t>(kMaxEntrySize) + 1, 0);
+  CHECK_FALSE(parse_x(big.data(), big.size(), xf, &err));
+  CHECK(err == "x: file too large");
+  Bytes edge(static_cast<size_t>(kMaxEntrySize), 0);  // exactly the cap is accepted into the parser (and fails on the header)
+  CHECK_FALSE(parse_x(edge.data(), edge.size(), xf, &err));
+  CHECK(err == "x: not a .x file");
+}
+#endif

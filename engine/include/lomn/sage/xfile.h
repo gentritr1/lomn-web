@@ -36,6 +36,8 @@ struct XMaterial {
 };
 
 // D3DXATTRIBUTERANGE: triangles [face_start, face_start+face_count) use materials[attrib_id].
+// Invariant: XMesh::materials may be empty (a Mesh without MeshMaterialList). Then every subset's attrib_id is 0 and
+// has NO material to index; renderers must use a default material instead of materials[attrib_id].
 struct XSubset {
   uint32_t attrib_id = 0, face_start = 0, face_count = 0, vertex_start = 0, vertex_count = 0;
 };
@@ -52,7 +54,8 @@ struct XMesh {
   std::vector<uint32_t> indices;        // 3 per triangle, triangles stably sorted by attribute id
   std::vector<uint32_t> triangle_attrib;
   std::vector<XSubset> subsets;         // attribute table, ascending attrib_id, one range per used material
-  std::vector<XMaterial> materials;     // all materials of the MeshMaterialList, in file order
+  std::vector<XMaterial> materials;     // all materials of the MeshMaterialList, in file order; EMPTY without a
+                                        // MeshMaterialList (then subsets[*].attrib_id == 0: use a default material)
   bool has_colors = false;              // MeshVertexColors present
   uint32_t file_vertices = 0;           // nVertices as stored
   uint32_t file_faces = 0;              // nFaces as stored (polygons)
@@ -63,6 +66,8 @@ struct XFile {
   XMesh mesh;               // the LAST mesh: LoadFrames overwrites mpSkinMesh for each Mesh it meets
 };
 
+// Fails with "x: file too large" above kMaxEntrySize (blockfile.h). On ANY failure `out` is reset to a
+// default-constructed XFile (never a partial mesh).
 bool parse_x(const uint8_t* data, size_t size, XFile& out, std::string* err);
 
 }  // namespace lomn::sage

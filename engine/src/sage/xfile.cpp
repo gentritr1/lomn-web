@@ -5,6 +5,7 @@
 #include <unordered_map>
 
 #include "bytes.h"
+#include "lomn/sage/blockfile.h"
 
 namespace lomn::sage {
 namespace {
@@ -381,8 +382,11 @@ bool decode_mesh(const std::vector<Obj>& objs, const Obj& m, XMesh& out, std::st
 
 }  // namespace
 
-bool parse_x(const uint8_t* data, size_t size, XFile& out, std::string* err) {
-  out = XFile();
+namespace {
+
+bool parse_x_impl(const uint8_t* data, size_t size, XFile& out, std::string* err) {
+  // Loose .x files (disk fallback) are otherwise uncapped, and the parser amplifies ~9x: same cap as a blockfile entry.
+  if (static_cast<uint64_t>(size) > kMaxEntrySize) return fail(err, "x: file too large");
   if (size < 16 || std::memcmp(data, "xof ", 4) != 0) return fail(err, "x: not a .x file");
   if (std::memcmp(data + 8, "bin ", 4) != 0) return fail(err, "x: not a binary .x file");
   size_t fsize = std::memcmp(data + 12, "0032", 4) == 0 ? 4 : std::memcmp(data + 12, "0064", 4) == 0 ? 8 : 0;
@@ -397,6 +401,15 @@ bool parse_x(const uint8_t* data, size_t size, XFile& out, std::string* err) {
     }
   if (!last) return true;
   return decode_mesh(p.objs, *last, out.mesh, err);
+}
+
+}  // namespace
+
+bool parse_x(const uint8_t* data, size_t size, XFile& out, std::string* err) {
+  out = XFile();
+  if (parse_x_impl(data, size, out, err)) return true;
+  out = XFile();  // a failure never leaves a partial mesh behind
+  return false;
 }
 
 }  // namespace lomn::sage
