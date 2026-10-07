@@ -36,6 +36,9 @@ def render(imports: dict[str, list[str]], uses: list[dict], names: dict[str, str
         for slot, m, addrs in rows:
             ex = ", ".join(f"`{names.get(a, a)}`" for a in addrs[:4])
             out.append(f"| {slot} | {m} | {len(addrs)} | {ex} |")
+    out += ["", "## Full caller lists", ""]
+    for (iface, m), addrs in sorted(callers.items()):
+        out.append(f"- **{iface}::{m}** ({len(addrs)}): " + ", ".join(f"`{a}` {names.get(a, '')}" for a in sorted(addrs)))
     return "\n".join(out) + "\n"
 
 
@@ -45,5 +48,6 @@ if __name__ == "__main__":
     exe, export_dir, vt, out = map(Path, sys.argv[1:5])
     uses = [json.loads(l) for l in (export_dir / "vtable_uses.jsonl").read_text().splitlines() if l]
     names = {f["addr"]: f["name"] for f in map(json.loads, (export_dir / "functions.jsonl").read_text().splitlines()) if f}
+    out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(render(Nb11.from_file(exe).imports(), uses, names, load_vtables(vt)))
     print("wrote", out)

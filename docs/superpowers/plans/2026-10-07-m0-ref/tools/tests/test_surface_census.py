@@ -10,6 +10,7 @@ def test_surface_render_counts():
     assert "## PE imports: 1 DLLs, 1 functions" in md
     assert "## IDirect3DDevice8: 1 of 2 methods used" in md
     assert "| 50 | SetRenderState | 2 | `A::f`, `B::g` |" in md
+    assert "- **IDirect3DDevice8::SetRenderState** (2): `0x1` A::f, `0x2` B::g" in md
 
 
 def test_census_areas(tmp_path):

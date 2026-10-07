@@ -4,7 +4,9 @@
 //   calls.jsonl          {"from","to":[addrs]}   (direct calls only)
 //   vtable_uses.jsonl    {"addr","iface","method"} for every Xxx->lpVtbl->Method field access (typed COM vtables)
 // Output is ordered by entry address, so two runs over the same program are byte-identical.
-// Optional EXPORT_LIMIT=N exports only the first N functions (smoke runs).
+// Optional EXPORT_LIMIT=N exports only the first N functions; EXPORT_NAME_FILTER=substr only matching names (debug runs).
+// Decompile timeout: DECOMP_TIMEOUT_S (default 300) per function, and one retry at 4x for any that fail, so
+// results do not depend on machine load (a 120 s limit made one extra function fail under load on 2026-10-07).
 import ghidra.app.script.GhidraScript;
 import ghidra.app.decompiler.*;
 import ghidra.program.model.data.*;
@@ -16,14 +18,24 @@ public class ExportCorpus extends GhidraScript {
     Path out = Paths.get(System.getenv("OUT_DIR"));
     Files.createDirectories(out.resolve("funcs"));
     int limit = System.getenv("EXPORT_LIMIT") == null ? Integer.MAX_VALUE : Integer.parseInt(System.getenv("EXPORT_LIMIT"));
-    DecompInterface di = new DecompInterface(); di.openProgram(currentProgram);
+    String filter = System.getenv("EXPORT_NAME_FILTER");
+    int timeout = System.getenv("DECOMP_TIMEOUT_S") == null ? 300 : Integer.parseInt(System.getenv("DECOMP_TIMEOUT_S"));
+    DecompInterface di = new DecompInterface();
+    DecompileOptions opts = new DecompileOptions();
+    // GcLegoCamera::Process (37 KB of code) exceeds the default 50 MB decompiler response buffer.
+    opts.setMaxPayloadMBytes(1024);
+    di.setOptions(opts);
+    di.openProgram(currentProgram);
     StringBuilder fj = new StringBuilder(), cj = new StringBuilder(), vj = new StringBuilder();
     int n = 0, ok = 0;
     for (Function f : currentProgram.getFunctionManager().getFunctions(true)) {
-      if (n++ >= limit || monitor.isCancelled()) break;
-      String addr = "0x" + f.getEntryPoint().toString();
+      if (n >= limit || monitor.isCancelled()) break;
       String name = f.getName(true);
-      DecompileResults r = di.decompileFunction(f, 120, monitor);
+      if (filter != null && !name.contains(filter)) continue;
+      n++;
+      String addr = "0x" + f.getEntryPoint().toString();
+      DecompileResults r = di.decompileFunction(f, timeout, monitor);
+      if (!r.decompileCompleted()) r = di.decompileFunction(f, timeout * 4, monitor);
       boolean good = r.decompileCompleted();
       String c = good ? r.getDecompiledFunction().getC() : "// DECOMPILE FAILED: " + r.getErrorMessage() + "\n";
       if (good) {

@@ -3,15 +3,26 @@
 namespace lomn::fs {
 
 std::string normalize(std::string_view path) {
-  std::string out;
-  out.reserve(path.size());
+  std::vector<std::string> segs;
+  std::string cur;
+  auto flush = [&] {
+    if (cur == "..") {
+      if (!segs.empty()) segs.pop_back();
+    } else if (!cur.empty() && cur != ".") {
+      segs.push_back(cur);
+    }
+    cur.clear();
+  };
   for (char c : path) {
-    if (c == '\\') c = '/';
-    if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
-    if (c == '/' && !out.empty() && out.back() == '/') continue;
-    out.push_back(c);
+    if (c == '\\' || c == '/') {
+      flush();
+      continue;
+    }
+    cur.push_back(c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c);
   }
-  while (out.rfind("./", 0) == 0) out.erase(0, 2);
+  flush();
+  std::string out;
+  for (size_t i = 0; i < segs.size(); ++i) out += (i ? "/" : "") + segs[i];
   return out;
 }
 
@@ -25,7 +36,7 @@ bool MemoryFileSystem::mount(std::string_view path, std::vector<uint8_t> bytes) 
 }
 
 size_t MemoryFileSystem::unmount_prefix(std::string_view prefix) {
-  std::string p = normalize(prefix);
+  std::string p = normalize(prefix) + "/";  // directory semantics: "lev1/" must not match "lev10/..."
   size_t removed = 0;
   for (auto it = files_.lower_bound(p); it != files_.end() && starts_with(it->first, p);) {
     it = files_.erase(it);

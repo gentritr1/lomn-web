@@ -1,3 +1,4 @@
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -19,7 +20,7 @@ TEST_CASE("fake delta time is the original game's constant") {
 
 TEST_CASE("deterministic loop: two null runs give identical trace and call log") {
   namespace fs = std::filesystem;
-  fs::path base = fs::temp_directory_path() / "lomn_loop_test";
+  fs::path base = fs::temp_directory_path() / ("lomn_loop_test_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
   fs::remove_all(base);
   std::string traces[2];
   std::vector<std::string> logs[2];

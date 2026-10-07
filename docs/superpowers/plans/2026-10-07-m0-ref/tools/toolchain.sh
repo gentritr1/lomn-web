@@ -19,6 +19,7 @@ fetch() {  # fetch URL SHA256 DEST
 }
 
 need() { command -v "$1" >/dev/null || { echo "missing $1: $2" >&2; exit 1; }; }
+need timeout "brew install coreutils"
 need ninja "brew install ninja"
 need node "install Node >= $NODE_MIN_MAJOR"
 [[ "$(node -p 'process.versions.node.split(".")[0]')" -ge "$NODE_MIN_MAJOR" ]] || { echo "Node >= $NODE_MIN_MAJOR required" >&2; exit 1; }
@@ -44,12 +45,12 @@ if [[ ! -f "$TC/emdawnwebgpu_pkg/.ok-$DAWN_RELEASE" ]]; then
 fi
 
 if [[ ! -f "$TC/emsdk/.ok-$EMSDK_VERSION" ]]; then
-  [[ -d "$TC/emsdk/.git" ]] || git clone -q https://github.com/emscripten-core/emsdk.git "$TC/emsdk"
-  git -C "$TC/emsdk" fetch -q --tags && git -C "$TC/emsdk" checkout -q "$EMSDK_VERSION"
-  "$TC/emsdk/emsdk" install "$EMSDK_VERSION" >/dev/null
-  "$TC/emsdk/emsdk" activate "$EMSDK_VERSION" >/dev/null
+  [[ -d "$TC/emsdk/.git" ]] || timeout 600 git clone -q https://github.com/emscripten-core/emsdk.git "$TC/emsdk"
+  timeout 300 git -C "$TC/emsdk" fetch -q --tags && git -C "$TC/emsdk" checkout -q "$EMSDK_VERSION"
+  timeout 2400 "$TC/emsdk/emsdk" install "$EMSDK_VERSION" >/dev/null
+  timeout 300 "$TC/emsdk/emsdk" activate "$EMSDK_VERSION" >/dev/null
   touch "$TC/emsdk/.ok-$EMSDK_VERSION"
 fi
 
-( cd "$ROOT/web" && npm ci --no-audit --no-fund >/dev/null && npx playwright install chromium >/dev/null )
+( cd "$ROOT/web" && timeout 900 npm ci --no-audit --no-fund >/dev/null && timeout 900 npx playwright install chromium >/dev/null )
 echo "toolchain ok: emsdk $EMSDK_VERSION, Dawn $DAWN_RELEASE, Playwright $PLAYWRIGHT_VERSION"

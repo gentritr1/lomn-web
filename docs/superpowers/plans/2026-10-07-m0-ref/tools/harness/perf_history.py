@@ -4,7 +4,8 @@ regressions using noise measured from repeated runs, never a hand-picked thresho
   perf_history.py append <metrics.json> --scene S [--accept]    add an entry (accepted entries are baselines)
   perf_history.py check  <metrics.json> --scene S               exit 1 if frame_ms_p50 regressed beyond noise
 
-Noise = max(3 x stdev of frame_ms_p50 over the last 5 accepted entries for this machine+scene, 0.01 ms resolution).
+Noise = max(3 x stdev, max - min) of frame_ms_p50 over the last 5 accepted entries for this machine+scene+backend:
+both terms are measured from the baseline runs themselves.
 With fewer than 3 accepted entries there is no baseline yet: check reports "no baseline" and passes.
 """
 from __future__ import annotations
@@ -19,7 +20,6 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 HISTORY = REPO / "perf" / "history.jsonl"
-RESOLUTION_MS = 0.01
 
 
 def machine() -> str:
@@ -48,7 +48,7 @@ def verdict(history: list[dict], current: dict) -> tuple[bool, str]:
             and h["scene"] == current["scene"] and h["backend"] == current["backend"]][-5:]
     if len(base) < 3:
         return True, f"no baseline yet ({len(base)} accepted runs; need 3)"
-    noise = max(3 * statistics.pstdev(base), RESOLUTION_MS)
+    noise = max(3 * statistics.pstdev(base), max(base) - min(base))
     ref = statistics.median(base)
     delta = current["frame_ms_p50"] - ref
     msg = f"p50 {current['frame_ms_p50']:.4f} ms vs baseline {ref:.4f} ms (delta {delta:+.4f}, noise {noise:.4f}, n={len(base)})"

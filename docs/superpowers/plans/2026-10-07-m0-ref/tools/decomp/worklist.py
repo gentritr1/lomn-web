@@ -115,6 +115,7 @@ def main(argv: list[str]) -> int:
             print("WORKLIST:", e, file=sys.stderr)
         print(f"worklist check: {len(rows)} functions, {len(errs)} errors")
         return 1 if errs else 0
+    a.out.parent.mkdir(parents=True, exist_ok=True)
     a.out.write_text(dashboard(rows))
     print("wrote", a.out)
     return 0

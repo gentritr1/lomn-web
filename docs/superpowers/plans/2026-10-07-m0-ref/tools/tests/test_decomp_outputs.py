@@ -12,6 +12,16 @@ def test_metrics_floors(gen_decomp):
     assert m["x87_nan_noise"] < m["x87_rewrites"]
 
 
+def test_ghidra_side_applied(gen_decomp):
+    """These come from Ghidra's own script logs and from the decompiled text, so a half-applied analysis fails here."""
+    m = json.loads((gen_decomp / "metrics.json").read_text())
+    assert m["ghidra_structs"] == 473 and m["ghidra_members_applied"] >= 1814
+    assert m["ghidra_labels_applied"] >= 7042
+    assert m["ghidra_local_funcs"] >= 429 and m["ghidra_params_applied"] >= 259 and m["ghidra_locals_applied"] >= 551
+    assert m["ghidra_d3d8_globals"] == 4
+    assert m["member_access"] >= 44950 and m["raw_offset_deref"] <= 620 and m["x87_rewrites"] >= 695
+
+
 def test_device_surface(gen_decomp):
     uses = [json.loads(l) for l in (gen_decomp / "vtable_uses.jsonl").read_text().splitlines() if l]
     methods = {u["method"] for u in uses if u["iface"] == "IDirect3DDevice8"}

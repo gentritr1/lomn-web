@@ -31,7 +31,7 @@ class DiskFileSystem final : public FileSystem {
     std::string n = normalize(path);
     if (n.rfind("root/", 0) == 0) return Error::ReadOnly;
     if (n.rfind("user/", 0) != 0) return Error::BadMount;
-    std::filesystem::path p = user_ / n.substr(5);
+    std::filesystem::path p = user_ / n.substr(5);  // n is normalised: no ".." can remain
     std::filesystem::create_directories(p.parent_path());
     std::ofstream f(p, std::ios::binary | std::ios::trunc);
     if (!f) return Error::Io;

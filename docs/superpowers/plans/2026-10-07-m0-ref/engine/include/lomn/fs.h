@@ -1,6 +1,8 @@
 // File system interface (frozen in M0; additive changes only, reviewed). Game paths look like
 // "Root/data/levels/lev1/vllg.blk" (read-only game data) or "User/save0.sav" (read-write user data).
-// Paths are normalised Windows-style: '\\' -> '/', ASCII lower-case, duplicate '/' collapsed.
+// Paths are normalised Windows-style: '\\' -> '/', ASCII lower-case, duplicate '/' collapsed, "." dropped and
+// ".." folded. A ".." that would climb out of the first segment ("user/../x") consumes it, so the result no longer
+// starts with root/ or user/ and every operation on it returns BadMount: paths can never escape a mount.
 #pragma once
 #include <cstddef>
 #include <cstdint>
@@ -40,7 +42,8 @@ class MemoryFileSystem final : public FileSystem {
  public:
   // Mount read-only game bytes; path must normalise to "root/...". Returns false otherwise.
   bool mount(std::string_view path, std::vector<uint8_t> bytes);
-  // Remove every mounted file whose normalised path starts with prefix; returns the number removed.
+  // Remove every mounted file inside the directory `prefix` (e.g. "Root/data/levels/lev1" or ".../lev1/";
+  // never matches the sibling "lev10"); returns the number removed.
   size_t unmount_prefix(std::string_view prefix);
   size_t resident_bytes() const;
   bool exists(std::string_view path) const override;

@@ -1,3 +1,4 @@
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 
@@ -10,6 +11,18 @@ TEST_CASE("normalize: windows separators, case, duplicate slashes, leading ./") 
   CHECK(normalize("Root\\Data\\Levels\\LEV1\\vllg.BLK") == "root/data/levels/lev1/vllg.blk");
   CHECK(normalize("./Root//data") == "root/data");
   CHECK(normalize("") == "");
+  CHECK(normalize("Root/data/../data/Main.blk") == "root/data/main.blk");
+  CHECK(normalize("User/../Root/data/x") == "root/data/x");
+  CHECK(normalize("User/../../etc/passwd") == "etc/passwd");
+}
+
+TEST_CASE("no path escapes a mount via ..") {
+  MemoryFileSystem m;
+  const uint8_t b[1] = {1};
+  CHECK(m.write("User/../../escape", b, 1) == Error::BadMount);
+  CHECK(m.write("User/../Root/data/x", b, 1) == Error::ReadOnly);
+  std::vector<uint8_t> out;
+  CHECK(m.read("User/../../etc/passwd", out) == Error::BadMount);
 }
 
 TEST_CASE("memory fs: mount, read, exists, logger") {
@@ -53,7 +66,7 @@ TEST_CASE("memory fs: unmount_prefix releases an area and keeps the rest") {
 #ifndef __EMSCRIPTEN__
 TEST_CASE("disk fs: case-insensitive Root lookup and User writes") {
   namespace sfs = std::filesystem;
-  sfs::path base = sfs::temp_directory_path() / "lomn_disk_fs_test";
+  sfs::path base = sfs::temp_directory_path() / ("lomn_disk_fs_test_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
   sfs::remove_all(base);
   sfs::create_directories(base / "install" / "data" / "levels" / "lev1");
   std::ofstream(base / "install" / "data" / "levels" / "lev1" / "nUju.blk") << "abc";

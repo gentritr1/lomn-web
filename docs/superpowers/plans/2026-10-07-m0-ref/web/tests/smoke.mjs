@@ -38,7 +38,7 @@ try {
     return { centre: at(img.width >> 1, img.height >> 1), corner: at(2, 2) };
   }, png.toString('base64'));
   console.log('pixels', JSON.stringify(px));
-  const near = (a, b) => a.slice(0, 3).every((v, i) => Math.abs(v - b[i]) <= 3);
+  const near = (a, b) => a.slice(0, 3).every((v, i) => Math.abs(v - b[i]) <= 2);
   if (!near(px.centre, [255, 128, 0])) fail('centre pixel not the orange triangle');
   if (!near(px.corner, [0, 0, 64])) fail('corner pixel not the clear colour');
   const foreign = srv.requests.filter((r) => !allowed.has(r));

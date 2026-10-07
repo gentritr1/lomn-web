@@ -26,9 +26,11 @@ struct Target {
   uint32_t width = 0, height = 0;
 };
 struct Pipeline {
-  WGPURenderPipeline pipeline = nullptr;
+  PipelineDesc desc;
+  WGPUShaderModule module = nullptr;
   WGPUBindGroupLayout layout = nullptr;
-  uint32_t uniform_bytes = 0;
+  WGPUPipelineLayout pipeline_layout = nullptr;
+  std::map<WGPUTextureFormat, WGPURenderPipeline> by_format;  // built lazily per render-target format
 };
 
 class WebGpuDevice final : public Device {
@@ -72,10 +74,9 @@ class WebGpuDevice final : public Device {
     src.code = sv(d.wgsl);
     WGPUShaderModuleDescriptor smd = WGPU_SHADER_MODULE_DESCRIPTOR_INIT;
     smd.nextInChain = &src.chain;
-    WGPUShaderModule sm = wgpuDeviceCreateShaderModule(dev_, &smd);
     Pipeline p;
-    p.uniform_bytes = d.uniform_bytes;
-    WGPUPipelineLayout layout = nullptr;
+    p.desc = d;
+    p.module = wgpuDeviceCreateShaderModule(dev_, &smd);
     if (d.uniform_bytes) {
       WGPUBindGroupLayoutEntry e = WGPU_BIND_GROUP_LAYOUT_ENTRY_INIT;
       e.binding = 0;
@@ -90,27 +91,29 @@ class WebGpuDevice final : public Device {
       WGPUPipelineLayoutDescriptor pl = WGPU_PIPELINE_LAYOUT_DESCRIPTOR_INIT;
       pl.bindGroupLayoutCount = 1;
       pl.bindGroupLayouts = &p.layout;
-      layout = wgpuDeviceCreatePipelineLayout(dev_, &pl);
+      p.pipeline_layout = wgpuDeviceCreatePipelineLayout(dev_, &pl);
     }
-    // One pipeline per colour format we may render to: offscreen RGBA8, and the surface format if any.
-    WGPUColorTargetState ct = WGPU_COLOR_TARGET_STATE_INIT;
-    ct.format = surface_ ? surface_format_ : WGPUTextureFormat_RGBA8Unorm;
-    WGPUFragmentState fs = WGPU_FRAGMENT_STATE_INIT;
-    fs.module = sm;
-    fs.entryPoint = sv(d.fs_entry);
-    fs.targetCount = 1;
-    fs.targets = &ct;
-    WGPURenderPipelineDescriptor rpd = WGPU_RENDER_PIPELINE_DESCRIPTOR_INIT;
-    rpd.layout = layout;
-    rpd.vertex.module = sm;
-    rpd.vertex.entryPoint = sv(d.vs_entry);
-    rpd.fragment = &fs;
-    p.pipeline = wgpuDeviceCreateRenderPipeline(dev_, &rpd);
-    if (layout) wgpuPipelineLayoutRelease(layout);
-    wgpuShaderModuleRelease(sm);
     ++stats_.pipelines_total;
     pipelines_[++next_pipe_] = p;
     return next_pipe_;
+  }
+
+  WGPURenderPipeline variant(Pipeline& p, WGPUTextureFormat fmt) {
+    auto it = p.by_format.find(fmt);
+    if (it != p.by_format.end()) return it->second;
+    WGPUColorTargetState ct = WGPU_COLOR_TARGET_STATE_INIT;
+    ct.format = fmt;
+    WGPUFragmentState fs = WGPU_FRAGMENT_STATE_INIT;
+    fs.module = p.module;
+    fs.entryPoint = sv(p.desc.fs_entry);
+    fs.targetCount = 1;
+    fs.targets = &ct;
+    WGPURenderPipelineDescriptor rpd = WGPU_RENDER_PIPELINE_DESCRIPTOR_INIT;
+    rpd.layout = p.pipeline_layout;
+    rpd.vertex.module = p.module;
+    rpd.vertex.entryPoint = sv(p.desc.vs_entry);
+    rpd.fragment = &fs;
+    return p.by_format[fmt] = wgpuDeviceCreateRenderPipeline(dev_, &rpd);
   }
 
   void begin_frame(TextureId target, const float c[4]) override {
@@ -119,9 +122,12 @@ class WebGpuDevice final : public Device {
     if (target == 0) {
       WGPUSurfaceTexture st = WGPU_SURFACE_TEXTURE_INIT;
       wgpuSurfaceGetCurrentTexture(surface_, &st);
+      frame_surface_texture_ = st.texture;
       frame_surface_view_ = view = wgpuTextureCreateView(st.texture, nullptr);
+      pass_format_ = surface_format_;
     } else {
       view = targets_.at(target).view;
+      pass_format_ = WGPUTextureFormat_RGBA8Unorm;
     }
     enc_ = wgpuDeviceCreateCommandEncoder(dev_, nullptr);
     WGPURenderPassColorAttachment ca = WGPU_RENDER_PASS_COLOR_ATTACHMENT_INIT;
@@ -137,8 +143,8 @@ class WebGpuDevice final : public Device {
 
   void draw(PipelineId pid, uint32_t n, BufferId u, uint32_t off) override {
     Pipeline& p = pipelines_.at(pid);
-    wgpuRenderPassEncoderSetPipeline(pass_, p.pipeline);
-    if (p.uniform_bytes) wgpuRenderPassEncoderSetBindGroup(pass_, 0, bind_group(pid, p, u), 1, &off);
+    wgpuRenderPassEncoderSetPipeline(pass_, variant(p, pass_format_));
+    if (p.desc.uniform_bytes) wgpuRenderPassEncoderSetBindGroup(pass_, 0, bind_group(pid, p, u), 1, &off);
     wgpuRenderPassEncoderDraw(pass_, n, 1, 0, 0);
     ++stats_.draws;
   }
@@ -152,7 +158,9 @@ class WebGpuDevice final : public Device {
     wgpuCommandEncoderRelease(enc_);
     if (frame_surface_view_) {
       wgpuTextureViewRelease(frame_surface_view_);
+      wgpuTextureRelease(frame_surface_texture_);  // the surface texture is acquired per frame and must be released
       frame_surface_view_ = nullptr;
+      frame_surface_texture_ = nullptr;
     }
   }
 
@@ -210,7 +218,7 @@ class WebGpuDevice final : public Device {
     WGPUBindGroupEntry e = WGPU_BIND_GROUP_ENTRY_INIT;
     e.binding = 0;
     e.buffer = buffers_.at(u);
-    e.size = p.uniform_bytes;
+    e.size = p.desc.uniform_bytes;
     WGPUBindGroupDescriptor bd = WGPU_BIND_GROUP_DESCRIPTOR_INIT;
     bd.layout = p.layout;
     bd.entryCount = 1;
@@ -233,6 +241,8 @@ class WebGpuDevice final : public Device {
   WGPUCommandEncoder enc_ = nullptr;
   WGPURenderPassEncoder pass_ = nullptr;
   WGPUTextureView frame_surface_view_ = nullptr;
+  WGPUTexture frame_surface_texture_ = nullptr;
+  WGPUTextureFormat pass_format_ = WGPUTextureFormat_RGBA8Unorm;
   FrameStats stats_;
 };
 

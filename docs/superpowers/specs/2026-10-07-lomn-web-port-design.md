@@ -284,3 +284,8 @@ Measured while building and running the M0 reference implementation (`docs/super
 | A9 | SDL3 | in M0b build skeleton | Pinned in `deps.lock`, not linked until M1 (no window/input needed headless). |
 | A10 | Interface names | `IFileSystem` | `lomn::fs::FileSystem` (+ `MemoryFileSystem`, `open_disk`); `rhi.h` as in the reference. |
 | A11 | Tooling gap 4 | to be fixed | Still open: 3,279 `in_stack`/`in_EAX` artefacts in the full corpus (by-value `ScOSIVariant` args). Scheduled with the M2 OSI VM. 80 x87 compare sites in unhandled forms remain (695 rewritten). |
+| A12 | 0.2 layout asserts | "a ctest compiles the static_asserts" | Delivered as a pytest that compiles `gen/include/original/all.cpp` with `em++` (wasm32, asserts on) and `clang++` (native): 473 headers, 1,770 offset asserts. Same check, different runner. |
+| A13 | 0.10 platform time/input | frozen in M0 | Deferred to M1 together with SDL3 (A9). M0 is headless; time is `std::chrono::steady_clock` inside the loop. |
+| A14 | 0.3 caller list | full caller list per slot | `docs/surface.md` has the per-slot table (count + 4 examples) **and** a "Full caller lists" section. The spot check is 5 rows by the implementer, with 2 re-verified by the reviewer. |
+| A15 | Process | parallel streams | Tasks run strictly sequentially on branch `m0-foundations`. Each implementer commits only its own task's files (no push/stash/reset/checkout/`add -A`). The controller reviews each task by re-running its checks and owns merges. |
+| A16 | Browser pixel tolerance | ±2/255 | Kept at ±2 (measured exact match 255,128,0 on Metal). |
