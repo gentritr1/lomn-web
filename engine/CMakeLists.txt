@@ -28,7 +28,8 @@ target_link_libraries(lomn_d3d PUBLIC lomn_core)
 target_compile_options(lomn_d3d PRIVATE -Wall -Wextra)
 
 # M1a-2 first pixels + M1a-3: CPU mips, area loader, the SAGE frame replay on the shim, the A7/A9 synthetic scene.
-add_library(lomn_area STATIC src/view/mips.cpp src/view/area.cpp src/view/sage_frame.cpp src/view/synthetic.cpp)
+add_library(lomn_area STATIC src/view/mips.cpp src/view/area.cpp src/view/sage_frame.cpp src/view/synthetic.cpp
+            src/view/texture_cache.cpp)
 target_link_libraries(lomn_area PUBLIC lomn_sage lomn_d3d)
 target_compile_options(lomn_area PRIVATE -Wall -Wextra)
 
@@ -189,6 +190,12 @@ else()
   add_test(NAME view_cli_survey_empty COMMAND sh -c
            "rm -rf \"$1\"; mkdir -p \"$1/Data/Levels/lev1\" || exit 1; \"$0\" --install \"$1\" --survey 1 --out \"$1/s.json\" >/dev/null 2>&1; rc=$?; [ $rc -eq 3 ] || { echo \"rc=$rc (want 3)\"; exit 1; }"
            $<TARGET_FILE:lomn_view> ${CMAKE_CURRENT_BINARY_DIR}/view_survey_empty)
+  # M1a-4 Task 3: --texture-cache. Off (absent or "off") and on give byte-identical call and state logs (synthetic A9
+  # scene); the metrics JSON has a "texture_cache" key only when on; a bad value is exit 2. A survey of the written
+  # synthetic install (levt: areas stat + test share the level's textures) reuses decodes across areas when on.
+  add_test(NAME view_cli_texture_cache COMMAND sh -c
+           "rm -rf \"$1\"; mkdir -p \"$1\" && cd \"$1\" || exit 1; for m in none off on; do f=''; [ $m = none ] || f=\"--texture-cache $m\"; \"$0\" --synthetic 2 --backend null --frames 2 --out c.$m.txt --state-log s.$m.txt $f >/dev/null 2>&1 || { echo \"run $m failed\"; exit 1; }; done; cmp c.none.txt c.off.txt && cmp c.none.txt c.on.txt && cmp s.none.txt s.off.txt && cmp s.none.txt s.on.txt || { echo 'logs differ'; exit 1; }; ! grep -q texture_cache c.none.txt.json && ! grep -q texture_cache c.off.txt.json || { echo 'texture_cache key with the flag off'; exit 1; }; grep -q '\"texture_cache\":{\"hits\":0,\"misses\":[1-9]' c.on.txt.json || { echo 'no texture_cache block with the flag on'; exit 1; }; \"$0\" --synthetic 2 --backend null --out c.bad.txt --texture-cache yes >/dev/null 2>&1; [ $? -eq 2 ] || { echo 'bad value not exit 2'; exit 1; }; \"$0\" --synthetic 2 --backend null --out x.txt --write-install inst >/dev/null 2>&1 || exit 1; \"$0\" --install inst --survey 1 --out off.json >/dev/null 2>&1 && \"$0\" --install inst --survey 1 --out on.json --texture-cache on >/dev/null 2>&1 || { echo 'survey failed'; exit 1; }; ! grep -q texture_cache off.json || { echo 'survey: key with the flag off'; exit 1; }; grep -q '^\"texture_cache\":{\"hits\":[1-9]' on.json || { echo 'survey: no cross-area hit'; exit 1; }"
+           $<TARGET_FILE:lomn_view> ${CMAKE_CURRENT_BINARY_DIR}/view_texture_cache)
   # C9: camera.fallback is true while ANY of eye/yaw/pitch/fov/near/far is a documented fallback (spec M1 §2.3), with
   # explicit per-field sources. Synthetic scene, no overrides: eye = POS start (data), yaw = scene-set, the rest fallback.
   # Every camera field given on the command line: nothing is a fallback.
@@ -236,7 +243,7 @@ endif()
 # Unit tests: natively, and under Node when cross-compiled with emcmake (CMAKE_CROSSCOMPILING_EMULATOR=node).
 add_executable(lomn_tests tests/test_main.cpp tests/test_fs.cpp tests/test_rhi_null.cpp tests/test_loop.cpp tests/test_sage_blockfile.cpp tests/test_sage_blockchain.cpp tests/test_sage_slb.cpp tests/test_sage_xfile.cpp tests/test_sage_image.cpp
                tests/test_rhi_mesh.cpp tests/test_view_mips.cpp tests/test_view_area.cpp tests/test_d3d.cpp tests/test_sage_osi.cpp
-               tests/test_area_states.cpp tests/test_sage_frame.cpp)
+               tests/test_area_states.cpp tests/test_sage_frame.cpp tests/test_view_texture_cache.cpp)
 target_link_libraries(lomn_tests PRIVATE lomn_area)
 target_include_directories(lomn_tests PRIVATE "${LOMN_TOOLCHAIN_DIR}/include")
 if(EMSCRIPTEN)

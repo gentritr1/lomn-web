@@ -17,6 +17,7 @@
 #include "lomn/sage/osi.h"
 #include "lomn/sage/xfile.h"
 #include "lomn/view/sage_frame.h"
+#include "lomn/view/texture_cache.h"
 
 namespace lomn::view {
 namespace {
@@ -86,6 +87,7 @@ class Loader {
     max_texture_bytes_ = std::min(opt.max_texture_bytes, kMaxAreaTextureBytes);
     max_geometry_bytes_ = std::min(opt.max_geometry_bytes, kMaxAreaGeometryBytes);
     max_lights_ = std::min(opt.max_lights, kMaxAreaLights);
+    cache_ = opt.texture_cache;  // M1a-4 Task 3: nullptr (the default) = no cache, the pre-cache path exactly
     out_.level = std::string(level.substr(0, 4));
     out_.area = std::string(area.substr(0, 4));
     std::string e;
@@ -649,9 +651,30 @@ class Loader {
       return false;
     }
     const auto t0 = Clock::now();
-    sage::Image img;
     Texture tex;
     tex.request = chosen;
+    // M1a-4 Task 3: with a cache, key = (lower-cased resolved path, SHA-256 of the entry bytes). A hit takes the same
+    // byte-cap check as a fresh decode and copies the cached mips (the area owns its copy; release_cpu_copies frees
+    // that copy only). The hash, lookup and copy are timed as decode_ms. Without a cache none of this runs.
+    Sha256Digest digest{};
+    if (cache_) {
+      digest = sha256(bytes.data(), bytes.size());
+      if (const std::shared_ptr<const DecodedTexture> hit = cache_->find(key, digest)) {
+        ++st.texture_cache_hits;
+        const uint64_t chain_bytes = mip_chain_bytes(hit->mips.front().width, hit->mips.front().height);
+        if (chain_bytes > max_texture_bytes_ - std::min(max_texture_bytes_, st.texture_bytes)) {
+          st.decode_ms += ms_since(t0);
+          return fatal("area: textures over kMaxAreaTextureBytes");
+        }
+        tex.format = hit->format;
+        tex.alpha_on = hit->alpha_on;
+        tex.mips = hit->mips;
+        st.decode_ms += ms_since(t0);
+        return add_texture(std::move(tex), chain_bytes, key, index);
+      }
+      ++st.texture_cache_misses;
+    }
+    sage::Image img;
     bool ok = false;
     if (ends_with(key, ".tga")) {
       sage::TgaInfo ti;
@@ -688,7 +711,18 @@ class Loader {
       warn("texture " + name + ": mip chain failed");
       return false;
     }
+    if (cache_) {  // only successful decodes are stored (a failure is re-tried, and re-warned, by every load)
+      auto d = std::make_shared<DecodedTexture>();
+      d->format = tex.format;
+      d->alpha_on = tex.alpha_on;
+      d->mips = tex.mips;
+      cache_->insert(key, digest, std::move(d));
+    }
     st.decode_ms += ms_since(t0);
+    return add_texture(std::move(tex), chain_bytes, key, index);
+  }
+  bool add_texture(Texture&& tex, uint64_t chain_bytes, const std::string& key, uint32_t& index) {
+    AreaStats& st = out_.stats;
     st.texture_bytes += chain_bytes;
     if (tex.alpha_on) ++st.textures_alpha;
     texture_cache_[key] = static_cast<int64_t>(out_.textures.size());
@@ -741,6 +775,7 @@ class Loader {
   std::string prefix_;
   std::vector<uint8_t> bytes_;
   std::map<std::string, int64_t> model_cache_, texture_cache_;  // ordered maps: deterministic, no pointer keys
+  TextureCache* cache_ = nullptr;  // AreaOptions::texture_cache (cross-load decode cache; not owned)
   std::set<std::string> warnings_;
   uint32_t warnings_dropped_ = 0;
   std::string fatal_;  // set when a cap is exceeded: the whole load fails

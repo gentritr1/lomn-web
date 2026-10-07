@@ -67,6 +67,8 @@ constexpr float kMaxPitchDeg = 89.9f;  // make_camera clamps the pitch to +-kMax
 
 constexpr uint32_t kNoTexture = 0xffffffffu;  // subset drawn with the 1x1 white texture
 
+class TextureCache;  // lomn/view/texture_cache.h (M1a-4 Task 3)
+
 struct AreaOptions {
   bool draw_main = true, draw_trans = true, draw_back = true, draw_moveable = true, draw_nolight = true;
   // The R16 caps (+ kMaxAreaLights, Task 8B D4), injectable so tests can cross them with tiny inputs. They can only be
@@ -74,6 +76,11 @@ struct AreaOptions {
   uint32_t max_placements = kMaxPlacements, max_draws = kMaxDraws, max_textures = kMaxAreaTextures;
   uint64_t max_texture_bytes = kMaxAreaTextureBytes, max_geometry_bytes = kMaxAreaGeometryBytes;
   uint32_t max_lights = kMaxAreaLights;
+  // M1a-4 Task 3: a decode cache shared across loads (not owned; must outlive the call). nullptr (the default) = off:
+  // the loader never hashes, looks up or stores anything and behaves exactly as before. When set, every resolved
+  // texture entry is SHA-256 hashed and looked up by (lower-cased path, digest); a hit copies the cached mips instead of
+  // decoding, a successful decode is stored. Caps, warnings, counts and pixels are the same either way.
+  TextureCache* texture_cache = nullptr;
 };
 
 struct SubsetDraw {
@@ -142,6 +149,9 @@ struct AreaStats {
   uint64_t texture_bytes = 0;   // RGBA8 incl. full mip chains (what is uploaded)
   uint64_t geometry_bytes = 0;  // vertex + index bytes
   uint32_t draws = 0;           // placements x subsets (one indexed draw each)
+  // M1a-4 Task 3: this load's lookups in AreaOptions::texture_cache (both 0 when it is off). decode_ms then includes
+  // the hashing, the lookup and the copy of a hit.
+  uint32_t texture_cache_hits = 0, texture_cache_misses = 0;
 };
 
 // A light the area adds to GcLightDirector, already turned into the D3DLIGHT8 GcLight::Render hands to SetLight.

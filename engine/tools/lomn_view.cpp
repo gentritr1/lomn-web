@@ -13,6 +13,11 @@
 //   --fog on|off            off drops fog from every draw (debug; the state log is unchanged)
 //   --write-install DIR     (--synthetic only, native; else exit 2) also write the synthetic install to DIR/data/...
 //   --keep-cpu on|off       keep the CPU vertex/index/mip copies after upload (default off: released)
+//   --texture-cache on|off  M1a-4 Task 3 (default off): a decode cache across area loads (lomn/view/texture_cache.h,
+//                           256 MiB, LRU, keyed by path + SHA-256 of the bytes). Off constructs no cache and leaves every
+//                           output byte-identical; on adds "texture_cache":{hits,misses,bytes,evictions} to the metrics
+//                           (and, with --survey, to every area row: this load's hits/misses/evictions and the bytes
+//                           resident after it, plus the run's totals at the top level).
 // Always writes <out>.json metrics (except --survey, whose output IS the JSON).
 // Exit codes (as lomn_native): 0 ok, 2 bad args, 3 no WebGPU adapter / install or area unreadable / survey found no
 // area, 4 failure (bad area data, an exceeded cap, a write error).
@@ -42,6 +47,7 @@
 #include "lomn/rhi.h"
 #include "lomn/view/area.h"
 #include "lomn/view/synthetic.h"
+#include "lomn/view/texture_cache.h"
 
 #include <unistd.h>
 
@@ -130,7 +136,7 @@ int usage(const char* why) {
                "usage: lomn_view --install DIR --level LEV --area AREA --out FILE [--backend webgpu|null] [--width W --height H]\n"
                "                 [--fov DEG --near N --far F --eye x,y,z --yaw DEG --pitch DEG --eye-height H] [--frames N]\n"
                "                 [--vertex-colors on|off] [--routes main,trans,back,moveable,nolight] [--state-log FILE]\n"
-               "                 [--lighting faithful|forced] [--fog on|off]\n"
+               "                 [--lighting faithful|forced] [--fog on|off] [--texture-cache on|off]\n"
                "       lomn_view --synthetic 1 --out FILE [...]   |   lomn_view --install DIR --survey 1 --out FILE.json\n");
   return 2;
 }
@@ -238,6 +244,12 @@ std::string models_json(const view::AreaData& a) {
   return o + "]";
 }
 
+// M1a-4 Task 3: {"hits","misses","bytes","evictions"} (+ any extra members, already JSON).
+std::string texture_cache_json(uint64_t hits, uint64_t misses, uint64_t bytes, uint64_t evictions, const std::string& extra = "") {
+  return "{\"hits\":" + std::to_string(hits) + ",\"misses\":" + std::to_string(misses) + ",\"bytes\":" + std::to_string(bytes) +
+         ",\"evictions\":" + std::to_string(evictions) + extra + "}";
+}
+
 std::string warnings_json(const std::vector<std::string>& w) {
   std::string o = "[";
   for (size_t i = 0; i < w.size(); ++i) o += std::string(i ? "," : "") + js(w[i]);
@@ -282,7 +294,8 @@ bool is_dir(const std::filesystem::directory_entry& d) {
   std::error_code ec;
   return d.is_directory(ec);
 }
-int survey(const std::string& install, const std::string& out_path) {
+// `cache` (M1a-4 Task 3): nullptr = off (no cache key anywhere in the JSON); else shared by every area's load.
+int survey(const std::string& install, const std::string& out_path, view::TextureCache* cache) {
   namespace sfs = std::filesystem;
   auto fsp = fs::open_disk(install, disk_user_dir());
   if (!fsp) return std::fprintf(stderr, "cannot open install %s\n", install.c_str()), 3;
@@ -334,7 +347,10 @@ int survey(const std::string& install, const std::string& out_path) {
     view::AreaData a;
     std::string err;
     const auto t0 = Clock::now();
-    bool ok = view::load_area(*fsp, la.first, la.second, view::AreaOptions(), a, &err);
+    view::AreaOptions ao;
+    ao.texture_cache = cache;
+    const uint64_t evictions_before = cache ? cache->stats().evictions : 0;
+    bool ok = view::load_area(*fsp, la.first, la.second, ao, a, &err);
     const double ms = ms_since(t0);
     total_ms += ms;
     const std::string where = la.first + "/" + la.second;
@@ -376,7 +392,11 @@ int survey(const std::string& install, const std::string& out_path) {
             ",\"scene\":{\"level_type\":" + std::to_string(a.level_type) + ",\"lights\":" + std::to_string(a.lights.size()) +
             ",\"lights_source\":" + js(a.lights_source) + ",\"fog_source\":" + js(a.fog.source) + ",\"fog_start\":" + num(a.fog.start) +
             ",\"fog_end\":" + num(a.fog.end) + ",\"cave_lighting\":" + (a.cave_lighting ? "true" : "false") + ",\"script_class\":" +
-            js(a.script_class) + ",\"special_matches\":" + std::to_string(a.special_matches) + "}}";
+            js(a.script_class) + ",\"special_matches\":" + std::to_string(a.special_matches) + "}" +
+            (cache ? ",\"texture_cache\":" + texture_cache_json(a.stats.texture_cache_hits, a.stats.texture_cache_misses, cache->stats().bytes,
+                                                              cache->stats().evictions - evictions_before)
+                   : std::string()) +
+            "}";
     max_records = std::max<uint64_t>(max_records, a.stats.obj_records);
     track(a.stats.placements, max_place, max_place_at, where);
     track(a.stats.draws, max_draws, max_draws_at, where);
@@ -393,7 +413,12 @@ int survey(const std::string& install, const std::string& out_path) {
     << ",\"state_calls_at\":" << js(max_states_at) << ",\"lights\":" << max_lights << ",\"lights_at\":" << js(max_lights_at) << ",\"shader_variants\":" << max_variants
     << ",\"shader_variants_at\":" << js(max_variants_at)
     << "},\n\"frames\":{\"failures\":" << frame_failures << ",\"frames_with_rejects\":" << frame_rejects << ",\"unsupported_bits\":"
-    << unsupported << ",\"areas_with_osi_fog\":" << fog_osi << "},\n\"areas\":[\n"
+    << unsupported << ",\"areas_with_osi_fog\":" << fog_osi << "},\n"
+    << (cache ? "\"texture_cache\":" + texture_cache_json(cache->stats().hits, cache->stats().misses, cache->stats().bytes, cache->stats().evictions,
+                                                          ",\"entries\":" + std::to_string(cache->stats().entries) + ",\"cap_bytes\":" +
+                                                              std::to_string(cache->cap_bytes())) + ",\n"
+              : std::string())
+    << "\"areas\":[\n"
     << rows << "]}\n";
   o.close();  // a late write error (e.g. ENOSPC) only shows after the final flush
   if (o.fail()) return std::fprintf(stderr, "cannot write %s\n", out_path.c_str()), 4;
@@ -409,7 +434,8 @@ int main(int argc, char** argv) {
   std::map<std::string, std::string> a;
   static const char* known[] = {"--install", "--level", "--area", "--out", "--backend", "--width", "--height", "--frames", "--fov", "--near",
                                 "--far", "--eye", "--yaw", "--pitch", "--eye-height", "--vertex-colors", "--routes",
-                                "--synthetic", "--survey", "--keep-cpu", "--state-log", "--lighting", "--fog", "--write-install"};
+                                "--synthetic", "--survey", "--keep-cpu", "--state-log", "--lighting", "--fog", "--write-install",
+                                "--texture-cache"};
   for (int i = 1; i + 1 < argc; i += 2) {
     std::string k = argv[i];
     if (std::find_if(std::begin(known), std::end(known), [&](const char* x) { return k == x; }) == std::end(known))
@@ -425,13 +451,18 @@ int main(int argc, char** argv) {
   if (synthetic && (has("--install") || has("--level") || has("--area") || has("--survey")))
     return usage("--synthetic cannot be combined with --install, --level, --area or --survey");
   if (has("--survey") && (has("--level") || has("--area"))) return usage("--survey cannot be combined with --level or --area");
+  // M1a-4 Task 3: the cache object exists only when the flag is on; off (the default) never constructs one.
+  if (has("--texture-cache") && a["--texture-cache"] != "on" && a["--texture-cache"] != "off") return usage("bad --texture-cache (on|off)");
+  const bool texture_cache_on = has("--texture-cache") && a["--texture-cache"] == "on";
+  std::unique_ptr<view::TextureCache> texture_cache;
   if (has("--survey")) {
 #if defined(__EMSCRIPTEN__)
     return usage("--survey needs the native disk file system");
 #else
     if (!has("--install")) return usage("--survey needs --install");
     if (int rc = remove_stale_outputs(out)) return rc;
-    return survey(a["--install"], out);
+    if (texture_cache_on) texture_cache = std::make_unique<view::TextureCache>();
+    return survey(a["--install"], out, texture_cache.get());
 #endif
   }
   std::string level = synthetic ? view::kSyntheticLevel : a["--level"];
@@ -573,6 +604,10 @@ int main(int argc, char** argv) {
 #endif
   }
 
+  if (texture_cache_on) {
+    texture_cache = std::make_unique<view::TextureCache>();
+    ao.texture_cache = texture_cache.get();
+  }
   view::AreaData data;
   std::string err;
   view::LoadError load_kind = view::LoadError::None;
@@ -683,6 +718,9 @@ int main(int argc, char** argv) {
     << num(data.fog.end) << ",\"density\":" << num(data.fog.density) << ",\"source\":" << js(data.fog.source) << "}"
     << ",\"cave_lighting\":" << (data.cave_lighting ? "true" : "false") << ",\"script_class\":" << js(data.script_class)
     << ",\"special_textures\":" << data.special_textures << ",\"special_matches\":" << data.special_matches << "}"
+    << (texture_cache ? ",\n\"texture_cache\":" + texture_cache_json(texture_cache->stats().hits, texture_cache->stats().misses,
+                                                                     texture_cache->stats().bytes, texture_cache->stats().evictions)
+                      : std::string())
     << ",\n\"warnings_dropped\":" << data.warnings_dropped
     << ",\"warnings\":" << warnings_json(data.warnings) << "\n}\n";
   m.close();
