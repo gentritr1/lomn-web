@@ -37,23 +37,20 @@ wasm:
 site: wasm
 	timeout 120 node web/tools/build_site.mjs build/wasm build/site
 
-# A skipped test is not a pass (M1b T7). pytest runs with -rs and its report is gated: every skip must match the allowlist
-# PYTEST_SKIP_ALLOW (an awk regex over the "SKIPPED [n] file:line: reason" line; EMPTY = no skip is allowed), the sum of
-# the [n] counts must equal the "N skipped" in pytest's summary line (so a changed report format cannot hide skips), and a
-# skip is also tolerated when LOMN_DATA is unset and the reason says so (the data-free subset is all that can run then;
-# check prints "SKIPPED (no LOMN_DATA)" for the data layers too). test-tools needs build/native (test_m1a1_oracles runs
-# lomn_datacheck), so it runs after `native`. The log is build/pytest-tools.log.
+# A skipped test is not a pass, and neither is an expected failure (M1b T7, T8 P15). pytest runs with -rsxX and its report is
+# gated by tools/pytest_gate.py (unit-tested on synthetic reports in tools/tests/test_pytest_gate.py): every skip must match
+# the allowlist PYTEST_SKIP_ALLOW (a regex over the "SKIPPED [n] file:line: reason" line; EMPTY = no skip is allowed), every
+# xfail / xpass must match PYTEST_XFAIL_ALLOW (EMPTY = none), the counts listed must equal the "N skipped / xfailed / xpassed"
+# of pytest's summary line (so a changed report format cannot hide any), and a skip is also tolerated when LOMN_DATA is unset
+# and the line ENDS with the reason "(no LOMN_DATA)" (anchored: "needs node and LOMN_DATA" no longer hides a missing node; the
+# data-free subset is all that can run then; check prints "SKIPPED (no LOMN_DATA)" for the data layers too). test-tools needs
+# build/native (test_m1a1_oracles runs lomn_datacheck), so it runs after `native`. The log is build/pytest-tools.log.
 PYTEST_SKIP_ALLOW ?=
+PYTEST_XFAIL_ALLOW ?=
 test-tools: native $(VENV)/.ok
 	@mkdir -p build
-	$(EMSDK_ENV); set -o pipefail; timeout 1800 $(VENV)/bin/pytest -q -rs tools 2>&1 | tee build/pytest-tools.log
-	@awk -v allow="$(PYTEST_SKIP_ALLOW)" -v nodata="$$([ -z "$$LOMN_DATA" ] && echo 1)" \
-	  '/^SKIPPED \[[0-9]+\]/ { match($$0, /\[[0-9]+\]/); n = substr($$0, RSTART + 1, RLENGTH - 2) + 0; listed += n; \
-	     if ((allow != "" && $$0 ~ allow) || (nodata == "1" && $$0 ~ /LOMN_DATA/)) next; bad += n; print "  unexpected skip: " $$0 } \
-	   / skipped/ && /in [0-9.]+s/ { if (match($$0, /[0-9]+ skipped/)) summary = substr($$0, RSTART, RLENGTH - 8) + 0 } \
-	   END { if (summary + 0 != listed) { printf "test-tools: summary says %d skipped but -rs lists %d\n", summary, listed; exit 1 } \
-	         if (bad > 0) { printf "test-tools: FAILED, %d unexpected pytest skip(s) (a skip is not a pass); allowlist PYTEST_SKIP_ALLOW is %s\n", bad, (allow == "" ? "empty" : allow); exit 1 } \
-	         printf "test-tools: %d pytest skip(s), all allowed\n", listed }' build/pytest-tools.log
+	$(EMSDK_ENV); set -o pipefail; timeout 1800 $(VENV)/bin/pytest -q -rsxX tools 2>&1 | tee build/pytest-tools.log
+	@$(PY) tools/pytest_gate.py build/pytest-tools.log --allow-skip "$(PYTEST_SKIP_ALLOW)" --allow-xfail "$(PYTEST_XFAIL_ALLOW)" $$([ -z "$$LOMN_DATA" ] && echo --no-data)
 
 test-native: native
 	ctest --test-dir build/native --output-on-failure --timeout 300

@@ -4,7 +4,6 @@ the fingerprint tools/builds.json accepts."""
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import struct
 import subprocess
@@ -94,9 +93,9 @@ def test_prefix_names_sort_shorter_first(tmp_path: Path) -> None:
     assert js_fingerprint(root) == py
 
 
-@pytest.mark.skipif(NODE is None or not os.environ.get("LOMN_DATA"), reason="needs node and LOMN_DATA")
-def test_real_install_is_the_accepted_build() -> None:
-    root = Path(os.environ["LOMN_DATA"]) / "install"
+@pytest.mark.skipif(NODE is None, reason="node not found")
+def test_real_install_is_the_accepted_build(lomn_data: Path) -> None:  # lomn_data skips with "SKIPPED (no LOMN_DATA)" (T8 P15)
+    root = lomn_data / "install"
     py = byo_fingerprint.fingerprint(root)
     assert py == js_fingerprint(root)
     builds = json.loads((REPO / "tools" / "builds.json").read_text())
