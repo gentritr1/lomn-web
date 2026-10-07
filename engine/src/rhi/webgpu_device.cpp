@@ -4,6 +4,7 @@
 #include <webgpu/webgpu.h>
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <map>
 
@@ -43,6 +44,11 @@ class WebGpuDevice final : public Device {
 
   // Releases every owned handle in reverse order of creation (children before the device, then
   // queue, device, adapter, instance).
+  WebGpuDevice(const WebGpuDevice&) = delete;
+  WebGpuDevice& operator=(const WebGpuDevice&) = delete;
+  WebGpuDevice(WebGpuDevice&&) = delete;
+  WebGpuDevice& operator=(WebGpuDevice&&) = delete;
+
   ~WebGpuDevice() override {
     if (pass_) {
       wgpuRenderPassEncoderEnd(pass_);
@@ -240,18 +246,25 @@ class WebGpuDevice final : public Device {
     wgpuCommandEncoderCopyTextureToBuffer(enc, &src, &dst, &ext);
     WGPUCommandBuffer cb = wgpuCommandEncoderFinish(enc, nullptr);
     wgpuQueueSubmit(queue_, 1, &cb);
-    bool mapped = false;
+    // Heap userdata: if the wait below fails, the map callback may still fire later, so it must not point at this stack frame.
+    struct MapState { bool mapped = false; };
+    auto* ms = new MapState;
     WGPUBufferMapCallbackInfo mcb = WGPU_BUFFER_MAP_CALLBACK_INFO_INIT;
     mcb.mode = WGPUCallbackMode_WaitAnyOnly;
     mcb.callback = [](WGPUMapAsyncStatus s, WGPUStringView msg, void* u1, void*) {
-      *static_cast<bool*>(u1) = s == WGPUMapAsyncStatus_Success;
+      static_cast<MapState*>(u1)->mapped = s == WGPUMapAsyncStatus_Success;
       if (s != WGPUMapAsyncStatus_Success) std::fprintf(stderr, "[webgpu] readback map failed (status %d): %s\n", int(s), str(msg).c_str());
     };
-    mcb.userdata1 = &mapped;
+    mcb.userdata1 = ms;
     WGPUFutureWaitInfo w = WGPU_FUTURE_WAIT_INFO_INIT;
     w.future = wgpuBufferMapAsync(buf, WGPUMapMode_Read, 0, bd.size, mcb);
     const WGPUWaitStatus ws = wgpuInstanceWaitAny(inst_, 1, &w, UINT64_MAX);
     bool ok = false;
+    bool mapped = false;
+    if (ws == WGPUWaitStatus_Success) {  // callback has run; safe to free its state
+      mapped = ms->mapped;
+      delete ms;
+    }  // else: intentionally leaked (a late callback would write to freed memory)
     if (ws != WGPUWaitStatus_Success) {
       std::fprintf(stderr, "[webgpu] readback wait failed (status %d)\n", int(ws));
     } else if (mapped) {
@@ -329,14 +342,15 @@ struct Pending {
 };
 
 // Releases whatever creation acquired so far, reports the error and frees p. Never leaks instance/adapter.
-void fail(Pending* p, const std::string& msg, WGPUDevice dev = nullptr, WGPUSurface surface = nullptr) {
+// msg is taken by value: callers pass p->error, which dies with `delete p`.
+void fail(Pending* p, std::string msg, WGPUDevice dev = nullptr, WGPUSurface surface = nullptr) {
   if (surface) wgpuSurfaceRelease(surface);
   if (dev) wgpuDeviceRelease(dev);
   if (p->adapter) wgpuAdapterRelease(p->adapter);
   if (p->inst) wgpuInstanceRelease(p->inst);
   DeviceCallback done = std::move(p->done);
   delete p;
-  done(nullptr, msg);
+  done(nullptr, std::move(msg));
 }
 
 void finish(Pending* p, WGPUDevice dev) {
@@ -456,7 +470,31 @@ void create_webgpu_device(const char* canvas_selector, uint32_t width, uint32_t 
     (void)f;
 #endif
   };
+#if !defined(__EMSCRIPTEN__)
+  // Native debugging/test override: LOMN_WEBGPU_BACKEND=metal|vulkan|d3d12|d3d11|opengl|null forces the adapter backend
+  // (e.g. d3d12 on macOS yields "no adapter", which makes the failure path testable). Unset or unknown = default.
+  WGPURequestAdapterOptions aopts = WGPU_REQUEST_ADAPTER_OPTIONS_INIT;
+  const WGPURequestAdapterOptions* aopts_ptr = nullptr;
+  if (const char* be = std::getenv("LOMN_WEBGPU_BACKEND")) {
+    const std::string v = be;
+    WGPUBackendType bt = WGPUBackendType_Undefined;
+    if (v == "metal") bt = WGPUBackendType_Metal;
+    else if (v == "vulkan") bt = WGPUBackendType_Vulkan;
+    else if (v == "d3d12") bt = WGPUBackendType_D3D12;
+    else if (v == "d3d11") bt = WGPUBackendType_D3D11;
+    else if (v == "opengl") bt = WGPUBackendType_OpenGL;
+    else if (v == "null") bt = WGPUBackendType_Null;
+    if (bt == WGPUBackendType_Undefined) {
+      if (!v.empty()) std::fprintf(stderr, "[webgpu] ignoring unknown LOMN_WEBGPU_BACKEND=%s\n", v.c_str());
+    } else {
+      aopts.backendType = bt;
+      aopts_ptr = &aopts;
+    }
+  }
+  WGPUFuture f = wgpuInstanceRequestAdapter(p->inst, aopts_ptr, acb);
+#else
   WGPUFuture f = wgpuInstanceRequestAdapter(p->inst, nullptr, acb);
+#endif
 #if !defined(__EMSCRIPTEN__)
   WGPUFutureWaitInfo w = WGPU_FUTURE_WAIT_INFO_INIT;
   w.future = f;

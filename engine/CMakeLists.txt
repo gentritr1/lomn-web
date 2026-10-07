@@ -58,6 +58,12 @@ else()
     target_link_libraries(lomn_gpu_test PRIVATE lomn_webgpu)
     add_test(NAME gpu_triangle COMMAND lomn_gpu_test)
     set_tests_properties(gpu_triangle PROPERTIES SKIP_RETURN_CODE 77 LABELS gpu)
+    # No-adapter path: forcing the D3D12 backend on macOS/Linux yields no adapter. lomn_native must exit 3 (not crash)
+    # and print a readable reason. ctest ignores the exit code when PASS_REGULAR_EXPRESSION is set, so the sh wrapper asserts it.
+    add_test(NAME gpu_no_adapter COMMAND sh -c "\"$0\" --backend webgpu --frames 1 --out \"$1\"; test $? -eq 3"
+             $<TARGET_FILE:lomn_native> ${CMAKE_CURRENT_BINARY_DIR}/noadapter)
+    set_tests_properties(gpu_no_adapter PROPERTIES ENVIRONMENT "LOMN_WEBGPU_BACKEND=d3d12"
+                         PASS_REGULAR_EXPRESSION "webgpu unavailable: no WebGPU adapter" LABELS gpu)
   endif()
 endif()
 
