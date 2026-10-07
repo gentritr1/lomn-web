@@ -5,7 +5,7 @@
 // Options (every option takes a value):
 //   --backend webgpu|null   webgpu (default) writes <out> as PNG; null writes the rhi call log to <out>
 //   --width 1280 --height 720 --frames 1
-//   --fov 60 --near 0.5 --far 4000 --eye x,y,z --yaw deg --pitch deg --eye-height 3   (camera fallback overrides)
+//   --fov 72 --near 0.01 --far 4700 (the exe's camera; "exe" source) --eye x,y,z --yaw deg --pitch deg --eye-height 3
 //   --vertex-colors on|off  --routes main,trans,back,moveable,nolight
 //   --state-log FILE        write the D3D8 state log (A9): device init + frame 1 (+ frame 2 when --frames >= 2)
 //   --lighting faithful|forced   forced = GcRenderNodeGroup::SetLighting(true) on MainArea/MainTrans (half of the night-vision state: the special emissive colour is not modelled)
@@ -44,10 +44,11 @@
 
 #include <unistd.h>
 
+#if !defined(__EMSCRIPTEN__) || defined(LOMN_NODE_DISK_FS)
+#include <filesystem>
+#endif
 #if !defined(__EMSCRIPTEN__)
 #include <sys/resource.h>
-
-#include <filesystem>
 
 #include "stb_image_write.h"
 #endif
@@ -218,7 +219,7 @@ std::string area_counts_json(const view::AreaData& a) {
          std::to_string(s.missing_models) + ",\"placements_with_orientation\":" + std::to_string(s.placements_with_orientation) +
          ",\"models\":" + std::to_string(s.models) + ",\"models_without_colors\":" + std::to_string(s.models_without_colors) +
          ",\"subsets\":" + std::to_string(s.subsets) + ",\"alpha_subsets\":" + std::to_string(s.alpha_subsets) + ",\"untextured_subsets\":" +
-         std::to_string(s.untextured_subsets) + ",\"draws\":" + std::to_string(s.draws) + ",\"vertices\":" + std::to_string(s.vertices) +
+         std::to_string(s.untextured_subsets) + ",\"untextured_materials\":" + std::to_string(s.untextured_materials) + ",\"draws\":" + std::to_string(s.draws) + ",\"vertices\":" + std::to_string(s.vertices) +
          ",\"triangles\":" + std::to_string(s.triangles) + ",\"geometry_bytes\":" + std::to_string(s.geometry_bytes) + ",\"textures\":" +
          std::to_string(s.textures) + ",\"textures_alpha\":" + std::to_string(s.textures_alpha) + ",\"textures_missing\":" +
          std::to_string(s.textures_missing) + ",\"textures_failed\":" + std::to_string(s.textures_failed) + ",\"texture_bytes_with_mips\":" +
@@ -241,6 +242,15 @@ std::string warnings_json(const std::vector<std::string>& w) {
   for (size_t i = 0; i < w.size(); ++i) o += std::string(i ? "," : "") + js(w[i]);
   return o + "]";
 }
+
+#if !defined(__EMSCRIPTEN__) || defined(LOMN_NODE_DISK_FS)
+// The disk file system's user directory (native, or wasm32 under Node with NODERAWFS).
+std::string disk_user_dir() {
+  std::error_code ec;
+  const std::filesystem::path t = std::filesystem::temp_directory_path(ec);
+  return ((ec ? std::filesystem::path("/tmp") : t) / "lomn_view_user").string();
+}
+#endif
 
 #if !defined(__EMSCRIPTEN__)
 // Every <lev>/<area>.blk under data/levels (sorted), CPU-loaded with load_area. Measures the caps' real maxima.
@@ -305,6 +315,9 @@ int survey(const std::string& install, const std::string& out_path) {
   uint64_t max_place = 0, max_draws = 0, max_tex = 0, max_tex_bytes = 0, max_geo = 0, max_records = 0, failures = 0;
   double total_ms = 0;
   std::string max_place_at, max_draws_at, max_tex_at, max_tex_bytes_at, max_geo_at;
+  uint64_t max_pipes = 0, max_states = 0, max_lights = 0, frame_failures = 0, frame_rejects = 0, fog_osi = 0, max_variants = 0;
+  uint32_t unsupported = 0;
+  std::string max_pipes_at, max_states_at, max_lights_at, max_variants_at;
   auto track = [](uint64_t v, uint64_t& m, std::string& at, const std::string& where) {
     if (v > m) {
       m = v;
@@ -325,8 +338,39 @@ int survey(const std::string& install, const std::string& out_path) {
       rows += ",\"error\":" + js(err) + "}";
       continue;
     }
+    // M1a-3: one null-backend frame through the D3D8 replay -> pipelines, state calls, draw kinds per area.
+    std::string fr = ",\"frame\":null";
+    {
+      auto nd = rhi::create_null_device(nullptr);
+      const rhi::TextureId rt = nd->create_render_target_ex(rhi::RenderTargetDesc{64, 64, true, 1.0f});
+      view::AreaRenderer ren;
+      std::string uerr;
+      if (rt && ren.upload(*nd, a, view::RenderOptions(), &uerr) &&
+          ren.render(*nd, rt, a, view::make_camera(a, view::CameraSettings(), 1.0f))) {
+        const view::RenderStats rs = ren.last_stats();
+        const rhi::FrameStats fs = nd->last_frame_stats();
+        fr = ",\"frame\":{\"pipelines\":" + std::to_string(ren.pipelines()) + ",\"draws\":" + std::to_string(fs.draws) + ",\"rejected\":" +
+             std::to_string(fs.rejected) + ",\"state_calls\":" + std::to_string(rs.state_calls) + ",\"lit\":" + std::to_string(rs.lit_draws) +
+             ",\"fogged\":" + std::to_string(rs.fogged_draws) + ",\"blended\":" + std::to_string(rs.blended_draws) + ",\"alpha_tested\":" +
+             std::to_string(rs.alpha_tested_draws) + ",\"null_texture\":" + std::to_string(rs.null_texture_draws) + ",\"shader_variants\":" + std::to_string(rs.shader_variants) + ",\"unsupported_bits\":" +
+             std::to_string(rs.unsupported) + "}";
+        track(ren.pipelines(), max_pipes, max_pipes_at, where);
+        track(rs.state_calls, max_states, max_states_at, where);
+        track(rs.shader_variants, max_variants, max_variants_at, where);
+        if (fs.rejected) ++frame_rejects;
+        unsupported |= rs.unsupported;
+      } else {
+        ++frame_failures;
+      }
+    }
+    track(a.lights.size(), max_lights, max_lights_at, where);
+    fog_osi += a.fog.source == "osi";
     rows += "," + area_counts_json(a) + ",\"load_ms\":" + num(a.stats.load_ms) + ",\"decode_ms\":" + num(a.stats.decode_ms) +
-            ",\"warnings\":" + std::to_string(a.warnings.size()) + ",\"warnings_dropped\":" + std::to_string(a.warnings_dropped) + "}";
+            ",\"warnings\":" + std::to_string(a.warnings.size()) + ",\"warnings_dropped\":" + std::to_string(a.warnings_dropped) + fr +
+            ",\"scene\":{\"level_type\":" + std::to_string(a.level_type) + ",\"lights\":" + std::to_string(a.lights.size()) +
+            ",\"lights_source\":" + js(a.lights_source) + ",\"fog_source\":" + js(a.fog.source) + ",\"fog_start\":" + num(a.fog.start) +
+            ",\"fog_end\":" + num(a.fog.end) + ",\"cave_lighting\":" + (a.cave_lighting ? "true" : "false") + ",\"script_class\":" +
+            js(a.script_class) + ",\"special_matches\":" + std::to_string(a.special_matches) + "}}";
     max_records = std::max<uint64_t>(max_records, a.stats.obj_records);
     track(a.stats.placements, max_place, max_place_at, where);
     track(a.stats.draws, max_draws, max_draws_at, where);
@@ -339,12 +383,16 @@ int survey(const std::string& install, const std::string& out_path) {
     << ",\"placements\":" << max_place << ",\"placements_at\":" << js(max_place_at) << ",\"draws\":" << max_draws << ",\"draws_at\":"
     << js(max_draws_at) << ",\"textures\":" << max_tex << ",\"textures_at\":" << js(max_tex_at) << ",\"texture_bytes_with_mips\":"
     << max_tex_bytes << ",\"texture_bytes_at\":" << js(max_tex_bytes_at) << ",\"geometry_bytes\":" << max_geo << ",\"geometry_bytes_at\":"
-    << js(max_geo_at) << "},\n\"areas\":[\n"
+    << js(max_geo_at) << ",\"pipelines\":" << max_pipes << ",\"pipelines_at\":" << js(max_pipes_at) << ",\"state_calls\":" << max_states
+    << ",\"state_calls_at\":" << js(max_states_at) << ",\"lights\":" << max_lights << ",\"lights_at\":" << js(max_lights_at) << ",\"shader_variants\":" << max_variants
+    << ",\"shader_variants_at\":" << js(max_variants_at)
+    << "},\n\"frames\":{\"failures\":" << frame_failures << ",\"frames_with_rejects\":" << frame_rejects << ",\"unsupported_bits\":"
+    << unsupported << ",\"areas_with_osi_fog\":" << fog_osi << "},\n\"areas\":[\n"
     << rows << "]}\n";
   o.close();  // a late write error (e.g. ENOSPC) only shows after the final flush
   if (o.fail()) return std::fprintf(stderr, "cannot write %s\n", out_path.c_str()), 4;
   std::printf("survey: %zu areas, %llu failures -> %s\n", areas.size(), static_cast<unsigned long long>(failures), out_path.c_str());
-  return failures ? 4 : 0;
+  return failures || frame_failures || frame_rejects ? 4 : 0;
 }
 #endif
 
@@ -389,8 +437,9 @@ int main(int argc, char** argv) {
   uint32_t width = 1280, height = 720, frames = 1;
   if (synthetic) width = height = 64;
   view::CameraSettings cs = synthetic ? view::synthetic_camera() : view::CameraSettings();
-  // Per-field camera sources (spec M1 §2.3): "cli" when the flag was given, else the documented fallback (the synthetic
-  // scene's own values count as fallback too: they are not data). M1a-3 adds "osi". clip = near AND far both given.
+  // Per-field camera sources (spec M1 §2.3): "cli" when the flag was given; "exe" for FOV/near/far taken from the exe's
+  // GcViewPort camera (M1a-3; Base.osi sets none of them); else the documented fallback (the synthetic scene's own
+  // values count as fallback: they are not data). clip = near AND far both given.
   const bool pitch_cli = has("--pitch"), fov_cli = has("--fov"), clip_cli = has("--near") && has("--far");
   view::RenderOptions ro;
   view::AreaOptions ao;
@@ -478,10 +527,10 @@ int main(int argc, char** argv) {
 #endif
     fsp = std::move(mem);
   } else {
-#if defined(__EMSCRIPTEN__)
+#if defined(__EMSCRIPTEN__) && !defined(LOMN_NODE_DISK_FS)
     return usage("--install needs the native build (the browser path is M1b)");
 #else
-    fsp = fs::open_disk(a["--install"], user_dir());
+    fsp = fs::open_disk(a["--install"], disk_user_dir());
     if (!fsp) return std::fprintf(stderr, "cannot open install %s\n", a["--install"].c_str()), 3;
 #endif
   }
@@ -572,10 +621,10 @@ int main(int argc, char** argv) {
   std::sort(sorted.begin(), sorted.end());
   const double p50 = sorted[sorted.size() / 2];
   const char* const pitch_src = pitch_cli ? "cli" : "fallback";
-  const char* const fov_src = fov_cli ? "cli" : "fallback";
-  const char* const clip_src = clip_cli ? "cli" : "fallback";
-  const bool camera_fallback = cam.eye_source == "bounds_centre" || cam.eye_source == "origin" ||
-                               (cam.yaw_source != "cli") || !pitch_cli || !fov_cli || !clip_cli;
+  const char* const fov_src = fov_cli ? "cli" : synthetic ? "fallback" : "exe";
+  const char* const clip_src = clip_cli ? "cli" : synthetic ? "fallback" : "exe";
+  const bool camera_fallback = cam.eye_source == "bounds_centre" || cam.eye_source == "origin" || (cam.yaw_source != "cli") ||
+                               !pitch_cli || std::string(fov_src) == "fallback" || std::string(clip_src) == "fallback";
   std::ofstream m(out + ".json");
   m << "{\n\"tool\":\"lomn_view\",\"level\":" << js(data.level) << ",\"area\":" << js(data.area) << ",\"synthetic\":"
     << (synthetic ? "true" : "false") << ",\n\"backend\":" << js(dev->backend()) << ",\"adapter\":" << js(dev->adapter())

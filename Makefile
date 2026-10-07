@@ -5,7 +5,7 @@ export LOMN_DATA LOMN_CACHE
 VENV := .venv
 PY := $(VENV)/bin/python
 EMSDK_ENV := source .toolchain/emsdk/emsdk_env.sh >/dev/null 2>&1
-.PHONY: setup check-data decomp worklist native wasm site test-tools test-native test-wasm test-web check perf datacheck
+.PHONY: setup check-data decomp worklist native wasm site test-tools test-native test-wasm test-web check perf datacheck datacheck-wasm
 
 setup: $(VENV)/.ok
 	timeout 3600 tools/toolchain.sh
@@ -62,7 +62,16 @@ perf: native $(VENV)/.ok
 datacheck: native $(VENV)/.ok
 	timeout 1200 $(PY) tools/research/oracle/check_datacheck.py --exe build/native/lomn_datacheck --install "$(LOMN_DATA)/install"
 
+# M1a-3: the same oracle against the wasm32 datacheck under Node (NODERAWFS disk file system), then native == wasm32 on
+# the real-data null logs of vllg / ghut / crss (call log and D3D8 state log).
+datacheck-wasm: wasm native $(VENV)/.ok
+	$(EMSDK_ENV) && timeout 1800 $(PY) tools/research/oracle/check_datacheck.py --exe build/wasm/lomn_datacheck_node.sh --install "$(LOMN_DATA)/install"
+	$(EMSDK_ENV) && for la in lev1:vllg lev2:ghut lev4:crss; do l=$${la%%:*}; a=$${la##*:}; \
+	  timeout 300 build/native/lomn_view --install "$(LOMN_DATA)/install" --level $$l --area $$a --backend null --out build/native/$$a.calls.txt --state-log build/native/$$a.state.txt >/dev/null && \
+	  timeout 300 node build/wasm/lomn_view.js --install "$(LOMN_DATA)/install" --level $$l --area $$a --backend null --out build/wasm/$$a.calls.txt --state-log build/wasm/$$a.state.txt >/dev/null && \
+	  cmp build/native/$$a.calls.txt build/wasm/$$a.calls.txt && cmp build/native/$$a.state.txt build/wasm/$$a.state.txt || exit 1; done; echo "native == wasm32: real-area null logs"
+
 check: test-tools test-native test-wasm test-web
-	@if [ -n "$(LOMN_DATA)" ]; then $(MAKE) datacheck; else echo "datacheck SKIPPED (no LOMN_DATA)"; fi
+	@if [ -n "$(LOMN_DATA)" ]; then $(MAKE) datacheck datacheck-wasm; else echo "datacheck SKIPPED (no LOMN_DATA)"; fi
 	@if [ -d gen/decomp ]; then $(MAKE) worklist; else echo "worklist SKIPPED (run make decomp first)"; fi
 	@echo "make check: all layers green"

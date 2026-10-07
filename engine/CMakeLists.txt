@@ -68,10 +68,19 @@ if(EMSCRIPTEN)
            -DOUT=${CMAKE_CURRENT_BINARY_DIR}/determinism -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/determinism.cmake)
   # M1a-2 A7 under Node: the same synthetic scene's null call log must equal the same checked-in expected log, so the
   # native and wasm32 logs are byte-identical (make test-wasm also cmp's the two files directly).
-  add_executable(lomn_view tools/lomn_view.cpp)
+  # M1a-3: lomn_view and lomn_datacheck under Node read a real install through the disk file system (NODERAWFS), so
+  # real-area null logs and the datacheck run natively AND as wasm32 (M1a-1 carry-over R1).
+  add_executable(lomn_view tools/lomn_view.cpp src/fs/disk_fs.cpp)
   target_link_libraries(lomn_view PRIVATE lomn_area)
   target_include_directories(lomn_view PRIVATE src/app)
-  target_link_options(lomn_view PRIVATE -sNODERAWFS=1 -sALLOW_MEMORY_GROWTH=1)
+  target_compile_definitions(lomn_view PRIVATE LOMN_NODE_DISK_FS=1)
+  target_link_options(lomn_view PRIVATE -sNODERAWFS=1 -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=2GB)
+  add_executable(lomn_datacheck tools/lomn_datacheck.cpp src/fs/disk_fs.cpp)
+  target_link_libraries(lomn_datacheck PRIVATE lomn_sage)
+  target_compile_definitions(lomn_datacheck PRIVATE LOMN_NODE_DISK_FS=1)
+  target_link_options(lomn_datacheck PRIVATE -sNODERAWFS=1 -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=2GB)
+  file(GENERATE OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/lomn_datacheck_node.sh
+       CONTENT "#!/bin/sh\nexec node \"$<TARGET_FILE:lomn_datacheck>\" \"$@\"\n" FILE_PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE)
   add_test(NAME a7_null_calls COMMAND ${CMAKE_COMMAND} -DRUNNER=node -DEXE=$<TARGET_FILE:lomn_view> -DOUT=${CMAKE_CURRENT_BINARY_DIR}/a7
            -DEXPECTED=${CMAKE_CURRENT_SOURCE_DIR}/tests/data/a7_calls.txt -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/a7_calls.cmake)
   # M1a-3 A9 under Node: the synthetic state scene's D3D8 state log equals the same checked-in expected log.

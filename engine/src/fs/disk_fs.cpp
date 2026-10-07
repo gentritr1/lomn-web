@@ -11,6 +11,11 @@ class DiskFileSystem final : public FileSystem {
  public:
   DiskFileSystem(std::filesystem::path install, std::filesystem::path user) : install_(std::move(install)), user_(std::move(user)) {
     std::error_code ec;
+    // M1a-3: iterate from the canonical path. A symlinked install root iterates natively, but under Node (wasm32,
+    // NODERAWFS) the directory iterator fails on it ("Not a directory"); the relative keys are the same either way.
+    const std::filesystem::path canon = std::filesystem::canonical(install_, ec);
+    if (!ec) install_ = canon;
+    ec.clear();
     for (auto it = std::filesystem::recursive_directory_iterator(install_, ec); !ec && it != std::filesystem::recursive_directory_iterator(); it.increment(ec)) {
       std::error_code ec2;
       if (!it->is_regular_file(ec2) || ec2) continue;

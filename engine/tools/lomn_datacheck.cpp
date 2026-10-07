@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <map>
@@ -128,6 +129,37 @@ struct XInfo {
 
 }  // namespace
 
+// M1a-3 (carry-over "material floats into the A4 oracle"): order-independent checksum of every material's 11 floats
+// (faceColor RGBA, power, specular RGB, emissive RGB) as float32 bit patterns plus its texture name. One line per
+// material "%08x x 11|name" (name "-" without TextureFilename), lines sorted, joined with '\n', M0 checksum
+// (sum = sum * 31 + byte) over the bytes. tools/research/oracle/check_datacheck.py computes the same from xbin.py.
+std::string material_sum(const std::vector<lomn::sage::XMaterial>& mats) {
+  std::vector<std::string> lines;
+  for (const lomn::sage::XMaterial& m : mats) {
+    const float f[11] = {m.diffuse[0], m.diffuse[1], m.diffuse[2], m.diffuse[3], m.power, m.specular[0], m.specular[1],
+                         m.specular[2], m.emissive[0], m.emissive[1], m.emissive[2]};
+    std::string l;
+    for (float v : f) {
+      uint32_t u;
+      std::memcpy(&u, &v, 4);
+      char b[9];
+      std::snprintf(b, sizeof b, "%08x", u);
+      l += b;
+    }
+    l += "|" + (m.has_texture ? m.texture : std::string("-"));
+    lines.push_back(l);
+  }
+  std::sort(lines.begin(), lines.end());
+  uint32_t sum = 0;
+  for (size_t i = 0; i < lines.size(); ++i) {
+    if (i) sum = sum * 31u + uint8_t('\n');
+    for (unsigned char c : lines[i]) sum = sum * 31u + c;
+  }
+  char b[9];
+  std::snprintf(b, sizeof b, "%08x", sum);
+  return b;
+}
+
 int main(int argc, char** argv) {
   if (argc < 2) {
     std::fprintf(stderr, "usage: lomn_datacheck <install_dir> [--areas lev/area,...] [--dump <blk> <entry> <out>]...\n");
@@ -173,11 +205,15 @@ int main(int argc, char** argv) {
     return 0;
   }
 
-  // Every .blk, as a VFS path "Root/<relative path>", sorted by normalised path.
+  // Every .blk, as a VFS path "Root/<relative path>", sorted by normalised path. Walked from the canonical install path
+  // (M1a-3: Node's NODERAWFS cannot iterate a symlinked root; native results are unchanged).
   std::vector<std::string> blks;
-  for (auto it = std::filesystem::recursive_directory_iterator(install, ec); !ec && it != std::filesystem::recursive_directory_iterator(); it.increment(ec))
+  std::filesystem::path walk_root = std::filesystem::canonical(install, ec);
+  if (ec) walk_root = install;
+  ec.clear();
+  for (auto it = std::filesystem::recursive_directory_iterator(walk_root, ec); !ec && it != std::filesystem::recursive_directory_iterator(); it.increment(ec))
     if (it->is_regular_file() && lower(it->path().extension().string()) == ".blk")
-      blks.push_back("Root/" + std::filesystem::relative(it->path(), install).generic_string());
+      blks.push_back("Root/" + std::filesystem::relative(it->path(), walk_root).generic_string());
   std::sort(blks.begin(), blks.end(), [](const std::string& a, const std::string& b) { return fs::normalize(a) < fs::normalize(b); });
 
   Meter m_header, m_read, m_x, m_dds, m_tga, m_slb;
@@ -257,7 +293,8 @@ int main(int argc, char** argv) {
         out_x += ",\"meshes\":" + std::to_string(xf.mesh_count) + ",\"vertices\":" + std::to_string(m.file_vertices) +
                  ",\"faces\":" + std::to_string(m.file_faces) + ",\"subsets\":" + std::to_string(m.subsets.size()) +
                  ",\"has_colors\":" + (m.has_colors ? "true" : "false") + ",\"out_vertices\":" + std::to_string(m.source_vertex.size()) +
-                 ",\"triangles\":" + std::to_string(m.indices.size() / 3) + ",\"materials\":" + std::to_string(m.materials.size()) + "}";
+                 ",\"triangles\":" + std::to_string(m.indices.size() / 3) + ",\"materials\":" + std::to_string(m.materials.size()) +
+                 ",\"mat_sum\":\"" + material_sum(m.materials) + "\"}";
         XInfo xi;
         for (const XMaterial& mt : m.materials) {
           xi.mat_tex.push_back(mt.has_texture ? mt.texture : "");

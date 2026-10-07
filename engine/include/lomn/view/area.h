@@ -189,10 +189,14 @@ bool load_area(const fs::FileSystem& fs, std::string_view level, std::string_vie
 // and clip planes are a DOCUMENTED FALLBACK until M1a-3 mines the Base.osi camera literals. Defaults below.
 // lomn_view's metrics JSON flags it: camera.fallback is true while ANY of eye/yaw/pitch/fov/near/far is a fallback,
 // with per-field eye_source, yaw_source, pitch_source, fov_source, clip_source ("cli" or "fallback"; M1a-3 adds "osi").
+// M1a-3: FOV, near and far are the exe's own values: GcViewPort::GcViewPort (0x004479f0) builds the main GcLegoCamera with
+// fov 72 deg (@0x00704e00, ScPerspectiveCamera x pi/180 @0x0070d508, vertical fovy of D3DXMatrixPerspectiveFovRH), near
+// 0.01 (@0x00704e1c) and far = GcGraphicsOptions::GetDrawDistance() = 4700 (mDrawDistance @0x0074a328); Base.osi never
+// calls SetDrawDistance or a FOV setter (tools/research/osi.py). lomn_view reports them with source "exe".
 struct CameraSettings {
-  float fov_deg = 60.0f;      // vertical, D3DXMatrixPerspectiveFovRH fovy
-  float near_z = 0.5f;
-  float far_z = 4000.0f;
+  float fov_deg = 72.0f;      // vertical, D3DXMatrixPerspectiveFovRH fovy
+  float near_z = 0.01f;
+  float far_z = 4700.0f;
   float eye_height = 3.0f;    // added to the POS start y (the record marks where the Toa stands)
   float pitch_deg = -10.0f;   // negative looks down; clamped to +-kMaxPitchDeg
   bool eye_set = false;       // --eye overrides the POS start (eye_height is then not added)

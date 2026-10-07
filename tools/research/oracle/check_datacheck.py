@@ -65,6 +65,20 @@ def fourcc(v):
     return bytes([(v >> 24) & 255, (v >> 16) & 255, (v >> 8) & 255, v & 255]).split(b'\0')[0].decode('latin1')
 
 
+def material_sum(mats):
+    """M1a-3: the C++ datacheck's order-independent material checksum (lomn_datacheck.cpp material_sum), from xbin.py:
+    11 float32 bit patterns (faceColor, power, specular, emissive) + '|' + texture name ('-' without one) per material,
+    lines sorted, joined with newlines, sum = sum * 31 + byte."""
+    lines = []
+    for rgba, power, spec, emis, tex in mats:
+        vals = list(rgba) + [power] + list(spec) + list(emis)
+        lines.append(''.join('%08x' % struct.unpack('<I', struct.pack('<f', v))[0] for v in vals) + '|' + (tex if tex is not None else '-'))
+    s = 0
+    for b in '\n'.join(sorted(lines)).encode('latin1'):
+        s = (s * 31 + b) & 0xffffffff
+    return '%08x' % s
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--exe', required=True)
@@ -187,14 +201,15 @@ def main():
             out_v = iv[0] + sum(len(s) - 1 for s in used.values())
             exp = dict(meshes=len(ms), vertices=len(last.positions), faces=len(last.faces),
                        subsets=len(set(last.face_material or [])), out_vertices=out_v,
-                       has_colors=any(c.type == 'MeshVertexColors' for c in lm.children))
+                       has_colors=any(c.type == 'MeshVertexColors' for c in lm.children),
+                       mat_sum=material_sum(last.materials))
             c = cx.get((rel, name), {})
             got = {k: c.get(k) for k in exp}
             if got != exp:
                 diffs.append((rel, name, exp, got))
     check('A4 2,653 .x files; xbin.py failed == []', nx == 2653 and not fails and cpp['x_summary']['ok'] == 2653, f'{nx} files, fails {fails[:3]}')
     check('A4 meshes per file = 1 except characters/bull.blk/mklf.x = 3', multi == [('data/characters/bull.blk', 'mklf.x', 3)], str(multi))
-    check('A4 per-file meshes/vertices/faces/subsets/has_colors/out_vertices equal xbin.py', not diffs, f'{len(diffs)} differ, e.g. {diffs[:2]}')
+    check('A4 per-file meshes/vertices/faces/subsets/has_colors/out_vertices/material floats+names equal xbin.py', not diffs, f'{len(diffs)} differ, e.g. {diffs[:2]}')
     print(f"      with vertex colours {cpp['x_summary']['with_colors']}, file vertices {cpp['x_summary']['vertices']}, "
           f"after normal split {cpp['x_summary']['out_vertices']}")
 
