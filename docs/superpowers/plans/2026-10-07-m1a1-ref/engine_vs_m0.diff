@@ -1,0 +1,194 @@
+diff -ru scratch/engine_m0_orig/CMakeLists.txt engine/CMakeLists.txt
+--- scratch/engine_m0_orig/CMakeLists.txt	2026-10-07 04:43:16
++++ engine/CMakeLists.txt	2026-10-07 04:57:35
+@@ -12,6 +12,11 @@
+ target_include_directories(lomn_core PUBLIC include PRIVATE "${LOMN_TOOLCHAIN_DIR}/include")
+ target_compile_options(lomn_core PRIVATE -Wall -Wextra)
+ 
++# M1a-1 data path (no GPU): SAGE blockfiles, lookup chain, SLB tables, binary .x meshes, DDS/TGA decoders.
++add_library(lomn_sage STATIC src/sage/blockfile.cpp src/sage/blockchain.cpp src/sage/slb.cpp src/sage/xfile.cpp src/sage/image.cpp)
++target_link_libraries(lomn_sage PUBLIC lomn_core)
++target_compile_options(lomn_sage PRIVATE -Wall -Wextra)
++
+ if(EMSCRIPTEN)
+   set(EMDAWN_PORT "--use-port=${LOMN_TOOLCHAIN_DIR}/emdawnwebgpu_pkg/emdawnwebgpu.port.py")
+ else()
+@@ -50,6 +55,10 @@
+   target_compile_definitions(lomn_native PRIVATE $<$<BOOL:${LOMN_WEBGPU}>:LOMN_HAS_WEBGPU=1>)
+   add_test(NAME determinism_null COMMAND ${CMAKE_COMMAND} -DEXE=$<TARGET_FILE:lomn_native>
+            -DOUT=${CMAKE_CURRENT_BINARY_DIR}/determinism -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/determinism.cmake)
++  # Native-only data survey over a real install (LOMN_DATA); validated by oracle/check_datacheck.py.
++  add_executable(lomn_datacheck tools/lomn_datacheck.cpp)
++  target_link_libraries(lomn_datacheck PRIVATE lomn_sage)
++  target_compile_options(lomn_datacheck PRIVATE -Wall -Wextra)
+   if(LOMN_WEBGPU)
+     add_executable(lomn_gpu_test tests/test_gpu.cpp)
+     target_link_libraries(lomn_gpu_test PRIVATE lomn_webgpu)
+@@ -59,8 +68,10 @@
+ endif()
+ 
+ # Unit tests: natively, and under Node when cross-compiled with emcmake (CMAKE_CROSSCOMPILING_EMULATOR=node).
+-add_executable(lomn_tests tests/test_main.cpp tests/test_fs.cpp tests/test_rhi_null.cpp tests/test_loop.cpp)
+-target_link_libraries(lomn_tests PRIVATE lomn_core)
++add_executable(lomn_tests tests/test_main.cpp tests/test_fs.cpp tests/test_rhi_null.cpp tests/test_loop.cpp
++               tests/test_sage_blockfile.cpp tests/test_sage_blockchain.cpp tests/test_sage_slb.cpp
++               tests/test_sage_xfile.cpp tests/test_sage_image.cpp)
++target_link_libraries(lomn_tests PRIVATE lomn_sage)
+ target_include_directories(lomn_tests PRIVATE "${LOMN_TOOLCHAIN_DIR}/include")
+ if(EMSCRIPTEN)
+   target_link_options(lomn_tests PRIVATE -sNODERAWFS=1 -sALLOW_MEMORY_GROWTH=1)
+diff -ru scratch/engine_m0_orig/include/lomn/fs.h engine/include/lomn/fs.h
+--- scratch/engine_m0_orig/include/lomn/fs.h	2026-10-07 04:43:16
++++ engine/include/lomn/fs.h	2026-10-07 04:43:28
+@@ -25,6 +25,11 @@
+   virtual bool exists(std::string_view path) const = 0;
+   virtual Error read(std::string_view path, std::vector<uint8_t>& out) const = 0;
+   virtual Error write(std::string_view path, const uint8_t* data, size_t size) = 0;
++  // Additive (M1a-1): size query and byte-range read, so blockfile entries are read on demand like the original
++  // ScBlockFile::LoadDiskBlock (fopen/fseek/fread of one entry). The defaults go through read() (whole file);
++  // backends override them. read_range fails with Io if [offset, offset+size) is not inside the file.
++  virtual Error size(std::string_view path, uint64_t& out) const;
++  virtual Error read_range(std::string_view path, uint64_t offset, uint64_t size, std::vector<uint8_t>& out) const;
+   // Called with the normalised path on every successful read (drives the per-area prefetch manifest).
+   void set_access_logger(std::function<void(const std::string&)> logger) { logger_ = std::move(logger); }
+ 
+@@ -49,6 +54,8 @@
+   bool exists(std::string_view path) const override;
+   Error read(std::string_view path, std::vector<uint8_t>& out) const override;
+   Error write(std::string_view path, const uint8_t* data, size_t size) override;
++  Error size(std::string_view path, uint64_t& out) const override;
++  Error read_range(std::string_view path, uint64_t offset, uint64_t size, std::vector<uint8_t>& out) const override;
+ 
+  private:
+   std::map<std::string, std::vector<uint8_t>> files_;
+Only in engine/include/lomn/sage: blockchain.h
+Only in engine/include/lomn/sage: blockfile.h
+Only in engine/include/lomn/sage: image.h
+Only in engine/include/lomn/sage: slb.h
+Only in engine/include/lomn/sage: xfile.h
+diff -ru scratch/engine_m0_orig/src/fs/disk_fs.cpp engine/src/fs/disk_fs.cpp
+--- scratch/engine_m0_orig/src/fs/disk_fs.cpp	2026-10-07 04:43:16
++++ engine/src/fs/disk_fs.cpp	2026-10-07 04:43:50
+@@ -27,6 +27,34 @@
+     log_access(n);
+     return Error::None;
+   }
++  Error size(std::string_view path, uint64_t& out) const override {
++    std::string n = normalize(path);
++    if (n.rfind("root/", 0) != 0 && n.rfind("user/", 0) != 0) return Error::BadMount;
++    std::filesystem::path p = resolve(n);
++    if (p.empty()) return Error::NotFound;
++    std::error_code ec;
++    uint64_t s = std::filesystem::file_size(p, ec);
++    if (ec) return Error::Io;
++    out = s;
++    return Error::None;
++  }
++  Error read_range(std::string_view path, uint64_t offset, uint64_t size, std::vector<uint8_t>& out) const override {
++    std::string n = normalize(path);
++    if (n.rfind("root/", 0) != 0 && n.rfind("user/", 0) != 0) return Error::BadMount;
++    std::filesystem::path p = resolve(n);
++    if (p.empty()) return Error::NotFound;
++    std::error_code ec;
++    uint64_t total = std::filesystem::file_size(p, ec);
++    if (ec || offset > total || size > total - offset) return Error::Io;
++    std::ifstream f(p, std::ios::binary);
++    if (!f) return Error::Io;
++    out.resize(static_cast<size_t>(size));
++    f.seekg(static_cast<std::streamoff>(offset));
++    if (size) f.read(reinterpret_cast<char*>(out.data()), static_cast<std::streamsize>(size));
++    if (!f) return Error::Io;
++    log_access(n);
++    return Error::None;
++  }
+   Error write(std::string_view path, const uint8_t* data, size_t size) override {
+     std::string n = normalize(path);
+     if (n.rfind("root/", 0) == 0) return Error::ReadOnly;
+diff -ru scratch/engine_m0_orig/src/fs/memory_fs.cpp engine/src/fs/memory_fs.cpp
+--- scratch/engine_m0_orig/src/fs/memory_fs.cpp	2026-10-07 04:43:16
++++ engine/src/fs/memory_fs.cpp	2026-10-07 04:43:41
+@@ -28,6 +28,25 @@
+ 
+ static bool starts_with(const std::string& s, std::string_view p) { return s.compare(0, p.size(), p) == 0; }
+ 
++// Range end checked in u64 without overflow: offset <= total && size <= total - offset.
++static bool range_ok(uint64_t total, uint64_t offset, uint64_t size) { return offset <= total && size <= total - offset; }
++
++Error FileSystem::size(std::string_view path, uint64_t& out) const {
++  std::vector<uint8_t> all;
++  Error e = read(path, all);
++  if (e == Error::None) out = all.size();
++  return e;
++}
++
++Error FileSystem::read_range(std::string_view path, uint64_t offset, uint64_t size, std::vector<uint8_t>& out) const {
++  std::vector<uint8_t> all;
++  Error e = read(path, all);
++  if (e != Error::None) return e;
++  if (!range_ok(all.size(), offset, size)) return Error::Io;
++  out.assign(all.begin() + static_cast<std::ptrdiff_t>(offset), all.begin() + static_cast<std::ptrdiff_t>(offset + size));
++  return Error::None;
++}
++
+ bool MemoryFileSystem::mount(std::string_view path, std::vector<uint8_t> bytes) {
+   std::string n = normalize(path);
+   if (!starts_with(n, "root/")) return false;
+@@ -59,6 +78,27 @@
+   auto it = files_.find(n);
+   if (it == files_.end()) return Error::NotFound;
+   out = it->second;
++  log_access(n);
++  return Error::None;
++}
++
++Error MemoryFileSystem::size(std::string_view path, uint64_t& out) const {
++  std::string n = normalize(path);
++  if (!starts_with(n, "root/") && !starts_with(n, "user/")) return Error::BadMount;
++  auto it = files_.find(n);
++  if (it == files_.end()) return Error::NotFound;
++  out = it->second.size();
++  return Error::None;
++}
++
++Error MemoryFileSystem::read_range(std::string_view path, uint64_t offset, uint64_t size, std::vector<uint8_t>& out) const {
++  std::string n = normalize(path);
++  if (!starts_with(n, "root/") && !starts_with(n, "user/")) return Error::BadMount;
++  auto it = files_.find(n);
++  if (it == files_.end()) return Error::NotFound;
++  if (!range_ok(it->second.size(), offset, size)) return Error::Io;
++  auto first = it->second.begin() + static_cast<std::ptrdiff_t>(offset);
++  out.assign(first, first + static_cast<std::ptrdiff_t>(size));
+   log_access(n);
+   return Error::None;
+ }
+Only in engine/src/sage: blockchain.cpp
+Only in engine/src/sage: blockfile.cpp
+Only in engine/src/sage: bytes.h
+Only in engine/src/sage: image.cpp
+Only in engine/src/sage: slb.cpp
+Only in engine/src/sage: xfile.cpp
+Only in engine/tests: sage_test_util.h
+diff -ru scratch/engine_m0_orig/tests/test_fs.cpp engine/tests/test_fs.cpp
+--- scratch/engine_m0_orig/tests/test_fs.cpp	2026-10-07 04:43:16
++++ engine/tests/test_fs.cpp	2026-10-07 05:05:43
+@@ -74,6 +74,14 @@
+   std::vector<uint8_t> out;
+   CHECK(fs->read("Root\\DATA\\levels\\LEV1\\NUJU.blk", out) == Error::None);
+   CHECK(out.size() == 3);
++  uint64_t size = 0;  // M1a-1 additive range API: real seek+read on disk, bounds-checked
++  CHECK(fs->size("root/data/levels/lev1/nuju.blk", size) == Error::None);
++  CHECK(size == 3);
++  CHECK(fs->read_range("Root/data/levels/lev1/NUJU.BLK", 1, 2, out) == Error::None);
++  CHECK(out == std::vector<uint8_t>{'b', 'c'});
++  CHECK(fs->read_range("Root/data/levels/lev1/nuju.blk", 2, 2, out) == Error::Io);
++  CHECK(fs->read_range("Root/data/levels/lev1/nuju.blk", ~0ull, 2, out) == Error::Io);
++  CHECK(fs->read_range("Root/data/levels/lev1/missing.blk", 0, 1, out) == Error::NotFound);
+   const uint8_t b[1] = {7};
+   CHECK(fs->write("Root/data/new", b, 1) == Error::ReadOnly);
+   CHECK(fs->write("User/saves/s0.sav", b, 1) == Error::None);
+Only in engine/tests: test_sage_blockchain.cpp
+Only in engine/tests: test_sage_blockfile.cpp
+Only in engine/tests: test_sage_image.cpp
+Only in engine/tests: test_sage_slb.cpp
+Only in engine/tests: test_sage_xfile.cpp
+Only in engine/tools: lomn_datacheck.cpp
