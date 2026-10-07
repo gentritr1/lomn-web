@@ -1,0 +1,22 @@
+vllg determinism r1 vs r2: 0 of 921600 pixels differ, max channel difference 0
+vllg determinism r1 vs r3: 0 of 921600 pixels differ, max channel difference 0
+vllg vs M1a-2 unlit reference (same camera, fog off): 181456 of 921600 pixels differ, max channel difference 44
+vllg faithful vs fog off: 155532 of 921600 pixels differ, max channel difference 29
+vllg faithful vs forced lighting: 921600 of 921600 pixels differ, max channel difference 191
+vllg null call log + state log identical across 2 runs
+ghut determinism r1 vs r2: 0 of 921600 pixels differ, max channel difference 0
+ghut determinism r1 vs r3: 0 of 921600 pixels differ, max channel difference 0
+ghut vs M1a-2 unlit reference (same camera, fog off): 275447 of 921600 pixels differ, max channel difference 241
+ghut faithful vs fog off: 0 of 921600 pixels differ, max channel difference 0
+ghut faithful vs forced lighting: 921600 of 921600 pixels differ, max channel difference 125
+ghut null call log + state log identical across 2 runs
+crss determinism r1 vs r2: 0 of 921600 pixels differ, max channel difference 0
+crss determinism r1 vs r3: 0 of 921600 pixels differ, max channel difference 0
+crss vs M1a-2 unlit reference (same camera, fog off): 20073 of 921600 pixels differ, max channel difference 11
+crss faithful vs fog off: 0 of 921600 pixels differ, max channel difference 0
+crss faithful vs forced lighting: 921548 of 921600 pixels differ, max channel difference 29
+crss null call log + state log identical across 2 runs
+crss yaw67.5 r1 vs r2: 0 of 921600 pixels differ, max channel difference 0
+crss yaw67.5 r1 vs r3: 0 of 921600 pixels differ, max channel difference 0
+survey: 123 areas, 0 failures -> $W/evidence/survey.json
+done

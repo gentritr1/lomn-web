@@ -1,0 +1,11 @@
+100% tests passed, 0 tests failed out of 22
+[doctest] test cases:    128 |    128 passed | 0 failed | 0 skipped
+[doctest] assertions: 172010 | 172010 passed | 0 failed |
+[doctest] Status: SUCCESS!
+vllg rc=0 stderr_bytes=0 vs Release: 0 of 921600 pixels differ, max channel difference 0
+ghut rc=0 stderr_bytes=0 vs Release: 0 of 921600 pixels differ, max channel difference 0
+crss rc=0 stderr_bytes=0 vs Release: 0 of 921600 pixels differ, max channel difference 0
+survey rc=0 stderr_bytes=0 survey: 123 areas, 0 failures 
+vllg ASan null backend 2 frames rc=0 stderr_bytes=0: state log vs Release identical (579 lines), null call log vs Release identical
+ghut ASan null backend 2 frames rc=0 stderr_bytes=0: state log vs Release identical (422 lines), null call log vs Release identical
+crss ASan null backend 2 frames rc=0 stderr_bytes=0: state log vs Release identical (660 lines), null call log vs Release identical

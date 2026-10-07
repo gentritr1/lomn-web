@@ -1,0 +1,51 @@
+2,5c2
+< create_mesh_pipeline wgsl=1691 bytes sum=71fcec4f vs=vs fs=fs_opaque uniforms=96 stride=48 attrs=[0:f32x3@0,1:f32x3@12,2:f32x2@24,3:f32x4@32] blend=opaque depth_write=1 depth=lessequal cull=none -> 1
+< create_mesh_pipeline wgsl=1691 bytes sum=71fcec4f vs=vs fs=fs_alpha uniforms=96 stride=48 attrs=[0:f32x3@0,1:f32x3@12,2:f32x2@24,3:f32x4@32] blend=alpha depth_write=1 depth=lessequal cull=none -> 2
+< create_sampler mag=linear min=linear mip=linear u=wrap v=wrap aniso=3 -> 1
+< create_uniform_buffer 2560 -> 1
+---
+> create_uniform_buffer 10240 -> 1
+8d4
+< create_bind_group uniforms=1 bytes=96 texture=2 sampler=1 -> 1
+13d8
+< create_bind_group uniforms=1 bytes=96 texture=3 sampler=1 -> 2
+19d13
+< create_bind_group uniforms=1 bytes=96 texture=4 sampler=1 -> 3
+22c16
+< write_buffer 2 +0 576 bytes sum=51c53250
+---
+> write_buffer 2 +0 576 bytes sum=35a77ec4
+28c22,30
+< write_buffer 1 +0 2560 bytes sum=56ab9d5a
+---
+> create_mesh_pipeline wgsl=3902 bytes sum=e1e89604 vs=vs fs=fs uniforms=1024 stride=48 attrs=[0:f32x3@0,1:f32x3@12,2:f32x2@24,3:f32x4@32] blend=opaque depth_write=1 depth=lessequal cull=front front=cw -> 1
+> create_sampler mag=linear min=linear mip=linear u=wrap v=wrap aniso=1 -> 1
+> create_bind_group uniforms=1 bytes=1024 texture=3 sampler=1 -> 1
+> create_bind_group uniforms=1 bytes=1024 texture=2 sampler=1 -> 2
+> create_mesh_pipeline wgsl=3902 bytes sum=e1e89604 vs=vs fs=fs uniforms=1024 stride=48 attrs=[0:f32x3@0,1:f32x3@12,2:f32x2@24,3:f32x4@32] blend=alpha depth_write=1 depth=lessequal cull=front front=cw -> 2
+> create_bind_group uniforms=1 bytes=1024 texture=4 sampler=1 -> 3
+> create_mesh_pipeline wgsl=3902 bytes sum=e1e89604 vs=vs fs=fs uniforms=1024 stride=48 attrs=[0:f32x3@0,1:f32x3@12,2:f32x2@24,3:f32x4@32] blend=opaque depth_write=1 depth=lessequal cull=none front=cw -> 3
+> create_mesh_pipeline wgsl=3902 bytes sum=e1e89604 vs=vs fs=fs uniforms=1024 stride=48 attrs=[0:f32x3@0,1:f32x3@12,2:f32x2@24,3:f32x4@32] blend=alpha depth_write=1 depth=lessequal cull=none front=cw -> 4
+> write_buffer 1 +0 10240 bytes sum=454f95d5
+30,39c32,41
+< draw_indexed pipeline=1 vb=2 ib=3 first=0 count=6 bind_group=2+0
+< draw_indexed pipeline=1 vb=2 ib=3 first=12 count=6 bind_group=1+256
+< draw_indexed pipeline=2 vb=2 ib=3 first=6 count=6 bind_group=3+512
+< draw_indexed pipeline=1 vb=4 ib=5 first=0 count=6 bind_group=1+768
+< draw_indexed pipeline=1 vb=4 ib=5 first=0 count=6 bind_group=1+1024
+< draw_indexed pipeline=1 vb=4 ib=5 first=0 count=6 bind_group=1+1280
+< draw_indexed pipeline=1 vb=4 ib=5 first=0 count=6 bind_group=1+1536
+< draw_indexed pipeline=1 vb=2 ib=3 first=0 count=6 bind_group=2+1792
+< draw_indexed pipeline=1 vb=2 ib=3 first=12 count=6 bind_group=1+2048
+< draw_indexed pipeline=2 vb=2 ib=3 first=6 count=6 bind_group=3+2304
+---
+> draw_indexed pipeline=1 vb=2 ib=3 first=0 count=6 bind_group=1+0
+> draw_indexed pipeline=1 vb=2 ib=3 first=12 count=6 bind_group=2+1024
+> draw_indexed pipeline=2 vb=2 ib=3 first=6 count=6 bind_group=3+2048
+> draw_indexed pipeline=1 vb=4 ib=5 first=0 count=6 bind_group=2+3072
+> draw_indexed pipeline=1 vb=4 ib=5 first=0 count=6 bind_group=2+4096
+> draw_indexed pipeline=3 vb=4 ib=5 first=0 count=6 bind_group=2+5120
+> draw_indexed pipeline=3 vb=2 ib=3 first=0 count=6 bind_group=1+6144
+> draw_indexed pipeline=3 vb=2 ib=3 first=12 count=6 bind_group=2+7168
+> draw_indexed pipeline=4 vb=2 ib=3 first=6 count=6 bind_group=3+8192
+> draw_indexed pipeline=3 vb=4 ib=5 first=0 count=6 bind_group=2+9216

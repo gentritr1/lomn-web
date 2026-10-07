@@ -1,0 +1,58 @@
+M1a-3 faithful-states reference bundle. BASE f47cc91 (branch m1a2-first-pixels). Built 2026-10-07T09:41Z.
+files/ mirrors the repo paths; engine.diff / makefile.diff / tools.diff reproduce work from base.
+
+CHANGED (23):
+  f187fc6559923c2d  Makefile
+  e73c4a5614fc7366  engine/CMakeLists.txt
+  d53915a793c8caab  engine/include/lomn/fs.h
+  302df8c9c5c29908  engine/include/lomn/rhi.h
+  28f77365527bcf8b  engine/include/lomn/sage/slb.h
+  d0ad1615bd0b353c  engine/include/lomn/view/area.h
+  845ea3e9c913b073  engine/include/lomn/view/synthetic.h
+  62b4d5aad796f8e2  engine/src/fs/disk_fs.cpp
+  2bcb56a9238db6e7  engine/src/rhi/null_device.cpp
+  22a9bd49262e3765  engine/src/rhi/registry.h
+  81940e73938e6880  engine/src/rhi/webgpu_device.cpp
+  ca7b6ceeb7677c63  engine/src/sage/bytes.h
+  645ae0b0f0acefc4  engine/src/sage/slb.cpp
+  e041b1736ec4779a  engine/src/view/area.cpp
+  0bba7b7b577aefc6  engine/src/view/synthetic.cpp
+  e39cd16ad6686a47  engine/tests/data/a7_calls.txt
+  9a2d38a85fa6b186  engine/tests/test_gpu_area.cpp
+  a413685f4d86aada  engine/tests/test_gpu_mesh.cpp
+  bd2fb7e4287c96ef  engine/tests/test_rhi_mesh.cpp
+  bfac1665e4b200ab  engine/tests/test_view_area.cpp
+  8084731d3ba18310  engine/tools/lomn_datacheck.cpp
+  e5f00b711ce75df6  engine/tools/lomn_view.cpp
+  495b34d82a6b9cc3  tools/research/oracle/check_datacheck.py
+ADDED (16):
+  a0633b1dba34ea49  engine/include/lomn/d3d/device8.h
+  46751e91aff689ce  engine/include/lomn/d3d/ffp.h
+  0410047b2002430a  engine/include/lomn/sage/osi.h
+  a62071dda04c6036  engine/include/lomn/view/sage_frame.h
+  71f3a7e7c6498751  engine/src/d3d/device8.cpp
+  37d70294a71dbe0c  engine/src/d3d/ffp.cpp
+  dadf86ef6dcb9a36  engine/src/sage/osi.cpp
+  42ac38f3d1d2e85e  engine/src/view/sage_frame.cpp
+  338e73d70a8d2115  engine/tests/a9_state.cmake
+  9e59571a239af866  engine/tests/data/a7_calls.txt.json
+  f2f09aaed3f93315  engine/tests/data/a9_state.txt
+  5a13b0538d17f6f7  engine/tests/test_d3d.cpp
+  2672b1fd990ac6cc  engine/tests/test_gpu_ffp.cpp
+  5bd740112fb9bd65  engine/tests/test_sage_osi.cpp
+  af1b62056e084fe3  tools/research/oracle/a9_oracle.py
+  0512de73d95ab741  tools/research/osi.py
+
+logs/:
+  81e37992aafa2240  logs/a7_calls_r2_to_r3.diff
+  49a50a552fbc9ba6  logs/asan-run.log
+  e8d50e44ae80482e  logs/evidence3.log
+  8cf64233211c31ab  logs/make-check.log
+  42aa58e6390df1eb  logs/metrics.txt
+  26c90dd29dfef140  logs/mutations3.log
+scripts/:
+  6228631ecddfcf47  scripts/bundle3.sh
+  2570d29e747ec0c6  scripts/evidence3.sh
+  d07acbe0d318f091  scripts/mutate3.py
+  3723bc752bee2f3d  scripts/peread.py
+  9c95b27f3fcda12a  scripts/pngdiff.py

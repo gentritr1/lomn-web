@@ -1,0 +1,11 @@
+area | models/draws | pipelines | state calls/frame | shader variants | lit/fogged/blended/tested draws | load ms | decode ms | upload ms | frame submit first / p50 ms | lights (source) | fog (source) | special textures
+vllg r1 | 10/31 | 3 | 212 | 5 | 0/23/2/4 | 24.052 | 6.952 | 10.104 | 11.661 / 0.254 (frames 60/60) | 23 (light_slb) | 40.0..1200.0 (osi) | 1 of 15
+vllg r2 | 10/31 | 3 | 212 | 5 | 0/23/2/4 | 9.609 | 6.645 | 4.211 | 7.937 / 0.288 (frames 60/60) | 23 (light_slb) | 40.0..1200.0 (osi) | 1 of 15
+vllg r3 | 10/31 | 3 | 212 | 5 | 0/23/2/4 | 8.57 | 6.632 | 3.559 | 8.685 / 0.306 (frames 60/60) | 23 (light_slb) | 40.0..1200.0 (osi) | 1 of 15
+ghut r1 | 1/30 | 2 | 137 | 4 | 0/30/3/2 | 22.467 | 9.836 | 4.466 | 6.501 / 0.284 (frames 60/60) | 5 (light_slb+default) | 4701.0..4702.0 (default) | 2 of 10
+ghut r2 | 1/30 | 2 | 137 | 4 | 0/30/3/2 | 11.264 | 9.708 | 6.326 | 8.067 / 0.27 (frames 60/60) | 5 (light_slb+default) | 4701.0..4702.0 (default) | 2 of 10
+ghut r3 | 1/30 | 2 | 137 | 4 | 0/30/3/2 | 7.692 | 9.797 | 4.453 | 6.452 / 0.275 (frames 60/60) | 5 (light_slb+default) | 4701.0..4702.0 (default) | 2 of 10
+crss r1 | 14/42 | 4 | 234 | 8 | 0/38/8/10 | 53.269 | 26.161 | 13.075 | 10.392 / 0.318 (frames 60/60) | 2 (light_slb) | 4701.0..4702.0 (default) | 1 of 2
+crss r2 | 14/42 | 4 | 234 | 8 | 0/38/8/10 | 12.246 | 24.314 | 7.26 | 9.003 / 0.281 (frames 60/60) | 2 (light_slb) | 4701.0..4702.0 (default) | 1 of 2
+crss r3 | 14/42 | 4 | 234 | 8 | 0/38/8/10 | 12.129 | 23.817 | 7.93 | 9.401 / 0.313 (frames 60/60) | 2 (light_slb) | 4701.0..4702.0 (default) | 1 of 2
+survey 123 areas 0 failures {"obj_records": 55, "placements": 55, "placements_at": "lev6/ta03", "draws": 165, "draws_at": "lev6/ta11", "textures": 76, "textures_at": "lev2/vllg", "texture_bytes_with_mips": 56994412, "texture_bytes_at": "lev0/frnt", "geometry_bytes": 1649376, "geometry_bytes_at": "lev6/ta14", "pipelines": 4, "pipelines_at": "fren/frnt", "state_calls": 830, "state_calls_at": "lev6/ta03", "lights": 209, "lights_at": "lev6/ta08", "shader_variants": 11, "shader_variants_at": "lev1/clf2"} {"failures": 0, "frames_with_rejects": 0, "unsupported_bits": 0, "areas_with_osi_fog": 53}
