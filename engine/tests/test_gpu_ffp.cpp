@@ -96,7 +96,10 @@ int main() {
     }
     const uint8_t* c = &px[(4 * 8 + 4) * 4];
     int w8[3];
-    bool hit = std::abs(int(c[3]) - want_a) <= 2 && unsup == 0;
+    // M1a-4 fix round 1 (M-4): an expected alpha of 255 (the clear, a kept destination, or an opaque write of 1) is
+    // exact; only a computed stage alpha (the ONE/ZERO case) gets the +-2 of the colour channels.
+    const bool alpha_ok = want_a == 255 ? c[3] == 255 : std::abs(int(c[3]) - want_a) <= 2;
+    bool hit = alpha_ok && unsup == 0;
     for (int k = 0; k < 3; ++k) {
       w8[k] = static_cast<int>(std::lround(std::min(1.0f, std::max(0.0f, want[k])) * 255.0f));
       hit = hit && std::abs(int(c[k]) - w8[k]) <= 2;
