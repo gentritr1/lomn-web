@@ -51,8 +51,9 @@ test-wasm: wasm test-native $(VENV)/.ok
 	cmp build/native/a9/a/calls.txt build/wasm/a9/a/calls.txt
 	cmp build/native/a9/f2/state.txt build/wasm/a9/f2/state.txt
 
+# M1b T5a: + the BYO validation unit tests (node --test).
 test-web: site
-	cd web && timeout 60 node --test tests/serve_test.mjs
+	cd web && timeout 60 node --test tests/serve_test.mjs tests/unit_test.mjs tests/unit_r2_test.mjs
 	cd web && timeout 180 node tests/smoke.mjs ../build/site ../build/pw-profile
 
 # M1b: the per-area prefetch manifest of the install (build/m1b/manifest.json; derived data: never committed).
