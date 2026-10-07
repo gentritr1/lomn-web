@@ -113,7 +113,7 @@ fuzz-formats:
 	timeout 600 cmake -S engine -B build/asan/native $(ASAN_CMAKE) >/dev/null && timeout 1800 cmake --build build/asan/native --target lomn_fuzz_formats
 	$(EMSDK_ENV) && timeout 600 emcmake cmake -S engine -B build/asan/wasm $(ASAN_CMAKE) >/dev/null && timeout 1800 cmake --build build/asan/wasm --target lomn_fuzz_formats
 	set -o pipefail; timeout $(FUZZ_TIMEOUT) build/asan/native/lomn_fuzz_formats $(call FUZZ_ARGS,$(FUZZ_N)) --crash-dir build/asan/native/fuzz-crashes | tee build/asan/native/fuzz_formats.txt
-	set -o pipefail; $(EMSDK_ENV) && timeout $(FUZZ_TIMEOUT) node build/asan/wasm/lomn_fuzz_formats.js $(call FUZZ_ARGS,$(FUZZ_N_WASM)) --crash-dir build/asan/wasm/fuzz-crashes | tee build/asan/wasm/fuzz_formats.txt
+	set -o pipefail; $(EMSDK_ENV) && timeout $(FUZZ_TIMEOUT) node build/asan/wasm/lomn_fuzz_formats.js $(call FUZZ_ARGS,$(FUZZ_N_WASM)) --crash-dir build/asan/wasm/fuzz-crashes --last-input build/asan/wasm/last_input.txt | tee build/asan/wasm/fuzz_formats.txt || { echo "fuzz-formats wasm32 failed; last input started: $$(cat build/asan/wasm/last_input.txt 2>/dev/null)"; exit 1; }
 	@if [ "$(FUZZ_N)" = "$(FUZZ_N_WASM)" ]; then grep '^fuzz_formats: ' build/asan/native/fuzz_formats.txt > build/asan/native/fuzz_totals.txt && \
 	  grep '^fuzz_formats: ' build/asan/wasm/fuzz_formats.txt > build/asan/wasm/fuzz_totals.txt && \
 	  cmp build/asan/native/fuzz_totals.txt build/asan/wasm/fuzz_totals.txt && echo "fuzz-formats: native == wasm32 per-format totals"; fi

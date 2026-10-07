@@ -22,13 +22,14 @@
 // heap growth (peak live operator-new bytes) and process-memory growth (ru_maxrss natively, wasm linear memory) under
 // 64 MiB natively / 256 MiB on wasm32; every byte the input allocated is released afterwards.
 // Deep reach: an input whose parse got past the header checks into the format's body loop (BLK entry table, LZSS
-// decode loop, the SLB view's record loop, the .x token stream, the DDS block loop, the TGA RLE packet loop, the OSI
-// tables + bytecode walk). Determined from the parser's result and error string (see deep_* below), not from the input.
+// decode loop, the SLB view's record loop, .x mesh decoding (decode_mesh entered; the token stream is printed apart as
+// token_stream=), the DDS block loop, TGA: the RLE packet loop OR an accepted image (so accepted raw type-2 TGAs, which
+// have no packet loop, count as deep too), the OSI tables + bytecode walk). Determined from the parser's result and error string (see deep_* below), not from the input.
 // Output: per format "inputs accepted deep findings" (deterministic: identical natively and as wasm32), then a
 // separate "resources" block (timings and memory, not deterministic). Exit 1 on any finding or a deep-reach fraction
 // below --min-deep (default 0.05), 2 on usage errors, 3 when --data yields no real seed for a format.
 // Usage: lomn_fuzz_formats [--n N] [--seed S] [--data INSTALL] [--formats a,b] [--real-per-format K] [--crash-dir D]
-//                          [--min-deep F] [--smoke] [--replay FMT ITER --dump FILE]
+//                          [--min-deep F] [--smoke] [--replay FMT ITER --dump FILE] [--last-input FILE]
 // How to run: tools/research/fuzz_formats.md (make fuzz-formats; ctest fuzz_formats_smoke).
 #include <algorithm>
 #include <chrono>
@@ -212,12 +213,15 @@ std::string g_crash_dir;
 std::string g_replay_args;  // --seed / --data part of the replay command
 bool g_warmup = false;      // findings name the seed (index g_iter in the format's synthetic / real pool), not an input
 bool g_quiet = false;       // re-timing run: invariant findings were already checked on the first run
+// --last-input FILE: the format and index of the input about to run, overwritten before every input. wasm32 has no
+// per-input watchdog (a synchronous wasm loop cannot be interrupted), so after an outer timeout this names the input.
+std::FILE* g_last = nullptr;
 
 struct Format {
   const char* name;
   std::vector<Seed> syn, real;
   uint32_t real_den;  // a real seed is used for 1 in real_den inputs (when real seeds exist)
-  uint64_t inputs = 0, accepted = 0, deep = 0, findings = 0;
+  uint64_t inputs = 0, accepted = 0, deep = 0, findings = 0, aux = 0;
   double max_seconds = 0, total_seconds = 0, max_cpu = 0;  // wall (first run), wall sum, CPU (minimum of the runs)
   uint64_t max_heap = 0, max_rss = 0;
   uint64_t max_input = 0;
@@ -271,6 +275,7 @@ struct Exact {
 
 struct Result {
   bool accepted = false, deep = false;
+  bool aux = false;  // .x only: the token stream was entered (past the 16-byte header), printed as token_stream=
 };
 #define REQUIRE_INV(cond, msg) \
   do {                         \
@@ -444,6 +449,18 @@ bool x_default(const XFile& f) {
          m.file_faces == 0;
 }
 
+// Every error decode_mesh (xfile.cpp) can return starts with one of these; the token parser's errors end in
+// " at byte N" and parse_x's header errors are "file too large" / "not a (binary) .x file" / "unsupported float size".
+// Pinned against a counter at decode_mesh's entry in fix round 1 (0 mismatches; tools/research/fuzz_formats.md).
+bool decode_mesh_error(const std::string& err) {
+  static const char* const kPrefixes[] = {"x: Mesh ",          "x: MeshNormals ",   "x: MeshTextureCoords ", "x: MeshVertexColors ",
+                                          "x: MeshMaterialList ", "x: Material floats", "x: face ",           "x: material ",
+                                          "x: normal index",   "x: texture name",   "x: too many materials", "x: vertex colour"};
+  for (const char* p : kPrefixes)
+    if (err.compare(0, std::strlen(p), p) == 0) return true;
+  return false;
+}
+
 Result run_x(const Bytes& in, Rng&) {
   Result r;
   Exact e(in);
@@ -452,11 +469,14 @@ Result run_x(const Bytes& in, Rng&) {
   if (!parse_x(e.p.get(), e.n, xf, &err)) {
     REQUIRE_INV(!err.empty(), "x: rejected without an error");
     REQUIRE_INV(x_default(xf), "x: rejected parse left a partial XFile");
-    // Header checks of parse_x; anything else failed inside the token stream or the mesh decode.
-    r.deep = !(has(err, "file too large") || has(err, "not a .x file") || has(err, "not a binary .x file") || has(err, "unsupported float size"));
+    // aux: past parse_x's header checks (into the token stream). deep: decode_mesh was entered, i.e. the error is one of
+    // decode_mesh's own (fix round 1, review I-1: "past the header" read 90-95 %, so its 5 % floor could not fail).
+    r.aux = !(has(err, "file too large") || has(err, "not a .x file") || has(err, "not a binary .x file") || has(err, "unsupported float size"));
+    r.deep = decode_mesh_error(err);
     return r;
   }
-  r.accepted = r.deep = true;
+  r.accepted = r.aux = true;
+  r.deep = xf.mesh_count > 0;  // accepted with a mesh: decode_mesh ran to the end
   const XMesh& m = xf.mesh;
   if (xf.mesh_count == 0) {
     REQUIRE_INV(x_default(xf), "x: no mesh but mesh data");
@@ -534,10 +554,10 @@ Result run_tga(const Bytes& in, Rng&) {
     REQUIRE_INV(!err.empty(), "tga: rejected without an error");
     REQUIRE_INV(image_default(img), "tga: rejected decode left an image");
     REQUIRE_INV(ti.width == 0 && ti.height == 0 && ti.image_type == 0 && ti.bits == 0, "tga: rejected decode wrote TgaInfo");
-    r.deep = has(err, "RLE data truncated") || has(err, "RLE packet runs past");  // the RLE packet loop
+    r.deep = has(err, "RLE data truncated") || has(err, "RLE packet runs past");  // the RLE packet loop (accepted: below)
     return r;
   }
-  r.accepted = r.deep = true;
+  r.accepted = r.deep = true;  // NOTE: includes accepted raw (type 2) TGAs, which never enter the RLE packet loop
   REQUIRE_INV(img.width == ti.width && img.height == ti.height, "tga: image and info dimensions differ");
   REQUIRE_INV(img.width >= 1 && img.height >= 1 && img.width <= kMaxTextureDim && img.height <= kMaxTextureDim, "tga: dimensions outside 1..4096");
   REQUIRE_INV(img.rgba.size() == uint64_t(img.width) * img.height * 4, "tga: rgba size != w*h*4");
@@ -1249,10 +1269,10 @@ double cpu_seconds() {
 }
 
 #if !defined(__EMSCRIPTEN__)
-void watchdog(int seconds) {  // CPU-time watchdog (SIGVTALRM): a hang burns CPU, a busy host does not trip it
-  itimerval t{};
+void watchdog(int seconds) {  // CPU-time watchdog (ITIMER_PROF / SIGPROF: user + system CPU, so a loop spinning in the
+  itimerval t{};               // kernel trips it too); a hang burns CPU, a busy host does not trip it
   t.it_value.tv_sec = seconds;
-  setitimer(ITIMER_VIRTUAL, &t, nullptr);
+  setitimer(ITIMER_PROF, &t, nullptr);
 }
 #endif
 
@@ -1296,6 +1316,7 @@ Result run_measured(Format& f, const Bytes& b, Rng& r, bool is_real) {
   ++f.inputs;
   f.accepted += res.accepted;
   f.deep += res.deep;
+  f.aux += res.aux;
   f.total_seconds += wall;
   f.max_seconds = std::max(f.max_seconds, wall);
   f.max_cpu = std::max(f.max_cpu, cpu);
@@ -1319,7 +1340,7 @@ void make_input(const Format& f, uint64_t seed, uint64_t iter, Rng& r, Bytes& b,
 int usage() {
   std::printf(
       "usage: lomn_fuzz_formats [--n N] [--seed S] [--data INSTALL] [--formats a,b] [--real-per-format K] [--crash-dir D]\n"
-      "                         [--min-deep F] [--smoke] [--replay FMT ITER --dump FILE]\n");
+      "                         [--min-deep F] [--smoke] [--replay FMT ITER --dump FILE] [--last-input FILE]\n");
   return 2;
 }
 
@@ -1350,6 +1371,10 @@ int main(int argc, char** argv) {
     else if (a == "--min-deep" && val(v)) min_deep = std::strtod(v.c_str(), nullptr);
     else if (a == "--replay" && val(replay_fmt) && val(v)) replay_iter = std::strtoull(v.c_str(), nullptr, 10);
     else if (a == "--dump" && val(v)) dump = v;
+    else if (a == "--last-input" && val(v)) {
+      g_last = std::fopen(v.c_str(), "w");
+      if (!g_last) return usage();
+    }
     else return usage();
   }
   if (smoke) data.clear();  // the ctest subset uses synthetic seeds only
@@ -1383,7 +1408,7 @@ int main(int argc, char** argv) {
   }
 
 #if !defined(__EMSCRIPTEN__)
-  std::signal(SIGVTALRM, on_alarm);  // before the warm-up and --replay: both run parsers under the CPU watchdog
+  std::signal(SIGPROF, on_alarm);  // before the warm-up and --replay: both run parsers under the CPU watchdog
 #endif
   if (!replay_fmt.empty()) {
     for (Format& f : formats)
@@ -1462,6 +1487,11 @@ int main(int argc, char** argv) {
       make_input(f, seed, it, r, b, is_real);
       g_iter = it;
       g_input = &b;
+      if (g_last) {
+        std::rewind(g_last);
+        std::fprintf(g_last, "%-9s %12llu\n", f.name, static_cast<unsigned long long>(it));
+        std::fflush(g_last);
+      }
       (void)run_measured(f, b, r, is_real);
       if ((it + 1) % (n / 10 ? n / 10 : 1) == 0)  // progress, with the process memory (wasm32: linear memory size)
         std::fprintf(stderr, "fuzz_formats: %s %llu/%llu mem=%.0fMiB\n", f.name, static_cast<unsigned long long>(it + 1),
@@ -1476,9 +1506,13 @@ int main(int argc, char** argv) {
   for (const Format& f : formats) {
     if (!f.inputs) continue;
     const double frac = static_cast<double>(f.deep) / static_cast<double>(f.inputs);
-    std::printf("fuzz_formats: %-9s inputs=%llu accepted=%llu deep=%llu (%.1f%%) findings=%llu\n", f.name,
+    char extra[64] = "";
+    if (std::strcmp(f.name, "x") == 0)  // the pre-fix-round-1 .x "deep" (past the header), kept as a second column
+      std::snprintf(extra, sizeof extra, " token_stream=%llu (%.1f%%)", static_cast<unsigned long long>(f.aux),
+                    100.0 * static_cast<double>(f.aux) / static_cast<double>(f.inputs));
+    std::printf("fuzz_formats: %-9s inputs=%llu accepted=%llu deep=%llu (%.1f%%) findings=%llu%s\n", f.name,
                 static_cast<unsigned long long>(f.inputs), static_cast<unsigned long long>(f.accepted), static_cast<unsigned long long>(f.deep),
-                100.0 * frac, static_cast<unsigned long long>(f.findings));
+                100.0 * frac, static_cast<unsigned long long>(f.findings), extra);
     total += f.inputs;
     total_findings += f.findings;
     if (f.findings) ok = false;

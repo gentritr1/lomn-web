@@ -202,12 +202,31 @@ How to run it and what each number means: `tools/research/fuzz_formats.md`.
 | slb.pos | 200,000 | 45,258 | 44,723 (22.4 %) | 0 |
 | slb.light | 200,000 | 47,479 | 46,863 (23.4 %) | 0 |
 | slb.tex | 200,000 | 37,246 | 37,583 (18.8 %) | 0 |
-| x | 200,000 | 18,480 | 190,843 (95.4 %) | 0 |
+| x | 200,000 | 18,480 | 27,543 (13.8 %) mesh decoding; 190,843 (95.4 %) token stream | 0 |
 | dds | 200,000 | 84,944 | 84,944 (42.5 %) | 0 |
 | tga | 200,000 | 65,506 | 108,281 (54.1 %) | 0 |
 | osi | 200,000 | 51,750 | 51,750 (25.9 %) | 0 |
 
 slb.tex deep reach exceeds its accepted count because a failure inside the record loop also counts as deep.
+
+**`.x` deep reach corrected in fix round 1** (review I-1). It used to count "past the 16-byte header into the token
+stream" (95.4 % real, 90.9 % smoke), so the 5 % floor could not fail. It now counts mesh decoding entered: accepted
+with a mesh, or one of `decode_mesh`'s own errors.
+
+The new count is pinned against an independent counter at `decode_mesh`'s entry (a scratch probe), input by input. In
+each run it found 0 inputs counted deep without entering and 0 that entered without counting:
+
+| Run | Deep = decode_mesh entered |
+|---|---|
+| smoke | 1,917 (9.6 %) |
+| real seeds, 20,000 | 2,785 (13.9 %) |
+| real seeds, 200,000 (`--formats x`, Release; the same input stream as the table above) | 27,543 (13.8 %) |
+
+**The floor now has teeth:** with a scratch `parse_x` that rejects every input before `decode_mesh`:
+- the old definition still passes the smoke (deep 90.9 %, rc 0);
+- the new one fails it: `x deep reach 0.0% is below the 5.0% minimum`, rc 1.
+
+TGA deep reach counts accepted images, raw type 2 included, plus failures inside the RLE packet loop.
 
 **wasm32 under Node (2 GB cap):** identical per-format totals to native. The make target's `cmp` of the two logs passed
 ("fuzz-formats: native == wasm32 per-format totals"), and make exited 0.
@@ -230,7 +249,7 @@ slb.tex deep reach exceeds its accepted count because a failure inside the recor
 
 **Smoke subset (ctest `fuzz_formats_smoke`, Release, synthetic seeds only, 20,000 per format):**
 - 0 findings.
-- Deep reach 16.2 % (slb.pos) to 90.9 % (x).
+- Deep reach 9.6 % (x, mesh decoding; its token stream 90.9 %) to 81.7 % (blk).
 - 0.64 s native, 0.29-0.38 s wasm32.
 - Per-format totals byte-identical native vs wasm32.
 

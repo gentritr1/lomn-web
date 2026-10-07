@@ -59,7 +59,7 @@ the engine parses from a player's (untrusted) install. Spec M1 §4 A11 and §5; 
 | `blk` | `BlockFile::open_bytes`, `is_sorted`, `find` (6 names), `read` (4 entries) | 3-entry stored, stored + LZSS, unterminated 40-byte name, 16-entry sorted table | whole `.blk` files ≤ 256 KiB | the entry-table loop: accepted with ≥ 1 entry, or failed on the name-run cap |
 | `lzss` | `decode_lzss` on `[u32 declared size][stream]` | the hand-built streams + an encoded 600-byte text | the Beta install has **no** compressed entry: the first ≤ 768 bytes of sampled real entries, encoded with the test's independent encoder | past the ratio check into the decode loop, with a non-empty stream |
 | `slb.obj` / `slb.pos` / `slb.light` / `slb.tex` | `Slb::parse`, then all four typed views on every input | `make_obj`, the POS/LIGHT tables, `make_textures` | `<area>_obj/_pos/_light.slb` and `textures.slb` entries | the format's own view accepted ≥ 1 record (textures: also a failure inside its record loop) |
-| `x` | `parse_x` | the unit tests' `sample()`, two meshes, material references, a mesh without a material list | `.x` entries | past the header checks (size, `xof `, `bin `, float size) into the token stream |
+| `x` | `parse_x` | the unit tests' `sample()`, two meshes, material references, a mesh without a material list | `.x` entries | mesh decoding entered (`decode_mesh`): accepted with a mesh, or failed with one of `decode_mesh`'s own errors. The old "past the header into the token stream" count is printed apart as `token_stream=` (fix round 1: it read 90-95 %, so its 5 % floor could not fail) |
 | `dds` | `decode_dds` | DXT1 5x3, DXT3, DXT5, A8R8G8B8 | `.dds` entries | accepted (every rejection happens before the block loop) |
 | `tga` | `decode_tga` | 24/32 bpp uncompressed, RLE 32 bpp, RLE 24 bpp right-to-left, a 4096x4096 RLE header over 10 bytes (the M1a-4 finding) | loose `.tga` files and `.tga` entries | accepted, or failed inside the RLE packet loop (not the pre-allocation "too short for the image" check) |
 | `osi` | `OsiFile::parse`, `check_all`, up to 16 sampled `eval_calls` | `statt_osi()`, the `fuzz_osi` cap-edge program | `Base.osi` (1 in 16 inputs) | accepted: every table parsed, every offset/symbol checked, and `check_all` run |
@@ -150,10 +150,14 @@ The weights below are out of 16.
   - **Hangs are still caught:** a hang or a quadratic path burns CPU.
     - A scratch `decode_dds` that spins for 2.1 s of CPU is reported as
       `CPU time 2.100140 s >= 2 s on 3 runs (minimum shown)`.
-  - **Native watchdog:** 10 s of CPU (`ITIMER_VIRTUAL`, `SIGVTALRM`). It also covers the seed warm-up and `--replay`.
+  - **Native watchdog:** 10 s of user + system CPU (`ITIMER_PROF`, `SIGPROF`). It also covers the seed warm-up and
+    `--replay`.
     - A scratch infinite loop exits 4 with `FINDING dds input 22: no result after 10 s of CPU time (hang)`.
     - A hang in a seed is reported as `seed #0`.
-  - wasm32 has no watchdog; a hang there ends at the make target's `timeout`.
+  - wasm32 has no watchdog: a synchronous wasm loop cannot be interrupted. A hang there ends at the make target's
+    `timeout`. The wasm32 leg runs with `--last-input build/asan/wasm/last_input.txt` (the format and index of the
+    input about to run, overwritten before every input), and the target prints it when the leg fails, so the hanging
+    input is named. Replay it with `--replay`.
   - `retimed=` in the resources lines counts the re-run inputs.
 - **Per-input memory growth:**
   - peak live heap bytes (every `operator new` is counted) and process-memory growth are each ≤ 64 MiB natively
@@ -161,17 +165,17 @@ The weights below are out of 16.
   - every byte an input allocated is released afterwards. A warm-up pass over the seeds runs first, so function-local
     statics are not counted.
 
-## What it cannot reach (covered elsewhere)
+## Known blind spots (and what covers them instead)
 
-Mutations cannot build the large, internally consistent structures that some caps guard. Those caps are pinned by
-crafted-input tests and probes instead:
+Reviewed in fix round 1. The review re-introduced 10 single-check defects ("bites") and found these gaps.
 
-| Cap | Pinned by |
-|---|---|
-| `kMaxSpecTextures`: 1,025+ records, each needing its own fix-up slot | `slb_probe` |
-| OSI class, method, instruction and call caps | `osi_probe`, `make fuzz-osi` |
-| `.x` object arena and material-reference amplification | the `test_sage_xfile.cpp` cap tests |
-| BLK name runs over a 672 KB table | `test_sage_blockfile.cpp` |
+| Blind spot | Example (bite) | Why the fuzzer misses it | Covered instead by |
+|---|---|---|---|
+| Bounds that need **two coordinated field changes** | `.x` `MeshNormals floats short` (`xfile.cpp`), removed: missed at 2 x 20,000 inputs, synthetic and real | A count must be raised past its list **and** an index must use the extra range in the same input | Unit tests in `test_sage_xfile.cpp`: `MeshNormals floats short`, `MeshTextureCoords floats short`, `MeshVertexColors truncated` (both halves). In a scratch copy each removed check fails its own test |
+| **Count caps** that need hundreds or thousands of consistent structures | OSI `kMaxOsiCallsPerMethod` and `kMaxOsiStackDepth`, removed: 0 findings; `kMaxSpecTextures`, removed: 0 in 200,000 | Mutations of seeds ≤ 256 KiB cannot build 2,049 calls, a 257-deep literal stack, or 1,025 records that each have a fix-up slot | `test_sage_osi.cpp` (calls-per-method and stack-depth cases), `osi_probe` (crafted calls and stack inputs, native and wasm32), `slb_probe`, `make fuzz-osi` |
+| Large structures behind other caps | `.x` object arena, material-reference amplification, BLK name runs over a 672 KB table | Same as above | The `test_sage_xfile.cpp` and `test_sage_blockfile.cpp` cap tests |
+| **Memory-safety bites in the ctest smoke** | TGA RLE bound removed: Release smoke reports 0 findings, rc 0 | The smoke subset runs in the Release build (`make test-native` / `make test-wasm`). An out-of-bounds read or write there is undefined behaviour, not a report | Only `make fuzz-formats` (ASan + UBSan, native and wasm32) sees out-of-bounds bites. The Release smoke still catches invariant and heap bites (name-run cap, the TGA pre-allocation check) |
+| wasm32 hangs | — | No per-input watchdog on wasm32 | The native leg's CPU watchdog runs first on the same inputs; `--last-input` names the wasm32 input |
 
 ## Reading the memory numbers
 
