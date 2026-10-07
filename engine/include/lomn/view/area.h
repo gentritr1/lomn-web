@@ -205,7 +205,9 @@ bool load_area(const fs::FileSystem& fs, std::string_view level, std::string_vie
 // Camera (spec M1 §2.3). Only the eye position comes from data (first POS record with flag 0x1000); orientation, FOV
 // and clip planes are a DOCUMENTED FALLBACK until M1a-3 mines the Base.osi camera literals. Defaults below.
 // lomn_view's metrics JSON flags it: camera.fallback is true while ANY of eye/yaw/pitch/fov/near/far is a fallback,
-// with per-field eye_source, yaw_source, pitch_source, fov_source, clip_source ("cli" or "fallback"; M1a-3 adds "osi").
+// with per-field eye_source, yaw_source, pitch_source, fov_source, clip_source: "cli" (the flag(s) given), "exe" (M1a-3:
+// the exe's own value, real installs; fov and clip), "fallback" (the documented default; the synthetic scene's values),
+// and for clip "cli_partial" (Task 8B F1: only one of --near / --far given).
 // M1a-3: FOV, near and far are the exe's own values: GcViewPort::GcViewPort (0x004479f0) builds the main GcLegoCamera with
 // fov 72 deg (@0x00704e00, ScPerspectiveCamera x pi/180 @0x0070d508, vertical fovy of D3DXMatrixPerspectiveFovRH), near
 // 0.01 (@0x00704e1c) and far = GcGraphicsOptions::GetDrawDistance() = 4700 (mDrawDistance @0x0074a328); Base.osi never

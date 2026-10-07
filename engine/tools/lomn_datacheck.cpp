@@ -129,9 +129,9 @@ struct XInfo {
 
 }  // namespace
 
-// M1a-3 (carry-over "material floats into the A4 oracle"): order-independent checksum of every material's 11 floats
+// M1a-3 (carry-over "material floats into the A4 oracle"): ordered checksum of every material's 11 floats
 // (faceColor RGBA, power, specular RGB, emissive RGB) as float32 bit patterns plus its texture name. One line per
-// material "%08x x 11|name" (name "-" without TextureFilename), lines sorted, joined with '\n', M0 checksum
+// material "%08x x 11|name" (name "-" without TextureFilename), lines in file order, joined with '\n', M0 checksum
 // (sum = sum * 31 + byte) over the bytes. tools/research/oracle/check_datacheck.py computes the same from xbin.py.
 std::string material_sum(const std::vector<lomn::sage::XMaterial>& mats) {
   std::vector<std::string> lines;
@@ -149,7 +149,7 @@ std::string material_sum(const std::vector<lomn::sage::XMaterial>& mats) {
     l += "|" + (m.has_texture ? m.texture : std::string("-"));
     lines.push_back(l);
   }
-  std::sort(lines.begin(), lines.end());
+  // Task 8B F2: ORDERED (file order = the attribute ids DrawSubset uses); it was a sorted, order-blind multiset.
   uint32_t sum = 0;
   for (size_t i = 0; i < lines.size(); ++i) {
     if (i) sum = sum * 31u + uint8_t('\n');
@@ -195,7 +195,10 @@ int main(int argc, char** argv) {
     return 3;
   }
   auto t_index = Clock::now();
-  std::unique_ptr<fs::FileSystem> fsp = fs::open_disk(install, (std::filesystem::temp_directory_path() / "lomn_datacheck_user").string());
+  // Task 8B F2: the error_code overloads only (a bad TMPDIR used to abort with an uncaught filesystem_error).
+  const std::filesystem::path tmp = std::filesystem::temp_directory_path(ec);
+  std::unique_ptr<fs::FileSystem> fsp = fs::open_disk(install, ((ec ? std::filesystem::path("/tmp") : tmp) / "lomn_datacheck_user").string());
+  ec.clear();
   if (!fsp) { std::fprintf(stderr, "cannot open install: %s\n", install.c_str()); return 3; }
   double index_ms = std::chrono::duration<double, std::milli>(Clock::now() - t_index).count();
   const fs::FileSystem& fs = *fsp;
@@ -211,9 +214,12 @@ int main(int argc, char** argv) {
   std::filesystem::path walk_root = std::filesystem::canonical(install, ec);
   if (ec) walk_root = install;
   ec.clear();
-  for (auto it = std::filesystem::recursive_directory_iterator(walk_root, ec); !ec && it != std::filesystem::recursive_directory_iterator(); it.increment(ec))
-    if (it->is_regular_file() && lower(it->path().extension().string()) == ".blk")
-      blks.push_back("Root/" + std::filesystem::relative(it->path(), walk_root).generic_string());
+  for (auto it = std::filesystem::recursive_directory_iterator(walk_root, ec); !ec && it != std::filesystem::recursive_directory_iterator(); it.increment(ec)) {
+    std::error_code e2;  // Task 8B F2: non-throwing; an entry that cannot be examined is skipped
+    if (!it->is_regular_file(e2) || e2 || lower(it->path().extension().string()) != ".blk") continue;
+    const std::filesystem::path rel = std::filesystem::relative(it->path(), walk_root, e2);
+    if (!e2) blks.push_back("Root/" + rel.generic_string());
+  }
   std::sort(blks.begin(), blks.end(), [](const std::string& a, const std::string& b) { return fs::normalize(a) < fs::normalize(b); });
 
   Meter m_header, m_read, m_x, m_dds, m_tga, m_slb;

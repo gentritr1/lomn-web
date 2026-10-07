@@ -445,8 +445,11 @@ int main(int argc, char** argv) {
   view::CameraSettings cs = synthetic ? view::synthetic_camera() : view::CameraSettings();
   // Per-field camera sources (spec M1 §2.3): "cli" when the flag was given; "exe" for FOV/near/far taken from the exe's
   // GcViewPort camera (M1a-3; Base.osi sets none of them); else the documented fallback (the synthetic scene's own
-  // values count as fallback: they are not data). clip = near AND far both given.
+  // values count as fallback: they are not data). Task 8B F1: clip = "cli" when near AND far are both given,
+  // "cli_partial" when only one is (the other keeps its exe value, or its fallback on the synthetic scene); else exe /
+  // fallback. (Every other camera flag sets its whole field, so clip is the only partial override.)
   const bool pitch_cli = has("--pitch"), fov_cli = has("--fov"), clip_cli = has("--near") && has("--far");
+  const bool clip_partial = !clip_cli && (has("--near") || has("--far"));
   view::RenderOptions ro;
   view::AreaOptions ao;
   if (has("--width") && !parse_u32(a["--width"], 1, rhi::kMaxRenderTargetSize, width)) return usage("bad --width");
@@ -640,9 +643,11 @@ int main(int argc, char** argv) {
   const double p50 = sorted[sorted.size() / 2];
   const char* const pitch_src = pitch_cli ? "cli" : "fallback";
   const char* const fov_src = fov_cli ? "cli" : synthetic ? "fallback" : "exe";
-  const char* const clip_src = clip_cli ? "cli" : synthetic ? "fallback" : "exe";
+  const char* const clip_src = clip_cli ? "cli" : clip_partial ? "cli_partial" : synthetic ? "fallback" : "exe";
+  // A partial clip override on the synthetic scene still leaves one fallback plane.
+  const bool clip_fallback = std::string(clip_src) == "fallback" || (clip_partial && synthetic);
   const bool camera_fallback = cam.eye_source == "bounds_centre" || cam.eye_source == "origin" || (cam.yaw_source != "cli") ||
-                               !pitch_cli || std::string(fov_src) == "fallback" || std::string(clip_src) == "fallback";
+                               !pitch_cli || std::string(fov_src) == "fallback" || clip_fallback;
   std::ofstream m(out + ".json");
   m << "{\n\"tool\":\"lomn_view\",\"level\":" << js(data.level) << ",\"area\":" << js(data.area) << ",\"synthetic\":"
     << (synthetic ? "true" : "false") << ",\n\"backend\":" << js(dev->backend()) << ",\"adapter\":" << js(dev->adapter())

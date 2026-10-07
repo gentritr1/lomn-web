@@ -9,20 +9,27 @@ namespace {
 
 class DiskFileSystem final : public FileSystem {
  public:
-  DiskFileSystem(std::filesystem::path install, std::filesystem::path user) : install_(std::move(install)), user_(std::move(user)) {
+  DiskFileSystem(std::filesystem::path install, std::filesystem::path user) : install_(std::move(install)), user_(std::move(user)) {}
+  // Builds the case-insensitive index. False when the install root cannot be made canonical or its walk cannot start
+  // (e.g. no read permission): open_disk then returns nullptr instead of a file system whose empty index silently
+  // finds nothing (Task 8B F2). Unreadable entries further down are skipped, as before.
+  bool index() {
     std::error_code ec;
     // M1a-3: iterate from the canonical path. A symlinked install root iterates natively, but under Node (wasm32,
     // NODERAWFS) the directory iterator fails on it ("Not a directory"); the relative keys are the same either way.
     const std::filesystem::path canon = std::filesystem::canonical(install_, ec);
-    if (!ec) install_ = canon;
-    ec.clear();
-    for (auto it = std::filesystem::recursive_directory_iterator(install_, ec); !ec && it != std::filesystem::recursive_directory_iterator(); it.increment(ec)) {
+    if (ec) return false;
+    install_ = canon;
+    std::filesystem::recursive_directory_iterator it(install_, ec);
+    if (ec) return false;
+    for (; !ec && it != std::filesystem::recursive_directory_iterator(); it.increment(ec)) {
       std::error_code ec2;
       if (!it->is_regular_file(ec2) || ec2) continue;
       const std::filesystem::path rel = std::filesystem::relative(it->path(), install_, ec2);
       if (ec2) continue;
       index_["root/" + normalize(rel.generic_string())] = it->path();
     }
+    return true;
   }
   bool exists(std::string_view path) const override { return !resolve(normalize(path)).empty(); }
   Error read(std::string_view path, std::vector<uint8_t>& out) const override {
@@ -99,7 +106,8 @@ class DiskFileSystem final : public FileSystem {
     }
     if (n.rfind("user/", 0) == 0) {
       std::filesystem::path p = user_ / n.substr(5);
-      return std::filesystem::is_regular_file(p) ? p : std::filesystem::path();
+      std::error_code ec;  // the non-throwing overload (a permission error is "not found", never an exception)
+      return std::filesystem::is_regular_file(p, ec) ? p : std::filesystem::path();
     }
     return {};
   }
@@ -112,7 +120,9 @@ class DiskFileSystem final : public FileSystem {
 std::unique_ptr<FileSystem> open_disk(const std::string& install_dir, const std::string& user_dir) {
   std::error_code ec;
   if (!std::filesystem::is_directory(install_dir, ec) || ec) return nullptr;
-  return std::make_unique<DiskFileSystem>(install_dir, user_dir);
+  auto fs = std::make_unique<DiskFileSystem>(install_dir, user_dir);
+  if (!fs->index()) return nullptr;
+  return fs;
 }
 
 }  // namespace lomn::fs

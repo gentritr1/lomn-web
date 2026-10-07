@@ -66,15 +66,16 @@ def fourcc(v):
 
 
 def material_sum(mats):
-    """M1a-3: the C++ datacheck's order-independent material checksum (lomn_datacheck.cpp material_sum), from xbin.py:
-    11 float32 bit patterns (faceColor, power, specular, emissive) + '|' + texture name ('-' without one) per material,
-    lines sorted, joined with newlines, sum = sum * 31 + byte."""
+    """M1a-3: the C++ datacheck's material checksum (lomn_datacheck.cpp material_sum), from xbin.py: 11 float32 bit
+    patterns (faceColor, power, specular, emissive) + '|' + texture name ('-' without one) per material, lines in FILE
+    order (Task 8B F2: the order is the attribute ids DrawSubset uses; it used to sort them), joined with newlines,
+    sum = sum * 31 + byte."""
     lines = []
     for rgba, power, spec, emis, tex in mats:
         vals = list(rgba) + [power] + list(spec) + list(emis)
         lines.append(''.join('%08x' % struct.unpack('<I', struct.pack('<f', v))[0] for v in vals) + '|' + (tex if tex is not None else '-'))
     s = 0
-    for b in '\n'.join(sorted(lines)).encode('latin1'):
+    for b in '\n'.join(lines).encode('latin1'):
         s = (s * 31 + b) & 0xffffffff
     return '%08x' % s
 

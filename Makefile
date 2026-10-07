@@ -64,10 +64,12 @@ datacheck: native $(VENV)/.ok
 	timeout 1200 $(PY) tools/research/oracle/check_datacheck.py --exe build/native/lomn_datacheck --install "$(LOMN_DATA)/install"
 
 # M1a-3: the same oracle against the wasm32 datacheck under Node (NODERAWFS disk file system), then native == wasm32 on
-# the real-data null logs of vllg / ghut / crss (call log and D3D8 state log).
+# the real-data null logs of vllg / ghut / crss (call log and D3D8 state log). Task 8B F2: a failing environment
+# (emsdk_env) exits the loop line explicitly ("&& for ...; done; echo" fell through to the success echo). Not set -e:
+# emsdk_env.sh is sourced and may run commands that fail harmlessly.
 datacheck-wasm: wasm native $(VENV)/.ok
 	$(EMSDK_ENV) && timeout 1800 $(PY) tools/research/oracle/check_datacheck.py --exe build/wasm/lomn_datacheck_node.sh --install "$(LOMN_DATA)/install"
-	$(EMSDK_ENV) && for la in lev1:vllg lev2:ghut lev4:crss; do l=$${la%%:*}; a=$${la##*:}; \
+	$(EMSDK_ENV) || { echo "datacheck-wasm: emsdk environment failed"; exit 1; }; for la in lev1:vllg lev2:ghut lev4:crss; do l=$${la%%:*}; a=$${la##*:}; \
 	  timeout 300 build/native/lomn_view --install "$(LOMN_DATA)/install" --level $$l --area $$a --backend null --out build/native/$$a.calls.txt --state-log build/native/$$a.state.txt >/dev/null && \
 	  timeout 300 node build/wasm/lomn_view.js --install "$(LOMN_DATA)/install" --level $$l --area $$a --backend null --out build/wasm/$$a.calls.txt --state-log build/wasm/$$a.state.txt >/dev/null && \
 	  cmp build/native/$$a.calls.txt build/wasm/$$a.calls.txt && cmp build/native/$$a.state.txt build/wasm/$$a.state.txt || exit 1; done; echo "native == wasm32: real-area null logs"

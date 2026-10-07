@@ -204,4 +204,18 @@ TEST_CASE("disk fs: open_disk rejects a missing install dir and a regular file")
   CHECK(open_disk((base / "a_file").string(), (base / "user").string()) == nullptr);
   sfs::remove_all(base);
 }
+
+// Task 8B F2: an install directory the index walk cannot read (no permission) is a failed open (nullptr), not a disk
+// file system with an empty index that silently "finds" nothing.
+TEST_CASE("disk fs: an unreadable install directory fails open_disk instead of giving an empty index") {
+  namespace sfs = std::filesystem;
+  sfs::path base = sfs::temp_directory_path() / ("lomn_disk_fs_unreadable_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+  sfs::create_directories(base / "install" / "Data");
+  { std::ofstream(base / "install" / "Data" / "x.bin") << "x"; }
+  REQUIRE(open_disk((base / "install").string(), (base / "user").string()) != nullptr);
+  sfs::permissions(base / "install", sfs::perms::none);
+  CHECK(open_disk((base / "install").string(), (base / "user").string()) == nullptr);
+  sfs::permissions(base / "install", sfs::perms::owner_all);
+  sfs::remove_all(base);
+}
 #endif

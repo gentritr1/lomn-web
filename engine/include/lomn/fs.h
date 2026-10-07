@@ -64,7 +64,7 @@ class MemoryFileSystem final : public FileSystem {
 #if !defined(__EMSCRIPTEN__) || defined(LOMN_NODE_DISK_FS)
 // Native (and M1a-3: Node-only wasm32 tools built with LOMN_NODE_DISK_FS + NODERAWFS): "root/..." resolves
 // case-insensitively inside install_dir, "user/..." inside user_dir (created on write).
-// Returns nullptr if install_dir is not a directory.
+// Returns nullptr if install_dir is not a directory, or (Task 8B F2) cannot be made canonical or walked for the index.
 std::unique_ptr<FileSystem> open_disk(const std::string& install_dir, const std::string& user_dir);
 #endif
 
