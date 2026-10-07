@@ -83,6 +83,40 @@ test('blkTablesFingerprint: the total table byte cap (review fixes 4 and N1: sma
   assert.equal((await blkTablesFingerprint(f.entries, f.read)).tableBytes, 3 * 572);
 });
 
+test('blkTablesFingerprint: the DEFAULT total table cap (no option given) is 64 MiB: 18 maximal tables pass, a 19th is refused (T8 P9)', async () => {
+  // The option test above never exercises the default path (a mutant `maxTotalTableBytes = Infinity` survived it). Here no
+  // option is passed. Memory/time stay small: every file shares ONE 3.67 MB table buffer (the largest legal table) and
+  // digest() is stubbed for large inputs, so nothing big is allocated per file or hashed (the earlier 70 MB version
+  // deadlocked Node's exit in 1 run in 5). The stub is restored in `finally`.
+  const per = 12 + MAX_BLK_ENTRIES * 56;
+  const table = blk(MAX_BLK_ENTRIES);
+  assert.equal(table.length, per);
+  const files = (n) => Array.from({ length: n }, (_, i) => ({ path: `data/t${String(i).padStart(2, '0')}.blk`, size: per }));
+  let tableReads = 0;
+  const read = async (e, o, l) => {
+    if (l === 12) return table.subarray(0, 12);
+    assert.equal(o, 0);
+    assert.equal(l, per);
+    ++tableReads;
+    return table;
+  };
+  const subtle = globalThis.crypto.subtle;
+  const realDigest = subtle.digest;
+  subtle.digest = async (alg, data) => (data.byteLength > (1 << 20) ? new ArrayBuffer(32) : realDigest.call(subtle, alg, data));
+  try {
+    const ok = await blkTablesFingerprint(files(18), read);
+    assert.equal(ok.tableBytes, 18 * per);
+    assert.ok(ok.tableBytes <= MAX_TOTAL_TABLE_BYTES);
+    assert.equal(tableReads, 18);
+    tableReads = 0;
+    await assert.rejects(blkTablesFingerprint(files(19), read), /blockfile tables over the size cap/);
+    assert.equal(tableReads, 18, 'the refusal comes before the 19th table is read');
+  } finally {
+    delete subtle.digest;  // the own-property stub goes; the prototype's digest is back
+  }
+  assert.equal(subtle.digest, realDigest);
+});
+
 test('blkTablesFingerprint: names sort by UTF-8 bytes, as the Python oracle does (review fix 6)', async () => {
   // Same install as tools/tests/test_byo_fingerprint.py::test_non_ascii_names_sort_by_utf8_bytes_in_js_and_python: tables are
   // "BLKF", u32 7, u32 count, bytes 0..55 per entry; the oracle's fingerprint for it is hard-coded there and here.
