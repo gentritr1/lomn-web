@@ -5,7 +5,7 @@ export LOMN_DATA LOMN_CACHE
 VENV := .venv
 PY := $(VENV)/bin/python
 EMSDK_ENV := source .toolchain/emsdk/emsdk_env.sh >/dev/null 2>&1
-.PHONY: setup check-data decomp worklist native wasm site test-tools test-native test-wasm test-web check perf datacheck datacheck-wasm fuzz-osi fuzz-formats fuzz-formats-help a9-sweep
+.PHONY: setup check-data decomp worklist native wasm site test-tools test-native test-wasm test-web check perf perf-areas datacheck datacheck-wasm fuzz-osi fuzz-formats fuzz-formats-help a9-sweep
 
 setup: $(VENV)/.ok
 	timeout 3600 tools/toolchain.sh
@@ -59,6 +59,14 @@ perf: native $(VENV)/.ok
 	timeout 300 build/native/lomn_native --backend webgpu --frames 600 --out build/perf
 	timeout 120 $(PY) tools/harness/perf_history.py check build/perf/metrics.json --scene m0-triangle
 	timeout 120 $(PY) tools/harness/perf_history.py append build/perf/metrics.json --scene m0-triangle
+
+# M1a-4 A12 (opt-in, not part of `make check`): lomn_view on the real GPU over lev1/vllg, lev2/ghut and lev4/crss, 600 frames,
+# one unrecorded warm-up then REPS (default 3) recorded runs per area. Each run is reconciled (frames == expected, dt samples ==
+# frames - 1) before it is recorded, guarded on frame_ms_p50 by the measured noise, and marked provisional when the 1-minute
+# loadavg is above 6 or another GPU process overlapped. `make perf-areas ACCEPT=1 REPS=5` seeds accepted baselines. Waits (with
+# a deadline) while another GPU/browser perf process runs; never measures concurrently with one.
+perf-areas: native $(VENV)/.ok
+	timeout 7200 $(PY) tools/harness/perf_history.py areas --reps $(or $(REPS),3) $(if $(ACCEPT),--accept) --view build/native/lomn_view --install "$(LOMN_DATA)/install"
 
 datacheck: native $(VENV)/.ok
 	timeout 1200 $(PY) tools/research/oracle/check_datacheck.py --exe build/native/lomn_datacheck --install "$(LOMN_DATA)/install"

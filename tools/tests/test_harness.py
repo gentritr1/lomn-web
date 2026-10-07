@@ -128,3 +128,97 @@ def test_perf_check_does_not_call_git(tmp_path, monkeypatch):
 
     monkeypatch.setattr(perf_history, "commit", boom)
     assert perf_history.main(["check", str(m), "--scene", "s"], history=tmp_path / "h.jsonl") == 0
+
+
+# ---- M1a-4 Task 2 (A12): per-area perf history ------------------------------------------------------------------------
+
+def view_metrics(p50=1.0, frames_rendered=600, dt_samples=None, requested=600):
+    """The shape of lomn_view's <out>.json (only the keys perf-areas reads)."""
+    return {"tool": "lomn_view", "backend": "webgpu", "adapter": "apple/metal-3", "frames": requested,
+            "frames_rendered": frames_rendered, "load_ms": 100.0, "decode_ms": 50.0, "upload_ms": 20.0,
+            "frame_submit_ms_p50": p50, "frame_submit_ms_p95": p50 * 1.5,
+            "frame_dt_samples": frames_rendered - 1 if dt_samples is None else dt_samples, "frame_dt_ms_p50": p50,
+            "draws_last_frame": 700, "pipelines": 12, "texture_bytes_uploaded": 123456}
+
+
+def area_row(p50, accepted=True, provisional=None):
+    r = {"frame_ms_p50": p50, "accepted": accepted, "machine": "m", "scene": "area:lev1/vllg", "backend": "webgpu"}
+    if provisional is not None:
+        r["provisional"] = provisional
+    return r
+
+
+def area_history(tmp_path, rows):
+    p = tmp_path / "h.jsonl"
+    p.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    return p
+
+
+def area_metrics_file(tmp_path, **kw):
+    m = tmp_path / "metrics.json"
+    m.write_text(json.dumps(view_metrics(**kw)))
+    return m
+
+
+def area_check(tmp_path, rows, p50):
+    import perf_history
+    cur = perf_history.entry(view_metrics(p50=p50), "area:lev1/vllg", False)
+    cur["machine"] = "m"
+    return perf_history.verdict(perf_history.load(area_history(tmp_path, rows)), cur)
+
+
+def test_area_row_with_unreconciled_frames_is_rejected(tmp_path, capsys):
+    import perf_history
+    h = tmp_path / "h.jsonl"
+    # frames rendered != frames expected
+    m = area_metrics_file(tmp_path, frames_rendered=599)
+    assert perf_history.main(["append", str(m), "--scene", "area:lev1/vllg", "--accept"], history=h) != 0
+    assert not h.exists()                       # nothing written
+    assert "599" in capsys.readouterr().err     # the reconciliation line names the numbers
+    # dt samples != frames - 1
+    m = area_metrics_file(tmp_path, dt_samples=600)
+    assert perf_history.main(["append", str(m), "--scene", "area:lev1/vllg"], history=h) != 0
+    assert not h.exists()
+    # a reconciled sample is recorded, with the extra fields and the provisional flag
+    m = area_metrics_file(tmp_path)
+    assert perf_history.main(["append", str(m), "--scene", "area:lev1/vllg", "--accept",
+                              "--loadavg-start", "2.0", "--loadavg-end", "40.0"], history=h) == 0
+    row = json.loads(h.read_text())
+    assert row["frames"] == row["expected_frames"] == 600 and row["frame_dt_samples"] == 599
+    assert row["provisional"] is True and row["loadavg_start"] == 2.0 and row["loadavg_end"] == 40.0
+    assert row["draws"] == 700 and row["texture_bytes"] == 123456 and row["upload_ms"] == 20.0
+
+
+def test_area_provisional_rows_are_ignored_by_the_guard(tmp_path):
+    prov = [area_row(1.0, provisional=True) for _ in range(5)]
+    ok, msg = area_check(tmp_path, prov, 9.0)         # 9x slower than provisional rows: still no baseline
+    assert ok and "no baseline" in msg and "provisional" in msg
+    # one real row among provisional ones is still fewer than 3 usable baselines
+    ok, _ = area_check(tmp_path, prov + [area_row(1.0, provisional=False)] * 2, 9.0)
+    assert ok
+    # non-provisional rows are what the guard uses: provisional rows with other values do not move the baseline
+    real = [area_row(v, provisional=False) for v in (1.00, 1.01, 0.99)]
+    ok, msg = area_check(tmp_path, [area_row(5.0, provisional=True)] * 5 + real, 1.005)
+    assert ok and "n=3" in msg
+
+
+def test_area_regression_larger_than_noise_fails(tmp_path):
+    base = [area_row(v, provisional=False) for v in (1.00, 1.02, 0.98, 1.01, 0.99)]   # noise = max(3 sd, range) = 0.04
+    ok, msg = area_check(tmp_path, base, 1.0 + 0.5)
+    assert not ok and "delta +0.5" in msg and "noise 0.04" in msg
+
+
+def test_area_change_within_noise_passes(tmp_path):
+    base = [area_row(v, provisional=False) for v in (1.00, 1.02, 0.98, 1.01, 0.99)]
+    ok, msg = area_check(tmp_path, base, 1.0 + 0.03)
+    assert ok and "noise 0.04" in msg
+    ok, _ = area_check(tmp_path, base, 0.5)           # faster is never a regression
+    assert ok
+
+
+def test_area_provisional_threshold_is_loadavg_over_6():
+    import perf_history
+    assert perf_history.is_provisional(6.0, 6.0, False) is False
+    assert perf_history.is_provisional(6.01, 1.0, False) is True
+    assert perf_history.is_provisional(1.0, 6.01, False) is True
+    assert perf_history.is_provisional(1.0, 1.0, True) is True      # another GPU process overlapped

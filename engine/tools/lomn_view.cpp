@@ -642,9 +642,12 @@ int main(int argc, char** argv) {
   const uint64_t rss_after_release = rss_now(), fp_after_release = footprint_now(), heap_after_release = heap_in_use();
   const view::Camera cam = view::make_camera(data, cs, static_cast<float>(width) / static_cast<float>(height));
   std::vector<double> frame_ms;
+  std::vector<double> frame_starts_ms;  // M1a-4 A12: wall-clock start of each frame; the dt samples are the n-1 differences
+  const auto t_loop = Clock::now();
   size_t first_frame_lines = 0, state_lines = 0;
   for (uint32_t f = 0; f < frames; ++f) {
     const auto t0 = Clock::now();
+    frame_starts_ms.push_back(std::chrono::duration<double, std::milli>(t0 - t_loop).count());
     if (!renderer.render(*dev, rt, data, cam)) return std::fprintf(stderr, "render refused\n"), 4;
     frame_ms.push_back(ms_since(t0));
     if (f == 0) first_frame_lines = calls.size();
@@ -683,6 +686,13 @@ int main(int argc, char** argv) {
   std::vector<double> sorted = frame_ms;
   std::sort(sorted.begin(), sorted.end());
   const double p50 = sorted[sorted.size() / 2];
+  // M1a-4 A12: nearest-rank p95 (ceil(0.95 n) - 1), and the frame-to-frame dt samples (n - 1 of them) so the perf history can
+  // reconcile samples against frames before it records any percentile.
+  const double p95 = sorted[(sorted.size() * 95 + 99) / 100 - 1];
+  std::vector<double> dts;
+  for (size_t i = 1; i < frame_starts_ms.size(); ++i) dts.push_back(frame_starts_ms[i] - frame_starts_ms[i - 1]);
+  std::sort(dts.begin(), dts.end());
+  const double dt_p50 = dts.empty() ? 0.0 : dts[dts.size() / 2];
   const char* const pitch_src = pitch_cli ? "cli" : "fallback";
   const char* const fov_src = fov_cli ? "cli" : synthetic ? "fallback" : "exe";
   const char* const clip_src = clip_cli ? "cli" : clip_partial ? "cli_partial" : synthetic ? "fallback" : "exe";
@@ -695,7 +705,8 @@ int main(int argc, char** argv) {
     << (synthetic ? "true" : "false") << ",\n\"backend\":" << js(dev->backend()) << ",\"adapter\":" << js(dev->adapter())
     << ",\"width\":" << width << ",\"height\":" << height << ",\n\"frames\":" << frames << ",\"frames_rendered\":" << frame_ms.size()
     << ",\"load_ms\":" << num(data.stats.load_ms) << ",\"decode_ms\":" << num(data.stats.decode_ms) << ",\"upload_ms\":" << num(upload_ms)
-    << ",\"frame_submit_ms_first\":" << num(frame_ms.front()) << ",\"frame_submit_ms_p50\":" << num(p50) << ",\"readback_ms\":" << num(readback_ms)
+    << ",\"frame_submit_ms_first\":" << num(frame_ms.front()) << ",\"frame_submit_ms_p50\":" << num(p50) << ",\"frame_submit_ms_p95\":" << num(p95)
+    << ",\"frame_dt_samples\":" << dts.size() << ",\"frame_dt_ms_p50\":" << num(dt_p50) << ",\"readback_ms\":" << num(readback_ms)
     << ",\n\"rss_after_upload_bytes\":" << rss_after_upload << ",\"cpu_bytes_released\":" << cpu_freed
     << ",\"rss_after_release_bytes\":" << rss_after_release << ",\"rss_peak_bytes\":" << rss_peak()
     << ",\"footprint_after_upload_bytes\":" << fp_after_upload << ",\"footprint_after_release_bytes\":" << fp_after_release
