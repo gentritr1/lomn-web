@@ -444,14 +444,27 @@ class Loader {
         out_.fog.source = "osi";
       } else if (key == "gclightdirector.setcavelighting" && c.args.size() == 1 && c.args[0].number(v[0])) {
         out_.cave_lighting = v[0] != 0.0;
+        out_.cave_lighting_set = true;
       }
     }
-    if (out_.cave_lighting)  // SetCaveLighting(1) 0x0048e670: active style-0 lights get SetIntensity(0.25) (@0x0070bd68)
+    // M1a-4 fix round 1 (I-1). GcLightDirector::SetCaveLighting(bool) 0x0048e670 SETS the intensity of every light in the
+    // director list that is active (GcFastLight::IsActive 0x0058dde0 = byte +0x6c, set to 1 by the ctor 0x0058d5b0;
+    // SetActive 0x0058ddd0 has no caller), has style byte GcLight +0xb0 == 0 (the ctor's GeLightStyle: 0 for directional
+    // 0x004906b0 and ambient 0x00490960 lights, the LIGHT.slb style for point lights 0x00490480) while sUseSpots is false
+    // (static 0 @0x0070bd34, no writer): SetIntensity(0.25 @0x0070bd68) when true, SetIntensity(1.0 @0x0070bd6c) when
+    // false - Diffuse = Specular = base (+0x78) * v, which replaces the ctor's intensity (and its x1.2 boost). Order: the
+    // area script's InitFull runs after the area's lights exist - gs_lego_level.lego_level_initfull calls areasetcurrent
+    // (-> lego_area.setcurrent -> GcAreaDirector::SetCurrentArea 0x0048a540 -> LoadArea 0x004892f0 -> GcAreaLoader::
+    // LoadArea 0x004fedd0 -> GcLightLoader::LoadLights 0x00470010, synchronously) before areasetactive, and InitFull is
+    // reached later from areasetactivenow (Base.osi bytecode, tools/research/osi.py). The last call wins.
+    if (out_.cave_lighting_set) {
+      const float v = out_.cave_lighting ? 0.25f : 1.0f;
       for (SceneLight& l : out_.lights)
         if (l.style == 0) {
           const d3d::Color4& b = l.base;  // GcFastLight +0x78: the colour before any intensity
-          l.light.diffuse = l.light.specular = col(b.r * 0.25f, b.g * 0.25f, b.b * 0.25f, b.a * 0.25f);
+          l.light.diffuse = l.light.specular = col(b.r * v, b.g * v, b.b * v, b.a * v);
         }
+    }
   }
 
   // Model by 4CC id, cached per area (ScDrawableModel::Create keeps a map keyed by the full path; Find ignores case).

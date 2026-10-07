@@ -445,3 +445,57 @@ TEST_CASE("area: textures.slb records are applied by name in table order, duplic
   CHECK(tfx.uv_offset[1] == 0.5f);
   CHECK(a.special_matches == 1);  // only "tfx": this table has no "cut"
 }
+
+namespace {
+void cave_call(std::vector<uint8_t>& c, uint8_t on) {  // GcLightDirector::SetCaveLighting(on)
+  c.insert(c.end(), {0x43, on, 0x82, 2, 0, 3, 0, 1, 0x30});
+}
+view::AreaData cave_area(const std::vector<uint8_t>* calls) {
+  // A style-0 point light (intensity 0.5), a style-1 point light (flags 0x40|2, intensity 0.5) and a directional record
+  // (intensity 1.0 -> 1.2 in the ctor) with its style-0 "Shad" fill; level 3, so no default lights are added.
+  const std::vector<std::pair<std::string, Bytes>> entries = {
+      {"lite_light.slb", light_slb({{"pt0a", 1, 2, 3, 0.5f, 10, 0.8f, 0.6f, 0.4f, 1, 0x40},
+                                    {"pt1a", 1, 2, 3, 0.5f, 10, 1, 1, 1, 1, 0x42},
+                                    {"dir1", 0, -1, 0, 1.0f, 0, 0.5f, 0.5f, 0.5f, 1, 0x80}})}};
+  if (!calls) return lite("lev3", entries);
+  std::vector<uint8_t> c = *calls;
+  c.push_back(0x47);
+  c.push_back(0x52);
+  const Bytes osi = lite_osi("lego_area_lite3", c);
+  return lite("lev3", entries, {}, &osi);
+}
+}  // namespace
+
+TEST_CASE("area: SetCaveLighting SETS the intensity of style-0 lights: 0.25 when on, 1.0 when off (M1a-4 fix round 1, I-1)") {
+  // GcLightDirector::SetCaveLighting 0x0048e670: for every light in the director list with GcFastLight::IsActive
+  // (+0x6c, 1 from the ctor 0x0058d5b0), style byte +0xb0 == 0 and sUseSpots false (static 0 @0x0070bd34):
+  // SetIntensity(on ? 0.25 @0x0070bd68 : 1.0 @0x0070bd6c) - an overwrite of Diffuse = Specular = base * v.
+  const view::AreaData none = cave_area(nullptr);  // no script call: the ctor intensities
+  REQUIRE(none.lights.size() == 4);
+  CHECK_FALSE(none.cave_lighting_set);
+  check4(none.lights[0].light.diffuse, 0.8f * 0.5f, 0.6f * 0.5f, 0.4f * 0.5f, 0.5f);
+  check4(none.lights[2].light.diffuse, 0.5f * 1.2f, 0.5f * 1.2f, 0.5f * 1.2f, 1.2f);
+  std::vector<uint8_t> off;
+  cave_call(off, 0);
+  const view::AreaData a = cave_area(&off);
+  REQUIRE(a.lights.size() == 4);
+  CHECK(a.cave_lighting_set);
+  CHECK_FALSE(a.cave_lighting);
+  CHECK(a.lights[0].name == "pt0a");
+  check4(a.lights[0].light.diffuse, 0.8f, 0.6f, 0.4f, 1.0f);  // style 0: base * 1.0 (not the record's 0.5)
+  check4(a.lights[0].light.specular, 0.8f, 0.6f, 0.4f, 1.0f);
+  check4(a.lights[1].light.diffuse, 0.5f, 0.5f, 0.5f, 0.5f);  // style 1: untouched
+  CHECK(a.lights[2].name == "dir1");
+  check4(a.lights[2].light.diffuse, 0.5f, 0.5f, 0.5f, 1.0f);  // the ctor's 1.2 boost is overwritten by 1.0
+  CHECK(a.lights[3].name == "Shad");
+  check4(a.lights[3].light.diffuse, 0.35294119f, 0.35294119f, 0.35294119f, 1.0f);
+  // Every call overwrites from the base colour: the last one wins.
+  std::vector<uint8_t> on_off, off_on;
+  cave_call(on_off, 1);
+  cave_call(on_off, 0);
+  cave_call(off_on, 0);
+  cave_call(off_on, 1);
+  check4(cave_area(&on_off).lights[0].light.diffuse, 0.8f, 0.6f, 0.4f, 1.0f);
+  check4(cave_area(&off_on).lights[0].light.diffuse, 0.8f * 0.25f, 0.6f * 0.25f, 0.4f * 0.25f, 0.25f);
+  check4(cave_area(&off_on).lights[1].light.diffuse, 0.5f, 0.5f, 0.5f, 0.5f);
+}

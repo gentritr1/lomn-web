@@ -560,6 +560,7 @@ LIGHT_INTENSITY_KNEE, LIGHT_INTENSITY_BOOST = 0.9, 1.2  # GcLight ctors 0x004904
 #                                                         0x004906b0 (@0x0070c19c / 0x0070c1a0): v > 0.9 -> v * 1.2
 FAR_INTENSITY, MAX_LIGHT_RANGE = 0.15, 10000.0  # kFarIntensity @0x0073e8f0, kMaxLightRange @0x0073e8f4
 CAVE_INTENSITY = 0.25  # GcLightDirector::SetCaveLighting 0x0048e670: SetIntensity(@0x0070bd68) when on
+CAVE_OFF_INTENSITY = 1.0  # ... and SetIntensity(@0x0070bd6c) when off
 DEFAULT_INTENSITY = 1.0  # GrSetDefaultLighting 0x00470560: @0x00709300
 LMBA_AMBIENT = (0.47058824, 0.47058824, 0.47058824, 1.0)  # @0x00709364..70
 SUN_DIR = (0.85570401, -0.51642299, 0.0328423)  # "SunL" @0x0070931c..24; "Shad" uses @0x00709348..50 = -SUN_DIR
@@ -682,7 +683,7 @@ def expected(root, level, area, cam):
     level_type = (ord(ins.level[3]) - 0x30) & 0xff if len(ins.level) > 3 else 0xd0
     d = Device()
     f = Frame(d, ins.level)
-    cave = False
+    cave = None  # no SetCaveLighting call: the ctor intensities stay
     # fog literals of the area script (GcAreaDirector::SetFog negates start/end)
     ob = Install.ci(os.path.join(root, 'data', 'Base.osi'))
     if ob:
@@ -695,9 +696,13 @@ def expected(root, level, area, cam):
                 c = args[0] & 0xffffffff
                 f.fog = (c, -args[1], -args[2], args[3])
                 break
-        # GcLightDirector::SetCaveLighting 0x0048e670 (bool): every active light of style 0 gets SetIntensity(0.25 @
-        # 0x0070bd68) when on (1.0 @0x0070bd6c when off: the ctor's value again for v <= 0.9; INFERRED never called with
-        # 0 before a frame). The last call wins.
+        # GcLightDirector::SetCaveLighting 0x0048e670 (bool) loops over the light director's list and, for a light whose
+        # GcFastLight::IsActive (byte +0x6c: 1 from GcFastLight::GcFastLight 0x0058d5b0; SetActive 0x0058ddd0 is never
+        # called) holds, whose GcLight byte +0xb0 (the GeLightStyle the ctor stores) is 0 and while sUseSpots (@0x0070bd34,
+        # static 0, never written) is false, calls SetIntensity(DAT_0070bd68 = 0.25) when true and SetIntensity(DAT_0070bd6c
+        # = 1.0) when false: an overwrite from the base colour, both ways. It runs after the area's lights exist: InitFull
+        # is reached from gs_lego_level.areasetactivenow, after lego_level_initfull's areasetcurrent -> setcurrentarea ->
+        # LoadArea -> LoadLights (Base.osi bytecode). Each call overwrites, so the last one wins.
         for k, args in calls:
             if k == 'gclightdirector.setcavelighting' and len(args) == 1 and isinstance(args[0], (int, float)):
                 cave = args[0] != 0
@@ -721,8 +726,8 @@ def expected(root, level, area, cam):
     d.raw('# node MovingLight')
     count = 0
     for l in lights(ins, level_type):
-        if cave and l['style'] == 0:
-            set_intensity(l, f32(CAVE_INTENSITY))
+        if cave is not None and l['style'] == 0:
+            set_intensity(l, f32(CAVE_INTENSITY) if cave else f32(CAVE_OFF_INTENSITY))
         if count == 8:  # ScRenderer::GetLightID 0x005310c0: ids cycle 0..7
             count = 0
         d.raw(light_line(count, l)); d.raw('LIGHTENABLE %d 1' % count)

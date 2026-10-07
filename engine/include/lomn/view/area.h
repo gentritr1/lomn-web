@@ -165,7 +165,8 @@ struct AreaData {
   std::vector<SceneLight> lights;    // in GcLightDirector add order
   std::string lights_source;         // "light_slb" | "light_slb+default" | "default"
   FogSettings fog;
-  bool cave_lighting = false;        // the area script called GcLightDirector::SetCaveLighting(1)
+  bool cave_lighting = false;        // the area script's last GcLightDirector::SetCaveLighting argument was non-zero
+  bool cave_lighting_set = false;    // the area script called GcLightDirector::SetCaveLighting (either value)
   std::string script_class;          // the Base.osi class whose InitFull was read ("" when none)
   uint32_t special_textures = 0;     // textures.slb records
   uint32_t special_matches = 0;      // subsets a textures.slb record applied to
