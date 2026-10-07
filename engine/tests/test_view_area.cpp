@@ -305,8 +305,9 @@ TEST_CASE("area: placement cap (untrusted OBJ counts) fails the load cleanly") {
 }
 
 namespace {
-// Binary .x with one triangle per material: `n` materials, each with its own texture name tex<i> (or none).
-sage_test::Bytes x_with_subsets(uint32_t n, bool textured) {
+// Binary .x with one triangle per material: `n` materials, each with its own texture name tex<i> (or none). `pos` are
+// the triangle's three vertex positions (M1a-4 a: non-finite ones).
+sage_test::Bytes x_with_subsets(uint32_t n, bool textured, const std::vector<float>& pos = {0, 0, 0, 1, 0, 0, 0, 0, 1}) {
   using namespace sage_test;
   Bytes b;
   putstr(b, "xof 0303bin 0032");
@@ -328,7 +329,8 @@ sage_test::Bytes x_with_subsets(uint32_t n, bool textured) {
   name("Mesh");
   put16(b, 10);
   ints({3});
-  floats({0, 0, 0, 1, 0, 0, 0, 0, 1});
+  REQUIRE(pos.size() == 9);
+  floats(pos);
   std::vector<uint32_t> faces = {n};
   for (uint32_t i = 0; i < n; ++i) faces.insert(faces.end(), {3, 0, 1, 2});
   ints(faces);
@@ -909,4 +911,111 @@ TEST_CASE("area: load_area reports a typed error kind, Environment (a blockfile 
   CHECK(kind == LoadError::Data);
   CHECK(is_default(a));
   CHECK_FALSE(load_area(mfs, "levt", "none", AreaOptions(), a, &err));  // the kind is optional
+}
+
+// ---- M1a-4 (a): non-finite POS start positions and .x vertex positions ----
+namespace {
+struct PosSpec {
+  std::string id;  // fourcc order
+  float pos[3];
+  uint32_t flags;
+};
+sage_test::Bytes pos_table(const std::vector<PosSpec>& recs) {  // {slot, n, ptr=12} + 20-byte records
+  using namespace sage_test;
+  Bytes b;
+  put32(b, 0);
+  put32(b, static_cast<uint32_t>(recs.size()));
+  put32(b, 12);
+  for (const PosSpec& r : recs) {
+    REQUIRE(r.id.size() == 4);
+    for (int k = 3; k >= 0; --k) put8(b, static_cast<uint8_t>(r.id[k]));
+    for (float v : r.pos) putf(b, v);
+    put32(b, r.flags);
+  }
+  put32(b, 8);
+  put32(b, 1);
+  put32(b, 0x00C0FFEEu);
+  return b;
+}
+bool same_matrix(const Mat4& x, const Mat4& y) { return std::memcmp(x.m, y.m, sizeof x.m) == 0; }
+}  // namespace
+
+TEST_CASE("area: a POS start with a non-finite position is skipped with a warning; the camera falls back as with no POS (M1a-4 a)") {
+  const float nan = std::nanf(""), inf = std::numeric_limits<float>::infinity();
+  fs::MemoryFileSystem mfs;
+  REQUIRE(mount_synthetic_install(mfs));
+  const sage_test::Bytes blue = synthetic_entry("blue.x");
+  const sage_test::Bytes obj = obj_table({{"blue", {2, 0, -10}, {0, 0, 0}, 0x10}, {"blue", {-6, 0, -30}, {0, 0, 0}, 0x10}});
+  auto mount = [&](const char* area, const std::vector<PosSpec>* pos) {
+    std::vector<sage_test::BlkEntrySpec> es = {entry("blue.x", blue), entry(std::string(area) + "_obj.slb", obj)};
+    if (pos) es.push_back(entry(std::string(area) + "_pos.slb", pos_table(*pos)));
+    REQUIRE(mfs.mount("Root/Data/Levels/levt/" + std::string(area) + ".blk", sage_test::make_blk(es)));
+  };
+  const std::vector<PosSpec> bad = {{"pkup", {1, 2, 3}, 0x60}, {"strt", {nan, 0, 10}, 0x1000}, {"strt", {0, inf, 10}, 0x1000},
+                                    {"strt", {0, 0, -inf}, 0x1000}};
+  const std::vector<PosSpec> later = {{"strt", {nan, nan, nan}, 0x1000}, {"strt", {4, 5, 6}, 0x1000}};
+  mount("nps0", nullptr);  // the same area without a POS table: the reference fallback
+  mount("nps1", &bad);
+  mount("nps2", &later);
+  AreaData ref, a, b;
+  std::string err;
+  REQUIRE_MESSAGE(load_area(mfs, "levt", "nps0", AreaOptions(), ref, &err), err);
+  REQUIRE_MESSAGE(load_area(mfs, "levt", "nps1", AreaOptions(), a, &err), err);
+  REQUIRE_MESSAGE(load_area(mfs, "levt", "nps2", AreaOptions(), b, &err), err);
+  CHECK_FALSE(ref.has_start);
+  // Every start record is non-finite: no start, one warning per skipped record, the camera exactly as without a POS table.
+  CHECK(a.pos_records == 4);
+  CHECK_FALSE(a.has_start);
+  for (int r : {1, 2, 3}) CHECK(has_warning(a, "pos record " + std::to_string(r) + ": non-finite start position (skipped)"));
+  CHECK_FALSE(has_warning(a, "pos record 0:"));  // a finite record without the start flag is not a start
+  const Camera cr = make_camera(ref, CameraSettings(), 16.0f / 9.0f), ca = make_camera(a, CameraSettings(), 16.0f / 9.0f);
+  CHECK(cr.eye_source == "bounds_centre");
+  CHECK(ca.eye_source == "bounds_centre");
+  CHECK(ca.yaw_source == cr.yaw_source);
+  CHECK(std::memcmp(ca.eye, cr.eye, sizeof ca.eye) == 0);
+  CHECK(ca.yaw_deg == cr.yaw_deg);
+  CHECK(same_matrix(ca.view, cr.view));
+  CHECK(same_matrix(ca.proj, cr.proj));
+  for (float v : ca.eye) CHECK(std::isfinite(v));
+  // A skipped record is not there: a later finite start record is the start.
+  CHECK(b.has_start);
+  CHECK(b.start_record == 1);
+  CHECK(b.start[0] == 4.0f);
+  CHECK(b.start[1] == 5.0f);
+  CHECK(b.start[2] == 6.0f);
+  CHECK(has_warning(b, "pos record 0: non-finite start position (skipped)"));
+  CHECK(make_camera(b, CameraSettings(), 1.0f).eye_source == "pos_start");
+}
+
+TEST_CASE("area: a model with any non-finite vertex position is rejected at load with a warning (M1a-4 a)") {
+  const float nan = std::nanf(""), inf = std::numeric_limits<float>::infinity();
+  fs::MemoryFileSystem mfs;
+  REQUIRE(mount_synthetic_install(mfs));
+  const sage_test::Bytes blue = synthetic_entry("blue.x");
+  const sage_test::Bytes obj = obj_table({{"nanx", {0, 0, -10}, {0, 0, 0}, 0x10},
+                                          {"infx", {0, 0, -12}, {0, 0, 0}, 0x10},
+                                          {"ninf", {0, 0, -14}, {0, 0, 0}, 0x10},
+                                          {"blue", {0, 0, -20}, {0, 0, 0}, 0x10},
+                                          {"nanx", {5, 0, -10}, {0, 0, 0}, 0x110}});
+  REQUIRE(mfs.mount("Root/Data/Levels/levt/nfvx.blk",
+                    sage_test::make_blk({entry("blue.x", blue),  // entries in name order (the blockfile directory is sorted)
+                                         entry("infx.x", x_with_subsets(1, false, {inf, 0, 0, 1, 0, 0, 0, 0, 1})),
+                                         entry("nanx.x", x_with_subsets(1, false, {0, 0, 0, 1, nan, 0, 0, 0, 1})),
+                                         entry("nfvx_obj.slb", obj),
+                                         entry("ninf.x", x_with_subsets(1, false, {0, 0, 0, 1, 0, 0, 0, 0, -inf}))})));
+  AreaData a;
+  std::string err;
+  REQUIRE_MESSAGE(load_area(mfs, "levt", "nfvx", AreaOptions(), a, &err), err);
+  for (const char* id : {"nanx", "infx", "ninf"}) CHECK(has_warning(a, std::string("model ") + id + ": non-finite vertex position (rejected)"));
+  REQUIRE(a.models.size() == 1);  // only blue: a rejected model is cached as missing (one warning, every record skipped)
+  CHECK(a.models[0].id == "blue");
+  CHECK(a.stats.placements == 1);
+  CHECK(a.stats.missing_models == 4);
+  REQUIRE(a.has_bounds);
+  for (int k = 0; k < 3; ++k) {
+    CHECK(std::isfinite(a.bounds_min[k]));
+    CHECK(std::isfinite(a.bounds_max[k]));
+  }
+  for (const Model& m : a.models)
+    for (float v : m.vertices) CHECK(std::isfinite(v));
 }

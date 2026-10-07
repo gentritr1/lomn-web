@@ -119,6 +119,13 @@ class Loader {
         out_.pos_records = static_cast<uint32_t>(pos.size());
         for (uint32_t i = 0; i < pos.size(); ++i)
           if (pos[i].flags & kPosStartFlag) {
+            // M1a-4 (a): a NaN/inf start would poison the eye, the view matrix and both distance sorts: the record is
+            // skipped with a warning (like a non-finite OBJ placement), so without another start record the camera
+            // takes the no-POS fallback (make_camera: the bounds centre).
+            if (!finite3(pos[i].pos)) {
+              warn("pos record " + std::to_string(i) + ": non-finite start position (skipped)");
+              continue;
+            }
             out_.has_start = true;
             out_.start_record = i;
             std::memcpy(out_.start, pos[i].pos, sizeof out_.start);
@@ -484,6 +491,14 @@ class Loader {
       warn("model " + id + ": empty mesh");
       return false;
     }
+    // M1a-4 (a): one NaN/inf vertex position would poison the model's bounds (and with them the camera fallback), the
+    // trans sort's greatest-Y point and the GPU positions: the whole model is rejected (cached as missing, so every
+    // record that names it is skipped as a missing model).
+    for (float v : x.positions)
+      if (!std::isfinite(v)) {
+        warn("model " + id + ": non-finite vertex position (rejected)");
+        return false;
+      }
     // parse_x guarantees these; re-checked so a parser change can never turn into an out-of-range GPU upload.
     for (uint32_t v : x.indices)
       if (v >= n) {

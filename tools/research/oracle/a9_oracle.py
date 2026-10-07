@@ -180,7 +180,10 @@ def load_area(ins, eye_height):
         for i in range(n):
             r = base + 20 * i
             if struct.unpack_from('<I', posb, r + 16)[0] & 0x1000:
-                start = struct.unpack_from('<3f', posb, r + 4)
+                p = struct.unpack_from('<3f', posb, r + 4)
+                if not all(math.isfinite(c) for c in p):
+                    continue  # M1a-4 (a): a non-finite start record is skipped (the viewer's rule, warned there)
+                start = p
                 break
     spec = []
     tb = ins.entry('textures.slb')
@@ -242,6 +245,8 @@ def load_model(ins, xb, spec):
     if not meshes:
         return None
     m = meshes[-1]  # LoadFrames: the last Mesh wins
+    if not all(math.isfinite(c) for p in m.positions for c in p):
+        return None  # M1a-4 (a): a model with a non-finite vertex position is rejected (the viewer's rule, warned there)
     used = sorted(set(m.face_material)) if m.face_material else [0]
     subs = []
     for a in used:
