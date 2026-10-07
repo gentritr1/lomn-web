@@ -43,3 +43,12 @@ test('I6 checkCopyManifest / sameFiles: the completion manifest is shape-checked
   assert.match(sameFiles(entries.slice(0, 1), ok.files), /missing.*data\/Base\.osi/);
   assert.match(sameFiles([{ path: 'LEGOBionicle.exe', size: 4 }, { path: 'data/Base.osi', size: 3 }], ok.files), /size/);
 });
+
+test('M2 filterCached: a cached prefetch set over the byte cap is dropped (discovery runs instead)', async () => {
+  const { filterCached, MAX_CACHED_BYTES } = await import('../app/engine.js');
+  const byNorm = new Map([['root/a', { size: 1 << 30 }]]);
+  assert.equal(MAX_CACHED_BYTES, 64 * 1024 * 1024);
+  assert.equal(filterCached([{ path: 'root/a', offset: 0, length: 100 }, { path: 'root/zz', offset: 0, length: 1 }], byNorm).length, 1);
+  assert.deepEqual(filterCached([{ path: 'root/a', offset: 0, length: MAX_CACHED_BYTES + 1 }], byNorm), []);
+  assert.deepEqual(filterCached([{ path: 'root/a', offset: 2 ** 30 - 5, length: 10 }], byNorm), []);
+});

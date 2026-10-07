@@ -6,6 +6,12 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Pinned third-party inputs are fetched by tools/toolchain.sh into .toolchain/ (see deps.lock).
 set(LOMN_TOOLCHAIN_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../.toolchain" CACHE PATH "pinned toolchain root")
 option(LOMN_WEBGPU "build the WebGPU backend" ON)
+# M1b: the browser viewer's initial wasm memory (bytes, a multiple of 64 KiB). Measured 2026-10-07 (REF4 REPORT "Memory
+# budget", Chromium/Metal, 16 MiB start): boot set resident 16 MiB (no growth), after lev1/vllg 16, lev2/ghut 19.25,
+# lev4/crss 40, lev0/frnt (largest texture set, 57.0 MB with mips) 83.06 MiB = the high-water mark; a sweep of all 122
+# browser-addressable areas afterwards never grew it. 96 MiB = that mark + 15.6% headroom, so growth (a heap copy without
+# pthreads, spec §4.6) does not happen in normal use; MAXIMUM_MEMORY stays 2 GB for anything larger.
+set(LOMN_WEB_INITIAL_MEMORY 100663296)
 enable_testing()
 
 add_library(lomn_core STATIC src/fs/memory_fs.cpp src/fs/prefetch_fs.cpp src/rhi/null_device.cpp src/app/loop.cpp)
@@ -57,9 +63,24 @@ endif()
 
 if(EMSCRIPTEN)
   if(LOMN_WEBGPU)
+    # M1b viewer: an ES module factory (web/app/engine.js imports it); INVOKE_RUN=0 so the boot set is prefetched into
+    # the heap before main(). INITIAL_MEMORY is set from measurement (REF4 REPORT "Memory budget").
+    # Optimisation (REF4 r2 decision D14, amends parent spec §4.6 "-O2 + wasm-opt"): the Release build (-O3; emcc runs
+    # wasm-opt at link for both levels) measured against -O2, 4 interleaved reps per arm (web/tests/measure_arms.mjs,
+    # loadavg 13-20): load of 4 areas median 613 vs 605 ms (spread 236 / 525 ms), frame CPU p50 0.7 vs 0.7 ms (spread
+    # 0.1): indistinguishable; wasm 332,641 vs 344,390 B, the only difference beyond the (zero) null spread: -O3 kept.
+    # -sDYNAMIC_EXECUTION=0: no eval/new Function in the glue (the page's CSP allows only 'wasm-unsafe-eval').
     add_executable(lomn_web src/app/main_web.cpp)
-    target_link_libraries(lomn_web PRIVATE lomn_webgpu)
-    target_link_options(lomn_web PRIVATE -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=2GB)
+    target_link_libraries(lomn_web PRIVATE lomn_area lomn_webgpu)
+    target_include_directories(lomn_web PRIVATE src/app)
+    # The measured configuration, readable at runtime (lomn_build_info -> window.__lomn.metrics.build and the HUD).
+    string(TOUPPER "${CMAKE_BUILD_TYPE}" _lomn_bt)
+    string(STRIP "${CMAKE_CXX_FLAGS} ${CMAKE_CXX_FLAGS_${_lomn_bt}}" _lomn_flags)
+    target_compile_definitions(lomn_web PRIVATE "LOMN_BUILD_TYPE=\"${CMAKE_BUILD_TYPE}\"" "LOMN_BUILD_FLAGS=\"${_lomn_flags}\"")
+    target_link_options(lomn_web PRIVATE -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=2GB -sINITIAL_MEMORY=${LOMN_WEB_INITIAL_MEMORY}
+                        -sMODULARIZE=1 -sEXPORT_ES6=1 -sEXPORT_NAME=createLomn -sINVOKE_RUN=0 -sENVIRONMENT=web -sDYNAMIC_EXECUTION=0
+                        "SHELL:-sEXPORTED_FUNCTIONS=_main,_malloc,_free"
+                        "SHELL:-sEXPORTED_RUNTIME_METHODS=callMain,UTF8ToString,stringToNewUTF8,HEAPU8")
   endif()
   # Null-backend runner under Node: its trace/calls must be byte-identical to the native runner's.
   add_executable(lomn_native src/app/main_native.cpp)

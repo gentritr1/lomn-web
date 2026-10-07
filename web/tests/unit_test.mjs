@@ -1,10 +1,11 @@
 // Node unit tests of the page's untrusted-input code (no browser): build identification, builds.json shape checks, the
-// copy/index file rule and <input webkitdirectory> path handling.
+// copy/index file rule, <input webkitdirectory> path handling and the engine's range-list parser.
 // Run: cd web && timeout 60 node --test tests/unit_test.mjs
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { blkTablesFingerprint, checkBuilds, classify, MAX_BLK_ENTRIES } from '../app/fingerprint.js';
 import { filesSource, wanted } from '../app/byo.js';
+import { parseRanges } from '../app/engine.js';
 
 const H = (n) => n.toString(16).padStart(2, '0').repeat(32);
 const builds = checkBuilds({
@@ -87,4 +88,12 @@ test('filesSource: strips the picked folder, keeps only wanted files', () => {
   const s = filesSource([mk('install/LEGOBionicle.exe', 4), mk('install/data/Base.osi', 2), mk('install/mods/x.dll', 1), mk('install/data/.DS_Store', 1)]);
   assert.equal(s.name, 'install');
   assert.deepEqual(s.entries.map((e) => [e.path, e.size]), [['LEGOBionicle.exe', 4], ['data/Base.osi', 2]]);
+});
+
+test('parseRanges: integers only, malformed lines rejected', () => {
+  assert.deepEqual(parseRanges('root/a\t0\t12\nroot/b\t12\t560\n'), [{ path: 'root/a', offset: 0, length: 12 }, { path: 'root/b', offset: 12, length: 560 }]);
+  assert.throws(() => parseRanges('root/a\t-1\t12\n'), /malformed/);
+  assert.throws(() => parseRanges('root/a\t1.5\t12\n'), /malformed/);
+  assert.throws(() => parseRanges('root/a\t1\n'), /malformed/);
+  assert.throws(() => parseRanges('\t1\t2\n'), /malformed/);
 });

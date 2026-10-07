@@ -1,4 +1,5 @@
-// L3 browser smoke test for the M0 build. Usage: node tests/smoke.mjs <site_dir> <profile_dir>
+// L3 browser smoke test for the M0 build (M1b: the M0 triangle scene is index.html?scene=triangle; the viewer is covered by
+// byo_synthetic.mjs and a13_real.mjs). Usage: node tests/smoke.mjs <site_dir> <profile_dir>
 // Real GPU: Chromium channel "chromium" (new headless) + --enable-unsafe-webgpu. The headless shell falls back to
 // SwiftShader whose canvas screenshots come out blank, so pixels (not just state) are always checked.
 // Exit 0 pass, 1 fail. Prints adapter, frame count, dt reconciliation, requests.
@@ -9,7 +10,8 @@ import { serve } from './serve.mjs';
 
 const [siteDir, profileDir] = process.argv.slice(2);
 const site = path.resolve(siteDir);
-const allowed = new Set(fs.readdirSync(site).map((f) => '/' + f).concat(['/', '/favicon.ico']));
+const manifest = JSON.parse(fs.readFileSync(path.join(site, 'asset-manifest.json'), 'utf8'));
+const allowed = new Set(manifest.files.map((f) => '/' + f.path).concat(['/', '/favicon.ico', '/asset-manifest.json']));
 const srv = await serve(site);
 const fail = (msg) => { console.error('FAIL:', msg); process.exitCode = 1; };
 const ctx = await chromium.launchPersistentContext(path.resolve(profileDir), {
@@ -23,19 +25,18 @@ try {
     consoleMsgs.push(`${msg.type()}: ${msg.text()}`);
   });
   page.on('pageerror', (err) => pageErrors.push(err.message));
-  await page.goto(srv.url + 'index.html', { timeout: 30000 });
+  await page.goto(srv.url + 'index.html?scene=triangle', { timeout: 30000 });
   await page.waitForFunction(() => ['running', 'error'].includes(window.__lomn?.state), null, { timeout: 20000 });
   const st = await page.evaluate(() => window.__lomn);
   if (st.state !== 'running') throw new Error('engine state ' + st.state + ': ' + st.error);
   const adapter = await page.evaluate(async () => { const a = await navigator.gpu.requestAdapter();
     return `${a.info.vendor}/${a.info.architecture}`; });
-  await page.waitForFunction(() => window.__lomn.frames >= 120, null, { timeout: 20000 });
-  const m = await page.evaluate(() => ({ frames: window.__lomn.frames, dts: window.__lomn.metrics.dts }));
-  const windowMs = m.dts.reduce((a, b) => a + b, 0);
-  const p50 = [...m.dts].sort((a, b) => a - b)[Math.floor(m.dts.length / 2)];
-  console.log(`adapter=${adapter} frames=${m.frames} dt_samples=${m.dts.length} window_ms=${windowMs.toFixed(0)} ` +
-              `p50_dt_ms=${p50.toFixed(2)} expected_at_60hz=${(windowMs / 16.667).toFixed(0)}`);
-  if (m.dts.length !== m.frames - 1) fail(`dt samples ${m.dts.length} != frames-1 ${m.frames - 1}`);
+  await page.waitForFunction(() => window.__lomn.metrics?.frames >= 120, null, { timeout: 20000 });
+  // One metrics snapshot (frames and dt samples from the same instant).
+  const m = await page.evaluate(() => window.__lomn.metrics);
+  console.log(`adapter=${adapter} frames=${m.frames} dt_samples=${m.fps.dt_samples} window_ms=${m.fps.window_ms.toFixed(0)} ` +
+              `p50_dt_ms=${m.fps.p50_ms.toFixed(2)} expected_intervals=${m.fps.expected_intervals.toFixed(0)} at ${m.fps.nominal_hz} Hz`);
+  if (m.fps.dt_samples !== m.frames - 1) fail(`dt samples ${m.fps.dt_samples} != frames-1 ${m.frames - 1}`);
   const png = await page.locator('#canvas').screenshot();
   fs.writeFileSync(path.join(path.resolve(profileDir), '..', 'smoke.png'), png);
   const px = await page.evaluate(async (b64) => {

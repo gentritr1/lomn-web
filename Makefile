@@ -33,8 +33,9 @@ native:
 wasm:
 	$(EMSDK_ENV) && timeout 600 emcmake cmake -S engine -B build/wasm -G Ninja -DCMAKE_BUILD_TYPE=Release && timeout 1800 cmake --build build/wasm
 
+# M1b: index.html + web/app/*.js + the wasm build + builds.json, and asset-manifest.json (the network-discipline list).
 site: wasm
-	rm -rf build/site && mkdir -p build/site && cp web/index.html build/wasm/lomn_web.js build/wasm/lomn_web.wasm build/site/
+	timeout 120 node web/tools/build_site.mjs build/wasm build/site
 
 test-tools: $(VENV)/.ok
 	$(EMSDK_ENV); timeout 1800 $(VENV)/bin/pytest -q -rs tools
@@ -51,10 +52,12 @@ test-wasm: wasm test-native $(VENV)/.ok
 	cmp build/native/a9/a/calls.txt build/wasm/a9/a/calls.txt
 	cmp build/native/a9/f2/state.txt build/wasm/a9/f2/state.txt
 
-# M1b T5a: + the BYO validation unit tests (node --test).
-test-web: site
+# M1b: + the data-free BYO/viewer test on a synthetic install (needs the native lomn_view for the fixture and the
+# reference renders) and the fingerprint/JS unit tests.
+test-web: site native
 	cd web && timeout 60 node --test tests/serve_test.mjs tests/unit_test.mjs tests/unit_r2_test.mjs
 	cd web && timeout 180 node tests/smoke.mjs ../build/site ../build/pw-profile
+	cd web && timeout 600 node tests/byo_synthetic.mjs ../build/wasm ../build/byo-syn ../build/native/lomn_view
 
 # M1b: the per-area prefetch manifest of the install (build/m1b/manifest.json; derived data: never committed).
 manifest: native
