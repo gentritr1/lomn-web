@@ -16,6 +16,11 @@ struct OsiSpec {
   std::vector<uint8_t> code;               // the method's bytecode
   uint32_t functions = 0;                  // function-table entries
   uint32_t function_stride = 0;            // function k starts at code + k * stride (0: all share the method's code)
+  // Task 8B C2: extra classes after lego_area_statt (empty names, no properties), each with extra_methods methods whose
+  // symbol is extra_symbol (symbol 1) and whose bytecode is the method's code. 0 = none.
+  uint32_t extra_classes = 0;
+  uint8_t extra_methods = 0;
+  std::string extra_symbol = "m";
 };
 
 inline void osi_put16(std::vector<uint8_t>& b, uint32_t v) {
@@ -49,22 +54,38 @@ inline std::vector<uint8_t> build_osi(const OsiSpec& s) {
     osi_put32(b, 0);
     osi_put16(b, 0);
   }
-  osi_put16(b, 1);  // one class, no properties, one method: symbol 0 = "initfull"
+  osi_put16(b, 1 + s.extra_classes);  // class 0: no properties, one method: symbol 0 = "initfull"
   b.push_back(0);
   b.push_back(1);
   osi_put16(b, 0);
   const size_t mpatch = b.size();
   osi_put32(b, 0);
+  std::vector<size_t> xpatch;  // extra classes' method offsets
+  xpatch.reserve(size_t(s.extra_classes) * s.extra_methods);
+  for (uint32_t k = 0; k < s.extra_classes; ++k) {
+    b.push_back(0);
+    b.push_back(s.extra_methods);
+    for (uint32_t m = 0; m < s.extra_methods; ++m) {
+      osi_put16(b, 1);
+      xpatch.push_back(b.size());
+      osi_put32(b, 0);
+    }
+  }
   b.push_back(static_cast<uint8_t>(s.cls.size()));
   b.insert(b.end(), s.cls.begin(), s.cls.end());
   b.push_back(0);
-  table({"initfull"});
+  for (uint32_t k = 0; k < s.extra_classes; ++k) {
+    b.push_back(0);  // empty class name + NUL
+    b.push_back(0);
+  }
+  table(s.extra_classes ? std::vector<std::string>{"initfull", s.extra_symbol} : std::vector<std::string>{"initfull"});
   table({});  // sources
   const uint32_t code = static_cast<uint32_t>(b.size());
   auto patch = [&](size_t at, uint32_t v) {
     for (int i = 0; i < 4; ++i) b[at + i] = static_cast<uint8_t>(v >> (8 * i));
   };
   patch(mpatch, code);
+  for (size_t at : xpatch) patch(at, code);
   for (uint32_t k = 0; k < s.functions; ++k) patch(fpatch[k], code + k * s.function_stride);
   b.insert(b.end(), s.code.begin(), s.code.end());
   return b;

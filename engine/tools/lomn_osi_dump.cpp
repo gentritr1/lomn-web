@@ -73,8 +73,8 @@ int main(int argc, char** argv) {
   std::vector<lomn::sage::OsiCall> calls;
   for (const lomn::sage::OsiClass& k : o.classes())
     for (const lomn::sage::OsiMethod& m : k.methods) {
-      std::string line = lower(k.name) + "." + lower(m.name) + "\t";
-      if (!o.eval_calls(k.name, m.name, calls, &err)) {
+      std::string line = lower(k.name) + "." + lower(o.method_name(m)) + "\t";
+      if (!o.eval_calls(k.name, o.method_name(m), calls, &err)) {
         line += "ERROR";
       } else {
         for (size_t c = 0; c < calls.size(); ++c) {

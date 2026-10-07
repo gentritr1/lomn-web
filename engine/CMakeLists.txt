@@ -229,6 +229,13 @@ if(EMSCRIPTEN)
   target_link_options(lomn_osi_probe PRIVATE -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=2GB)
 endif()
 add_test(NAME osi_probe COMMAND lomn_osi_probe)
+# Task 8B C1: the same time/memory probe for textures.slb (a 64 MiB table must hit kMaxSpecTextures), native and wasm32.
+add_executable(lomn_slb_probe tests/probe_slb.cpp)
+target_link_libraries(lomn_slb_probe PRIVATE lomn_sage)
+if(EMSCRIPTEN)
+  target_link_options(lomn_slb_probe PRIVATE -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=2GB)
+endif()
+add_test(NAME slb_probe COMMAND lomn_slb_probe)
 
 # Internal JSON string escaper used by metrics.json (header lives in src/app, not in the public include dir).
 target_sources(lomn_tests PRIVATE tests/test_json_escape.cpp)

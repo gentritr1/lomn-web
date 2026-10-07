@@ -11,21 +11,9 @@
 
 #include "lomn/sage/osi.h"
 #include "osi_builder.h"
+#include "probe_util.h"
 
-#if defined(__EMSCRIPTEN__)
-static double peak_mb() { return __builtin_wasm_memory_size(0) * 65536.0 / 1048576.0; }
-#else
-#include <sys/resource.h>
-static double peak_mb() {
-  rusage u{};
-  getrusage(RUSAGE_SELF, &u);
-#if defined(__APPLE__)
-  return u.ru_maxrss / 1048576.0;  // bytes
-#else
-  return u.ru_maxrss / 1024.0;  // KiB
-#endif
-}
-#endif
+static double peak_mb() { return probe_peak_mb(); }
 
 using namespace lomn;
 
@@ -101,6 +89,19 @@ int main() {
   ok &= probe("nops", test::build_osi(s), "kMaxOsiInstructions");
   // 5. One byte over the file cap.
   ok &= probe("too-large", std::vector<uint8_t>(static_cast<size_t>(sage::kMaxOsiBytes) + 1, 0), "too large");
+  // 6. (Task 8B C2) Methods sharing one 255-character symbol (each method used to copy the symbol name). Just inside
+  // kMaxOsiMethods (1 + 1,028 x 255 = 262,141 methods): accepted, and bounded because a method keeps a symbol index,
+  // not a copy of the name. (Run first: the native figure is the process PEAK, which only grows.)
+  s.code = test::osi_statt_program();
+  s.extra_symbol = std::string(255, 'm');
+  s.extra_methods = 255;
+  s.extra_classes = 1028;
+  ok &= probe("methods-in-cap", test::build_osi(s), nullptr);
+  // 6b. The method table as large as the file cap allows: 5,450 classes x 255 methods = 1.39M methods (365 MB natively
+  // before the cap): rejected by kMaxOsiMethods before any method is stored.
+  s.extra_classes = 5450;
+  ok &= probe("methods-flood", test::build_osi(s), "kMaxOsiMethods");
+  s.extra_classes = 0;
   std::printf("%s\n", ok ? "osi_probe: all probes bounded" : "osi_probe: FAILED");
   return ok ? 0 : 1;
 }

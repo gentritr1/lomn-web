@@ -78,7 +78,7 @@ int main(int argc, char** argv) {
         if (budget-- == 0) break;
         std::vector<sage::OsiCall> calls(2);
         ++evaluated;
-        if (!o.eval_calls(k.name, m.name, calls, &err)) {
+        if (!o.eval_calls(k.name, o.method_name(m), calls, &err)) {
           if (!calls.empty()) die("failed eval left calls", it);
           continue;
         }

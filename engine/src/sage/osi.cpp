@@ -14,9 +14,14 @@ using detail::Cursor;
 using detail::le16;
 using detail::le32;
 
-std::string lower(std::string s) {
-  for (char& c : s) c = static_cast<char>(c >= 'A' && c <= 'Z' ? c - 'A' + 'a' : c);
-  return s;
+// ASCII case-insensitive equality without allocating (Task 8B C3: lookups used to lower-case a copy of every class and
+// method name they compared; this makes the lowered-name cache the review asked for unnecessary).
+char lc(char c) { return static_cast<char>(c >= 'A' && c <= 'Z' ? c - 'A' + 'a' : c); }
+bool iequals(const std::string& a, const std::string& b) {
+  if (a.size() != b.size()) return false;
+  for (size_t i = 0; i < a.size(); ++i)
+    if (lc(a[i]) != lc(b[i])) return false;
+  return true;
 }
 bool fail(std::string* err, const std::string& m) {
   if (err) *err = "osi: " + m;
@@ -107,17 +112,21 @@ bool OsiFile::parse_tables(std::vector<uint8_t> bytes, std::string* err) {
   }
   uint16_t nc = 0;
   if (!c.u16(nc) || uint64_t(nc) * 2 > c.remaining()) return fail(err, "bad class table");
+  // Task 8B C2: both counts are capped before anything is stored for them (measured 395 classes / 8,406 methods).
+  if (nc > kMaxOsiClasses) return fail(err, "class table exceeds kMaxOsiClasses");
   classes_.resize(nc);
-  std::vector<uint16_t> method_sym;  // symbol index per method, in class order; resolved below
+  uint64_t methods = 0;
   for (uint32_t i = 0; i < nc; ++i) {
     uint8_t np = 0, nm = 0;
     if (!c.u8(np) || !c.skip(uint64_t(np) * 2) || !c.u8(nm) || uint64_t(nm) * 6 > c.remaining()) return fail(err, "truncated class");
+    methods += nm;
+    if (methods > kMaxOsiMethods) return fail(err, "method tables exceed kMaxOsiMethods");
+    classes_[i].methods.reserve(nm);
     for (uint32_t m = 0; m < nm; ++m) {
       uint16_t sym = 0;
       uint32_t off = 0;
       if (!c.u16(sym) || !c.u32(off)) return fail(err, "truncated method");
-      classes_[i].methods.push_back({std::string(), off});
-      method_sym.push_back(sym);
+      classes_[i].methods.push_back({sym, off});  // the symbol is resolved (range-checked) once the table is read
     }
   }
   for (uint32_t i = 0; i < nc; ++i) {
@@ -125,12 +134,9 @@ bool OsiFile::parse_tables(std::vector<uint8_t> bytes, std::string* err) {
     if (!c.u8(len) || !c.str(len, classes_[i].name) || !c.skip(1)) return fail(err, "truncated class names");
   }
   if (!read_strings(c, symbols_) || !read_strings(c, sources_)) return fail(err, "truncated symbol/source table");
-  size_t mi = 0;
-  for (OsiClass& k : classes_)
-    for (OsiMethod& m : k.methods) {
-      const uint16_t sym = method_sym[mi++];
-      if (sym >= symbols_.size()) return fail(err, "method symbol out of range");
-      m.name = symbols_[sym];
+  for (const OsiClass& k : classes_)
+    for (const OsiMethod& m : k.methods) {
+      if (m.symbol >= symbols_.size()) return fail(err, "method symbol out of range");
       if (m.offset >= d_.size()) return fail(err, "method offset outside the file");
     }
   for (const auto& f : functions_)
@@ -139,9 +145,8 @@ bool OsiFile::parse_tables(std::vector<uint8_t> bytes, std::string* err) {
 }
 
 const OsiClass* OsiFile::find_class(const std::string& name) const {
-  const std::string n = lower(name);
   for (const OsiClass& c : classes_)
-    if (lower(c.name) == n) return &c;
+    if (iequals(c.name, name)) return &c;
   return nullptr;
 }
 
@@ -196,8 +201,12 @@ bool OsiFile::disasm(uint32_t start, std::vector<Insn>& out, std::string* err) c
       if (k < 3) *slot[k] = v;
     }
     out.push_back(in);
-    if (in.op == 0x53 || in.op == 0x54) last_target = std::max<uint64_t>(last_target, uint64_t(int64_t(c.pos()) + in.a));
-    else if (in.op == 0x52 && c.pos() > last_target) return true;
+    if (in.op == 0x53 || in.op == 0x54) {
+      // Task 8B C3: a target before the file start (negative) never extends the walk, as in osi.py (max with 0); it
+      // used to wrap to a huge unsigned value that ran the walk past every Return.
+      const int64_t target = int64_t(c.pos()) + in.a;
+      if (target > 0) last_target = std::max<uint64_t>(last_target, uint64_t(target));
+    } else if (in.op == 0x52 && c.pos() > last_target) return true;
   }
   return fail(err, "subroutine exceeds kMaxOsiInstructions");
 }
@@ -237,7 +246,7 @@ bool OsiFile::eval_impl(const std::string& cls, const std::string& method, std::
   if (!k) return fail(err, "no class " + cls);
   const OsiMethod* m = nullptr;
   for (const OsiMethod& x : k->methods)
-    if (lower(x.name) == lower(method)) m = &x;
+    if (iequals(symbols_[x.symbol], method)) m = &x;
   if (!m) return fail(err, "no method " + cls + "." + method);
   std::vector<Insn> ins;
   if (!disasm(m->offset, ins, err)) return false;

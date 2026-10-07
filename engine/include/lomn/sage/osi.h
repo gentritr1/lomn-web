@@ -14,6 +14,21 @@
 // CLEARS the stack (values become unknown), so a reported literal is always one computed in straight-line code right
 // before the call. (Not to be confused with osi.py's find_plain_push_calls / --plain-calls, which only decodes the argc
 // instructions right before a call when they are plain pushes: a computed argument such as 0 - 40 reads as None there.)
+// C++ vs osi.py on CRAFTED input (Task 8B C3). Both agree on all 8,406 class.method pairs of the real Base.osi (ctest
+// osi_all_methods); on hostile bytecode they differ in these documented ways (osi.py is a research oracle, this reader
+// the engine's bounded one):
+//  - float folds: each fold result is stored as float32 here (OsiValue::f); osi.py keeps float64 through a chain of
+//    folds, so a chain can round differently (a single fold agrees after one double -> float rounding);
+//  - integer folds are computed in double here and kept as Int only within +-9.0e18 (else the value becomes Unknown),
+//    and lose exactness above 2^53; osi.py uses exact unbounded ints. NEITHER wraps at 32 bits: whether the game VM's
+//    integers are 32-bit (and wrap) is UNVERIFIED (no real script folds out of the 32-bit range);
+//  - a negative CallGameFunction argc is an error here; osi.py pops nothing (0 arguments);
+//  - a string index outside the string table (PushString, call class/function names) gives Unknown / "?" here; osi.py
+//    raises IndexError;
+//  - ALIGNED (Task 8B C3): a branch target before the file start never extends the subroutine walk in either reader
+//    (this one used to wrap it to a huge unsigned target and walk past every Return).
+// Name lookups (find_class, eval_calls) compare ASCII case-insensitively without allocating; method names are symbol
+// indices (OsiMethod::symbol, method_name()), never per-method copies.
 // Untrusted input (spec section 5, M1a-1 audit rules): every read bounds-checked; table counts bounded by the remaining
 // bytes; every attacker-controlled count below is capped from a value MEASURED on the real Base.osi (Beta 1.5.0, 486,274
 // bytes; tools/research/osi_maxima.py) with >= 16x headroom where the format allows it. A cap hit is an error: parse() leaves
@@ -35,6 +50,8 @@ constexpr uint32_t kMaxOsiArgc = 127;                       // per call: 9 -> 12
 constexpr uint32_t kMaxOsiArgsPerMethod = 4096;             // eval_calls, sum of argc: 128 -> 4,096 (32x)
 constexpr uint32_t kMaxOsiStringArgBytes = 16384;           // eval_calls, string bytes copied into args: 570 -> 16,384 (28x)
 constexpr uint32_t kMaxOsiStackDepth = 256;                 // eval_calls literal stack: 16 -> 256 (16x)
+constexpr uint32_t kMaxOsiClasses = 8192;                   // class table: 395 -> 8,192 (20.7x)
+constexpr uint32_t kMaxOsiMethods = 1u << 18;               // methods summed over all classes: 8,406 -> 262,144 (31x)
 
 struct OsiValue {
   enum Kind { Unknown, Int, Float, String } kind = Unknown;
@@ -51,7 +68,7 @@ struct OsiCall {
 };
 
 struct OsiMethod {
-  std::string name;
+  uint16_t symbol = 0;  // index into the symbol table (OsiFile::method_name); Task 8B C2: no per-method copy of the name
   uint32_t offset = 0;
 };
 struct OsiClass {
@@ -67,6 +84,8 @@ class OsiFile {
   const std::vector<std::string>& strings() const { return strings_; }
   const std::vector<OsiClass>& classes() const { return classes_; }
   const OsiClass* find_class(const std::string& name) const;  // case-insensitive
+  // The method's name (its symbol; parse() checked the index). Methods sharing a symbol share the one string.
+  const std::string& method_name(const OsiMethod& m) const { return symbols_[m.symbol]; }
   // Every CallGameFunction in class.method (case-insensitive names), with literal arguments where recoverable.
   bool eval_calls(const std::string& cls, const std::string& method, std::vector<OsiCall>& out, std::string* err) const;
   // Disassembles every distinct function and method subroutine (bounds/opcode check of the whole file) within

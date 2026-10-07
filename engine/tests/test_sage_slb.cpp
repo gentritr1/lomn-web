@@ -293,3 +293,32 @@ TEST_CASE("slb: textures.slb records (name read at ptr + 1, trans, U/V speeds, f
     if (p.parse(Bytes(good.begin(), good.begin() + static_cast<std::ptrdiff_t>(len)), &err)) parse_spec_textures(p, t, &err);
   }
 }
+
+// Task 8B C1: caps from the measured real maxima (tools/research/spec_textures_maxima.py: 18 tables, at most 15 records,
+// names at most 35 chars) and the exe's own name bound; a rejected table leaves no partial record list.
+TEST_CASE("slb: textures.slb caps: records <= kMaxSpecTextures, names < 64 chars (exe ScFixedString<0x40>), no partial state") {
+  std::vector<SpecTextureRecord> t;
+  std::string err;
+  // LoadTextures copies name + 1 into a ScFixedString of mMaxSize 0x40; ScFixedString::Init (0x00401850) throws
+  // kOutOfRange when strlen >= mMaxSize. So 63 characters is the longest name the game accepts.
+  Slb n63 = parse_ok(make_textures({{std::string(63, 'n'), 0.5f}}));
+  CHECK(parse_spec_textures(n63, t, &err));
+  Slb n64 = parse_ok(make_textures({{std::string(64, 'n'), 0.5f}}));
+  CHECK_FALSE(parse_spec_textures(n64, t, &err));
+  CHECK(err.find("kMaxSpecTextureName") != std::string::npos);
+  CHECK(t.empty());
+  std::vector<std::pair<std::string, float>> many(kMaxSpecTextures, {"tfx", 0.5f});
+  Slb at_cap = parse_ok(make_textures(many));
+  REQUIRE_MESSAGE(parse_spec_textures(at_cap, t, &err), err);
+  CHECK(t.size() == kMaxSpecTextures);
+  many.push_back({"tfx", 0.5f});
+  Slb over = parse_ok(make_textures(many));
+  CHECK_FALSE(parse_spec_textures(over, t, &err));
+  CHECK(err.find("kMaxSpecTextures") != std::string::npos);
+  CHECK(t.empty());
+  // A bad record after good ones: nothing of the table is kept (it used to keep the records before the bad one).
+  t.assign(1, SpecTextureRecord{"stale", 0.5f, 0, 0, 0});
+  Slb bad = parse_ok(make_textures({{"good", 0.5f}, {std::string(300, 'x'), 0.5f}}));  // over both the old and new name bound
+  CHECK_FALSE(parse_spec_textures(bad, t, &err));
+  CHECK(t.empty());
+}

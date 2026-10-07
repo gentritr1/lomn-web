@@ -132,15 +132,18 @@ bool parse_light(const Slb& slb, std::vector<LightRecord>& out, std::string* err
   return true;
 }
 
+// Task 8B C1: the record count is capped (kMaxSpecTextures) BEFORE anything is allocated, and the table is built into a
+// local vector that replaces `out` only on success: a rejected table leaves `out` empty, never a partial record list.
 bool parse_spec_textures(const Slb& slb, std::vector<SpecTextureRecord>& out, std::string* err) {
   out.clear();
   uint32_t n = 0, base = 0;
   if (!table(slb, 4, 8, kSpecTextureRecordSize, n, base, "textures", err)) return false;
-  out.resize(n);
+  if (n > kMaxSpecTextures) return fail(err, "textures: more than kMaxSpecTextures records");
+  std::vector<SpecTextureRecord> recs(n);
   const std::vector<uint8_t>& b = slb.bytes();
   for (uint32_t i = 0; i < n; ++i) {
     const uint64_t r = base + uint64_t(i) * kSpecTextureRecordSize;
-    SpecTextureRecord& t = out[i];
+    SpecTextureRecord& t = recs[i];
     uint32_t name = 0;
     if (!slb.read_ptr(r, name)) return fail(err, "textures: record " + std::to_string(i) + " name is not a fix-up slot");
     for (uint64_t p = uint64_t(name) + 1; p < b.size() && b[static_cast<size_t>(p)] != 0; ++p) {
@@ -152,6 +155,7 @@ bool parse_spec_textures(const Slb& slb, std::vector<SpecTextureRecord>& out, st
     t.v = lef32(b.data() + r + 12);
     t.frames = le32(b.data() + r + 16);
   }
+  out = std::move(recs);
   return true;
 }
 

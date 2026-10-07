@@ -177,7 +177,13 @@ def find_plain_push_calls(d, o, wanted):
 
 def eval_calls(d, o, cls, method):
     """CallGameFunction calls in cls.method with their literal arguments, evaluating straight-line constant code:
-    pushes, + - * / on numbers, Pop/PopN; every other opcode, branch or branch target forgets the stack."""
+    pushes, + - * / on numbers, Pop/PopN; every other opcode, branch or branch target forgets the stack.
+
+    Differences from the C++ evaluator (lomn/sage/osi.h) on CRAFTED input only (Task 8B C3; all 8,406 real methods agree):
+    float folds stay float64 here (C++ rounds each fold to float32); integer folds are exact unbounded ints here (C++
+    computes in double, keeps an Int only within +-9.0e18); neither wraps at 32 bits (the game VM's integer width is
+    UNVERIFIED); a negative argc pops nothing here (C++: error); an out-of-range string index raises IndexError here
+    (C++: Unknown / "?"). A branch target before the file start is ignored by both disassemblers (C++ aligned in 8B)."""
     off = None
     for name, meths in ((c[0], c[2]) for c in o['classes']):
         if name.lower() == cls.lower():

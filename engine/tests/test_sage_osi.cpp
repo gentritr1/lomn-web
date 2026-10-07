@@ -241,3 +241,45 @@ TEST_CASE("osi: a failed parse leaves no partial tables; oversized files are rej
   CHECK_FALSE(o.parse(std::move(big), &err));
   CHECK(err.find("too large") != std::string::npos);
 }
+
+// Task 8B C2: the class and method tables are capped from the measured real maxima (395 classes, 8,406 methods; REF3
+// logs/osi-maxima.json) before anything per method is allocated; a cap hit leaves an empty OsiFile.
+TEST_CASE("osi: class and method counts are capped (kMaxOsiClasses, kMaxOsiMethods) with no partial tables") {
+  test::OsiSpec s;
+  s.code = test::osi_statt_program();
+  std::string err;
+  sage::OsiFile o;
+  s.extra_classes = sage::kMaxOsiClasses - 1;  // + lego_area_statt = exactly the cap
+  REQUIRE_MESSAGE(o.parse(test::build_osi(s), &err), err);
+  CHECK(o.classes().size() == sage::kMaxOsiClasses);
+  s.extra_classes = sage::kMaxOsiClasses;
+  CHECK_FALSE(o.parse(test::build_osi(s), &err));
+  CHECK(err.find("kMaxOsiClasses") != std::string::npos);
+  CHECK(o.classes().empty());
+  // Methods: 1 + 1028 x 255 = 262,141 <= 2^18 accepted; one more class of 255 methods crosses it.
+  s.extra_classes = 1028;
+  s.extra_methods = 255;
+  REQUIRE_MESSAGE(o.parse(test::build_osi(s), &err), err);
+  uint64_t methods = 0;
+  for (const sage::OsiClass& k : o.classes()) methods += k.methods.size();
+  CHECK(methods == 1 + 1028u * 255u);
+  s.extra_classes = 1029;
+  CHECK_FALSE(o.parse(test::build_osi(s), &err));
+  CHECK(err.find("kMaxOsiMethods") != std::string::npos);
+  CHECK(o.classes().empty());
+}
+
+// Task 8B C3: a branch whose target lies before the file start does not extend the subroutine walk (osi.py's
+// disasm takes max(last_target, target) with last_target starting at 0, so a negative target is ignored there). The C++
+// walk turned it into a huge unsigned target and ran past every Return.
+TEST_CASE("osi: a backward branch before the file start ends the walk at the next Return, as osi.py does") {
+  // Jump 0x53 with offset -32768 (target < 0), then PushNothing, Return, then 3 bytes of an unknown opcode.
+  sage::OsiFile o;
+  std::string err;
+  REQUIRE_MESSAGE(o.parse(with_code({0x53, 0x00, 0x80, 0x47, 0x52, 0xEE, 0xEE, 0xEE}), &err), err);
+  uint64_t n = 0;
+  REQUIRE_MESSAGE(o.check_all(&n, &err), err);
+  CHECK(n == 3);
+  std::vector<sage::OsiCall> calls;
+  CHECK(o.eval_calls("lego_area_statt", "initfull", calls, &err));
+}

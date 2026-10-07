@@ -85,13 +85,23 @@ constexpr size_t kLightRecordSize = 44;
 // records {ptr name, f32 transparency, f32 u speed, f32 v speed, u32 animation frames}. The name pointer targets a
 // length-prefixed string; the game reads the C string at name + 1 (the length byte is ignored), so do we, bounded by
 // the buffer and kMaxSpecTextureName.
+// Caps (Task 8B C1; untrusted input). Measured over the 18 textures.slb entries of the Beta 1.5.0 install
+// (tools/research/spec_textures_maxima.py, 2026-10-07): at most 15 records (lev1/lev1.blk), names at most 35 characters
+// ("on_lev_21xx_river_waterfall_trans_1"), entries at most 768 bytes.
+//  - kMaxSpecTextures 1024 records (68x the measured 15); more fails the table before anything is allocated.
+//  - kMaxSpecTextureName 63 characters: the EXE's own bound, not a multiple. LoadTextures copies name + 1 into a
+//    ScFixedString with mMaxSize 0x40 and ScFixedString::Init (0x00401850) throws kOutOfRange when strlen >= 0x40, so a
+//    64-character name already fails in the game (the game would have applied the records before it; a rejected table
+//    here applies none: documented deviation, no partial state).
+// A rejected table leaves `out` empty.
 struct SpecTextureRecord {
   std::string name;
   float trans = 1.0f, u = 0.0f, v = 0.0f;
   uint32_t frames = 0;
 };
 constexpr size_t kSpecTextureRecordSize = 20;
-constexpr size_t kMaxSpecTextureName = 255;
+constexpr size_t kMaxSpecTextureName = 63;
+constexpr uint32_t kMaxSpecTextures = 1024;
 bool parse_spec_textures(const Slb& slb, std::vector<SpecTextureRecord>& out, std::string* err);
 
 bool parse_obj(const Slb& slb, std::vector<ObjRecord>& out, std::string* err);
