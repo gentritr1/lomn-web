@@ -573,12 +573,74 @@ std::vector<XRow> count_length_rows() {
   r.push_back({"L228b-uv-count-differs",
                mesh_obj([](X& x) { tri_mesh(x); x.obj("MeshTextureCoords").ints({5}).floats({0, 0, 1, 0, 1, 1, 0, 1, 0.5f, 0.5f}).close(); }),
                "x: MeshTextureCoords count differs from nVertices"});
+
+  // ---- cleanup C1-b: the MeshVertexColors / MeshMaterialList / Material checks (line numbers at 043226f).
+  // L235 "MeshVertexColors header truncated": colours without the nColors count. Without it mc->ints[0] dereferences an
+  // empty vector (SEGV in every build).
+  r.push_back({"L235-colors-0-ints",
+               mesh_obj([](X& x) { tri_mesh(x); x.obj("MeshVertexColors").floats({1, 1, 1, 1}).close(); }),
+               "x: MeshVertexColors header truncated"});
+  // L252 "MeshMaterialList header truncated": < 2 ints (nMaterials, nFaceIndexes); the Material itself is valid.
+  //   1 int: without it ci[1] is read past a size-1 list (ASan heap-buffer-overflow; garbage nFaceIndexes otherwise).
+  //   0 ints: without it ci[0] dereferences an empty vector (SEGV).
+  r.push_back({"L252-mml-1-int",
+               mesh_obj([](X& x) {
+                 tri_mesh(x);
+                 x.obj("MeshMaterialList").ints({1}).obj("Material").floats({1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0}).close().close();
+               }),
+               "x: MeshMaterialList header truncated"});
+  r.push_back({"L252-mml-0-ints",
+               mesh_obj([](X& x) {
+                 tri_mesh(x);
+                 x.obj("MeshMaterialList").obj("Material").floats({1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0}).close().close();
+               }),
+               "x: MeshMaterialList header truncated"});
+  // L255 "MeshMaterialList face indices truncated": nFaceIndexes 2 with 1 index for a 1-face mesh. Without the check the
+  // face loop only reads index 0 (present) and the file is accepted.
+  r.push_back({"L255-mml-face-indices-cut",
+               mesh_obj([](X& x) {
+                 tri_mesh(x);
+                 x.obj("MeshMaterialList").ints({1, 2, 0}).obj("Material").floats({1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0}).close().close();
+               }),
+               "x: MeshMaterialList face indices truncated"});
+  // L279 / L296 "material count differs" (the early bails; L298 after the loop gives the same message). Without an early
+  // bail the loop goes on, and a later member's own error wins: each row ends with a Material whose floats are short,
+  // so a deleted bail turns the message into "x: Material floats short". The bails are also the memory bound: a
+  // memoised reference costs 11 file bytes but copies a whole XMaterial (with up to kXMaxTextureName = 576 name bytes).
+  //   L279 (memo hit): nMaterials 1, references {M} {M}: the second one is the memo hit that exceeds nMaterials.
+  r.push_back({"L279-memo-hit-over-count",
+               [] {
+                 X x;
+                 x.name("Material").name("M").open().floats({1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0}).close();
+                 x.obj("Mesh");
+                 tri_mesh(x);
+                 x.obj("MeshMaterialList").ints({1, 1, 0}).ref("M").ref("M").obj("Material").floats({1, 1, 1}).close().close();
+                 x.close();
+                 return x.b;
+               }(),
+               "x: material count differs from MeshMaterialList"});
+  //   L296 (fresh decode): nMaterials 1, two distinct inline Materials: the second one exceeds nMaterials.
+  r.push_back({"L296-fresh-over-count",
+               mesh_obj([](X& x) {
+                 tri_mesh(x);
+                 x.obj("MeshMaterialList").ints({1, 1, 0});
+                 x.obj("Material").floats({1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0}).close();
+                 x.obj("Material").floats({0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0}).close();
+                 x.obj("Material").floats({1, 1, 1}).close();
+                 x.close();
+               }),
+               "x: material count differs from MeshMaterialList"});
+  // L282 "Material floats short": 4 of the 11 floats (a power-of-two list: vector capacity == size). Without it the
+  // copy reads floats[4..10] past the end (ASan heap-buffer-overflow; garbage, and an accepted file, otherwise).
+  r.push_back({"L282-material-floats-short",
+               mesh_obj([](X& x) { tri_mesh(x); x.obj("MeshMaterialList").ints({1, 1, 0}).obj("Material").floats({1, 1, 1, 1}).close().close(); }),
+               "x: Material floats short"});
   return r;
 }
 
 }  // namespace
 
-TEST_CASE("x: crafted count/length rejections, one input per decode_mesh check (cleanup C1-a)") {
+TEST_CASE("x: crafted count/length rejections, one input per decode_mesh check (cleanup C1-a, C1-b)") {
   for (const XRow& row : count_length_rows()) {
     SUBCASE(row.id) {
       XFile xf;
