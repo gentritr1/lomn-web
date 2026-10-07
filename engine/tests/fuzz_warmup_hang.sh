@@ -3,19 +3,22 @@
 # wasm32 has no per-input watchdog, so after an outer timeout the --last-input file is the only record of the input
 # that hung. --test-hang-seed 1 makes the driver spin forever on synthetic .x seed #1 of the warm-up; the file must
 # name exactly that seed while the driver is stuck there. The driver is then killed (as the make target's timeout
-# would). Waits on the file's content, never on a fixed time; gives up after ~60 s (a failure).
+# would). Waits on the file's content, never on a fixed time; gives up after 60 s of ELAPSED wall-clock time (cleanup
+# S5: read from the clock, not counted in loop passes, which each fork grep and kill and stretch on a loaded host), a
+# failure. The ctest TIMEOUT (90 s, CMakeLists.txt) stays above that deadline plus the kill.
 # usage: fuzz_warmup_hang.sh DRIVER LAST_INPUT_FILE [EMULATOR...]
 drv=$1
 last=$2
 shift 2
+deadline_s=60
 # The last-input lines are padded to a fixed width by the driver; print them without the trailing spaces.
 trimmed() { sed 's/  *$//' "$last" 2>/dev/null; }
 /bin/rm -f "$last"
 "$@" "$drv" --smoke --formats x --n 1 --last-input "$last" --test-hang-seed 1 &
 pid=$!
 want='^x  *seed #1 (synthetic, unmutated) *$'
-i=0
-while [ $i -lt 600 ]; do
+start=$(date +%s)
+while [ $(($(date +%s) - start)) -lt $deadline_s ]; do
   if grep -q "$want" "$last" 2>/dev/null; then
     alive=yes
     kill -0 $pid 2>/dev/null || alive=no
@@ -35,9 +38,8 @@ while [ $i -lt 600 ]; do
     exit 1
   fi
   sleep 0.1
-  i=$((i + 1))
 done
 kill $pid 2>/dev/null
 wait $pid 2>/dev/null
-echo "FAIL: after ~60 s the last-input file does not name the hanging seed: '$(trimmed)'"
+echo "FAIL: after $(($(date +%s) - start)) s (deadline ${deadline_s} s) the last-input file does not name the hanging seed: '$(trimmed)'"
 exit 1
