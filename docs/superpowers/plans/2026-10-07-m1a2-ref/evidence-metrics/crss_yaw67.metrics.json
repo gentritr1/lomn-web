@@ -1,0 +1,12 @@
+{
+"tool":"lomn_view","level":"lev4","area":"crss","synthetic":false,
+"backend":"webgpu","adapter":"apple/metal-3/Metal driver on macOS Version 26.5.2 (Build 25F84)","width":1280,"height":720,
+"frames":1,"frames_rendered":1,"load_ms":12.247,"decode_ms":24.935,"upload_ms":10.866,"frame_submit_ms_first":3.783,"frame_submit_ms_p50":3.783,"readback_ms":2.759,
+"rss_after_upload_bytes":80396288,"cpu_bytes_released":27044888,"rss_after_release_bytes":80396288,"rss_peak_bytes":83968000,"rejected_last_frame":0,
+"draws_last_frame":42,"indices_last_frame":18621,"pipelines":2,"gpu_textures":38,"texture_bytes_uploaded":26678568,
+"art_blk":true,"obj_records":14,"placements":14,"routes":{"main":2,"trans":1,"back":1,"moveable":10,"nolight":0},"ignored_records":0,"disabled_records":0,"missing_models":0,"placements_with_orientation":0,"models":14,"models_without_colors":3,"subsets":42,"alpha_subsets":10,"untextured_subsets":0,"draws":42,"vertices":6080,"triangles":6207,"geometry_bytes":366324,"textures":37,"textures_alpha":6,"textures_missing":0,"textures_failed":0,"texture_bytes_with_mips":26678564,"pos_records":22,"start":{"record":0,"pos":[187.197,-43.565,65.549]},"bounds":{"min":[-3422.710,-712.229,-3794.517],"max":[3795.858,1405.246,3424.055]},
+"model_ids":["dor1","hot0","ic00","ic01","ic02","ic03","ic04","ic05","id02","main","pl00","skts","sky1","tre1"],
+"camera":{"fallback":true,"eye":[187.197,-40.565,65.549],"at":[188.107,-40.739,65.173],"eye_source":"pos_start","yaw_deg":67.500,"yaw_source":"cli","pitch_deg":-10.000,"fov_deg":60.000,"near":0.500,"far":4000.000,"aspect":1.778},
+"render":{"vertex_colors":true,"alpha_ref":1.000},
+"warnings":[]
+}

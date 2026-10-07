@@ -2,6 +2,96 @@
 
 Built 2026-10-07 by an Opus subagent in an isolated scratch copy of BASE `443bd37` (branch `m1a1-data-path`). The controller wrote this report from the builder's hand-back; the builder's environment could not write `.md` files. The controller's independent re-verification is recorded in the SDD ledger.
 
+## Revision 2 (Fable review round, 2026-10-07)
+
+Applied in the same scratch copy, re-validated and bundled in place. Where this section disagrees with the text below, this section wins.
+
+| # | Change | Where |
+|---|---|---|
+| 1 | `create_bind_group(const BindGroupDesc&)` with `{uniforms, uniform_bytes, texture, sampler}` replaces the positional arguments. Layouts are cached by (uniform stride, populated-slot mask), and bind-group/layout entries are built per populated slot, so M1a-3 can add optional slots (0 = absent) as new mask bits. The null log text for valid bind groups is byte-identical. | `rhi.h`, `registry.h`, both backends |
+| 2 | The uniform-size cap is now 65536 (`kMaxUniformBytes`, WebGPU's default `maxUniformBufferBindingSize`). Slot stride is `uniform_stride(b)` = b rounded up to 256; the binding size and `minBindingSize` are both the stride; dynamic offsets stay multiples of 256. Pipeline/bind-group compatibility compares strides, so 64-byte and 96-byte blocks are now compatible (both stride 256). Tests: 65537 is rejected; 257 is accepted with stride 512 (an offset of 768 in a 1024-byte buffer is rejected; 256 is accepted). | same |
+| 3 | Interleaved vertex is 12 floats (48 bytes): position @0, normal @12 (`@location(1)`, unused by the unlit shader; zero without MeshNormals), uv @24, colour @32. | `view/area.*` |
+| 4 | `FrameStats.rejected`: rejected calls of any kind since `begin_frame`, in both backends. | `rhi.h`, backends |
+| 5 | M0 `draw()` is validated through the registry: an unknown pipeline, a mesh pipeline, an unknown uniform buffer, a misaligned offset or an out-of-range offset is rejected, never reaches Dawn and never throws. Valid M0 log text is unchanged. | `registry.h`, backends |
+| 6 | New standalone `test_gpu_mesh.cpp` (ctest `gpu_mesh`), linked against `lomn_webgpu` only and using local WGSL. It runs the blend probe (128,0,127,255), checks that an M0 triangle in a depth target is byte-identical to the same draw without depth and is drawn over a nearer mesh quad (not depth-tested), and checks that 3 invalid M0 draws are rejected with pixels equal to the valid frame. The blend probe moved here from `test_gpu_area.cpp`. | tests |
+| 7 | `release_cpu_copies(AreaData&)` frees the vertex/index arrays and mip chains after upload. `lomn_view` calls it by default (`--keep-cpu on` keeps them). `upload()` refuses released data. Memory is measured below. | `view/area.*`, `lomn_view` |
+| 8 | `kMaxAreaTextureBytes` is 256 MiB, 4.7× the measured maximum. | `view/area.h` |
+| 9 | Code docs updated. **ALPHAREF is history-dependent**: SrPushRenderMode (0x00531100) sets 0 when entering a 0x80000 mode and 1 only when leaving one; the D3D8 default is 0; `--alpha-ref` stays. The **DrawX flag at `*param_2+0xc`** (~lines 295–298) turns ALPHABLEND off in the alpha pass (alpha test only); this is not modelled and is listed as an M1a-3 gap. Shader comment corrected: DrawX sets **ALPHAOP SELECTARG2 with ALPHAARG2 = TEXTURE**, which gives the same result. | `view/area.*` |
+| 10 | Both mutation runs re-executed and bundled: `logs/mutations.log`, `logs/mutations-blend.log`. | logs |
+
+### Revision 2 evidence (executed)
+
+**Test suites**
+- **`make -o .venv/.ok check`**: all layers green (`logs/make-check.log`):
+  - pytest 67 passed
+  - native ctest 11/11 (new: `gpu_mesh`)
+  - wasm ctest 3/3
+  - `cmp` of the determinism log and the A7 log, native against wasm32
+  - web smoke pixels `255,128,0` / `0,0,64`, no console errors
+  - datacheck 39/39
+  - worklist 0 errors
+- **ASan+UBSan:**
+  - ctest 11/11 and unit 97/97 on the final sources (`logs/asan-ctest-unit.log`); no sanitizer reports.
+  - The 123-area survey and the vllg/ghut/crss renders give rc 0 with 0 bytes on stderr (`logs/asan-ctest-unit-survey-renders.log`).
+- **Unit suite:** 93 → 97 cases. New:
+  - uniform stride
+  - M0 `draw()` validation and the per-frame `rejected` counter
+  - the 48-byte vertex layout
+  - `release_cpu_copies`
+
+**A7 expected log** (regenerated once; `logs/a7_calls_r1_to_r2.diff`). Six lines changed; all other lines, including every bind-group line, the uniform write and the 10 draws, are byte-identical:
+- 2 `create_mesh_pipeline` lines: the WGSL changed (1266 → 1691 bytes, new checksum) because of the normal input and the corrected comments; stride 36 → 48; the attribute list gains `1:f32x3@12`, and uv/colour move to @24/@32 at locations 2/3.
+- `create_vertex_buffer` 432 → 576 (quad, 12 vertices × 48) and 144 → 192 (blue, 4 × 48).
+- The 2 matching `write_buffer` checksums: the vertex bytes now include normals. The synthetic `quad.x` gained one MeshNormals normal (0,−1,0); it splits no vertex and leaves the index buffer identical.
+
+**Native = wasm32:** the A7 log is byte-identical, and both equal the checked-in file.
+
+**Mutations: all 26 intended defects caught; the no-op control survives.**
+- `mutate.py`: the 18 revision-1 mutations, plus "WebGPU blend additive" (now caught by `gpu_mesh`), plus 8 new ones:
+  - M0 `draw()` accepts a mesh pipeline
+  - bind-group stride not checked
+  - uniform cap off by one
+  - `rejected` not reset per frame
+  - WebGPU binds `uniform_bytes` instead of the stride
+  - WebGPU M0 `draw()` not validated (caught by `gpu_mesh` aborting on the old throw path)
+  - normals not written
+  - release keeps mips
+- `mutate2.py`: both blend mutations are caught by `gpu_mesh`. Additive gives 255,0,255; the pre-fix alpha rule gives alpha 191.
+
+**Fuzz:** 1,500 cases; 1,413 accepted and rendered with 0 rejected calls; 87 rejected with no partial state. The count was 1,426/74 before, because the synthetic bytes changed.
+
+**Survey:** 123 areas, 0 failures. Maxima are unchanged except geometry bytes, which went from 1,270,872 to 1,649,376 (lev6/ta14) because of the 48-byte vertex. That is still 40.7× under the 64 MiB cap.
+
+**Renders compared with the revision-1 evidence PNGs**
+- vllg, ghut and crss: **byte-identical** (0 of 921,600 pixels differ). The null call logs are identical across 2 runs.
+- crss `--yaw 67.5`: **2 pixels differ**, (480,223) and (481,223), by 3–6 levels per channel, at the alpha-tested edge of the fir tree.
+  - This is **not caused by the change.** The revision-1 code, rebuilt today from the previous bundle, produces the revision-2 pixels.
+  - Removing the normal input from the shader also gives the revision-2 pixels.
+  - The earlier `farcheck` render from the revision-1 session also equals the revision-2 output.
+  - 12 fresh reruns all equal the revision-2 output.
+  - So the revision-1 `crss_yaw67.png` is a one-off GPU run-to-run variation: 1 outlier in at least 17 renders of this view.
+  - **Root cause UNVERIFIED** (Metal/driver). Dawn PNG comparisons should therefore tolerate a few pixels at alpha-tested edges.
+  - The new reference is `../evidence_r2/crss_yaw67.png`.
+
+**Memory with CPU copies released after upload vs kept** (3 runs each, 1280×720, 1 frame; `logs/memory-r2.log`):
+
+| Area | CPU copies freed | C heap in use after upload → after release (MiB) | Heap with `--keep-cpu on` (MiB) | phys_footprint (keep / release, MiB) | Peak RSS (keep / release, MiB) |
+|---|---|---|---|---|---|
+| vllg | 7,332,352 B | 8.8 → 1.8 | 8.8 | 22.6–23.4 / 22.6–23.2 | 52.2–53.7 / 52.3–53.2 |
+| ghut | 10,377,320 B | 11.7 → 1.8 | 11.7 | 30.0–30.4 / 29.9–30.2 | 59.5–62.1 / 59.8–60.7 |
+| crss | 27,044,888 B | 27.8 → 2.0 | 27.8 | 79.2–79.4 / 79.3–79.5 | 80.4–80.9 / 80.4–80.7 |
+
+- The C heap drops by exactly the released amount.
+- RSS and phys_footprint do **not** drop. This is macOS malloc keeping freed pages mapped for reuse; a standalone probe (`scripts/fpprobe.cpp`) shows the same with 27 MiB allocated and freed: footprint 28.1 → 28.1 MiB. wasm32 linear memory never shrinks either. So the gain is heap headroom for the next allocations, such as the next area, not a smaller process.
+- Peak RSS is unchanged, as expected: load decodes every texture before upload, so all CPU copies coexist at that point. Lowering the peak would need upload-as-you-decode, which is an M1b option.
+
+**Decision taken.** BindGroupDesc in M1a-2 requires all three slots (uniforms, texture, sampler); an absent slot is rejected. The slot mask exists so that later milestones can make *new* slots optional.
+
+### New and changed paths in revision 2
+- Changed: `rhi.h`, `registry.h`, `null_device.cpp`, `webgpu_device.cpp`, `view/area.*`, `view/synthetic.*`, `lomn_view.cpp`, `CMakeLists.txt`, `tests/data/a7_calls.txt`, `test_rhi_mesh.cpp`, `test_view_area.cpp`, `test_gpu_area.cpp`.
+- Added: `tests/test_gpu_mesh.cpp`.
+- New scripts: `scripts/evidence_r2.sh`, `scripts/rss_r2.sh`, `scripts/fpprobe.cpp`, `scripts/manifest.sh`.
+
 ## Contents (`MANIFEST.txt`)
 
 **Changed (5 files):**
@@ -79,8 +169,8 @@ Built 2026-10-07 by an Opus subagent in an isolated scratch copy of BASE `443bd3
 | Drawn placements per area | 55 (lev6/ta03) | 1024 |
 | Draws per area | 165 (lev6/ta11) | 4096 |
 | Textures per area | 76 (lev2/vllg) | 1024 |
-| Texture bytes per area (RGBA8 with mips) | 57.0 MB (lev0/frnt) | 512 MiB (wasm32 heap) |
-| Geometry bytes per area | 1.27 MB (lev6/ta14) | 64 MiB |
+| Texture bytes per area (RGBA8 with mips) | 57.0 MB (lev0/frnt) | 256 MiB (wasm32 heap; revision 2) |
+| Geometry bytes per area | 1.65 MB (lev6/ta14; 48-byte vertices, revision 2) | 64 MiB |
 
 The boundaries are unit-tested. A deterministic 1,500-case mutation fuzz runs natively, as wasm32 and under ASan. Accepted areas render with zero rejected calls, and rejected areas leave no partial state.
 

@@ -1,6 +1,6 @@
 diff -ruN base/engine/CMakeLists.txt work/engine/CMakeLists.txt
 --- base/engine/CMakeLists.txt	2026-10-07 07:48:56
-+++ work/engine/CMakeLists.txt	2026-10-07 08:07:48
++++ work/engine/CMakeLists.txt	2026-10-07 08:50:34
 @@ -20,6 +20,11 @@
  target_link_libraries(lomn_sage PUBLIC lomn_core)
  target_compile_options(lomn_sage PRIVATE -Wall -Wextra)
@@ -49,7 +49,7 @@ diff -ruN base/engine/CMakeLists.txt work/engine/CMakeLists.txt
    # A trailing flag with no value must be rejected with exit 2 (usage), not silently ignored.
    add_test(NAME cli_dangling_flag COMMAND sh -c
             "\"$0\" --backend null --frames 10 --out \"$1\" --shot >/dev/null 2>&1; [ $? -eq 2 ]"
-@@ -80,12 +107,22 @@
+@@ -80,12 +107,27 @@
               "out=$(\"$0\" --backend webgpu --frames 1 --out \"$1\" 2>&1); rc=$?; printf '%s\\n' \"$out\"; echo \"rc=$rc\"; [ \"$rc\" -eq 3 ] && printf '%s' \"$out\" | grep -q \"webgpu unavailable: no WebGPU adapter\""
               $<TARGET_FILE:lomn_native> ${CMAKE_CURRENT_BINARY_DIR}/noadapter)
      set_tests_properties(gpu_no_adapter PROPERTIES ENVIRONMENT "LOMN_WEBGPU_BACKEND=d3d12" LABELS gpu)
@@ -58,6 +58,11 @@ diff -ruN base/engine/CMakeLists.txt work/engine/CMakeLists.txt
 +    target_link_libraries(lomn_gpu_area_test PRIVATE lomn_area lomn_webgpu)
 +    add_test(NAME a7_gpu_pixels COMMAND lomn_gpu_area_test)
 +    set_tests_properties(a7_gpu_pixels PROPERTIES SKIP_RETURN_CODE 77 LABELS gpu)
++    # rhi mesh surface on Dawn without lomn_area: blend, M0 pipelines in depth targets, rejected M0 draws.
++    add_executable(lomn_gpu_mesh_test tests/test_gpu_mesh.cpp)
++    target_link_libraries(lomn_gpu_mesh_test PRIVATE lomn_webgpu)
++    add_test(NAME gpu_mesh COMMAND lomn_gpu_mesh_test)
++    set_tests_properties(gpu_mesh PROPERTIES SKIP_RETURN_CODE 77 LABELS gpu)
 +    add_test(NAME a7_gpu_no_adapter COMMAND sh -c
 +             "out=$(\"$0\" --synthetic 1 --out \"$1\" 2>&1); rc=$?; printf '%s\\n' \"$out\"; [ \"$rc\" -eq 3 ]"
 +             $<TARGET_FILE:lomn_view> ${CMAKE_CURRENT_BINARY_DIR}/a7_noadapter.png)
@@ -76,7 +81,7 @@ diff -ruN base/engine/CMakeLists.txt work/engine/CMakeLists.txt
    target_link_options(lomn_tests PRIVATE -sNODERAWFS=1 -sALLOW_MEMORY_GROWTH=1)
 diff -ruN base/engine/include/lomn/rhi.h work/engine/include/lomn/rhi.h
 --- base/engine/include/lomn/rhi.h	2026-10-07 07:48:56
-+++ work/engine/include/lomn/rhi.h	2026-10-07 08:21:29
++++ work/engine/include/lomn/rhi.h	2026-10-07 08:46:16
 @@ -1,6 +1,12 @@
  // Render interface (frozen in M0; additive changes only, reviewed). Two backends: "null" (records a
  // deterministic call log, no GPU) and "webgpu" (Dawn natively, emdawnwebgpu in the browser).
@@ -90,7 +95,7 @@ diff -ruN base/engine/include/lomn/rhi.h work/engine/include/lomn/rhi.h
  #pragma once
  #include <cstdint>
  #include <functional>
-@@ -14,6 +20,13 @@
+@@ -14,6 +20,17 @@
  using BufferId = uint32_t;    // 0 = none
  using PipelineId = uint32_t;
  constexpr uint32_t kUniformAlign = 256;
@@ -101,10 +106,14 @@ diff -ruN base/engine/include/lomn/rhi.h work/engine/include/lomn/rhi.h
 +constexpr uint32_t kMaxTextureSize = 4096;
 +constexpr uint32_t kMaxRenderTargetSize = 8192;
 +constexpr uint32_t kMaxVertexAttributes = 8;
++// Mesh uniform blocks: up to WebGPU's default maxUniformBufferBindingSize. A block occupies a slot of
++// uniform_stride(bytes) = bytes rounded up to kUniformAlign; dynamic offsets stay multiples of kUniformAlign.
++constexpr uint32_t kMaxUniformBytes = 65536;
++constexpr uint32_t uniform_stride(uint32_t bytes) { return (bytes + kUniformAlign - 1) / kUniformAlign * kUniformAlign; }
  
  struct PipelineDesc {
    std::string wgsl;               // must define the vertex/fragment entry points below
-@@ -23,10 +36,66 @@
+@@ -23,10 +40,78 @@
  };
  
  struct FrameStats {
@@ -113,6 +122,7 @@ diff -ruN base/engine/include/lomn/rhi.h work/engine/include/lomn/rhi.h
 +  uint32_t draws = 0;            // M0 draws + M1a-2 indexed draws accepted this frame
 +  uint32_t pipelines_total = 0;  // M0 + mesh pipelines created so far
 +  uint64_t indices = 0;          // M1a-2: indices submitted by draw_indexed this frame
++  uint32_t rejected = 0;         // M1a-2: calls rejected by validation since this frame's begin_frame (any call kind)
  };
  
 +// ---- M1a-2 additive types ----
@@ -135,15 +145,17 @@ diff -ruN base/engine/include/lomn/rhi.h work/engine/include/lomn/rhi.h
 +enum class CompareFunc : uint8_t { Never, Less, Equal, LessEqual, Greater, NotEqual, GreaterEqual, Always };
 +enum class CullMode : uint8_t { None, Front, Back };  // None = render mode 0x11 (D3DCULL_NONE)
 +
-+// Pipeline for indexed meshes. Bind group 0 layout (fixed): @binding(0) var<uniform> (dynamic offset, uniform_bytes),
-+// @binding(1) texture_2d<f32>, @binding(2) sampler (filtering). One vertex buffer (slot 0), u32 indices, triangle list.
++// Pipeline for indexed meshes. Bind group 0: @binding(0) var<uniform> (dynamic offset, bound size
++// uniform_stride(uniform_bytes)), @binding(1) texture_2d<f32>, @binding(2) sampler (filtering). One vertex buffer
++// (slot 0), u32 indices, triangle list. A bind group is compatible with a pipeline when both have the same uniform
++// stride and the same populated slots (backends cache one layout per (stride, slots)).
 +// Alpha test has no fixed-function equivalent in WebGPU: it is a `discard` in the fragment entry point (pick a
 +// different fs_entry per pipeline).
 +struct MeshPipelineDesc {
 +  std::string wgsl;
 +  std::string vs_entry = "vs";
 +  std::string fs_entry = "fs";
-+  uint32_t uniform_bytes = 0;     // 1..kUniformAlign
++  uint32_t uniform_bytes = 0;     // 1..kMaxUniformBytes (slot stride uniform_stride(uniform_bytes))
 +  uint32_t vertex_stride = 0;     // 4..2048, multiple of 4
 +  std::vector<VertexAttribute> attributes;  // 1..kMaxVertexAttributes, each inside the stride
 +  BlendMode blend = BlendMode::Opaque;
@@ -166,14 +178,23 @@ diff -ruN base/engine/include/lomn/rhi.h work/engine/include/lomn/rhi.h
 +  BufferId indices = 0;          // from create_index_buffer (u32 indices)
 +  uint32_t first_index = 0;      // in indices
 +  uint32_t index_count = 0;      // > 0, multiple of 3; first_index + index_count inside the index buffer
-+  BindGroupId bind_group = 0;    // its uniform_bytes must equal the pipeline's
-+  uint32_t uniform_offset = 0;   // multiple of kUniformAlign; offset + uniform_bytes inside the uniform buffer
++  BindGroupId bind_group = 0;    // its uniform stride and populated slots must equal the pipeline's
++  uint32_t uniform_offset = 0;   // multiple of kUniformAlign; offset + uniform_stride inside the uniform buffer
++};
++
++// Group 0 contents. Named fields (not positional args) so later milestones can add optional slots additively
++// (e.g. a per-frame uniform block or a second texture: 0 = absent) without breaking callers.
++struct BindGroupDesc {
++  BufferId uniforms = 0;       // uniform buffer, bound with a dynamic offset
++  uint32_t uniform_bytes = 0;  // 1..kMaxUniformBytes; the buffer must hold at least uniform_stride(uniform_bytes)
++  TextureId texture = 0;       // sampled texture (create_texture)
++  SamplerId sampler = 0;
 +};
 +
  class Device {
   public:
    virtual ~Device() = default;
-@@ -42,6 +111,25 @@
+@@ -42,6 +127,25 @@
    // Synchronous readback of a render target into tightly packed RGBA8. False if unsupported (null, browser).
    virtual bool read_pixels(TextureId target, std::vector<uint8_t>& rgba) = 0;
    virtual FrameStats last_frame_stats() const = 0;
@@ -192,8 +213,8 @@ diff -ruN base/engine/include/lomn/rhi.h work/engine/include/lomn/rhi.h
 +  virtual bool write_texture(TextureId, uint32_t /*mip*/, const void* /*rgba*/, size_t /*bytes*/) { return false; }
 +  virtual SamplerId create_sampler(const SamplerDesc&) { return 0; }
 +  virtual PipelineId create_mesh_pipeline(const MeshPipelineDesc&) { return 0; }
-+  // Group 0 of a mesh pipeline: [uniforms + dynamic offset, uniform_bytes], texture (sampled), sampler. 0 if invalid.
-+  virtual BindGroupId create_bind_group(BufferId /*uniforms*/, uint32_t /*uniform_bytes*/, TextureId, SamplerId) { return 0; }
++  // Group 0 of a mesh pipeline (see BindGroupDesc). 0 if invalid.
++  virtual BindGroupId create_bind_group(const BindGroupDesc&) { return 0; }
 +  // Indexed triangle-list draw inside begin_frame/end_frame. Invalid draws are rejected and not counted.
 +  virtual void draw_indexed(const DrawIndexedDesc&) {}
  };
@@ -201,8 +222,8 @@ diff -ruN base/engine/include/lomn/rhi.h work/engine/include/lomn/rhi.h
  // Null backend: appends one line per call to *call_log (if non-null). Lines are stable text, so two runs
 diff -ruN base/engine/include/lomn/view/area.h work/engine/include/lomn/view/area.h
 --- base/engine/include/lomn/view/area.h	1970-01-01 01:00:00
-+++ work/engine/include/lomn/view/area.h	2026-10-07 08:13:08
-@@ -0,0 +1,180 @@
++++ work/engine/include/lomn/view/area.h	2026-10-07 09:01:39
+@@ -0,0 +1,195 @@
 +// M1a-2 "first pixels": an area's static geometry, loaded the way GcAreaLoader::LoadArea does and drawn UNLIT and
 +// textured straight on rhi (no D3D8 shim yet; that is M1a-3).
 +//
@@ -237,13 +258,15 @@ diff -ruN base/engine/include/lomn/view/area.h work/engine/include/lomn/view/are
 +// Caps on what one area may make the renderer allocate (untrusted input, spec §5). Measured over all 123 area
 +// blockfiles of the Beta 1.5.0 install with `lomn_view --survey 1` (2026-10-07; every area loads, 0 failures):
 +//   drawn placements max 55 (lev6/ta03), draws max 165 (lev6/ta11), textures max 76 (lev2/vllg),
-+//   texture bytes incl. mips max 56,994,412 (lev0/frnt), vertex+index bytes max 1,270,872 (lev6/ta14).
-+// Headroom: 18.6x, 24.8x, 13.5x, 9.4x, 52.8x. The texture-byte cap is bounded by the wasm32 heap (2 GB, and the
-+// CPU copy lives until upload) rather than by a multiple; a rejection is a named error, never a partial area.
++//   texture bytes incl. mips max 56,994,412 (lev0/frnt), vertex+index bytes max 1,649,376 (lev6/ta14, 48-byte
++//   vertices; 1,270,872 with the earlier 36-byte layout).
++// Headroom: 18.6x, 24.8x, 13.5x, 4.7x, 40.7x. The texture-byte cap is bounded by the wasm32 heap (2 GB; the CPU
++// mip chains exist until release_cpu_copies() after upload) rather than by a multiple; a rejection is a named error,
++// never a partial area.
 +constexpr uint32_t kMaxPlacements = 1024;                // drawn OBJ records per area
 +constexpr uint32_t kMaxDraws = 4096;                     // placements x subsets per frame (uniform buffer <= 1 MiB)
 +constexpr uint32_t kMaxAreaTextures = 1024;              // distinct resolved textures per area
-+constexpr uint64_t kMaxAreaTextureBytes = 512ull << 20;  // RGBA8 incl. mips, per area
++constexpr uint64_t kMaxAreaTextureBytes = 256ull << 20;  // RGBA8 incl. mips, per area
 +constexpr uint64_t kMaxAreaGeometryBytes = 64ull << 20;  // vertex + index bytes, per area
 +
 +constexpr uint32_t kNoTexture = 0xffffffffu;  // subset drawn with the 1x1 white texture
@@ -263,12 +286,15 @@ diff -ruN base/engine/include/lomn/view/area.h work/engine/include/lomn/view/are
 +  std::string id;                 // 4CC as in the OBJ record
 +  uint32_t vertex_count = 0;
 +  bool has_colors = false;        // MeshVertexColors present
-+  std::vector<float> vertices;    // interleaved, kVertexFloats per vertex: position xyz, uv, colour rgba
++  std::vector<float> vertices;    // interleaved, kVertexFloats per vertex: position xyz, normal xyz, uv, colour rgba
 +  std::vector<uint32_t> indices;  // triangle list, sorted by attribute id (parse_x)
 +  std::vector<SubsetDraw> subsets;
 +  float bounds_min[3] = {0, 0, 0}, bounds_max[3] = {0, 0, 0};  // model space
 +};
-+constexpr uint32_t kVertexFloats = 9;  // 36-byte stride
++// 48-byte stride: position @0 (@location(0)), normal @12 (@location(1); parse_x's per-split-vertex normal, zero
++// without MeshNormals; unused by the unlit shader, there for M1a-3 lighting), uv @24 (@location(2)), colour rgba @32
++// (@location(3); white without MeshVertexColors).
++constexpr uint32_t kVertexFloats = 12;
 +
 +struct Texture {
 +  std::string request;   // resolved request ("Root/Data/Levels/lev1/textures/<name>.dds")
@@ -302,6 +328,7 @@ diff -ruN base/engine/include/lomn/view/area.h work/engine/include/lomn/view/are
 +
 +struct AreaData {
 +  std::string level, area;
++  bool cpu_released = false;  // release_cpu_copies() ran: models' vertices/indices and textures' mips are empty
 +  bool art_blk = false;  // Art.blk opened (optional: without it only the area and level blockfiles are searched)
 +  std::vector<Model> models;
 +  std::vector<Texture> textures;
@@ -346,9 +373,18 @@ diff -ruN base/engine/include/lomn/view/area.h work/engine/include/lomn/view/are
 +
 +struct RenderOptions {
 +  bool vertex_colors = true;  // diffuse = vertex colour when present (D3DMCS_COLOR1), else material diffuse
-+  float alpha_ref = 1.0f;     // ALPHAREF (0..255): alpha pass discards a*255 <= ref (ALPHAFUNC GREATER)
++  // ALPHAREF (0..255): the alpha pass discards a*255 <= ref (DrawX sets ALPHAFUNC 5 = D3DCMP_GREATER). The game's
++  // value is HISTORY-DEPENDENT: SrPushRenderMode (0x00531100) sets ALPHAREF 0 when ENTERING a 0x80000 mode and 1 only
++  // when LEAVING one; the D3D8 default is 0; area mode 0x11 itself sets nothing. 1 assumes a 0x80000 (sprite/HUD) mode
++  // ran earlier in the frame (INFERRED); --alpha-ref overrides. M1a-3 settles it from the real frame's mode sequence.
++  float alpha_ref = 1.0f;
 +  float clear[4] = {0.0f, 0.0f, 0.0f, 1.0f};  // 0xff000000
 +};
++
++// Frees the CPU-side vertex/index arrays and texture mip chains once they are on the GPU (upload copies them).
++// Placements, subsets, stats and warnings stay, so render() keeps working; upload() refuses released data.
++// Returns the bytes freed.
++uint64_t release_cpu_copies(AreaData& area);
 +
 +class AreaRenderer {
 + public:
@@ -463,8 +499,8 @@ diff -ruN base/engine/include/lomn/view/mips.h work/engine/include/lomn/view/mip
 +}  // namespace lomn::view
 diff -ruN base/engine/include/lomn/view/synthetic.h work/engine/include/lomn/view/synthetic.h
 --- base/engine/include/lomn/view/synthetic.h	1970-01-01 01:00:00
-+++ work/engine/include/lomn/view/synthetic.h	2026-10-07 08:05:15
-@@ -0,0 +1,30 @@
++++ work/engine/include/lomn/view/synthetic.h	2026-10-07 08:51:04
+@@ -0,0 +1,32 @@
 +// The A7 contract scene (spec M1 §4 A7): a tiny synthetic install, built in memory from bytes written here (no game
 +// data), that goes through the same path as a real area: blockfiles, OBJ/POS SLB tables, binary .x, DDS decode,
 +// texture resolution, mip generation, upload and draw.
@@ -474,8 +510,10 @@ diff -ruN base/engine/include/lomn/view/synthetic.h work/engine/include/lomn/vie
 +// Root/Data/Levels/levt/test.blk:
 +//   quad.x  3 subsets (Z-up model space, faces in the y = 0 plane, so the world plane is z = 0 after RotX):
 +//           red quad x [-8,-1] (texture red), cut quad x [1,8] (texture cut, alpha pass), a third quad far off-screen
-+//           whose texture "nothere" does not exist (white fallback); vertex colours (1, 0.5, 1, 1)
-+//   blue.x  one quad x [-8,8], model z [-2,8] (world y), material diffuse (0,0,1,1), no texture, no vertex colours
++//           whose texture "nothere" does not exist (white fallback); vertex colours (1, 0.5, 1, 1); one normal
++//           (0,-1,0) for every corner (MeshNormals)
++//   blue.x  one quad x [-8,8], model z [-2,8] (world y), material diffuse (0,0,1,1), no texture, no vertex colours,
++//           no normals
 +//   test_OBJ.slb  quad main @0; blue main @(0,0,-2); blue back @-50; quad trans @-60; blue trans @-70;
 +//                 blue nolight @-80; "nope" flags 0x4 (ignored: never loaded); "miss" main (no such model: warning)
 +//   test_POS.slb  a pickup record (0x60) then the start record (0x1000) at (0, 0, 10)
@@ -497,8 +535,8 @@ diff -ruN base/engine/include/lomn/view/synthetic.h work/engine/include/lomn/vie
 +}  // namespace lomn::view
 diff -ruN base/engine/src/rhi/null_device.cpp work/engine/src/rhi/null_device.cpp
 --- base/engine/src/rhi/null_device.cpp	2026-10-07 07:48:56
-+++ work/engine/src/rhi/null_device.cpp	2026-10-07 08:20:02
-@@ -1,36 +1,52 @@
++++ work/engine/src/rhi/null_device.cpp	2026-10-07 08:55:10
+@@ -1,39 +1,63 @@
 +#include <cstdarg>
  #include <cstdio>
  
@@ -540,6 +578,7 @@ diff -ruN base/engine/src/rhi/null_device.cpp work/engine/src/rhi/null_device.cp
 -    rec("write_buffer %u +%u %u bytes sum=%08x", b, off, size, sum);
 +    std::string why = reg_.check_write_buffer(b, off, size, data == nullptr);
 +    if (!why.empty()) {
++      ++stats_.rejected;
 +      rec("write_buffer %u +%u %u bytes rejected: %s", b, off, size, why.c_str());
 +      return;
 +    }
@@ -550,7 +589,7 @@ diff -ruN base/engine/src/rhi/null_device.cpp work/engine/src/rhi/null_device.cp
 -    rec("create_pipeline wgsl=%zu bytes vs=%s fs=%s uniforms=%u -> %u", d.wgsl.size(), d.vs_entry.c_str(),
 -        d.fs_entry.c_str(), d.uniform_bytes, ++next_pipe_);
 -    return next_pipe_;
-+    PipelineId id = reg_.add_pipeline({false, d.uniform_bytes});
++    PipelineId id = reg_.add_pipeline({false, d.uniform_bytes, 0});
 +    rec("create_pipeline wgsl=%zu bytes vs=%s fs=%s uniforms=%u -> %u", d.wgsl.size(), d.vs_entry.c_str(), d.fs_entry.c_str(),
 +        d.uniform_bytes, id);
 +    return id;
@@ -558,10 +597,20 @@ diff -ruN base/engine/src/rhi/null_device.cpp work/engine/src/rhi/null_device.cp
    void begin_frame(TextureId t, const float c[4]) override {
      stats_.draws = 0;
 +    stats_.indices = 0;
++    stats_.rejected = 0;
      rec("begin_frame target=%u clear=%.3f,%.3f,%.3f,%.3f", t, c[0], c[1], c[2], c[3]);
    }
    void draw(PipelineId p, uint32_t n, BufferId u, uint32_t off) override {
-@@ -41,16 +57,127 @@
++    std::string why = reg_.check_draw(p, u, off);
++    if (!why.empty()) {
++      ++stats_.rejected;
++      rec("draw pipeline=%u vertices=%u uniforms=%u+%u rejected: %s", p, n, u, off, why.c_str());
++      return;
++    }
+     ++stats_.draws;
+     rec("draw pipeline=%u vertices=%u uniforms=%u+%u", p, n, u, off);
+   }
+@@ -41,16 +65,139 @@
    bool read_pixels(TextureId, std::vector<uint8_t>&) override { return false; }
    FrameStats last_frame_stats() const override { return stats_; }
  
@@ -569,6 +618,7 @@ diff -ruN base/engine/src/rhi/null_device.cpp work/engine/src/rhi/null_device.cp
 +  TextureId create_render_target_ex(const RenderTargetDesc& d) override {
 +    std::string why = Registry::check_render_target(d);
 +    if (!why.empty()) {
++      ++stats_.rejected;
 +      rec("create_render_target_ex %ux%u depth=%d rejected: %s -> 0", d.width, d.height, int(d.depth), why.c_str());
 +      return 0;
 +    }
@@ -581,6 +631,7 @@ diff -ruN base/engine/src/rhi/null_device.cpp work/engine/src/rhi/null_device.cp
 +  TextureId create_texture(uint32_t w, uint32_t h, uint32_t mips) override {
 +    std::string why = Registry::check_texture(w, h, mips);
 +    if (!why.empty()) {
++      ++stats_.rejected;
 +      rec("create_texture %ux%u mips=%u rejected: %s -> 0", w, h, mips, why.c_str());
 +      return 0;
 +    }
@@ -591,6 +642,7 @@ diff -ruN base/engine/src/rhi/null_device.cpp work/engine/src/rhi/null_device.cp
 +  bool write_texture(TextureId t, uint32_t mip, const void* rgba, size_t bytes) override {
 +    std::string why = reg_.check_write_texture(t, mip, bytes, rgba == nullptr);
 +    if (!why.empty()) {
++      ++stats_.rejected;
 +      rec("write_texture %u mip=%u %llu bytes rejected: %s", t, mip, static_cast<unsigned long long>(bytes), why.c_str());
 +      return false;
 +    }
@@ -602,6 +654,7 @@ diff -ruN base/engine/src/rhi/null_device.cpp work/engine/src/rhi/null_device.cp
 +  SamplerId create_sampler(const SamplerDesc& s) override {
 +    std::string why = Registry::check_sampler(s);
 +    if (!why.empty()) {
++      ++stats_.rejected;
 +      rec("create_sampler rejected: %s -> 0", why.c_str());
 +      return 0;
 +    }
@@ -613,11 +666,12 @@ diff -ruN base/engine/src/rhi/null_device.cpp work/engine/src/rhi/null_device.cp
 +  PipelineId create_mesh_pipeline(const MeshPipelineDesc& d) override {
 +    std::string why = Registry::check_mesh_pipeline(d);
 +    if (!why.empty()) {
++      ++stats_.rejected;
 +      rec("create_mesh_pipeline rejected: %s -> 0", why.c_str());
 +      return 0;
 +    }
 +    ++stats_.pipelines_total;
-+    PipelineId id = reg_.add_pipeline({true, d.uniform_bytes});
++    PipelineId id = reg_.add_pipeline({true, d.uniform_bytes, detail::kMeshSlots});
 +    std::string attrs;
 +    for (const VertexAttribute& a : d.attributes) {
 +      char b[48];
@@ -630,19 +684,25 @@ diff -ruN base/engine/src/rhi/null_device.cpp work/engine/src/rhi/null_device.cp
 +        detail::cull_name(d.cull), id);
 +    return id;
 +  }
-+  BindGroupId create_bind_group(BufferId u, uint32_t ubytes, TextureId t, SamplerId s) override {
-+    std::string why = reg_.check_bind_group(u, ubytes, t, s);
++  BindGroupId create_bind_group(const BindGroupDesc& d) override {
++    const BufferId u = d.uniforms;
++    const uint32_t ubytes = d.uniform_bytes;
++    const TextureId t = d.texture;
++    const SamplerId s = d.sampler;
++    std::string why = reg_.check_bind_group(d);
 +    if (!why.empty()) {
++      ++stats_.rejected;
 +      rec("create_bind_group uniforms=%u bytes=%u texture=%u sampler=%u rejected: %s -> 0", u, ubytes, t, s, why.c_str());
 +      return 0;
 +    }
-+    BindGroupId id = reg_.add_bind_group({u, ubytes, t, s});
++    BindGroupId id = reg_.add_bind_group({d, uniform_stride(ubytes), detail::bind_slots(d)});
 +    rec("create_bind_group uniforms=%u bytes=%u texture=%u sampler=%u -> %u", u, ubytes, t, s, id);
 +    return id;
 +  }
 +  void draw_indexed(const DrawIndexedDesc& d) override {
 +    std::string why = reg_.check_draw_indexed(d);
 +    if (!why.empty()) {
++      ++stats_.rejected;
 +      rec("draw_indexed pipeline=%u vb=%u ib=%u first=%u count=%u bind_group=%u+%u rejected: %s", d.pipeline, d.vertices, d.indices,
 +          d.first_index, d.index_count, d.bind_group, d.uniform_offset, why.c_str());
 +      return;
@@ -659,6 +719,7 @@ diff -ruN base/engine/src/rhi/null_device.cpp work/engine/src/rhi/null_device.cp
 +  BufferId make_buffer(const char* what, BufKind kind, uint32_t bytes) {
 +    std::string why = Registry::check_buffer_bytes(bytes);
 +    if (!why.empty()) {
++      ++stats_.rejected;
 +      rec("%s %u rejected: %s -> 0", what, bytes, why.c_str());
 +      return 0;
 +    }
@@ -696,8 +757,8 @@ diff -ruN base/engine/src/rhi/null_device.cpp work/engine/src/rhi/null_device.cp
  
 diff -ruN base/engine/src/rhi/registry.h work/engine/src/rhi/registry.h
 --- base/engine/src/rhi/registry.h	1970-01-01 01:00:00
-+++ work/engine/src/rhi/registry.h	2026-10-07 08:19:59
-@@ -0,0 +1,176 @@
++++ work/engine/src/rhi/registry.h	2026-10-07 08:55:07
+@@ -0,0 +1,196 @@
 +// Internal (M1a-2): the object table and validation rules shared by the null and WebGPU backends, so both accept and
 +// reject exactly the same calls. Ids are allocated per kind (textures = render targets + sampled textures, buffers,
 +// pipelines, samplers, bind groups), start at 1 and are never reused. Every check returns "" when the call is valid,
@@ -724,16 +785,23 @@ diff -ruN base/engine/src/rhi/registry.h work/engine/src/rhi/registry.h
 +  uint32_t width = 0, height = 0, mips = 1;
 +  bool depth = false;
 +};
++// Populated group-0 slots (bit mask). Layout compatibility = same uniform stride and same slot mask; later milestones
++// add bits for new optional slots (e.g. a per-frame uniform block, a second texture).
++constexpr uint32_t kSlotUniforms = 1u, kSlotTexture = 2u, kSlotSampler = 4u;
++constexpr uint32_t kMeshSlots = kSlotUniforms | kSlotTexture | kSlotSampler;
 +struct PipeInfo {
 +  bool mesh = false;
 +  uint32_t uniform_bytes = 0;
++  uint32_t slots = 0;  // mesh pipelines: kMeshSlots
 +};
 +struct BindInfo {
-+  BufferId uniforms = 0;
-+  uint32_t uniform_bytes = 0;
-+  TextureId texture = 0;
-+  SamplerId sampler = 0;
++  BindGroupDesc desc;
++  uint32_t stride = 0;  // uniform_stride(desc.uniform_bytes)
++  uint32_t slots = 0;
 +};
++inline uint32_t bind_slots(const BindGroupDesc& d) {
++  return (d.uniforms ? kSlotUniforms : 0u) | (d.texture ? kSlotTexture : 0u) | (d.sampler ? kSlotSampler : 0u);
++}
 +
 +// floor(log2(max(w, h))) + 1: the full chain down to 1x1.
 +inline uint32_t full_mip_count(uint32_t w, uint32_t h) {
@@ -830,7 +898,7 @@ diff -ruN base/engine/src/rhi/registry.h work/engine/src/rhi/registry.h
 +  }
 +  static std::string check_mesh_pipeline(const MeshPipelineDesc& d) {
 +    if (d.wgsl.empty()) return "empty wgsl";
-+    if (d.uniform_bytes == 0 || d.uniform_bytes > kUniformAlign) return "uniform_bytes out of range";
++    if (d.uniform_bytes == 0 || d.uniform_bytes > kMaxUniformBytes) return "uniform_bytes out of range";
 +    if (d.vertex_stride < 4 || d.vertex_stride > 2048 || d.vertex_stride % 4) return "vertex_stride out of range";
 +    if (d.attributes.empty() || d.attributes.size() > kMaxVertexAttributes) return "attribute count out of range";
 +    uint32_t used = 0;
@@ -842,13 +910,25 @@ diff -ruN base/engine/src/rhi/registry.h work/engine/src/rhi/registry.h
 +    if (static_cast<unsigned>(d.depth_compare) > 7) return "bad depth compare";
 +    return "";
 +  }
-+  std::string check_bind_group(BufferId u, uint32_t ubytes, TextureId t, SamplerId s) const {
++  std::string check_bind_group(const BindGroupDesc& d) const {
++    auto b = buffers.find(d.uniforms);
++    if (b == buffers.end() || b->second.kind != BufKind::Uniform) return "unknown uniform buffer";
++    if (d.uniform_bytes == 0 || d.uniform_bytes > kMaxUniformBytes || uniform_stride(d.uniform_bytes) > b->second.bytes)
++      return "uniform_bytes out of range";
++    auto tx = textures.find(d.texture);
++    if (tx == textures.end() || tx->second.kind != TexKind::Sampled) return "unknown sampled texture";
++    if (!samplers.count(d.sampler)) return "unknown sampler";
++    return "";
++  }
++  // M0 draw(): the pipeline must be an M0 pipeline; with a uniform block, the buffer must hold [off, off + bytes).
++  std::string check_draw(PipelineId p, BufferId u, uint32_t off) const {
++    auto pi = pipelines.find(p);
++    if (pi == pipelines.end() || pi->second.mesh) return "unknown M0 pipeline";
++    if (pi->second.uniform_bytes == 0) return "";
 +    auto b = buffers.find(u);
 +    if (b == buffers.end() || b->second.kind != BufKind::Uniform) return "unknown uniform buffer";
-+    if (ubytes == 0 || ubytes > kUniformAlign || ubytes > b->second.bytes) return "uniform_bytes out of range";
-+    auto tx = textures.find(t);
-+    if (tx == textures.end() || tx->second.kind != TexKind::Sampled) return "unknown sampled texture";
-+    if (!samplers.count(s)) return "unknown sampler";
++    if (off % kUniformAlign) return "uniform_offset not aligned";
++    if (uint64_t(off) + pi->second.uniform_bytes > b->second.bytes) return "uniform range outside the buffer";
 +    return "";
 +  }
 +  std::string check_draw_indexed(const DrawIndexedDesc& d) const {
@@ -862,10 +942,11 @@ diff -ruN base/engine/src/rhi/registry.h work/engine/src/rhi/registry.h
 +    if ((uint64_t(d.first_index) + d.index_count) * 4 > ib->second.bytes) return "index range outside the index buffer";
 +    auto bg = bind_groups.find(d.bind_group);
 +    if (bg == bind_groups.end()) return "unknown bind group";
-+    if (bg->second.uniform_bytes != p->second.uniform_bytes) return "bind group does not match the pipeline layout";
++    if (bg->second.stride != uniform_stride(p->second.uniform_bytes) || bg->second.slots != p->second.slots)
++      return "bind group does not match the pipeline layout";
 +    if (d.uniform_offset % kUniformAlign) return "uniform_offset not aligned";
-+    auto ub = buffers.find(bg->second.uniforms);
-+    if (ub == buffers.end() || uint64_t(d.uniform_offset) + bg->second.uniform_bytes > ub->second.bytes) return "uniform range outside the buffer";
++    auto ub = buffers.find(bg->second.desc.uniforms);
++    if (ub == buffers.end() || uint64_t(d.uniform_offset) + bg->second.stride > ub->second.bytes) return "uniform range outside the buffer";
 +    return "";
 +  }
 +
@@ -876,7 +957,7 @@ diff -ruN base/engine/src/rhi/registry.h work/engine/src/rhi/registry.h
 +}  // namespace lomn::rhi::detail
 diff -ruN base/engine/src/rhi/webgpu_device.cpp work/engine/src/rhi/webgpu_device.cpp
 --- base/engine/src/rhi/webgpu_device.cpp	2026-10-07 07:48:56
-+++ work/engine/src/rhi/webgpu_device.cpp	2026-10-07 08:21:51
++++ work/engine/src/rhi/webgpu_device.cpp	2026-10-07 08:55:16
 @@ -1,14 +1,18 @@
  // WebGPU backend. Same code for native (Dawn, headless render targets + synchronous readback via
  // wgpuInstanceWaitAny) and browser (emdawnwebgpu, presents to a canvas; no Asyncify: device creation
@@ -1039,13 +1120,13 @@ diff -ruN base/engine/src/rhi/webgpu_device.cpp work/engine/src/rhi/webgpu_devic
      if (d.uniform_bytes) {
        WGPUBindGroupLayoutEntry e = WGPU_BIND_GROUP_LAYOUT_ENTRY_INIT;
        e.binding = 0;
-@@ -134,32 +180,72 @@
+@@ -134,32 +180,73 @@
        p.pipeline_layout = wgpuDeviceCreatePipelineLayout(dev_, &pl);
      }
      ++stats_.pipelines_total;
 -    pipelines_[++next_pipe_] = p;
 -    return next_pipe_;
-+    PipelineId id = reg_.add_pipeline({false, d.uniform_bytes});
++    PipelineId id = reg_.add_pipeline({false, d.uniform_bytes, 0});
 +    pipelines_[id] = p;
 +    return id;
    }
@@ -1112,6 +1193,7 @@ diff -ruN base/engine/src/rhi/webgpu_device.cpp work/engine/src/rhi/webgpu_devic
    void begin_frame(TextureId target, const float c[4]) override {
      stats_.draws = 0;
 +    stats_.indices = 0;
++    stats_.rejected = 0;
      frame_active_ = false;
 +    pass_depth_ = false;
      WGPUTextureView view = nullptr;
@@ -1119,7 +1201,7 @@ diff -ruN base/engine/src/rhi/webgpu_device.cpp work/engine/src/rhi/webgpu_devic
      if (target == 0) {
        // Skip the frame (draw/end_frame become no-ops) rather than touching a null surface or texture.
        if (!surface_) {
-@@ -179,7 +265,13 @@
+@@ -179,7 +266,13 @@
        frame_surface_view_ = view = wgpuTextureCreateView(st.texture, nullptr);
        pass_format_ = surface_format_;
      } else {
@@ -1134,7 +1216,7 @@ diff -ruN base/engine/src/rhi/webgpu_device.cpp work/engine/src/rhi/webgpu_devic
        pass_format_ = WGPUTextureFormat_RGBA8Unorm;
      }
      enc_ = wgpuDeviceCreateCommandEncoder(dev_, nullptr);
-@@ -191,6 +283,15 @@
+@@ -191,14 +284,25 @@
      WGPURenderPassDescriptor rp = WGPU_RENDER_PASS_DESCRIPTOR_INIT;
      rp.colorAttachmentCount = 1;
      rp.colorAttachments = &ca;
@@ -1150,16 +1232,18 @@ diff -ruN base/engine/src/rhi/webgpu_device.cpp work/engine/src/rhi/webgpu_devic
      pass_ = wgpuCommandEncoderBeginRenderPass(enc_, &rp);
      frame_active_ = true;
    }
-@@ -198,7 +299,7 @@
+ 
    void draw(PipelineId pid, uint32_t n, BufferId u, uint32_t off) override {
      if (!frame_active_) return;
++    std::string why = reg_.check_draw(pid, u, off);
++    if (!why.empty()) return reject("draw", why);  // unknown id or a mesh pipeline: never reaches Dawn, never throws
      Pipeline& p = pipelines_.at(pid);
 -    wgpuRenderPassEncoderSetPipeline(pass_, variant(p, pass_format_));
 +    wgpuRenderPassEncoderSetPipeline(pass_, variant(p, pass_format_, pass_depth_));
      if (p.desc.uniform_bytes) wgpuRenderPassEncoderSetBindGroup(pass_, 0, bind_group(pid, p, u), 1, &off);
      wgpuRenderPassEncoderDraw(pass_, n, 1, 0, 0);
      ++stats_.draws;
-@@ -229,7 +330,9 @@
+@@ -229,7 +333,9 @@
      (void)rgba;
      return false;  // browser readback is async; tests screenshot the canvas instead
  #else
@@ -1170,7 +1254,7 @@ diff -ruN base/engine/src/rhi/webgpu_device.cpp work/engine/src/rhi/webgpu_devic
      const uint32_t row = (t.width * 4 + 255) / 256 * 256;
      WGPUBufferDescriptor bd = WGPU_BUFFER_DESCRIPTOR_INIT;
      bd.size = uint64_t(row) * t.height;
-@@ -287,7 +390,207 @@
+@@ -287,7 +393,234 @@
  
    FrameStats last_frame_stats() const override { return stats_; }
  
@@ -1266,36 +1350,49 @@ diff -ruN base/engine/src/rhi/webgpu_device.cpp work/engine/src/rhi/webgpu_devic
 +    p.mesh = true;
 +    p.mesh_desc = d;
 +    p.module = shader(d.wgsl);
-+    p.layout = mesh_layout(d.uniform_bytes);
++    p.layout = mesh_layout(uniform_stride(d.uniform_bytes), detail::kMeshSlots);
 +    WGPUPipelineLayoutDescriptor pl = WGPU_PIPELINE_LAYOUT_DESCRIPTOR_INIT;
 +    pl.bindGroupLayoutCount = 1;
 +    pl.bindGroupLayouts = &p.layout;
 +    p.pipeline_layout = wgpuDeviceCreatePipelineLayout(dev_, &pl);
 +    ++stats_.pipelines_total;
-+    PipelineId id = reg_.add_pipeline({true, d.uniform_bytes});
++    PipelineId id = reg_.add_pipeline({true, d.uniform_bytes, detail::kMeshSlots});
 +    pipelines_[id] = p;
 +    return id;
 +  }
 +
-+  BindGroupId create_bind_group(BufferId u, uint32_t ubytes, TextureId t, SamplerId s) override {
-+    std::string why = reg_.check_bind_group(u, ubytes, t, s);
++  BindGroupId create_bind_group(const BindGroupDesc& d) override {
++    std::string why = reg_.check_bind_group(d);
 +    if (!why.empty()) {
 +      reject("create_bind_group", why);
 +      return 0;
 +    }
-+    WGPUBindGroupEntry e[3] = {WGPU_BIND_GROUP_ENTRY_INIT, WGPU_BIND_GROUP_ENTRY_INIT, WGPU_BIND_GROUP_ENTRY_INIT};
-+    e[0].binding = 0;
-+    e[0].buffer = buffers_.at(u);
-+    e[0].size = ubytes;
-+    e[1].binding = 1;
-+    e[1].textureView = sampled_.at(t).view;
-+    e[2].binding = 2;
-+    e[2].sampler = samplers_.at(s);
++    const uint32_t stride = uniform_stride(d.uniform_bytes), slots = detail::bind_slots(d);
++    std::vector<WGPUBindGroupEntry> e;  // one entry per populated slot, matching mesh_layout(stride, slots)
++    if (slots & detail::kSlotUniforms) {
++      WGPUBindGroupEntry x = WGPU_BIND_GROUP_ENTRY_INIT;
++      x.binding = 0;
++      x.buffer = buffers_.at(d.uniforms);
++      x.size = stride;  // the whole slot: offset + stride is validated against the buffer
++      e.push_back(x);
++    }
++    if (slots & detail::kSlotTexture) {
++      WGPUBindGroupEntry x = WGPU_BIND_GROUP_ENTRY_INIT;
++      x.binding = 1;
++      x.textureView = sampled_.at(d.texture).view;
++      e.push_back(x);
++    }
++    if (slots & detail::kSlotSampler) {
++      WGPUBindGroupEntry x = WGPU_BIND_GROUP_ENTRY_INIT;
++      x.binding = 2;
++      x.sampler = samplers_.at(d.sampler);
++      e.push_back(x);
++    }
 +    WGPUBindGroupDescriptor bd = WGPU_BIND_GROUP_DESCRIPTOR_INIT;
-+    bd.layout = mesh_layout(ubytes);
-+    bd.entryCount = 3;
-+    bd.entries = e;
-+    BindGroupId id = reg_.add_bind_group({u, ubytes, t, s});
++    bd.layout = mesh_layout(stride, slots);
++    bd.entryCount = e.size();
++    bd.entries = e.data();
++    const BindGroupId id = reg_.add_bind_group({d, stride, slots});
 +    mesh_bind_groups_[id] = wgpuDeviceCreateBindGroup(dev_, &bd);
 +    return id;
 +  }
@@ -1351,45 +1448,60 @@ diff -ruN base/engine/src/rhi/webgpu_device.cpp work/engine/src/rhi/webgpu_devic
 +    return id;
 +  }
 +
-+  // One canonical group-0 layout per uniform size, shared by every mesh pipeline and bind group with that size (so a
-+  // bind group is compatible with all of them).
-+  WGPUBindGroupLayout mesh_layout(uint32_t ubytes) {
-+    auto it = mesh_layouts_.find(ubytes);
++  // One canonical group-0 layout per (uniform stride, populated slots), shared by every mesh pipeline and bind group
++  // with that key, so a bind group is compatible with all of them. M1a-2 has one slot set (kMeshSlots); new optional
++  // slots add bits to the key without disturbing existing layouts.
++  WGPUBindGroupLayout mesh_layout(uint32_t stride, uint32_t slots) {
++    const uint64_t key = (uint64_t(stride) << 32) | slots;
++    auto it = mesh_layouts_.find(key);
 +    if (it != mesh_layouts_.end()) return it->second;
-+    WGPUBindGroupLayoutEntry e[3] = {WGPU_BIND_GROUP_LAYOUT_ENTRY_INIT, WGPU_BIND_GROUP_LAYOUT_ENTRY_INIT, WGPU_BIND_GROUP_LAYOUT_ENTRY_INIT};
-+    e[0].binding = 0;
-+    e[0].visibility = WGPUShaderStage_Vertex | WGPUShaderStage_Fragment;
-+    e[0].buffer.type = WGPUBufferBindingType_Uniform;
-+    e[0].buffer.hasDynamicOffset = true;
-+    e[0].buffer.minBindingSize = ubytes;
-+    e[1].binding = 1;
-+    e[1].visibility = WGPUShaderStage_Fragment;
-+    e[1].texture.sampleType = WGPUTextureSampleType_Float;
-+    e[1].texture.viewDimension = WGPUTextureViewDimension_2D;
-+    e[2].binding = 2;
-+    e[2].visibility = WGPUShaderStage_Fragment;
-+    e[2].sampler.type = WGPUSamplerBindingType_Filtering;
++    std::vector<WGPUBindGroupLayoutEntry> e;  // one entry per populated slot, in binding order
++    if (slots & detail::kSlotUniforms) {
++      WGPUBindGroupLayoutEntry x = WGPU_BIND_GROUP_LAYOUT_ENTRY_INIT;
++      x.binding = 0;
++      x.visibility = WGPUShaderStage_Vertex | WGPUShaderStage_Fragment;
++      x.buffer.type = WGPUBufferBindingType_Uniform;
++      x.buffer.hasDynamicOffset = true;
++      x.buffer.minBindingSize = stride;
++      e.push_back(x);
++    }
++    if (slots & detail::kSlotTexture) {
++      WGPUBindGroupLayoutEntry x = WGPU_BIND_GROUP_LAYOUT_ENTRY_INIT;
++      x.binding = 1;
++      x.visibility = WGPUShaderStage_Fragment;
++      x.texture.sampleType = WGPUTextureSampleType_Float;
++      x.texture.viewDimension = WGPUTextureViewDimension_2D;
++      e.push_back(x);
++    }
++    if (slots & detail::kSlotSampler) {
++      WGPUBindGroupLayoutEntry x = WGPU_BIND_GROUP_LAYOUT_ENTRY_INIT;
++      x.binding = 2;
++      x.visibility = WGPUShaderStage_Fragment;
++      x.sampler.type = WGPUSamplerBindingType_Filtering;
++      e.push_back(x);
++    }
 +    WGPUBindGroupLayoutDescriptor bl = WGPU_BIND_GROUP_LAYOUT_DESCRIPTOR_INIT;
-+    bl.entryCount = 3;
-+    bl.entries = e;
-+    return mesh_layouts_[ubytes] = wgpuDeviceCreateBindGroupLayout(dev_, &bl);
++    bl.entryCount = e.size();
++    bl.entries = e.data();
++    return mesh_layouts_[key] = wgpuDeviceCreateBindGroupLayout(dev_, &bl);
 +  }
 +
    WGPUBindGroup bind_group(PipelineId pid, const Pipeline& p, BufferId u) {
      auto key = (uint64_t(pid) << 32) | u;
      auto it = bind_groups_.find(key);
-@@ -303,6 +606,10 @@
+@@ -303,6 +636,11 @@
      return bind_groups_[key] = wgpuDeviceCreateBindGroup(dev_, &bd);
    }
  
 +  void reject(const char* call, const std::string& why) {
++    ++stats_.rejected;
 +    if (rejects_++ < 16) std::fprintf(stderr, "[webgpu] %s rejected: %s\n", call, why.c_str());
 +  }
 +
    void log_skip_once(const std::string& why) {
      if (logged_skip_) return;
      logged_skip_ = true;
-@@ -316,19 +623,25 @@
+@@ -316,19 +654,25 @@
    WGPUSurface surface_;
    WGPUTextureFormat surface_format_;
    std::string adapter_desc_;
@@ -1403,7 +1515,7 @@ diff -ruN base/engine/src/rhi/webgpu_device.cpp work/engine/src/rhi/webgpu_devic
 +  std::map<SamplerId, WGPUSampler> samplers_;
 +  std::map<uint64_t, WGPUBindGroup> bind_groups_;          // M0: implicit, per (pipeline, uniform buffer)
 +  std::map<BindGroupId, WGPUBindGroup> mesh_bind_groups_;  // M1a-2: explicit
-+  std::map<uint32_t, WGPUBindGroupLayout> mesh_layouts_;
++  std::map<uint64_t, WGPUBindGroupLayout> mesh_layouts_;  // key: (uniform stride << 32) | slot mask
    WGPUCommandEncoder enc_ = nullptr;
    WGPURenderPassEncoder pass_ = nullptr;
    WGPUTextureView frame_surface_view_ = nullptr;
@@ -1419,8 +1531,8 @@ diff -ruN base/engine/src/rhi/webgpu_device.cpp work/engine/src/rhi/webgpu_devic
  struct Pending {
 diff -ruN base/engine/src/view/area.cpp work/engine/src/view/area.cpp
 --- base/engine/src/view/area.cpp	1970-01-01 01:00:00
-+++ work/engine/src/view/area.cpp	2026-10-07 08:24:23
-@@ -0,0 +1,568 @@
++++ work/engine/src/view/area.cpp	2026-10-07 08:58:30
+@@ -0,0 +1,598 @@
 +#include "lomn/view/area.h"
 +
 +#include <algorithm>
@@ -1617,6 +1729,7 @@ diff -ruN base/engine/src/view/area.cpp work/engine/src/view/area.cpp
 +    m.vertex_count = static_cast<uint32_t>(n);
 +    m.has_colors = x.has_colors && x.colors.size() == n * 4;
 +    const bool has_uv = x.uvs.size() == n * 2;
++    const bool has_normals = x.normals.size() == n * 3;
 +    m.vertices.resize(n * kVertexFloats);
 +    for (uint64_t v = 0; v < n; ++v) {
 +      float* o = &m.vertices[v * kVertexFloats];
@@ -1624,9 +1737,10 @@ diff -ruN base/engine/src/view/area.cpp work/engine/src/view/area.cpp
 +      o[0] = p[0];
 +      o[1] = p[1];
 +      o[2] = p[2];
-+      o[3] = has_uv ? x.uvs[v * 2] : 0.0f;
-+      o[4] = has_uv ? x.uvs[v * 2 + 1] : 0.0f;
-+      for (int c = 0; c < 4; ++c) o[5 + c] = m.has_colors ? x.colors[v * 4 + c] : 1.0f;
++      for (int k = 0; k < 3; ++k) o[3 + k] = has_normals ? x.normals[v * 3 + k] : 0.0f;
++      o[6] = has_uv ? x.uvs[v * 2] : 0.0f;
++      o[7] = has_uv ? x.uvs[v * 2 + 1] : 0.0f;
++      for (int c = 0; c < 4; ++c) o[8 + c] = m.has_colors ? x.colors[v * 4 + c] : 1.0f;
 +      for (int k = 0; k < 3; ++k) {
 +        if (v == 0 || p[k] < m.bounds_min[k]) m.bounds_min[k] = p[k];
 +        if (v == 0 || p[k] > m.bounds_max[k]) m.bounds_max[k] = p[k];
@@ -1773,14 +1887,18 @@ diff -ruN base/engine/src/view/area.cpp work/engine/src/view/area.cpp
 +  @location(0) uv: vec2f,
 +  @location(1) color: vec4f,
 +}
-+@vertex fn vs(@location(0) p: vec3f, @location(1) uv: vec2f, @location(2) c: vec4f) -> VOut {
++// @location(1) is the vertex normal: declared so the layout is visible here, unused until M1a-3 lighting.
++@vertex fn vs(@location(0) p: vec3f, @location(1) n: vec3f, @location(2) uv: vec2f, @location(3) c: vec4f) -> VOut {
 +  var o: VOut;
 +  o.pos = u.wvp * vec4f(p, 1.0);
 +  o.uv = uv;
 +  o.color = select(u.diffuse, c, u.params.x > 0.5);
 +  return o;
 +}
-+// D3D stage 0 defaults: COLOROP MODULATE(TEXTURE, DIFFUSE), ALPHAOP SELECTARG1(TEXTURE).
++// Stage 0: COLOROP MODULATE(TEXTURE, DIFFUSE) (D3D default). Alpha: DrawX (0x005528c0) sets ALPHAOP SELECTARG2
++// (stage state 4 = 3) with ALPHAARG2 = TEXTURE (6 = 2), i.e. alpha = texture alpha, as below.
++// Not modelled (M1a-3 gap): DrawX ~lines 295-298 turn ALPHABLEND OFF for the alpha pass when the flag at
++// *param_2 + 0xc is set (alpha test only); this preview always blends.
 +fn shade(i: VOut) -> vec4f {
 +  let t = textureSample(tex, samp, i.uv);
 +  return vec4f(t.rgb * i.color.rgb, t.a);
@@ -1862,13 +1980,36 @@ diff -ruN base/engine/src/view/area.cpp work/engine/src/view/area.cpp
 +  return c;
 +}
 +
++uint64_t release_cpu_copies(AreaData& a) {
++  uint64_t freed = 0;
++  for (Model& m : a.models) {
++    freed += m.vertices.capacity() * sizeof(float) + m.indices.capacity() * sizeof(uint32_t);
++    std::vector<float>().swap(m.vertices);
++    std::vector<uint32_t>().swap(m.indices);
++  }
++  for (Texture& t : a.textures) {
++    for (const MipLevel& l : t.mips) freed += l.rgba.capacity();
++    std::vector<MipLevel>().swap(t.mips);
++  }
++  a.cpu_released = true;
++  return freed;
++}
++
++namespace {
++constexpr uint32_t kSlot = rhi::uniform_stride(kAreaUniformBytes);  // one uniform slot per draw (256 bytes)
++}  // namespace
++
 +bool AreaRenderer::upload(rhi::Device& dev, const AreaData& a, const RenderOptions& opt, std::string* err) {
++  if (a.cpu_released) return fail(err, "render: area CPU copies were already released");
 +  opt_ = opt;
 +  rhi::MeshPipelineDesc pd;
 +  pd.wgsl = kWgsl;
 +  pd.uniform_bytes = kAreaUniformBytes;
 +  pd.vertex_stride = kVertexFloats * 4;
-+  pd.attributes = {{rhi::VertexFormat::Float32x3, 0, 0}, {rhi::VertexFormat::Float32x2, 12, 1}, {rhi::VertexFormat::Float32x4, 20, 2}};
++  pd.attributes = {{rhi::VertexFormat::Float32x3, 0, 0},
++                   {rhi::VertexFormat::Float32x3, 12, 1},
++                   {rhi::VertexFormat::Float32x2, 24, 2},
++                   {rhi::VertexFormat::Float32x4, 32, 3}};
 +  pd.cull = rhi::CullMode::None;               // render mode 0x11: D3DCULL_NONE
 +  pd.depth_compare = rhi::CompareFunc::LessEqual;  // D3DRS_ZFUNC LESSEQUAL
 +  pd.depth_write = true;                       // ZWRITE on in both DrawX passes
@@ -1876,7 +2017,8 @@ diff -ruN base/engine/src/view/area.cpp work/engine/src/view/area.cpp
 +  pd.blend = rhi::BlendMode::Opaque;
 +  opaque_ = dev.create_mesh_pipeline(pd);
 +  pd.fs_entry = "fs_alpha";
-+  pd.blend = rhi::BlendMode::AlphaBlend;  // DrawX pass 2: ALPHABLENDENABLE 1, SRCALPHA/INVSRCALPHA, ALPHATEST GREATER
++  // DrawX pass 2: ALPHABLENDENABLE 1 (SRCALPHA/INVSRCALPHA from SrPushRenderMode), ALPHATESTENABLE 1, ALPHAFUNC GREATER.
++  pd.blend = rhi::BlendMode::AlphaBlend;
 +  alpha_ = dev.create_mesh_pipeline(pd);
 +  if (!opaque_ || !alpha_) return fail(err, "render: mesh pipeline rejected");
 +  pipelines_created_ = 2;
@@ -1886,12 +2028,12 @@ diff -ruN base/engine/src/view/area.cpp work/engine/src/view/area.cpp
 +  sampler_ = dev.create_sampler(sd);
 +  if (!sampler_) return fail(err, "render: sampler rejected");
 +  uniform_slots_ = a.stats.draws ? a.stats.draws : 1;
-+  uniforms_ = dev.create_uniform_buffer(uniform_slots_ * rhi::kUniformAlign);
++  uniforms_ = dev.create_uniform_buffer(uniform_slots_ * kSlot);
 +  if (!uniforms_) return fail(err, "render: uniform buffer rejected");
 +  const uint8_t white[4] = {255, 255, 255, 255};
 +  rhi::TextureId wt = dev.create_texture(1, 1, 1);
 +  if (!wt || !dev.write_texture(wt, 0, white, 4)) return fail(err, "render: white texture rejected");
-+  white_group_ = dev.create_bind_group(uniforms_, kAreaUniformBytes, wt, sampler_);
++  white_group_ = dev.create_bind_group({uniforms_, kAreaUniformBytes, wt, sampler_});
 +  if (!white_group_) return fail(err, "render: bind group rejected");
 +  textures_created_ = 1;
 +  uploaded_texture_bytes_ = 4;
@@ -1905,7 +2047,7 @@ diff -ruN base/engine/src/view/area.cpp work/engine/src/view/area.cpp
 +      uploaded_texture_bytes_ += t.mips[m].rgba.size();
 +    }
 +    ++textures_created_;
-+    const rhi::BindGroupId bg = dev.create_bind_group(uniforms_, kAreaUniformBytes, id, sampler_);
++    const rhi::BindGroupId bg = dev.create_bind_group({uniforms_, kAreaUniformBytes, id, sampler_});
 +    if (!bg) return fail(err, "render: bind group rejected: " + t.request);
 +    texture_groups_.push_back(bg);
 +  }
@@ -1920,7 +2062,7 @@ diff -ruN base/engine/src/view/area.cpp work/engine/src/view/area.cpp
 +    dev.write_buffer(g.ib, 0, m.indices.data(), ibytes);
 +    models_.push_back(g);
 +  }
-+  uniform_data_.assign(size_t(uniform_slots_) * rhi::kUniformAlign, 0);
++  uniform_data_.assign(size_t(uniform_slots_) * kSlot, 0);
 +  return true;
 +}
 +
@@ -1968,9 +2110,9 @@ diff -ruN base/engine/src/view/area.cpp work/engine/src/view/area.cpp
 +    u[21] = opt_.alpha_ref / 255.0f;
 +    u[22] = 0.0f;
 +    u[23] = 0.0f;
-+    std::memcpy(&uniform_data_[size_t(i) * rhi::kUniformAlign], u, sizeof u);
++    std::memcpy(&uniform_data_[size_t(i) * kSlot], u, sizeof u);
 +  }
-+  if (n) dev.write_buffer(uniforms_, 0, uniform_data_.data(), n * rhi::kUniformAlign);
++  if (n) dev.write_buffer(uniforms_, 0, uniform_data_.data(), n * kSlot);
 +  dev.begin_frame(target, opt_.clear);
 +  for (uint32_t i = 0; i < n; ++i) {
 +    const Placement& p = a.placements[items[i].placement];
@@ -1982,7 +2124,7 @@ diff -ruN base/engine/src/view/area.cpp work/engine/src/view/area.cpp
 +    d.first_index = sd.first_index;
 +    d.index_count = sd.index_count;
 +    d.bind_group = sd.texture == kNoTexture ? white_group_ : texture_groups_[sd.texture];
-+    d.uniform_offset = i * rhi::kUniformAlign;
++    d.uniform_offset = i * kSlot;
 +    dev.draw_indexed(d);
 +  }
 +  dev.end_frame();
@@ -1991,7 +2133,7 @@ diff -ruN base/engine/src/view/area.cpp work/engine/src/view/area.cpp
 +}  // namespace lomn::view
 diff -ruN base/engine/src/view/math.cpp work/engine/src/view/math.cpp
 --- base/engine/src/view/math.cpp	1970-01-01 01:00:00
-+++ work/engine/src/view/math.cpp	2026-10-07 08:19:47
++++ work/engine/src/view/math.cpp	2026-10-07 08:54:40
 @@ -0,0 +1,97 @@
 +#include "lomn/view/math.h"
 +
@@ -2092,7 +2234,7 @@ diff -ruN base/engine/src/view/math.cpp work/engine/src/view/math.cpp
 +}  // namespace lomn::view
 diff -ruN base/engine/src/view/mips.cpp work/engine/src/view/mips.cpp
 --- base/engine/src/view/mips.cpp	1970-01-01 01:00:00
-+++ work/engine/src/view/mips.cpp	2026-10-07 08:19:54
++++ work/engine/src/view/mips.cpp	2026-10-07 08:54:45
 @@ -0,0 +1,93 @@
 +#include "lomn/view/mips.h"
 +
@@ -2189,8 +2331,8 @@ diff -ruN base/engine/src/view/mips.cpp work/engine/src/view/mips.cpp
 +}  // namespace lomn::view
 diff -ruN base/engine/src/view/synthetic.cpp work/engine/src/view/synthetic.cpp
 --- base/engine/src/view/synthetic.cpp	1970-01-01 01:00:00
-+++ work/engine/src/view/synthetic.cpp	2026-10-07 08:05:56
-@@ -0,0 +1,276 @@
++++ work/engine/src/view/synthetic.cpp	2026-10-07 08:51:21
+@@ -0,0 +1,280 @@
 +#include "lomn/view/synthetic.h"
 +
 +#include <algorithm>
@@ -2355,6 +2497,10 @@ diff -ruN base/engine/src/view/synthetic.cpp work/engine/src/view/synthetic.cpp
 +  std::vector<uint32_t> fi = {3};
 +  fi.insert(fi.end(), faces.begin(), faces.end());
 +  x.ints(fi);
++  // One normal (0,-1,0) for every corner (world +Z after RotX, towards the camera): no vertex is split.
++  std::vector<uint32_t> ni = {3};  // nFaceNormals, then per face: 4 corners, normal 0
++  for (int f = 0; f < 3; ++f) ni.insert(ni.end(), {4u, 0u, 0u, 0u, 0u});
++  x.obj("MeshNormals").ints({1}).floats({0.f, -1.f, 0.f}).ints(ni).close();
 +  x.obj("MeshTextureCoords").ints({12}).floats(uv).close();
 +  x.obj("MeshVertexColors").ints({12});
 +  for (uint32_t i = 0; i < 12; ++i) x.ints({i}).floats({1.0f, 0.5f, 1.0f, 1.0f});
@@ -2503,11 +2649,11 @@ diff -ruN base/engine/tests/a7_calls.cmake work/engine/tests/a7_calls.cmake
 +endif()
 diff -ruN base/engine/tests/data/a7_calls.txt work/engine/tests/data/a7_calls.txt
 --- base/engine/tests/data/a7_calls.txt	1970-01-01 01:00:00
-+++ work/engine/tests/data/a7_calls.txt	2026-10-07 08:12:04
++++ work/engine/tests/data/a7_calls.txt	2026-10-07 08:52:00
 @@ -0,0 +1,40 @@
 +create_render_target_ex 64x64 depth=1 clear_depth=1.000 -> 1
-+create_mesh_pipeline wgsl=1266 bytes sum=0e2d755a vs=vs fs=fs_opaque uniforms=96 stride=36 attrs=[0:f32x3@0,1:f32x2@12,2:f32x4@20] blend=opaque depth_write=1 depth=lessequal cull=none -> 1
-+create_mesh_pipeline wgsl=1266 bytes sum=0e2d755a vs=vs fs=fs_alpha uniforms=96 stride=36 attrs=[0:f32x3@0,1:f32x2@12,2:f32x4@20] blend=alpha depth_write=1 depth=lessequal cull=none -> 2
++create_mesh_pipeline wgsl=1691 bytes sum=71fcec4f vs=vs fs=fs_opaque uniforms=96 stride=48 attrs=[0:f32x3@0,1:f32x3@12,2:f32x2@24,3:f32x4@32] blend=opaque depth_write=1 depth=lessequal cull=none -> 1
++create_mesh_pipeline wgsl=1691 bytes sum=71fcec4f vs=vs fs=fs_alpha uniforms=96 stride=48 attrs=[0:f32x3@0,1:f32x3@12,2:f32x2@24,3:f32x4@32] blend=alpha depth_write=1 depth=lessequal cull=none -> 2
 +create_sampler mag=linear min=linear mip=linear u=wrap v=wrap aniso=3 -> 1
 +create_uniform_buffer 2560 -> 1
 +create_texture 1x1 mips=1 -> 2
@@ -2524,13 +2670,13 @@ diff -ruN base/engine/tests/data/a7_calls.txt work/engine/tests/data/a7_calls.tx
 +write_texture 4 mip=2 2x2 16 bytes sum=d5003180
 +write_texture 4 mip=3 1x1 4 bytes sum=003c2000
 +create_bind_group uniforms=1 bytes=96 texture=4 sampler=1 -> 3
-+create_vertex_buffer 432 -> 2
++create_vertex_buffer 576 -> 2
 +create_index_buffer 72 -> 3
-+write_buffer 2 +0 432 bytes sum=4dc87b5c
++write_buffer 2 +0 576 bytes sum=51c53250
 +write_buffer 3 +0 72 bytes sum=9e45dfa0
-+create_vertex_buffer 144 -> 4
++create_vertex_buffer 192 -> 4
 +create_index_buffer 24 -> 5
-+write_buffer 4 +0 144 bytes sum=ec634a76
++write_buffer 4 +0 192 bytes sum=c2f842f6
 +write_buffer 5 +0 24 bytes sum=7a8948f8
 +write_buffer 1 +0 2560 bytes sum=56ab9d5a
 +begin_frame target=1 clear=0.000,0.000,0.000,1.000
@@ -2547,10 +2693,10 @@ diff -ruN base/engine/tests/data/a7_calls.txt work/engine/tests/data/a7_calls.tx
 +end_frame draws=10
 diff -ruN base/engine/tests/test_gpu_area.cpp work/engine/tests/test_gpu_area.cpp
 --- base/engine/tests/test_gpu_area.cpp	1970-01-01 01:00:00
-+++ work/engine/tests/test_gpu_area.cpp	2026-10-07 08:21:29
-@@ -0,0 +1,113 @@
++++ work/engine/tests/test_gpu_area.cpp	2026-10-07 08:50:34
+@@ -0,0 +1,64 @@
 +// A7 on Dawn (headless): the synthetic scene rendered through load_area + AreaRenderer and checked at known pixels.
-+// Exits 77 (ctest SKIP) without an adapter. Pixel centres below are computed from the scene geometry in
++// Exits 77 (ctest SKIP) without an adapter. (The rhi-only blend and M0-in-depth probes live in test_gpu_mesh.cpp.) Pixel centres below are computed from the scene geometry in
 +// lomn/view/synthetic.h: 64x64, fov 90, eye (0,0,10) looking along -Z, so a point at world z = 0 has x_ndc = x / 10
 +// and at z = -2 x_ndc = x / 12; pixel (px, py) has ndc ((px + 0.5) / 32 - 1, 1 - (py + 0.5) / 32).
 +#include <cstdio>
@@ -2609,63 +2755,176 @@ diff -ruN base/engine/tests/test_gpu_area.cpp work/engine/tests/test_gpu_area.cp
 +    std::printf("%s (%d,%d) = %u,%u,%u,%u want %d,%d,%d: %s\n", hit ? "ok  " : "FAIL", p.x, p.y, c[0], c[1], c[2], c[3], p.r, p.g, p.b, p.what);
 +    ok = ok && hit;
 +  }
-+  const uint32_t a7_draws = dev->last_frame_stats().draws;
-+  std::printf("adapter=%s draws=%u\n", dev->adapter().c_str(), a7_draws);
-+  ok = ok && a7_draws == 10;
++  const rhi::FrameStats fs = dev->last_frame_stats();
++  std::printf("adapter=%s draws=%u rejected=%u\n", dev->adapter().c_str(), fs.draws, fs.rejected);
++  return ok && fs.draws == 10 && fs.rejected == 0 ? 0 : 1;
++}
+diff -ruN base/engine/tests/test_gpu_mesh.cpp work/engine/tests/test_gpu_mesh.cpp
+--- base/engine/tests/test_gpu_mesh.cpp	1970-01-01 01:00:00
++++ work/engine/tests/test_gpu_mesh.cpp	2026-10-07 08:50:34
+@@ -0,0 +1,158 @@
++// rhi WebGPU backend on Dawn (headless), without lomn_area: local WGSL only. Exits 77 (ctest SKIP) without an adapter.
++//  1. Blend: an opaque quad (blue), then an AlphaBlend quad (red, texture alpha 128) over it -> SRCALPHA/INVSRCALPHA
++//     = (128, 0, 127) and the target's alpha stays 255.
++//  2. An M0 pipeline drawn into a depth-enabled target keeps its pixels: byte-identical to the same draw into a target
++//     without depth, and it is not depth-tested against a mesh quad drawn first nearer the camera (compare Always).
++//  3. Invalid M0 draws (unknown pipeline, a mesh pipeline, unknown uniform buffer) are rejected and counted, never
++//     reach Dawn and never throw; the frame's pixels are unchanged.
++#include <cstdio>
++#include <cstdlib>
 +
-+  // Blend state on Dawn, straight through rhi with the area shader: a full-target opaque quad (vertex colour blue,
-+  // white texture), then an alpha-pipeline quad (vertex colour red, texture alpha 128) over it. SRCALPHA/INVSRCALPHA
-+  // gives red * 128/255 + blue * 127/255 = (128, 0, 127); the target's alpha stays 255.
-+  rhi::MeshPipelineDesc pd;
-+  pd.wgsl = view::area_wgsl();
-+  pd.uniform_bytes = view::kAreaUniformBytes;
-+  pd.vertex_stride = 36;
-+  pd.attributes = {{rhi::VertexFormat::Float32x3, 0, 0}, {rhi::VertexFormat::Float32x2, 12, 1}, {rhi::VertexFormat::Float32x4, 20, 2}};
++#include "lomn/rhi.h"
++
++using namespace lomn::rhi;
++
++namespace {
++
++const char* kMeshWgsl = R"(
++struct U { tint: vec4f }
++@group(0) @binding(0) var<uniform> u: U;
++@group(0) @binding(1) var tex: texture_2d<f32>;
++@group(0) @binding(2) var samp: sampler;
++struct VOut { @builtin(position) pos: vec4f, @location(0) color: vec4f }
++@vertex fn vs(@location(0) p: vec3f, @location(1) c: vec4f) -> VOut {
++  var o: VOut;
++  o.pos = vec4f(p, 1.0);
++  o.color = c * u.tint;
++  return o;
++}
++@fragment fn fs_opaque(i: VOut) -> @location(0) vec4f {
++  return vec4f(textureSample(tex, samp, vec2f(0.5, 0.5)).rgb * i.color.rgb, 1.0);
++}
++@fragment fn fs_alpha(i: VOut) -> @location(0) vec4f {
++  let t = textureSample(tex, samp, vec2f(0.5, 0.5));
++  if (t.a <= 1.0 / 255.0) { discard; }
++  return vec4f(t.rgb * i.color.rgb, t.a);
++}
++)";
++
++// The M0 triangle (as lomn::TriangleScene, angle 0): orange on the clear colour.
++const char* kM0Wgsl = R"(
++struct U { angle: f32 }
++@group(0) @binding(0) var<uniform> u: U;
++@vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
++  var p = array<vec2f, 3>(vec2f(0.0, 0.8), vec2f(-0.8, -0.8), vec2f(0.8, -0.8));
++  let c = cos(u.angle);
++  let s = sin(u.angle);
++  let v = p[i];
++  return vec4f(c * v.x - s * v.y, s * v.x + c * v.y, 0.0, 1.0);
++}
++@fragment fn fs() -> @location(0) vec4f { return vec4f(1.0, 0.5, 0.0, 1.0); }
++)";
++
++bool near(const uint8_t* c, int r, int g, int b, int a) {
++  return std::abs(c[0] - r) <= 2 && std::abs(c[1] - g) <= 2 && std::abs(c[2] - b) <= 2 && c[3] == a;
++}
++
++}  // namespace
++
++int main() {
++  std::unique_ptr<Device> dev;
++  std::string err;
++  create_webgpu_device(nullptr, 0, 0, [&](std::unique_ptr<Device> d, std::string e) {
++    dev = std::move(d);
++    err = std::move(e);
++  });
++  if (!dev) {
++    std::printf("SKIPPED (no WebGPU adapter: %s)\n", err.c_str());
++    return 77;
++  }
++  bool ok = true;
++  auto report = [&](bool hit, const char* what, const uint8_t* c) {
++    std::printf("%s %s = %u,%u,%u,%u\n", hit ? "ok  " : "FAIL", what, c[0], c[1], c[2], c[3]);
++    ok = ok && hit;
++  };
++
++  // Shared mesh objects: two full-target quads (z 0.5 blue, z 0.25 red), 1x1 textures (alpha 255 and 128).
++  MeshPipelineDesc pd;
++  pd.wgsl = kMeshWgsl;
++  pd.uniform_bytes = 16;
++  pd.vertex_stride = 28;
++  pd.attributes = {{VertexFormat::Float32x3, 0, 0}, {VertexFormat::Float32x4, 12, 1}};
 +  pd.fs_entry = "fs_opaque";
-+  rhi::PipelineId opaque = dev->create_mesh_pipeline(pd);
++  PipelineId opaque = dev->create_mesh_pipeline(pd);
 +  pd.fs_entry = "fs_alpha";
-+  pd.blend = rhi::BlendMode::AlphaBlend;
-+  rhi::PipelineId alpha = dev->create_mesh_pipeline(pd);
-+  const float verts[2][4][9] = {
-+      {{-1, -1, 0.5f, 0, 0, 0, 0, 1, 1}, {1, -1, 0.5f, 0, 0, 0, 0, 1, 1}, {1, 1, 0.5f, 0, 0, 0, 0, 1, 1}, {-1, 1, 0.5f, 0, 0, 0, 0, 1, 1}},
-+      {{-1, -1, 0.25f, 0, 0, 1, 0, 0, 1}, {1, -1, 0.25f, 0, 0, 1, 0, 0, 1}, {1, 1, 0.25f, 0, 0, 1, 0, 0, 1}, {-1, 1, 0.25f, 0, 0, 1, 0, 0, 1}}};
++  pd.blend = BlendMode::AlphaBlend;
++  PipelineId alpha = dev->create_mesh_pipeline(pd);
++  const float verts[2][4][7] = {
++      {{-1, -1, 0.5f, 0, 0, 1, 1}, {1, -1, 0.5f, 0, 0, 1, 1}, {1, 1, 0.5f, 0, 0, 1, 1}, {-1, 1, 0.5f, 0, 0, 1, 1}},
++      {{-1, -1, 0.25f, 1, 0, 0, 1}, {1, -1, 0.25f, 1, 0, 0, 1}, {1, 1, 0.25f, 1, 0, 0, 1}, {-1, 1, 0.25f, 1, 0, 0, 1}}};
 +  const uint32_t idx[12] = {0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7};
-+  rhi::BufferId vb = dev->create_vertex_buffer(sizeof verts), ib = dev->create_index_buffer(sizeof idx);
-+  rhi::BufferId ub = dev->create_uniform_buffer(2 * rhi::kUniformAlign);
++  BufferId vb = dev->create_vertex_buffer(sizeof verts), ib = dev->create_index_buffer(sizeof idx);
++  BufferId ub = dev->create_uniform_buffer(kUniformAlign);
 +  dev->write_buffer(vb, 0, verts, sizeof verts);
 +  dev->write_buffer(ib, 0, idx, sizeof idx);
-+  float u[2][64] = {};
-+  for (int k = 0; k < 2; ++k) {
-+    u[k][0] = u[k][5] = u[k][10] = u[k][15] = 1.0f;  // wvp = identity (positions already in clip space)
-+    u[k][20] = 1.0f;                                   // use vertex colour
-+    u[k][21] = 1.0f / 255.0f;                          // alpha ref 1
-+  }
-+  dev->write_buffer(ub, 0, u, sizeof u);
++  const float tint[4] = {1, 1, 1, 1};
++  dev->write_buffer(ub, 0, tint, sizeof tint);
 +  const uint8_t white[4] = {255, 255, 255, 255}, half[4] = {255, 255, 255, 128};
-+  rhi::TextureId tw = dev->create_texture(1, 1, 1), th = dev->create_texture(1, 1, 1);
++  TextureId tw = dev->create_texture(1, 1, 1), th = dev->create_texture(1, 1, 1);
 +  dev->write_texture(tw, 0, white, 4);
 +  dev->write_texture(th, 0, half, 4);
-+  rhi::SamplerId s = dev->create_sampler(rhi::SamplerDesc());
-+  rhi::BindGroupId bw = dev->create_bind_group(ub, view::kAreaUniformBytes, tw, s), bh = dev->create_bind_group(ub, view::kAreaUniformBytes, th, s);
-+  rhi::TextureId rt2 = dev->create_render_target_ex(rhi::RenderTargetDesc{8, 8, true, 1.0f});
-+  const float clear[4] = {0, 0, 0, 1};
-+  dev->begin_frame(rt2, clear);
++  SamplerId s = dev->create_sampler(SamplerDesc());
++  BindGroupId bw = dev->create_bind_group({ub, 16, tw, s}), bh = dev->create_bind_group({ub, 16, th, s});
++  if (!opaque || !alpha || !vb || !ib || !ub || !tw || !th || !s || !bw || !bh) return std::printf("FAIL setup\n"), 1;
++  const float clear[4] = {0, 0, 0.25f, 1};
++
++  // 1. Blend.
++  TextureId rt = dev->create_render_target_ex(RenderTargetDesc{8, 8, true, 1.0f});
++  dev->begin_frame(rt, clear);
 +  dev->draw_indexed({opaque, vb, ib, 0, 6, bw, 0});
-+  dev->draw_indexed({alpha, vb, ib, 6, 6, bh, rhi::kUniformAlign});
++  dev->draw_indexed({alpha, vb, ib, 6, 6, bh, 0});
 +  dev->end_frame();
-+  std::vector<uint8_t> px2;
-+  if (!dev->read_pixels(rt2, px2) || px2.size() != 8 * 8 * 4) return 1;
-+  const uint8_t* c = &px2[(4 * 8 + 4) * 4];
-+  const bool blend_ok = std::abs(c[0] - 128) <= 2 && c[1] <= 2 && std::abs(c[2] - 127) <= 2 && c[3] == 255;
-+  std::printf("%s blend (4,4) = %u,%u,%u,%u want 128,0,127,255: SRCALPHA/INVSRCALPHA, target alpha kept\n", blend_ok ? "ok  " : "FAIL", c[0],
-+              c[1], c[2], c[3]);
-+  ok = ok && blend_ok && dev->last_frame_stats().draws == 2;
++  std::vector<uint8_t> px;
++  if (!dev->read_pixels(rt, px)) return 1;
++  report(near(&px[(4 * 8 + 4) * 4], 128, 0, 127, 255) && dev->last_frame_stats().draws == 2,
++         "blend (4,4) want 128,0,127,255: SRCALPHA/INVSRCALPHA, target alpha kept", &px[(4 * 8 + 4) * 4]);
++
++  // 2. M0 pipeline into a depth target.
++  PipelineDesc m0;
++  m0.wgsl = kM0Wgsl;
++  m0.uniform_bytes = 16;
++  PipelineId tri = dev->create_pipeline(m0);
++  BufferId tu = dev->create_uniform_buffer(kUniformAlign);
++  const float angle[4] = {0, 0, 0, 0};
++  dev->write_buffer(tu, 0, angle, sizeof angle);
++  TextureId plain = dev->create_render_target(64, 64);
++  TextureId depth = dev->create_render_target_ex(RenderTargetDesc{64, 64, true, 1.0f});
++  std::vector<uint8_t> a, b;
++  for (TextureId t : {plain, depth}) {
++    dev->begin_frame(t, clear);
++    dev->draw(tri, 3, tu, 0);
++    dev->end_frame();
++    if (!dev->read_pixels(t, t == plain ? a : b)) return 1;
++  }
++  report(a == b && near(&b[(32 * 64 + 32) * 4], 255, 128, 0, 255), "M0 triangle in a depth target == without depth (centre)",
++         &b[(32 * 64 + 32) * 4]);
++  // A mesh quad written to depth 0.25 first; the M0 triangle (z 0, compare Always) still covers it.
++  dev->begin_frame(depth, clear);
++  dev->draw_indexed({opaque, vb, ib, 6, 6, bw, 0});
++  dev->draw(tri, 3, tu, 0);
++  dev->end_frame();
++  if (!dev->read_pixels(depth, b)) return 1;
++  report(near(&b[(32 * 64 + 32) * 4], 255, 128, 0, 255), "M0 triangle over a nearer mesh quad (not depth-tested)", &b[(32 * 64 + 32) * 4]);
++  report(near(&b[(2 * 64 + 2) * 4], 255, 0, 0, 255), "mesh quad outside the triangle", &b[(2 * 64 + 2) * 4]);
++
++  // 3. Invalid M0 draws are rejected: same pixels as a frame with only the valid draw.
++  dev->begin_frame(depth, clear);
++  dev->draw(99, 3, tu, 0);
++  dev->draw(opaque, 3, tu, 0);
++  dev->draw(tri, 3, 99, 0);
++  dev->draw(tri, 3, tu, 0);
++  dev->end_frame();
++  const FrameStats st = dev->last_frame_stats();
++  std::vector<uint8_t> c;
++  if (!dev->read_pixels(depth, c)) return 1;
++  report(st.rejected == 3 && st.draws == 1 && c == a, "3 invalid M0 draws rejected, 1 drawn, pixels == the valid frame", &c[(32 * 64 + 32) * 4]);
++  std::printf("adapter=%s\n", dev->adapter().c_str());
 +  return ok ? 0 : 1;
 +}
 diff -ruN base/engine/tests/test_rhi_mesh.cpp work/engine/tests/test_rhi_mesh.cpp
 --- base/engine/tests/test_rhi_mesh.cpp	1970-01-01 01:00:00
-+++ work/engine/tests/test_rhi_mesh.cpp	2026-10-07 08:10:00
-@@ -0,0 +1,229 @@
++++ work/engine/tests/test_rhi_mesh.cpp	2026-10-07 08:49:50
+@@ -0,0 +1,311 @@
 +// M1a-2 rhi additions on the null backend: stable log text, shared validation (no UB on bad ids or sizes).
 +#include <string>
 +#include <vector>
@@ -2712,7 +2971,7 @@ diff -ruN base/engine/tests/test_rhi_mesh.cpp work/engine/tests/test_rhi_mesh.cp
 +    tex = d->create_texture(2, 2, 2);
 +    s = d->create_sampler(SamplerDesc());
 +    p = d->create_mesh_pipeline(mesh_desc());
-+    bg = d->create_bind_group(ub, 96, tex, s);
++    bg = d->create_bind_group({ub, 96, tex, s});
 +  }
 +  DrawIndexedDesc draw() const {
 +    DrawIndexedDesc x;
@@ -2793,7 +3052,7 @@ diff -ruN base/engine/tests/test_rhi_mesh.cpp work/engine/tests/test_rhi_mesh.cp
 +  pd.vertex_stride = 34;
 +  CHECK(d->create_mesh_pipeline(pd) == 0);
 +  CHECK(d->last_frame_stats().pipelines_total == 0);
-+  CHECK(d->create_bind_group(1, 96, 1, 1) == 0);  // nothing exists
++  CHECK(d->create_bind_group({1, 96, 1, 1}) == 0);  // nothing exists
 +  REQUIRE(log.size() == 14);
 +  for (const auto& l : log) CHECK(l.find("rejected: ") != std::string::npos);
 +  CHECK(log[6] == "create_texture 4x4 mips=4 rejected: mip count out of range -> 0");
@@ -2801,11 +3060,92 @@ diff -ruN base/engine/tests/test_rhi_mesh.cpp work/engine/tests/test_rhi_mesh.cp
 +
 +TEST_CASE("rhi mesh: bind groups need a uniform buffer, a sampled texture and a sampler") {
 +  Scene sc;
-+  CHECK(sc.d->create_bind_group(sc.vb, 96, sc.tex, sc.s) == 0);   // vertex buffer as uniforms
-+  CHECK(sc.d->create_bind_group(sc.ub, 96, sc.rt, sc.s) == 0);    // render target as texture
-+  CHECK(sc.d->create_bind_group(sc.ub, 96, sc.tex, 7) == 0);      // unknown sampler
-+  CHECK(sc.d->create_bind_group(sc.ub, 257, sc.tex, sc.s) == 0);  // larger than kUniformAlign
-+  CHECK(sc.d->create_bind_group(sc.ub, 96, sc.tex, sc.s) == 2);
++  CHECK(sc.d->create_bind_group({sc.vb, 96, sc.tex, sc.s}) == 0);     // vertex buffer as uniforms
++  CHECK(sc.d->create_bind_group({sc.ub, 96, sc.rt, sc.s}) == 0);      // render target as texture
++  CHECK(sc.d->create_bind_group({sc.ub, 96, sc.tex, 7}) == 0);        // unknown sampler
++  CHECK(sc.d->create_bind_group({sc.ub, 96, sc.tex, 0}) == 0);        // missing sampler (all 3 slots required in M1a-2)
++  CHECK(sc.d->create_bind_group({sc.ub, 0, sc.tex, sc.s}) == 0);
++  CHECK(sc.d->create_bind_group({sc.ub, 65537, sc.tex, sc.s}) == 0);  // over kMaxUniformBytes
++  CHECK(sc.d->create_bind_group({sc.ub, 513, sc.tex, sc.s}) == 0);    // stride 768 > the 512-byte buffer
++  CHECK(sc.d->create_bind_group({sc.ub, 96, sc.tex, sc.s}) == 2);
++  CHECK(sc.d->create_bind_group({sc.ub, 257, sc.tex, sc.s}) == 3);    // stride 512 == the buffer
++  CHECK(sc.d->last_frame_stats().rejected == 7);
++  CHECK(sc.log.back() == "create_bind_group uniforms=1 bytes=257 texture=2 sampler=1 -> 3");
++}
++
++TEST_CASE("rhi mesh: uniform blocks up to 65536 bytes use a 256-aligned slot stride") {
++  CHECK(uniform_stride(1) == 256);
++  CHECK(uniform_stride(256) == 256);
++  CHECK(uniform_stride(257) == 512);
++  CHECK(uniform_stride(65536) == 65536);
++  std::vector<std::string> log;
++  auto d = create_null_device(&log);
++  MeshPipelineDesc pd = mesh_desc();
++  pd.uniform_bytes = 65537;
++  CHECK(d->create_mesh_pipeline(pd) == 0);
++  pd.uniform_bytes = 65536;
++  CHECK(d->create_mesh_pipeline(pd) == 1);
++  pd.uniform_bytes = 257;
++  PipelineId p257 = d->create_mesh_pipeline(pd);
++  REQUIRE(p257 == 2);
++  RenderTargetDesc rd;
++  rd.width = rd.height = 4;
++  TextureId rt = d->create_render_target_ex(rd);
++  BufferId ub = d->create_uniform_buffer(1024), vb = d->create_vertex_buffer(144), ib = d->create_index_buffer(24);
++  TextureId tex = d->create_texture(1, 1, 1);
++  SamplerId s = d->create_sampler(SamplerDesc());
++  BindGroupId bg = d->create_bind_group({ub, 257, tex, s});
++  REQUIRE(bg != 0);
++  const float clear[4] = {0, 0, 0, 1};
++  d->begin_frame(rt, clear);
++  DrawIndexedDesc x{p257, vb, ib, 0, 6, bg, 0};
++  d->draw_indexed(x);       // slot [0, 512)
++  x.uniform_offset = 512;   // slot [512, 1024)
++  d->draw_indexed(x);
++  x.uniform_offset = 768;   // 256-aligned, but [768, 1280) leaves the buffer
++  d->draw_indexed(x);
++  x.uniform_offset = 256;   // dynamic offsets stay 256-aligned, not stride-aligned
++  d->draw_indexed(x);
++  pd.uniform_bytes = 96;    // stride 256 != 512: another layout
++  x.pipeline = d->create_mesh_pipeline(pd);
++  x.uniform_offset = 0;
++  d->draw_indexed(x);
++  d->end_frame();
++  CHECK(d->last_frame_stats().draws == 3);
++  CHECK(d->last_frame_stats().rejected == 2);
++  CHECK(log[log.size() - 5].find("bind_group=1+768 rejected: uniform range outside the buffer") != std::string::npos);
++  CHECK(log[log.size() - 2] == "draw_indexed pipeline=3 vb=2 ib=3 first=0 count=6 bind_group=1+0 rejected: bind group does not match the pipeline layout");
++}
++
++TEST_CASE("rhi mesh: M0 draw() is validated too (unknown ids, mesh pipelines, uniform range) and counts rejections") {
++  std::vector<std::string> log;
++  auto d = create_null_device(&log);
++  PipelineDesc m0;
++  m0.wgsl = "x";
++  m0.uniform_bytes = 16;
++  PipelineId p = d->create_pipeline(m0);
++  BufferId ub = d->create_uniform_buffer(256);
++  PipelineId mesh = d->create_mesh_pipeline(mesh_desc());
++  TextureId rt = d->create_render_target(4, 4);
++  const float clear[4] = {0, 0, 0, 1};
++  d->begin_frame(rt, clear);
++  d->draw(p, 3, ub, 0);
++  d->draw(9, 3, ub, 0);
++  d->draw(mesh, 3, ub, 0);
++  d->draw(p, 3, 7, 0);
++  d->draw(p, 3, ub, 256);
++  d->draw(p, 3, ub, 16);
++  d->end_frame();
++  CHECK(d->last_frame_stats().draws == 1);
++  CHECK(d->last_frame_stats().rejected == 5);
++  CHECK(log[5] == "draw pipeline=1 vertices=3 uniforms=1+0");  // valid M0 text unchanged
++  CHECK(log[6] == "draw pipeline=9 vertices=3 uniforms=1+0 rejected: unknown M0 pipeline");
++  CHECK(log[7] == "draw pipeline=2 vertices=3 uniforms=1+0 rejected: unknown M0 pipeline");
++  CHECK(log[8] == "draw pipeline=1 vertices=3 uniforms=7+0 rejected: unknown uniform buffer");
++  CHECK(log[9] == "draw pipeline=1 vertices=3 uniforms=1+256 rejected: uniform range outside the buffer");
++  CHECK(log[10] == "draw pipeline=1 vertices=3 uniforms=1+16 rejected: uniform_offset not aligned");
++  d->begin_frame(rt, clear);
++  CHECK(d->last_frame_stats().rejected == 0);  // per frame
 +}
 +
 +TEST_CASE("rhi mesh: write_buffer validates ids, alignment and range (valid M0 writes unchanged)") {
@@ -2854,11 +3194,12 @@ diff -ruN base/engine/tests/test_rhi_mesh.cpp work/engine/tests/test_rhi_mesh.cp
 +  m0.uniform_bytes = 16;
 +  x = sc.draw(); x.pipeline = sc.d->create_pipeline(m0); rejected(x, "unknown mesh pipeline");  // M0 pipeline
 +  MeshPipelineDesc other = mesh_desc();
-+  other.uniform_bytes = 64;
++  other.uniform_bytes = 300;  // stride 512 vs the bind group's 256 (64 would share the 256 stride: compatible)
 +  x = sc.draw(); x.pipeline = sc.d->create_mesh_pipeline(other); rejected(x, "bind group does not match the pipeline layout");
 +  sc.d->end_frame();
 +  CHECK(sc.d->last_frame_stats().draws == 2);
 +  CHECK(sc.d->last_frame_stats().indices == 12);
++  CHECK(sc.d->last_frame_stats().rejected == 12);
 +  CHECK(sc.log.back() == "end_frame draws=2");
 +  CHECK(has_line(sc.log, "draw_indexed pipeline=1 vb=2 ib=3 first=0 count=6 bind_group=1+256"));
 +}
@@ -2892,13 +3233,13 @@ diff -ruN base/engine/tests/test_rhi_mesh.cpp work/engine/tests/test_rhi_mesh.cp
 +  CHECK_FALSE(d.write_texture(1, 0, px, 4));
 +  CHECK(d.create_sampler(SamplerDesc()) == 0);
 +  CHECK(d.create_mesh_pipeline(mesh_desc()) == 0);
-+  CHECK(d.create_bind_group(1, 96, 1, 1) == 0);
++  CHECK(d.create_bind_group({1, 96, 1, 1}) == 0);
 +  d.draw_indexed(DrawIndexedDesc());
 +}
 diff -ruN base/engine/tests/test_view_area.cpp work/engine/tests/test_view_area.cpp
 --- base/engine/tests/test_view_area.cpp	1970-01-01 01:00:00
-+++ work/engine/tests/test_view_area.cpp	2026-10-07 08:18:46
-@@ -0,0 +1,494 @@
++++ work/engine/tests/test_view_area.cpp	2026-10-07 08:51:34
+@@ -0,0 +1,533 @@
 +// M1a-2 area renderer: D3D-convention matrices, the synthetic A7 scene through load_area / AreaRenderer on the null
 +// backend, failure paths and caps.
 +#include <algorithm>
@@ -3393,6 +3734,45 @@ diff -ruN base/engine/tests/test_view_area.cpp work/engine/tests/test_view_area.
 +  CHECK(a.models[0].subsets[0].alpha == false);
 +  CHECK(a.models[0].subsets[1].alpha == true);
 +}
++
++TEST_CASE("area: interleaved vertex = position, normal, uv, colour (48-byte stride)") {
++  AreaData a = load_synthetic();
++  REQUIRE(kVertexFloats == 12);
++  const Model& q = a.models[0];
++  REQUIRE(q.vertices.size() == size_t(q.vertex_count) * kVertexFloats);
++  const float* v1 = &q.vertices[1 * kVertexFloats];  // red quad corner (x1, 0, z0) = (-1, 0, -4), uv (1, 1)
++  CHECK(std::vector<float>(v1, v1 + 12) == std::vector<float>{-1, 0, -4, 0, -1, 0, 1, 1, 1, 0.5f, 1, 1});
++  const Model& b = a.models[1];  // no MeshNormals: zero normal; no MeshTextureCoords: uv 0; no colours: white
++  CHECK(std::vector<float>(b.vertices.begin(), b.vertices.begin() + 12) == std::vector<float>{-8, 0, -2, 0, 0, 0, 0, 0, 1, 1, 1, 1});
++}
++
++TEST_CASE("area: release_cpu_copies frees vertex/index/mip copies; rendering is unchanged; re-upload is refused") {
++  AreaData a = load_synthetic();
++  auto frame = [](AreaData& area, bool release) {
++    std::vector<std::string> log;
++    auto dev = rhi::create_null_device(&log);
++    rhi::TextureId rt = dev->create_render_target_ex(rhi::RenderTargetDesc{64, 64, true, 1.0f});
++    AreaRenderer r;
++    std::string err;
++    REQUIRE(r.upload(*dev, area, RenderOptions(), &err));
++    if (release) {
++      CHECK(release_cpu_copies(area) >= 12 * 48 + 18 * 4 + 4 * 48 + 6 * 4 + 424);
++      CHECK_FALSE(r.upload(*dev, area, RenderOptions(), &err));
++      CHECK(err.find("already released") != std::string::npos);
++    }
++    log.clear();
++    r.render(*dev, rt, area, make_camera(area, synthetic_camera(), 1.0f));
++    return log;
++  };
++  const auto kept = frame(a, false);
++  const auto released = frame(a, true);
++  CHECK(a.cpu_released);
++  CHECK(a.models[0].vertices.empty());
++  CHECK(a.models[0].indices.empty());
++  CHECK(a.textures[0].mips.empty());
++  CHECK(a.models[0].subsets.size() == 3);
++  CHECK(kept == released);
++}
 diff -ruN base/engine/tests/test_view_mips.cpp work/engine/tests/test_view_mips.cpp
 --- base/engine/tests/test_view_mips.cpp	1970-01-01 01:00:00
 +++ work/engine/tests/test_view_mips.cpp	2026-10-07 08:09:04
@@ -3509,8 +3889,8 @@ diff -ruN base/engine/tests/test_view_mips.cpp work/engine/tests/test_view_mips.
 +}
 diff -ruN base/engine/tools/lomn_view.cpp work/engine/tools/lomn_view.cpp
 --- base/engine/tools/lomn_view.cpp	1970-01-01 01:00:00
-+++ work/engine/tools/lomn_view.cpp	2026-10-07 08:16:55
-@@ -0,0 +1,371 @@
++++ work/engine/tools/lomn_view.cpp	2026-10-07 09:01:21
+@@ -0,0 +1,451 @@
 +// lomn_view: render one area of a LOMN install, unlit, from the POS start (M1a-2 "first pixels").
 +//   lomn_view --install <dir> --level lev1 --area vllg --out <file.png> [options]
 +//   lomn_view --synthetic 1 --out <file> [options]          the A7 contract scene (no game data)
@@ -3520,6 +3900,7 @@ diff -ruN base/engine/tools/lomn_view.cpp work/engine/tools/lomn_view.cpp
 +//   --width 1280 --height 720 --frames 1
 +//   --fov 60 --near 0.5 --far 4000 --eye x,y,z --yaw deg --pitch deg --eye-height 3   (camera fallback overrides)
 +//   --vertex-colors on|off  --alpha-ref 1  --routes main,trans,back,moveable,nolight
++//   --keep-cpu on|off       keep the CPU vertex/index/mip copies after upload (default off: released)
 +// Always writes <out>.json metrics (except --survey, whose output IS the JSON).
 +// Exit codes (as lomn_native): 0 ok, 2 bad args, 3 no WebGPU adapter / install or area unreadable, 4 failure.
 +#include <algorithm>
@@ -3541,9 +3922,18 @@ diff -ruN base/engine/tools/lomn_view.cpp work/engine/tools/lomn_view.cpp
 +#include "lomn/view/synthetic.h"
 +
 +#if !defined(__EMSCRIPTEN__)
++#include <sys/resource.h>
++
 +#include <filesystem>
 +
 +#include "stb_image_write.h"
++#endif
++#if defined(__APPLE__)
++#include <mach/mach.h>
++#include <malloc/malloc.h>
++#elif defined(__linux__)
++#include <malloc.h>
++#include <unistd.h>
 +#endif
 +
 +using namespace lomn;
@@ -3552,6 +3942,62 @@ diff -ruN base/engine/tools/lomn_view.cpp work/engine/tools/lomn_view.cpp
 +namespace {
 +
 +double ms_since(Clock::time_point t0) { return std::chrono::duration<double, std::milli>(Clock::now() - t0).count(); }
++
++// Resident set size now / peak so far, in bytes (0 where unsupported, e.g. wasm32).
++uint64_t rss_now() {
++#if defined(__APPLE__)
++  mach_task_basic_info_data_t info;
++  mach_msg_type_number_t count = MACH_TASK_BASIC_INFO_COUNT;
++  if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO, reinterpret_cast<task_info_t>(&info), &count) == KERN_SUCCESS) return info.resident_size;
++  return 0;
++#elif defined(__linux__)
++  long pages = 0, rss = 0;
++  FILE* f = std::fopen("/proc/self/statm", "r");
++  if (!f) return 0;
++  const int n = std::fscanf(f, "%ld %ld", &pages, &rss);
++  std::fclose(f);
++  return n == 2 ? uint64_t(rss) * uint64_t(sysconf(_SC_PAGESIZE)) : 0;
++#else
++  return 0;
++#endif
++}
++// macOS phys_footprint (what Activity Monitor calls Memory): unlike resident_size it excludes pages malloc has
++// freed but kept mapped as reusable, so it shows a free() that resident_size hides. 0 elsewhere.
++uint64_t footprint_now() {
++#if defined(__APPLE__)
++  task_vm_info_data_t info;
++  mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
++  if (task_info(mach_task_self(), TASK_VM_INFO, reinterpret_cast<task_info_t>(&info), &count) == KERN_SUCCESS) return info.phys_footprint;
++#endif
++  return 0;
++}
++// Bytes the C heap has handed out and not freed (all malloc zones on macOS, mallinfo2 on glibc). Unlike RSS and
++// phys_footprint, this drops on free(): macOS keeps freed pages mapped for reuse (measured with a 27 MiB alloc/free
++// probe: footprint 28.1 -> 28.1 MiB), as does wasm32, whose linear memory never shrinks.
++uint64_t heap_in_use() {
++#if defined(__APPLE__)
++  malloc_statistics_t st{};
++  malloc_zone_statistics(nullptr, &st);
++  return st.size_in_use;
++#elif defined(__GLIBC__) && (__GLIBC__ > 2 || (__GLIBC__ == 2 && __GLIBC_MINOR__ >= 33))
++  return mallinfo2().uordblks + mallinfo2().hblkhd;
++#else
++  return 0;
++#endif
++}
++uint64_t rss_peak() {
++#if defined(__EMSCRIPTEN__)
++  return 0;
++#else
++  struct rusage ru;
++  if (getrusage(RUSAGE_SELF, &ru) != 0) return 0;
++#if defined(__APPLE__)
++  return uint64_t(ru.ru_maxrss);  // bytes on macOS
++#else
++  return uint64_t(ru.ru_maxrss) * 1024;  // KiB on Linux
++#endif
++#endif
++}
 +
 +int usage(const char* why) {
 +  std::fprintf(stderr, "%s\n", why);
@@ -3720,7 +4166,7 @@ diff -ruN base/engine/tools/lomn_view.cpp work/engine/tools/lomn_view.cpp
 +  std::map<std::string, std::string> a;
 +  static const char* known[] = {"--install", "--level", "--area", "--out", "--backend", "--width", "--height", "--frames", "--fov", "--near",
 +                                "--far", "--eye", "--yaw", "--pitch", "--eye-height", "--vertex-colors", "--alpha-ref", "--routes",
-+                                "--synthetic", "--survey"};
++                                "--synthetic", "--survey", "--keep-cpu"};
 +  for (int i = 1; i + 1 < argc; i += 2) {
 +    std::string k = argv[i];
 +    if (std::find_if(std::begin(known), std::end(known), [&](const char* x) { return k == x; }) == std::end(known))
@@ -3774,6 +4220,11 @@ diff -ruN base/engine/tools/lomn_view.cpp work/engine/tools/lomn_view.cpp
 +    ro.vertex_colors = a["--vertex-colors"] == "on";
 +  }
 +  if (has("--alpha-ref") && (!parse_float(a["--alpha-ref"], ro.alpha_ref) || !(ro.alpha_ref >= 0.0f && ro.alpha_ref <= 255.0f))) return usage("bad --alpha-ref");
++  bool keep_cpu = false;
++  if (has("--keep-cpu")) {
++    if (a["--keep-cpu"] != "on" && a["--keep-cpu"] != "off") return usage("bad --keep-cpu (on|off)");
++    keep_cpu = a["--keep-cpu"] == "on";
++  }
 +  if (has("--routes")) {
 +    ao.draw_main = ao.draw_trans = ao.draw_back = ao.draw_moveable = ao.draw_nolight = false;
 +    for (const std::string& r : split(a["--routes"], ',')) {
@@ -3836,6 +4287,10 @@ diff -ruN base/engine/tools/lomn_view.cpp work/engine/tools/lomn_view.cpp
 +    return 4;
 +  }
 +  const double upload_ms = ms_since(t_up);
++  // Upload copied every vertex/index array and mip chain to the device: free the CPU copies (unless --keep-cpu on).
++  const uint64_t rss_after_upload = rss_now(), fp_after_upload = footprint_now(), heap_after_upload = heap_in_use();
++  const uint64_t cpu_freed = keep_cpu ? 0 : view::release_cpu_copies(data);
++  const uint64_t rss_after_release = rss_now(), fp_after_release = footprint_now(), heap_after_release = heap_in_use();
 +  const view::Camera cam = view::make_camera(data, cs, static_cast<float>(width) / static_cast<float>(height));
 +  std::vector<double> frame_ms;
 +  for (uint32_t f = 0; f < frames; ++f) {
@@ -3870,6 +4325,11 @@ diff -ruN base/engine/tools/lomn_view.cpp work/engine/tools/lomn_view.cpp
 +    << ",\"width\":" << width << ",\"height\":" << height << ",\n\"frames\":" << frames << ",\"frames_rendered\":" << frame_ms.size()
 +    << ",\"load_ms\":" << num(data.stats.load_ms) << ",\"decode_ms\":" << num(data.stats.decode_ms) << ",\"upload_ms\":" << num(upload_ms)
 +    << ",\"frame_submit_ms_first\":" << num(frame_ms.front()) << ",\"frame_submit_ms_p50\":" << num(p50) << ",\"readback_ms\":" << num(readback_ms)
++    << ",\n\"rss_after_upload_bytes\":" << rss_after_upload << ",\"cpu_bytes_released\":" << cpu_freed
++    << ",\"rss_after_release_bytes\":" << rss_after_release << ",\"rss_peak_bytes\":" << rss_peak()
++    << ",\"footprint_after_upload_bytes\":" << fp_after_upload << ",\"footprint_after_release_bytes\":" << fp_after_release
++    << ",\"heap_in_use_after_upload_bytes\":" << heap_after_upload << ",\"heap_in_use_after_release_bytes\":" << heap_after_release
++    << ",\"rejected_last_frame\":" << fstats.rejected
 +    << ",\n\"draws_last_frame\":" << fstats.draws << ",\"indices_last_frame\":" << fstats.indices << ",\"pipelines\":" << fstats.pipelines_total
 +    << ",\"gpu_textures\":" << renderer.textures_created() << ",\"texture_bytes_uploaded\":" << renderer.uploaded_texture_bytes() << ",\n"
 +    << area_counts_json(data) << ",\n\"model_ids\":" << models_json(data) << ",\n\"camera\":{\"fallback\":true,\"eye\":" << vec3(cam.eye) << ",\"at\":" << vec3(cam.at)

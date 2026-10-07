@@ -24,16 +24,23 @@ struct TexInfo {
   uint32_t width = 0, height = 0, mips = 1;
   bool depth = false;
 };
+// Populated group-0 slots (bit mask). Layout compatibility = same uniform stride and same slot mask; later milestones
+// add bits for new optional slots (e.g. a per-frame uniform block, a second texture).
+constexpr uint32_t kSlotUniforms = 1u, kSlotTexture = 2u, kSlotSampler = 4u;
+constexpr uint32_t kMeshSlots = kSlotUniforms | kSlotTexture | kSlotSampler;
 struct PipeInfo {
   bool mesh = false;
   uint32_t uniform_bytes = 0;
+  uint32_t slots = 0;  // mesh pipelines: kMeshSlots
 };
 struct BindInfo {
-  BufferId uniforms = 0;
-  uint32_t uniform_bytes = 0;
-  TextureId texture = 0;
-  SamplerId sampler = 0;
+  BindGroupDesc desc;
+  uint32_t stride = 0;  // uniform_stride(desc.uniform_bytes)
+  uint32_t slots = 0;
 };
+inline uint32_t bind_slots(const BindGroupDesc& d) {
+  return (d.uniforms ? kSlotUniforms : 0u) | (d.texture ? kSlotTexture : 0u) | (d.sampler ? kSlotSampler : 0u);
+}
 
 // floor(log2(max(w, h))) + 1: the full chain down to 1x1.
 inline uint32_t full_mip_count(uint32_t w, uint32_t h) {
@@ -130,7 +137,7 @@ class Registry {
   }
   static std::string check_mesh_pipeline(const MeshPipelineDesc& d) {
     if (d.wgsl.empty()) return "empty wgsl";
-    if (d.uniform_bytes == 0 || d.uniform_bytes > kUniformAlign) return "uniform_bytes out of range";
+    if (d.uniform_bytes == 0 || d.uniform_bytes > kMaxUniformBytes) return "uniform_bytes out of range";
     if (d.vertex_stride < 4 || d.vertex_stride > 2048 || d.vertex_stride % 4) return "vertex_stride out of range";
     if (d.attributes.empty() || d.attributes.size() > kMaxVertexAttributes) return "attribute count out of range";
     uint32_t used = 0;
@@ -142,13 +149,25 @@ class Registry {
     if (static_cast<unsigned>(d.depth_compare) > 7) return "bad depth compare";
     return "";
   }
-  std::string check_bind_group(BufferId u, uint32_t ubytes, TextureId t, SamplerId s) const {
+  std::string check_bind_group(const BindGroupDesc& d) const {
+    auto b = buffers.find(d.uniforms);
+    if (b == buffers.end() || b->second.kind != BufKind::Uniform) return "unknown uniform buffer";
+    if (d.uniform_bytes == 0 || d.uniform_bytes > kMaxUniformBytes || uniform_stride(d.uniform_bytes) > b->second.bytes)
+      return "uniform_bytes out of range";
+    auto tx = textures.find(d.texture);
+    if (tx == textures.end() || tx->second.kind != TexKind::Sampled) return "unknown sampled texture";
+    if (!samplers.count(d.sampler)) return "unknown sampler";
+    return "";
+  }
+  // M0 draw(): the pipeline must be an M0 pipeline; with a uniform block, the buffer must hold [off, off + bytes).
+  std::string check_draw(PipelineId p, BufferId u, uint32_t off) const {
+    auto pi = pipelines.find(p);
+    if (pi == pipelines.end() || pi->second.mesh) return "unknown M0 pipeline";
+    if (pi->second.uniform_bytes == 0) return "";
     auto b = buffers.find(u);
     if (b == buffers.end() || b->second.kind != BufKind::Uniform) return "unknown uniform buffer";
-    if (ubytes == 0 || ubytes > kUniformAlign || ubytes > b->second.bytes) return "uniform_bytes out of range";
-    auto tx = textures.find(t);
-    if (tx == textures.end() || tx->second.kind != TexKind::Sampled) return "unknown sampled texture";
-    if (!samplers.count(s)) return "unknown sampler";
+    if (off % kUniformAlign) return "uniform_offset not aligned";
+    if (uint64_t(off) + pi->second.uniform_bytes > b->second.bytes) return "uniform range outside the buffer";
     return "";
   }
   std::string check_draw_indexed(const DrawIndexedDesc& d) const {
@@ -162,10 +181,11 @@ class Registry {
     if ((uint64_t(d.first_index) + d.index_count) * 4 > ib->second.bytes) return "index range outside the index buffer";
     auto bg = bind_groups.find(d.bind_group);
     if (bg == bind_groups.end()) return "unknown bind group";
-    if (bg->second.uniform_bytes != p->second.uniform_bytes) return "bind group does not match the pipeline layout";
+    if (bg->second.stride != uniform_stride(p->second.uniform_bytes) || bg->second.slots != p->second.slots)
+      return "bind group does not match the pipeline layout";
     if (d.uniform_offset % kUniformAlign) return "uniform_offset not aligned";
-    auto ub = buffers.find(bg->second.uniforms);
-    if (ub == buffers.end() || uint64_t(d.uniform_offset) + bg->second.uniform_bytes > ub->second.bytes) return "uniform range outside the buffer";
+    auto ub = buffers.find(bg->second.desc.uniforms);
+    if (ub == buffers.end() || uint64_t(d.uniform_offset) + bg->second.stride > ub->second.bytes) return "uniform range outside the buffer";
     return "";
   }
 

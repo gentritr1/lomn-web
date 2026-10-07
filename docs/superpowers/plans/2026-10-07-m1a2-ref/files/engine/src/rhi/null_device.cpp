@@ -32,6 +32,7 @@ class NullDevice final : public Device {
   void write_buffer(BufferId b, uint32_t off, const void* data, uint32_t size) override {
     std::string why = reg_.check_write_buffer(b, off, size, data == nullptr);
     if (!why.empty()) {
+      ++stats_.rejected;
       rec("write_buffer %u +%u %u bytes rejected: %s", b, off, size, why.c_str());
       return;
     }
@@ -39,7 +40,7 @@ class NullDevice final : public Device {
   }
   PipelineId create_pipeline(const PipelineDesc& d) override {
     ++stats_.pipelines_total;
-    PipelineId id = reg_.add_pipeline({false, d.uniform_bytes});
+    PipelineId id = reg_.add_pipeline({false, d.uniform_bytes, 0});
     rec("create_pipeline wgsl=%zu bytes vs=%s fs=%s uniforms=%u -> %u", d.wgsl.size(), d.vs_entry.c_str(), d.fs_entry.c_str(),
         d.uniform_bytes, id);
     return id;
@@ -47,9 +48,16 @@ class NullDevice final : public Device {
   void begin_frame(TextureId t, const float c[4]) override {
     stats_.draws = 0;
     stats_.indices = 0;
+    stats_.rejected = 0;
     rec("begin_frame target=%u clear=%.3f,%.3f,%.3f,%.3f", t, c[0], c[1], c[2], c[3]);
   }
   void draw(PipelineId p, uint32_t n, BufferId u, uint32_t off) override {
+    std::string why = reg_.check_draw(p, u, off);
+    if (!why.empty()) {
+      ++stats_.rejected;
+      rec("draw pipeline=%u vertices=%u uniforms=%u+%u rejected: %s", p, n, u, off, why.c_str());
+      return;
+    }
     ++stats_.draws;
     rec("draw pipeline=%u vertices=%u uniforms=%u+%u", p, n, u, off);
   }
@@ -61,6 +69,7 @@ class NullDevice final : public Device {
   TextureId create_render_target_ex(const RenderTargetDesc& d) override {
     std::string why = Registry::check_render_target(d);
     if (!why.empty()) {
+      ++stats_.rejected;
       rec("create_render_target_ex %ux%u depth=%d rejected: %s -> 0", d.width, d.height, int(d.depth), why.c_str());
       return 0;
     }
@@ -73,6 +82,7 @@ class NullDevice final : public Device {
   TextureId create_texture(uint32_t w, uint32_t h, uint32_t mips) override {
     std::string why = Registry::check_texture(w, h, mips);
     if (!why.empty()) {
+      ++stats_.rejected;
       rec("create_texture %ux%u mips=%u rejected: %s -> 0", w, h, mips, why.c_str());
       return 0;
     }
@@ -83,6 +93,7 @@ class NullDevice final : public Device {
   bool write_texture(TextureId t, uint32_t mip, const void* rgba, size_t bytes) override {
     std::string why = reg_.check_write_texture(t, mip, bytes, rgba == nullptr);
     if (!why.empty()) {
+      ++stats_.rejected;
       rec("write_texture %u mip=%u %llu bytes rejected: %s", t, mip, static_cast<unsigned long long>(bytes), why.c_str());
       return false;
     }
@@ -94,6 +105,7 @@ class NullDevice final : public Device {
   SamplerId create_sampler(const SamplerDesc& s) override {
     std::string why = Registry::check_sampler(s);
     if (!why.empty()) {
+      ++stats_.rejected;
       rec("create_sampler rejected: %s -> 0", why.c_str());
       return 0;
     }
@@ -105,11 +117,12 @@ class NullDevice final : public Device {
   PipelineId create_mesh_pipeline(const MeshPipelineDesc& d) override {
     std::string why = Registry::check_mesh_pipeline(d);
     if (!why.empty()) {
+      ++stats_.rejected;
       rec("create_mesh_pipeline rejected: %s -> 0", why.c_str());
       return 0;
     }
     ++stats_.pipelines_total;
-    PipelineId id = reg_.add_pipeline({true, d.uniform_bytes});
+    PipelineId id = reg_.add_pipeline({true, d.uniform_bytes, detail::kMeshSlots});
     std::string attrs;
     for (const VertexAttribute& a : d.attributes) {
       char b[48];
@@ -122,19 +135,25 @@ class NullDevice final : public Device {
         detail::cull_name(d.cull), id);
     return id;
   }
-  BindGroupId create_bind_group(BufferId u, uint32_t ubytes, TextureId t, SamplerId s) override {
-    std::string why = reg_.check_bind_group(u, ubytes, t, s);
+  BindGroupId create_bind_group(const BindGroupDesc& d) override {
+    const BufferId u = d.uniforms;
+    const uint32_t ubytes = d.uniform_bytes;
+    const TextureId t = d.texture;
+    const SamplerId s = d.sampler;
+    std::string why = reg_.check_bind_group(d);
     if (!why.empty()) {
+      ++stats_.rejected;
       rec("create_bind_group uniforms=%u bytes=%u texture=%u sampler=%u rejected: %s -> 0", u, ubytes, t, s, why.c_str());
       return 0;
     }
-    BindGroupId id = reg_.add_bind_group({u, ubytes, t, s});
+    BindGroupId id = reg_.add_bind_group({d, uniform_stride(ubytes), detail::bind_slots(d)});
     rec("create_bind_group uniforms=%u bytes=%u texture=%u sampler=%u -> %u", u, ubytes, t, s, id);
     return id;
   }
   void draw_indexed(const DrawIndexedDesc& d) override {
     std::string why = reg_.check_draw_indexed(d);
     if (!why.empty()) {
+      ++stats_.rejected;
       rec("draw_indexed pipeline=%u vb=%u ib=%u first=%u count=%u bind_group=%u+%u rejected: %s", d.pipeline, d.vertices, d.indices,
           d.first_index, d.index_count, d.bind_group, d.uniform_offset, why.c_str());
       return;
@@ -149,6 +168,7 @@ class NullDevice final : public Device {
   BufferId make_buffer(const char* what, BufKind kind, uint32_t bytes) {
     std::string why = Registry::check_buffer_bytes(bytes);
     if (!why.empty()) {
+      ++stats_.rejected;
       rec("%s %u rejected: %s -> 0", what, bytes, why.c_str());
       return 0;
     }

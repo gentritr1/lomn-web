@@ -7,8 +7,10 @@
 // Root/Data/Levels/levt/test.blk:
 //   quad.x  3 subsets (Z-up model space, faces in the y = 0 plane, so the world plane is z = 0 after RotX):
 //           red quad x [-8,-1] (texture red), cut quad x [1,8] (texture cut, alpha pass), a third quad far off-screen
-//           whose texture "nothere" does not exist (white fallback); vertex colours (1, 0.5, 1, 1)
-//   blue.x  one quad x [-8,8], model z [-2,8] (world y), material diffuse (0,0,1,1), no texture, no vertex colours
+//           whose texture "nothere" does not exist (white fallback); vertex colours (1, 0.5, 1, 1); one normal
+//           (0,-1,0) for every corner (MeshNormals)
+//   blue.x  one quad x [-8,8], model z [-2,8] (world y), material diffuse (0,0,1,1), no texture, no vertex colours,
+//           no normals
 //   test_OBJ.slb  quad main @0; blue main @(0,0,-2); blue back @-50; quad trans @-60; blue trans @-70;
 //                 blue nolight @-80; "nope" flags 0x4 (ignored: never loaded); "miss" main (no such model: warning)
 //   test_POS.slb  a pickup record (0x60) then the start record (0x1000) at (0, 0, 10)

@@ -112,6 +112,11 @@ else()
     target_link_libraries(lomn_gpu_area_test PRIVATE lomn_area lomn_webgpu)
     add_test(NAME a7_gpu_pixels COMMAND lomn_gpu_area_test)
     set_tests_properties(a7_gpu_pixels PROPERTIES SKIP_RETURN_CODE 77 LABELS gpu)
+    # rhi mesh surface on Dawn without lomn_area: blend, M0 pipelines in depth targets, rejected M0 draws.
+    add_executable(lomn_gpu_mesh_test tests/test_gpu_mesh.cpp)
+    target_link_libraries(lomn_gpu_mesh_test PRIVATE lomn_webgpu)
+    add_test(NAME gpu_mesh COMMAND lomn_gpu_mesh_test)
+    set_tests_properties(gpu_mesh PROPERTIES SKIP_RETURN_CODE 77 LABELS gpu)
     add_test(NAME a7_gpu_no_adapter COMMAND sh -c
              "out=$(\"$0\" --synthetic 1 --out \"$1\" 2>&1); rc=$?; printf '%s\\n' \"$out\"; [ \"$rc\" -eq 3 ]"
              $<TARGET_FILE:lomn_view> ${CMAKE_CURRENT_BINARY_DIR}/a7_noadapter.png)

@@ -7,6 +7,7 @@
 //   --width 1280 --height 720 --frames 1
 //   --fov 60 --near 0.5 --far 4000 --eye x,y,z --yaw deg --pitch deg --eye-height 3   (camera fallback overrides)
 //   --vertex-colors on|off  --alpha-ref 1  --routes main,trans,back,moveable,nolight
+//   --keep-cpu on|off       keep the CPU vertex/index/mip copies after upload (default off: released)
 // Always writes <out>.json metrics (except --survey, whose output IS the JSON).
 // Exit codes (as lomn_native): 0 ok, 2 bad args, 3 no WebGPU adapter / install or area unreadable, 4 failure.
 #include <algorithm>
@@ -28,9 +29,18 @@
 #include "lomn/view/synthetic.h"
 
 #if !defined(__EMSCRIPTEN__)
+#include <sys/resource.h>
+
 #include <filesystem>
 
 #include "stb_image_write.h"
+#endif
+#if defined(__APPLE__)
+#include <mach/mach.h>
+#include <malloc/malloc.h>
+#elif defined(__linux__)
+#include <malloc.h>
+#include <unistd.h>
 #endif
 
 using namespace lomn;
@@ -39,6 +49,62 @@ using Clock = std::chrono::steady_clock;
 namespace {
 
 double ms_since(Clock::time_point t0) { return std::chrono::duration<double, std::milli>(Clock::now() - t0).count(); }
+
+// Resident set size now / peak so far, in bytes (0 where unsupported, e.g. wasm32).
+uint64_t rss_now() {
+#if defined(__APPLE__)
+  mach_task_basic_info_data_t info;
+  mach_msg_type_number_t count = MACH_TASK_BASIC_INFO_COUNT;
+  if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO, reinterpret_cast<task_info_t>(&info), &count) == KERN_SUCCESS) return info.resident_size;
+  return 0;
+#elif defined(__linux__)
+  long pages = 0, rss = 0;
+  FILE* f = std::fopen("/proc/self/statm", "r");
+  if (!f) return 0;
+  const int n = std::fscanf(f, "%ld %ld", &pages, &rss);
+  std::fclose(f);
+  return n == 2 ? uint64_t(rss) * uint64_t(sysconf(_SC_PAGESIZE)) : 0;
+#else
+  return 0;
+#endif
+}
+// macOS phys_footprint (what Activity Monitor calls Memory): unlike resident_size it excludes pages malloc has
+// freed but kept mapped as reusable, so it shows a free() that resident_size hides. 0 elsewhere.
+uint64_t footprint_now() {
+#if defined(__APPLE__)
+  task_vm_info_data_t info;
+  mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
+  if (task_info(mach_task_self(), TASK_VM_INFO, reinterpret_cast<task_info_t>(&info), &count) == KERN_SUCCESS) return info.phys_footprint;
+#endif
+  return 0;
+}
+// Bytes the C heap has handed out and not freed (all malloc zones on macOS, mallinfo2 on glibc). Unlike RSS and
+// phys_footprint, this drops on free(): macOS keeps freed pages mapped for reuse (measured with a 27 MiB alloc/free
+// probe: footprint 28.1 -> 28.1 MiB), as does wasm32, whose linear memory never shrinks.
+uint64_t heap_in_use() {
+#if defined(__APPLE__)
+  malloc_statistics_t st{};
+  malloc_zone_statistics(nullptr, &st);
+  return st.size_in_use;
+#elif defined(__GLIBC__) && (__GLIBC__ > 2 || (__GLIBC__ == 2 && __GLIBC_MINOR__ >= 33))
+  return mallinfo2().uordblks + mallinfo2().hblkhd;
+#else
+  return 0;
+#endif
+}
+uint64_t rss_peak() {
+#if defined(__EMSCRIPTEN__)
+  return 0;
+#else
+  struct rusage ru;
+  if (getrusage(RUSAGE_SELF, &ru) != 0) return 0;
+#if defined(__APPLE__)
+  return uint64_t(ru.ru_maxrss);  // bytes on macOS
+#else
+  return uint64_t(ru.ru_maxrss) * 1024;  // KiB on Linux
+#endif
+#endif
+}
 
 int usage(const char* why) {
   std::fprintf(stderr, "%s\n", why);
@@ -207,7 +273,7 @@ int main(int argc, char** argv) {
   std::map<std::string, std::string> a;
   static const char* known[] = {"--install", "--level", "--area", "--out", "--backend", "--width", "--height", "--frames", "--fov", "--near",
                                 "--far", "--eye", "--yaw", "--pitch", "--eye-height", "--vertex-colors", "--alpha-ref", "--routes",
-                                "--synthetic", "--survey"};
+                                "--synthetic", "--survey", "--keep-cpu"};
   for (int i = 1; i + 1 < argc; i += 2) {
     std::string k = argv[i];
     if (std::find_if(std::begin(known), std::end(known), [&](const char* x) { return k == x; }) == std::end(known))
@@ -261,6 +327,11 @@ int main(int argc, char** argv) {
     ro.vertex_colors = a["--vertex-colors"] == "on";
   }
   if (has("--alpha-ref") && (!parse_float(a["--alpha-ref"], ro.alpha_ref) || !(ro.alpha_ref >= 0.0f && ro.alpha_ref <= 255.0f))) return usage("bad --alpha-ref");
+  bool keep_cpu = false;
+  if (has("--keep-cpu")) {
+    if (a["--keep-cpu"] != "on" && a["--keep-cpu"] != "off") return usage("bad --keep-cpu (on|off)");
+    keep_cpu = a["--keep-cpu"] == "on";
+  }
   if (has("--routes")) {
     ao.draw_main = ao.draw_trans = ao.draw_back = ao.draw_moveable = ao.draw_nolight = false;
     for (const std::string& r : split(a["--routes"], ',')) {
@@ -323,6 +394,10 @@ int main(int argc, char** argv) {
     return 4;
   }
   const double upload_ms = ms_since(t_up);
+  // Upload copied every vertex/index array and mip chain to the device: free the CPU copies (unless --keep-cpu on).
+  const uint64_t rss_after_upload = rss_now(), fp_after_upload = footprint_now(), heap_after_upload = heap_in_use();
+  const uint64_t cpu_freed = keep_cpu ? 0 : view::release_cpu_copies(data);
+  const uint64_t rss_after_release = rss_now(), fp_after_release = footprint_now(), heap_after_release = heap_in_use();
   const view::Camera cam = view::make_camera(data, cs, static_cast<float>(width) / static_cast<float>(height));
   std::vector<double> frame_ms;
   for (uint32_t f = 0; f < frames; ++f) {
@@ -357,6 +432,11 @@ int main(int argc, char** argv) {
     << ",\"width\":" << width << ",\"height\":" << height << ",\n\"frames\":" << frames << ",\"frames_rendered\":" << frame_ms.size()
     << ",\"load_ms\":" << num(data.stats.load_ms) << ",\"decode_ms\":" << num(data.stats.decode_ms) << ",\"upload_ms\":" << num(upload_ms)
     << ",\"frame_submit_ms_first\":" << num(frame_ms.front()) << ",\"frame_submit_ms_p50\":" << num(p50) << ",\"readback_ms\":" << num(readback_ms)
+    << ",\n\"rss_after_upload_bytes\":" << rss_after_upload << ",\"cpu_bytes_released\":" << cpu_freed
+    << ",\"rss_after_release_bytes\":" << rss_after_release << ",\"rss_peak_bytes\":" << rss_peak()
+    << ",\"footprint_after_upload_bytes\":" << fp_after_upload << ",\"footprint_after_release_bytes\":" << fp_after_release
+    << ",\"heap_in_use_after_upload_bytes\":" << heap_after_upload << ",\"heap_in_use_after_release_bytes\":" << heap_after_release
+    << ",\"rejected_last_frame\":" << fstats.rejected
     << ",\n\"draws_last_frame\":" << fstats.draws << ",\"indices_last_frame\":" << fstats.indices << ",\"pipelines\":" << fstats.pipelines_total
     << ",\"gpu_textures\":" << renderer.textures_created() << ",\"texture_bytes_uploaded\":" << renderer.uploaded_texture_bytes() << ",\n"
     << area_counts_json(data) << ",\n\"model_ids\":" << models_json(data) << ",\n\"camera\":{\"fallback\":true,\"eye\":" << vec3(cam.eye) << ",\"at\":" << vec3(cam.at)

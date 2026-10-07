@@ -1,0 +1,22 @@
+2,3c2,3
+< create_mesh_pipeline wgsl=1266 bytes sum=0e2d755a vs=vs fs=fs_opaque uniforms=96 stride=36 attrs=[0:f32x3@0,1:f32x2@12,2:f32x4@20] blend=opaque depth_write=1 depth=lessequal cull=none -> 1
+< create_mesh_pipeline wgsl=1266 bytes sum=0e2d755a vs=vs fs=fs_alpha uniforms=96 stride=36 attrs=[0:f32x3@0,1:f32x2@12,2:f32x4@20] blend=alpha depth_write=1 depth=lessequal cull=none -> 2
+---
+> create_mesh_pipeline wgsl=1691 bytes sum=71fcec4f vs=vs fs=fs_opaque uniforms=96 stride=48 attrs=[0:f32x3@0,1:f32x3@12,2:f32x2@24,3:f32x4@32] blend=opaque depth_write=1 depth=lessequal cull=none -> 1
+> create_mesh_pipeline wgsl=1691 bytes sum=71fcec4f vs=vs fs=fs_alpha uniforms=96 stride=48 attrs=[0:f32x3@0,1:f32x3@12,2:f32x2@24,3:f32x4@32] blend=alpha depth_write=1 depth=lessequal cull=none -> 2
+20c20
+< create_vertex_buffer 432 -> 2
+---
+> create_vertex_buffer 576 -> 2
+22c22
+< write_buffer 2 +0 432 bytes sum=4dc87b5c
+---
+> write_buffer 2 +0 576 bytes sum=51c53250
+24c24
+< create_vertex_buffer 144 -> 4
+---
+> create_vertex_buffer 192 -> 4
+26c26
+< write_buffer 4 +0 144 bytes sum=ec634a76
+---
+> write_buffer 4 +0 192 bytes sum=c2f842f6

@@ -162,6 +162,10 @@ Bytes quad_x() {
   std::vector<uint32_t> fi = {3};
   fi.insert(fi.end(), faces.begin(), faces.end());
   x.ints(fi);
+  // One normal (0,-1,0) for every corner (world +Z after RotX, towards the camera): no vertex is split.
+  std::vector<uint32_t> ni = {3};  // nFaceNormals, then per face: 4 corners, normal 0
+  for (int f = 0; f < 3; ++f) ni.insert(ni.end(), {4u, 0u, 0u, 0u, 0u});
+  x.obj("MeshNormals").ints({1}).floats({0.f, -1.f, 0.f}).ints(ni).close();
   x.obj("MeshTextureCoords").ints({12}).floats(uv).close();
   x.obj("MeshVertexColors").ints({12});
   for (uint32_t i = 0; i < 12; ++i) x.ints({i}).floats({1.0f, 0.5f, 1.0f, 1.0f});

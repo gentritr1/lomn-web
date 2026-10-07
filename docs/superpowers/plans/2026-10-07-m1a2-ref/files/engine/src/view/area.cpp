@@ -194,6 +194,7 @@ class Loader {
     m.vertex_count = static_cast<uint32_t>(n);
     m.has_colors = x.has_colors && x.colors.size() == n * 4;
     const bool has_uv = x.uvs.size() == n * 2;
+    const bool has_normals = x.normals.size() == n * 3;
     m.vertices.resize(n * kVertexFloats);
     for (uint64_t v = 0; v < n; ++v) {
       float* o = &m.vertices[v * kVertexFloats];
@@ -201,9 +202,10 @@ class Loader {
       o[0] = p[0];
       o[1] = p[1];
       o[2] = p[2];
-      o[3] = has_uv ? x.uvs[v * 2] : 0.0f;
-      o[4] = has_uv ? x.uvs[v * 2 + 1] : 0.0f;
-      for (int c = 0; c < 4; ++c) o[5 + c] = m.has_colors ? x.colors[v * 4 + c] : 1.0f;
+      for (int k = 0; k < 3; ++k) o[3 + k] = has_normals ? x.normals[v * 3 + k] : 0.0f;
+      o[6] = has_uv ? x.uvs[v * 2] : 0.0f;
+      o[7] = has_uv ? x.uvs[v * 2 + 1] : 0.0f;
+      for (int c = 0; c < 4; ++c) o[8 + c] = m.has_colors ? x.colors[v * 4 + c] : 1.0f;
       for (int k = 0; k < 3; ++k) {
         if (v == 0 || p[k] < m.bounds_min[k]) m.bounds_min[k] = p[k];
         if (v == 0 || p[k] > m.bounds_max[k]) m.bounds_max[k] = p[k];
@@ -350,14 +352,18 @@ struct VOut {
   @location(0) uv: vec2f,
   @location(1) color: vec4f,
 }
-@vertex fn vs(@location(0) p: vec3f, @location(1) uv: vec2f, @location(2) c: vec4f) -> VOut {
+// @location(1) is the vertex normal: declared so the layout is visible here, unused until M1a-3 lighting.
+@vertex fn vs(@location(0) p: vec3f, @location(1) n: vec3f, @location(2) uv: vec2f, @location(3) c: vec4f) -> VOut {
   var o: VOut;
   o.pos = u.wvp * vec4f(p, 1.0);
   o.uv = uv;
   o.color = select(u.diffuse, c, u.params.x > 0.5);
   return o;
 }
-// D3D stage 0 defaults: COLOROP MODULATE(TEXTURE, DIFFUSE), ALPHAOP SELECTARG1(TEXTURE).
+// Stage 0: COLOROP MODULATE(TEXTURE, DIFFUSE) (D3D default). Alpha: DrawX (0x005528c0) sets ALPHAOP SELECTARG2
+// (stage state 4 = 3) with ALPHAARG2 = TEXTURE (6 = 2), i.e. alpha = texture alpha, as below.
+// Not modelled (M1a-3 gap): DrawX ~lines 295-298 turn ALPHABLEND OFF for the alpha pass when the flag at
+// *param_2 + 0xc is set (alpha test only); this preview always blends.
 fn shade(i: VOut) -> vec4f {
   let t = textureSample(tex, samp, i.uv);
   return vec4f(t.rgb * i.color.rgb, t.a);
@@ -439,13 +445,36 @@ Camera make_camera(const AreaData& a, const CameraSettings& s, float aspect) {
   return c;
 }
 
+uint64_t release_cpu_copies(AreaData& a) {
+  uint64_t freed = 0;
+  for (Model& m : a.models) {
+    freed += m.vertices.capacity() * sizeof(float) + m.indices.capacity() * sizeof(uint32_t);
+    std::vector<float>().swap(m.vertices);
+    std::vector<uint32_t>().swap(m.indices);
+  }
+  for (Texture& t : a.textures) {
+    for (const MipLevel& l : t.mips) freed += l.rgba.capacity();
+    std::vector<MipLevel>().swap(t.mips);
+  }
+  a.cpu_released = true;
+  return freed;
+}
+
+namespace {
+constexpr uint32_t kSlot = rhi::uniform_stride(kAreaUniformBytes);  // one uniform slot per draw (256 bytes)
+}  // namespace
+
 bool AreaRenderer::upload(rhi::Device& dev, const AreaData& a, const RenderOptions& opt, std::string* err) {
+  if (a.cpu_released) return fail(err, "render: area CPU copies were already released");
   opt_ = opt;
   rhi::MeshPipelineDesc pd;
   pd.wgsl = kWgsl;
   pd.uniform_bytes = kAreaUniformBytes;
   pd.vertex_stride = kVertexFloats * 4;
-  pd.attributes = {{rhi::VertexFormat::Float32x3, 0, 0}, {rhi::VertexFormat::Float32x2, 12, 1}, {rhi::VertexFormat::Float32x4, 20, 2}};
+  pd.attributes = {{rhi::VertexFormat::Float32x3, 0, 0},
+                   {rhi::VertexFormat::Float32x3, 12, 1},
+                   {rhi::VertexFormat::Float32x2, 24, 2},
+                   {rhi::VertexFormat::Float32x4, 32, 3}};
   pd.cull = rhi::CullMode::None;               // render mode 0x11: D3DCULL_NONE
   pd.depth_compare = rhi::CompareFunc::LessEqual;  // D3DRS_ZFUNC LESSEQUAL
   pd.depth_write = true;                       // ZWRITE on in both DrawX passes
@@ -453,7 +482,8 @@ bool AreaRenderer::upload(rhi::Device& dev, const AreaData& a, const RenderOptio
   pd.blend = rhi::BlendMode::Opaque;
   opaque_ = dev.create_mesh_pipeline(pd);
   pd.fs_entry = "fs_alpha";
-  pd.blend = rhi::BlendMode::AlphaBlend;  // DrawX pass 2: ALPHABLENDENABLE 1, SRCALPHA/INVSRCALPHA, ALPHATEST GREATER
+  // DrawX pass 2: ALPHABLENDENABLE 1 (SRCALPHA/INVSRCALPHA from SrPushRenderMode), ALPHATESTENABLE 1, ALPHAFUNC GREATER.
+  pd.blend = rhi::BlendMode::AlphaBlend;
   alpha_ = dev.create_mesh_pipeline(pd);
   if (!opaque_ || !alpha_) return fail(err, "render: mesh pipeline rejected");
   pipelines_created_ = 2;
@@ -463,12 +493,12 @@ bool AreaRenderer::upload(rhi::Device& dev, const AreaData& a, const RenderOptio
   sampler_ = dev.create_sampler(sd);
   if (!sampler_) return fail(err, "render: sampler rejected");
   uniform_slots_ = a.stats.draws ? a.stats.draws : 1;
-  uniforms_ = dev.create_uniform_buffer(uniform_slots_ * rhi::kUniformAlign);
+  uniforms_ = dev.create_uniform_buffer(uniform_slots_ * kSlot);
   if (!uniforms_) return fail(err, "render: uniform buffer rejected");
   const uint8_t white[4] = {255, 255, 255, 255};
   rhi::TextureId wt = dev.create_texture(1, 1, 1);
   if (!wt || !dev.write_texture(wt, 0, white, 4)) return fail(err, "render: white texture rejected");
-  white_group_ = dev.create_bind_group(uniforms_, kAreaUniformBytes, wt, sampler_);
+  white_group_ = dev.create_bind_group({uniforms_, kAreaUniformBytes, wt, sampler_});
   if (!white_group_) return fail(err, "render: bind group rejected");
   textures_created_ = 1;
   uploaded_texture_bytes_ = 4;
@@ -482,7 +512,7 @@ bool AreaRenderer::upload(rhi::Device& dev, const AreaData& a, const RenderOptio
       uploaded_texture_bytes_ += t.mips[m].rgba.size();
     }
     ++textures_created_;
-    const rhi::BindGroupId bg = dev.create_bind_group(uniforms_, kAreaUniformBytes, id, sampler_);
+    const rhi::BindGroupId bg = dev.create_bind_group({uniforms_, kAreaUniformBytes, id, sampler_});
     if (!bg) return fail(err, "render: bind group rejected: " + t.request);
     texture_groups_.push_back(bg);
   }
@@ -497,7 +527,7 @@ bool AreaRenderer::upload(rhi::Device& dev, const AreaData& a, const RenderOptio
     dev.write_buffer(g.ib, 0, m.indices.data(), ibytes);
     models_.push_back(g);
   }
-  uniform_data_.assign(size_t(uniform_slots_) * rhi::kUniformAlign, 0);
+  uniform_data_.assign(size_t(uniform_slots_) * kSlot, 0);
   return true;
 }
 
@@ -545,9 +575,9 @@ void AreaRenderer::render(rhi::Device& dev, rhi::TextureId target, const AreaDat
     u[21] = opt_.alpha_ref / 255.0f;
     u[22] = 0.0f;
     u[23] = 0.0f;
-    std::memcpy(&uniform_data_[size_t(i) * rhi::kUniformAlign], u, sizeof u);
+    std::memcpy(&uniform_data_[size_t(i) * kSlot], u, sizeof u);
   }
-  if (n) dev.write_buffer(uniforms_, 0, uniform_data_.data(), n * rhi::kUniformAlign);
+  if (n) dev.write_buffer(uniforms_, 0, uniform_data_.data(), n * kSlot);
   dev.begin_frame(target, opt_.clear);
   for (uint32_t i = 0; i < n; ++i) {
     const Placement& p = a.placements[items[i].placement];
@@ -559,7 +589,7 @@ void AreaRenderer::render(rhi::Device& dev, rhi::TextureId target, const AreaDat
     d.first_index = sd.first_index;
     d.index_count = sd.index_count;
     d.bind_group = sd.texture == kNoTexture ? white_group_ : texture_groups_[sd.texture];
-    d.uniform_offset = i * rhi::kUniformAlign;
+    d.uniform_offset = i * kSlot;
     dev.draw_indexed(d);
   }
   dev.end_frame();

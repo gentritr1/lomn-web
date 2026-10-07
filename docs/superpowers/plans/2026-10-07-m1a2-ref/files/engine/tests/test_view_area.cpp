@@ -492,3 +492,42 @@ TEST_CASE("area: TGA textures resolve after .dds misses; 0 declared alpha bits m
   CHECK(a.models[0].subsets[0].alpha == false);
   CHECK(a.models[0].subsets[1].alpha == true);
 }
+
+TEST_CASE("area: interleaved vertex = position, normal, uv, colour (48-byte stride)") {
+  AreaData a = load_synthetic();
+  REQUIRE(kVertexFloats == 12);
+  const Model& q = a.models[0];
+  REQUIRE(q.vertices.size() == size_t(q.vertex_count) * kVertexFloats);
+  const float* v1 = &q.vertices[1 * kVertexFloats];  // red quad corner (x1, 0, z0) = (-1, 0, -4), uv (1, 1)
+  CHECK(std::vector<float>(v1, v1 + 12) == std::vector<float>{-1, 0, -4, 0, -1, 0, 1, 1, 1, 0.5f, 1, 1});
+  const Model& b = a.models[1];  // no MeshNormals: zero normal; no MeshTextureCoords: uv 0; no colours: white
+  CHECK(std::vector<float>(b.vertices.begin(), b.vertices.begin() + 12) == std::vector<float>{-8, 0, -2, 0, 0, 0, 0, 0, 1, 1, 1, 1});
+}
+
+TEST_CASE("area: release_cpu_copies frees vertex/index/mip copies; rendering is unchanged; re-upload is refused") {
+  AreaData a = load_synthetic();
+  auto frame = [](AreaData& area, bool release) {
+    std::vector<std::string> log;
+    auto dev = rhi::create_null_device(&log);
+    rhi::TextureId rt = dev->create_render_target_ex(rhi::RenderTargetDesc{64, 64, true, 1.0f});
+    AreaRenderer r;
+    std::string err;
+    REQUIRE(r.upload(*dev, area, RenderOptions(), &err));
+    if (release) {
+      CHECK(release_cpu_copies(area) >= 12 * 48 + 18 * 4 + 4 * 48 + 6 * 4 + 424);
+      CHECK_FALSE(r.upload(*dev, area, RenderOptions(), &err));
+      CHECK(err.find("already released") != std::string::npos);
+    }
+    log.clear();
+    r.render(*dev, rt, area, make_camera(area, synthetic_camera(), 1.0f));
+    return log;
+  };
+  const auto kept = frame(a, false);
+  const auto released = frame(a, true);
+  CHECK(a.cpu_released);
+  CHECK(a.models[0].vertices.empty());
+  CHECK(a.models[0].indices.empty());
+  CHECK(a.textures[0].mips.empty());
+  CHECK(a.models[0].subsets.size() == 3);
+  CHECK(kept == released);
+}

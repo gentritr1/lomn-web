@@ -1,0 +1,3 @@
+additive colour blend -> CAUGHT ['FAIL blend (4,4) want 128,0,127,255: SRCALPHA/INVSRCALPHA, target alpha kept = 255,0,255,255']
+pre-fix alpha component (dst alpha blended) -> CAUGHT ['FAIL blend (4,4) want 128,0,127,255: SRCALPHA/INVSRCALPHA, target alpha kept = 128,0,127,191']
+restored; gpu test rc 0

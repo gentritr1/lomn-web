@@ -180,7 +180,7 @@ class WebGpuDevice final : public Device {
       p.pipeline_layout = wgpuDeviceCreatePipelineLayout(dev_, &pl);
     }
     ++stats_.pipelines_total;
-    PipelineId id = reg_.add_pipeline({false, d.uniform_bytes});
+    PipelineId id = reg_.add_pipeline({false, d.uniform_bytes, 0});
     pipelines_[id] = p;
     return id;
   }
@@ -242,6 +242,7 @@ class WebGpuDevice final : public Device {
   void begin_frame(TextureId target, const float c[4]) override {
     stats_.draws = 0;
     stats_.indices = 0;
+    stats_.rejected = 0;
     frame_active_ = false;
     pass_depth_ = false;
     WGPUTextureView view = nullptr;
@@ -298,6 +299,8 @@ class WebGpuDevice final : public Device {
 
   void draw(PipelineId pid, uint32_t n, BufferId u, uint32_t off) override {
     if (!frame_active_) return;
+    std::string why = reg_.check_draw(pid, u, off);
+    if (!why.empty()) return reject("draw", why);  // unknown id or a mesh pipeline: never reaches Dawn, never throws
     Pipeline& p = pipelines_.at(pid);
     wgpuRenderPassEncoderSetPipeline(pass_, variant(p, pass_format_, pass_depth_));
     if (p.desc.uniform_bytes) wgpuRenderPassEncoderSetBindGroup(pass_, 0, bind_group(pid, p, u), 1, &off);
@@ -482,36 +485,49 @@ class WebGpuDevice final : public Device {
     p.mesh = true;
     p.mesh_desc = d;
     p.module = shader(d.wgsl);
-    p.layout = mesh_layout(d.uniform_bytes);
+    p.layout = mesh_layout(uniform_stride(d.uniform_bytes), detail::kMeshSlots);
     WGPUPipelineLayoutDescriptor pl = WGPU_PIPELINE_LAYOUT_DESCRIPTOR_INIT;
     pl.bindGroupLayoutCount = 1;
     pl.bindGroupLayouts = &p.layout;
     p.pipeline_layout = wgpuDeviceCreatePipelineLayout(dev_, &pl);
     ++stats_.pipelines_total;
-    PipelineId id = reg_.add_pipeline({true, d.uniform_bytes});
+    PipelineId id = reg_.add_pipeline({true, d.uniform_bytes, detail::kMeshSlots});
     pipelines_[id] = p;
     return id;
   }
 
-  BindGroupId create_bind_group(BufferId u, uint32_t ubytes, TextureId t, SamplerId s) override {
-    std::string why = reg_.check_bind_group(u, ubytes, t, s);
+  BindGroupId create_bind_group(const BindGroupDesc& d) override {
+    std::string why = reg_.check_bind_group(d);
     if (!why.empty()) {
       reject("create_bind_group", why);
       return 0;
     }
-    WGPUBindGroupEntry e[3] = {WGPU_BIND_GROUP_ENTRY_INIT, WGPU_BIND_GROUP_ENTRY_INIT, WGPU_BIND_GROUP_ENTRY_INIT};
-    e[0].binding = 0;
-    e[0].buffer = buffers_.at(u);
-    e[0].size = ubytes;
-    e[1].binding = 1;
-    e[1].textureView = sampled_.at(t).view;
-    e[2].binding = 2;
-    e[2].sampler = samplers_.at(s);
+    const uint32_t stride = uniform_stride(d.uniform_bytes), slots = detail::bind_slots(d);
+    std::vector<WGPUBindGroupEntry> e;  // one entry per populated slot, matching mesh_layout(stride, slots)
+    if (slots & detail::kSlotUniforms) {
+      WGPUBindGroupEntry x = WGPU_BIND_GROUP_ENTRY_INIT;
+      x.binding = 0;
+      x.buffer = buffers_.at(d.uniforms);
+      x.size = stride;  // the whole slot: offset + stride is validated against the buffer
+      e.push_back(x);
+    }
+    if (slots & detail::kSlotTexture) {
+      WGPUBindGroupEntry x = WGPU_BIND_GROUP_ENTRY_INIT;
+      x.binding = 1;
+      x.textureView = sampled_.at(d.texture).view;
+      e.push_back(x);
+    }
+    if (slots & detail::kSlotSampler) {
+      WGPUBindGroupEntry x = WGPU_BIND_GROUP_ENTRY_INIT;
+      x.binding = 2;
+      x.sampler = samplers_.at(d.sampler);
+      e.push_back(x);
+    }
     WGPUBindGroupDescriptor bd = WGPU_BIND_GROUP_DESCRIPTOR_INIT;
-    bd.layout = mesh_layout(ubytes);
-    bd.entryCount = 3;
-    bd.entries = e;
-    BindGroupId id = reg_.add_bind_group({u, ubytes, t, s});
+    bd.layout = mesh_layout(stride, slots);
+    bd.entryCount = e.size();
+    bd.entries = e.data();
+    const BindGroupId id = reg_.add_bind_group({d, stride, slots});
     mesh_bind_groups_[id] = wgpuDeviceCreateBindGroup(dev_, &bd);
     return id;
   }
@@ -567,28 +583,42 @@ class WebGpuDevice final : public Device {
     return id;
   }
 
-  // One canonical group-0 layout per uniform size, shared by every mesh pipeline and bind group with that size (so a
-  // bind group is compatible with all of them).
-  WGPUBindGroupLayout mesh_layout(uint32_t ubytes) {
-    auto it = mesh_layouts_.find(ubytes);
+  // One canonical group-0 layout per (uniform stride, populated slots), shared by every mesh pipeline and bind group
+  // with that key, so a bind group is compatible with all of them. M1a-2 has one slot set (kMeshSlots); new optional
+  // slots add bits to the key without disturbing existing layouts.
+  WGPUBindGroupLayout mesh_layout(uint32_t stride, uint32_t slots) {
+    const uint64_t key = (uint64_t(stride) << 32) | slots;
+    auto it = mesh_layouts_.find(key);
     if (it != mesh_layouts_.end()) return it->second;
-    WGPUBindGroupLayoutEntry e[3] = {WGPU_BIND_GROUP_LAYOUT_ENTRY_INIT, WGPU_BIND_GROUP_LAYOUT_ENTRY_INIT, WGPU_BIND_GROUP_LAYOUT_ENTRY_INIT};
-    e[0].binding = 0;
-    e[0].visibility = WGPUShaderStage_Vertex | WGPUShaderStage_Fragment;
-    e[0].buffer.type = WGPUBufferBindingType_Uniform;
-    e[0].buffer.hasDynamicOffset = true;
-    e[0].buffer.minBindingSize = ubytes;
-    e[1].binding = 1;
-    e[1].visibility = WGPUShaderStage_Fragment;
-    e[1].texture.sampleType = WGPUTextureSampleType_Float;
-    e[1].texture.viewDimension = WGPUTextureViewDimension_2D;
-    e[2].binding = 2;
-    e[2].visibility = WGPUShaderStage_Fragment;
-    e[2].sampler.type = WGPUSamplerBindingType_Filtering;
+    std::vector<WGPUBindGroupLayoutEntry> e;  // one entry per populated slot, in binding order
+    if (slots & detail::kSlotUniforms) {
+      WGPUBindGroupLayoutEntry x = WGPU_BIND_GROUP_LAYOUT_ENTRY_INIT;
+      x.binding = 0;
+      x.visibility = WGPUShaderStage_Vertex | WGPUShaderStage_Fragment;
+      x.buffer.type = WGPUBufferBindingType_Uniform;
+      x.buffer.hasDynamicOffset = true;
+      x.buffer.minBindingSize = stride;
+      e.push_back(x);
+    }
+    if (slots & detail::kSlotTexture) {
+      WGPUBindGroupLayoutEntry x = WGPU_BIND_GROUP_LAYOUT_ENTRY_INIT;
+      x.binding = 1;
+      x.visibility = WGPUShaderStage_Fragment;
+      x.texture.sampleType = WGPUTextureSampleType_Float;
+      x.texture.viewDimension = WGPUTextureViewDimension_2D;
+      e.push_back(x);
+    }
+    if (slots & detail::kSlotSampler) {
+      WGPUBindGroupLayoutEntry x = WGPU_BIND_GROUP_LAYOUT_ENTRY_INIT;
+      x.binding = 2;
+      x.visibility = WGPUShaderStage_Fragment;
+      x.sampler.type = WGPUSamplerBindingType_Filtering;
+      e.push_back(x);
+    }
     WGPUBindGroupLayoutDescriptor bl = WGPU_BIND_GROUP_LAYOUT_DESCRIPTOR_INIT;
-    bl.entryCount = 3;
-    bl.entries = e;
-    return mesh_layouts_[ubytes] = wgpuDeviceCreateBindGroupLayout(dev_, &bl);
+    bl.entryCount = e.size();
+    bl.entries = e.data();
+    return mesh_layouts_[key] = wgpuDeviceCreateBindGroupLayout(dev_, &bl);
   }
 
   WGPUBindGroup bind_group(PipelineId pid, const Pipeline& p, BufferId u) {
@@ -607,6 +637,7 @@ class WebGpuDevice final : public Device {
   }
 
   void reject(const char* call, const std::string& why) {
+    ++stats_.rejected;
     if (rejects_++ < 16) std::fprintf(stderr, "[webgpu] %s rejected: %s\n", call, why.c_str());
   }
 
@@ -631,7 +662,7 @@ class WebGpuDevice final : public Device {
   std::map<SamplerId, WGPUSampler> samplers_;
   std::map<uint64_t, WGPUBindGroup> bind_groups_;          // M0: implicit, per (pipeline, uniform buffer)
   std::map<BindGroupId, WGPUBindGroup> mesh_bind_groups_;  // M1a-2: explicit
-  std::map<uint32_t, WGPUBindGroupLayout> mesh_layouts_;
+  std::map<uint64_t, WGPUBindGroupLayout> mesh_layouts_;  // key: (uniform stride << 32) | slot mask
   WGPUCommandEncoder enc_ = nullptr;
   WGPURenderPassEncoder pass_ = nullptr;
   WGPUTextureView frame_surface_view_ = nullptr;

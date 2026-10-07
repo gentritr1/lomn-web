@@ -1,0 +1,74 @@
+[0/1] Re-running CMake...
+-- Configuring done (0.1s)
+-- Generating done (0.0s)
+-- Build files have been written to: $W/work/build/asan
+[1/27] Building CXX object CMakeFiles/lomn_area.dir/src/view/math.cpp.o
+[2/27] Building CXX object CMakeFiles/lomn_gpu_test.dir/tests/test_gpu.cpp.o
+[3/27] Building CXX object CMakeFiles/lomn_area.dir/src/view/mips.cpp.o
+[4/27] Building CXX object CMakeFiles/lomn_native.dir/src/app/main_native.cpp.o
+[5/27] Building CXX object CMakeFiles/lomn_core.dir/src/app/loop.cpp.o
+[6/27] Building CXX object CMakeFiles/lomn_core.dir/src/rhi/null_device.cpp.o
+[7/27] Building CXX object CMakeFiles/lomn_gpu_area_test.dir/tests/test_gpu_area.cpp.o
+[8/27] Linking CXX static library liblomn_core.a
+[9/27] Linking CXX executable lomn_datacheck
+[10/27] Building CXX object CMakeFiles/lomn_gpu_mesh_test.dir/tests/test_gpu_mesh.cpp.o
+[11/27] Building CXX object CMakeFiles/lomn_area.dir/src/view/synthetic.cpp.o
+[12/27] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_rhi_null.cpp.o
+[13/27] Building CXX object CMakeFiles/lomn_webgpu.dir/src/rhi/webgpu_device.cpp.o
+[14/27] Linking CXX static library liblomn_webgpu.a
+[15/27] Linking CXX executable lomn_gpu_test
+[16/27] Linking CXX executable lomn_gpu_mesh_test
+[17/27] Linking CXX executable lomn_native
+[18/27] Building CXX object CMakeFiles/lomn_view.dir/tools/lomn_view.cpp.o
+[19/27] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_loop.cpp.o
+[20/27] Building CXX object CMakeFiles/lomn_area.dir/src/view/area.cpp.o
+[21/27] Linking CXX static library liblomn_area.a
+[22/27] Linking CXX executable lomn_gpu_area_test
+[23/27] Linking CXX executable lomn_view
+[24/27] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_rhi_mesh.cpp.o
+[25/27] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_view_area.cpp.o
+[26/27] Linking CXX executable lomn_tests
+BUILD_EXIT=0
+Test project $W/work/build/asan
+      Start  1: determinism_null
+ 1/11 Test  #1: determinism_null .................   Passed    1.02 sec
+      Start  2: a7_null_calls
+ 2/11 Test  #2: a7_null_calls ....................   Passed    0.57 sec
+      Start  3: view_cli_dangling_flag
+ 3/11 Test  #3: view_cli_dangling_flag ...........   Passed    0.09 sec
+      Start  4: view_cli_missing_install
+ 4/11 Test  #4: view_cli_missing_install .........   Passed    0.08 sec
+      Start  5: cli_dangling_flag
+ 5/11 Test  #5: cli_dangling_flag ................   Passed    0.09 sec
+      Start  6: gpu_triangle
+ 6/11 Test  #6: gpu_triangle .....................   Passed    0.50 sec
+      Start  7: gpu_no_adapter
+ 7/11 Test  #7: gpu_no_adapter ...................   Passed    0.09 sec
+      Start  8: a7_gpu_pixels
+ 8/11 Test  #8: a7_gpu_pixels ....................   Passed    0.79 sec
+      Start  9: gpu_mesh
+ 9/11 Test  #9: gpu_mesh .........................   Passed    0.80 sec
+      Start 10: a7_gpu_no_adapter
+10/11 Test #10: a7_gpu_no_adapter ................   Passed    0.09 sec
+      Start 11: unit
+11/11 Test #11: unit .............................   Passed    1.35 sec
+
+100% tests passed, 0 tests failed out of 11
+
+Label Time Summary:
+gpu    =   2.28 sec*proc (5 tests)
+
+Total Test time (real) =   5.49 sec
+ASAN_CTEST_EXIT=0
+cannot create $TMPDIR/… Not a directory
+[doctest] doctest version is "2.5.3"
+[doctest] run with "--help" for options
+===============================================================================
+[doctest] test cases:    97 |    97 passed | 0 failed | 0 skipped
+[doctest] assertions: 53335 | 53335 passed | 0 failed |
+[doctest] Status: SUCCESS!
+ASAN_UNIT_EXIT=0
+ASAN_SURVEY_EXIT=0 stderr_bytes=       0
+ASAN_RENDER vllg rc=0 stderr_bytes=       0
+ASAN_RENDER ghut rc=0 stderr_bytes=       0
+ASAN_RENDER crss rc=0 stderr_bytes=       0

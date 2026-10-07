@@ -32,13 +32,15 @@ constexpr uint32_t kPosStartFlag = 0x1000;
 // Caps on what one area may make the renderer allocate (untrusted input, spec §5). Measured over all 123 area
 // blockfiles of the Beta 1.5.0 install with `lomn_view --survey 1` (2026-10-07; every area loads, 0 failures):
 //   drawn placements max 55 (lev6/ta03), draws max 165 (lev6/ta11), textures max 76 (lev2/vllg),
-//   texture bytes incl. mips max 56,994,412 (lev0/frnt), vertex+index bytes max 1,270,872 (lev6/ta14).
-// Headroom: 18.6x, 24.8x, 13.5x, 9.4x, 52.8x. The texture-byte cap is bounded by the wasm32 heap (2 GB, and the
-// CPU copy lives until upload) rather than by a multiple; a rejection is a named error, never a partial area.
+//   texture bytes incl. mips max 56,994,412 (lev0/frnt), vertex+index bytes max 1,649,376 (lev6/ta14, 48-byte
+//   vertices; 1,270,872 with the earlier 36-byte layout).
+// Headroom: 18.6x, 24.8x, 13.5x, 4.7x, 40.7x. The texture-byte cap is bounded by the wasm32 heap (2 GB; the CPU
+// mip chains exist until release_cpu_copies() after upload) rather than by a multiple; a rejection is a named error,
+// never a partial area.
 constexpr uint32_t kMaxPlacements = 1024;                // drawn OBJ records per area
 constexpr uint32_t kMaxDraws = 4096;                     // placements x subsets per frame (uniform buffer <= 1 MiB)
 constexpr uint32_t kMaxAreaTextures = 1024;              // distinct resolved textures per area
-constexpr uint64_t kMaxAreaTextureBytes = 512ull << 20;  // RGBA8 incl. mips, per area
+constexpr uint64_t kMaxAreaTextureBytes = 256ull << 20;  // RGBA8 incl. mips, per area
 constexpr uint64_t kMaxAreaGeometryBytes = 64ull << 20;  // vertex + index bytes, per area
 
 constexpr uint32_t kNoTexture = 0xffffffffu;  // subset drawn with the 1x1 white texture
@@ -58,12 +60,15 @@ struct Model {
   std::string id;                 // 4CC as in the OBJ record
   uint32_t vertex_count = 0;
   bool has_colors = false;        // MeshVertexColors present
-  std::vector<float> vertices;    // interleaved, kVertexFloats per vertex: position xyz, uv, colour rgba
+  std::vector<float> vertices;    // interleaved, kVertexFloats per vertex: position xyz, normal xyz, uv, colour rgba
   std::vector<uint32_t> indices;  // triangle list, sorted by attribute id (parse_x)
   std::vector<SubsetDraw> subsets;
   float bounds_min[3] = {0, 0, 0}, bounds_max[3] = {0, 0, 0};  // model space
 };
-constexpr uint32_t kVertexFloats = 9;  // 36-byte stride
+// 48-byte stride: position @0 (@location(0)), normal @12 (@location(1); parse_x's per-split-vertex normal, zero
+// without MeshNormals; unused by the unlit shader, there for M1a-3 lighting), uv @24 (@location(2)), colour rgba @32
+// (@location(3); white without MeshVertexColors).
+constexpr uint32_t kVertexFloats = 12;
 
 struct Texture {
   std::string request;   // resolved request ("Root/Data/Levels/lev1/textures/<name>.dds")
@@ -97,6 +102,7 @@ struct AreaStats {
 
 struct AreaData {
   std::string level, area;
+  bool cpu_released = false;  // release_cpu_copies() ran: models' vertices/indices and textures' mips are empty
   bool art_blk = false;  // Art.blk opened (optional: without it only the area and level blockfiles are searched)
   std::vector<Model> models;
   std::vector<Texture> textures;
@@ -141,9 +147,18 @@ Camera make_camera(const AreaData& area, const CameraSettings& s, float aspect);
 
 struct RenderOptions {
   bool vertex_colors = true;  // diffuse = vertex colour when present (D3DMCS_COLOR1), else material diffuse
-  float alpha_ref = 1.0f;     // ALPHAREF (0..255): alpha pass discards a*255 <= ref (ALPHAFUNC GREATER)
+  // ALPHAREF (0..255): the alpha pass discards a*255 <= ref (DrawX sets ALPHAFUNC 5 = D3DCMP_GREATER). The game's
+  // value is HISTORY-DEPENDENT: SrPushRenderMode (0x00531100) sets ALPHAREF 0 when ENTERING a 0x80000 mode and 1 only
+  // when LEAVING one; the D3D8 default is 0; area mode 0x11 itself sets nothing. 1 assumes a 0x80000 (sprite/HUD) mode
+  // ran earlier in the frame (INFERRED); --alpha-ref overrides. M1a-3 settles it from the real frame's mode sequence.
+  float alpha_ref = 1.0f;
   float clear[4] = {0.0f, 0.0f, 0.0f, 1.0f};  // 0xff000000
 };
+
+// Frees the CPU-side vertex/index arrays and texture mip chains once they are on the GPU (upload copies them).
+// Placements, subsets, stats and warnings stay, so render() keeps working; upload() refuses released data.
+// Returns the bytes freed.
+uint64_t release_cpu_copies(AreaData& area);
 
 class AreaRenderer {
  public:

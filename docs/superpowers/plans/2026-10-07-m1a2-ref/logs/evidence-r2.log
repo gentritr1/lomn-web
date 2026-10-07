@@ -1,0 +1,11 @@
+vllg vs revision-1 evidence: 0 of 921600 pixels differ
+vllg null log identical across 2 runs
+ghut vs revision-1 evidence: 0 of 921600 pixels differ
+ghut null log identical across 2 runs
+crss vs revision-1 evidence: 0 of 921600 pixels differ
+crss null log identical across 2 runs
+crss_yaw67 vs revision-1 evidence: 2 of 921600 pixels differ
+survey maxima unchanged vs revision 1: False {'obj_records': 55, 'placements': 55, 'placements_at': 'lev6/ta03', 'draws': 165, 'draws_at': 'lev6/ta11', 'textures': 76, 'textures_at': 'lev2/vllg', 'texture_bytes_with_mips': 56994412, 'texture_bytes_at': 'lev0/frnt', 'geometry_bytes': 1649376, 'geometry_bytes_at': 'lev6/ta14'}
+vllg cpu_bytes_released 7332352 | rss after upload MiB keep: ['37.2', '37.2', '37.2'] release: ['37.2', '37.3', '37.4'] | peak MiB keep: ['52.5', '53.0', '53.1'] release: ['51.9', '51.9', '52.9']
+ghut cpu_bytes_released 10377320 | rss after upload MiB keep: ['44.3', '44.5', '44.6'] release: ['44.5', '44.5', '44.6'] | peak MiB keep: ['60.6', '61.8', '62.0'] release: ['58.9', '60.0', '61.3']
+crss cpu_bytes_released 27044888 | rss after upload MiB keep: ['76.6', '76.8', '76.8'] release: ['76.7', '76.8', '76.8'] | peak MiB keep: ['80.8', '81.0', '92.4'] release: ['80.0', '80.2', '80.2']

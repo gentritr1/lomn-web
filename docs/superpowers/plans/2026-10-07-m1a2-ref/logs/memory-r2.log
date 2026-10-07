@@ -1,0 +1,4 @@
+| area | CPU copies released (bytes) | heap in use after upload -> after release, MiB (default) | heap in use after upload, MiB (--keep-cpu on) | phys_footprint after release, MiB (keep / release) | peak RSS, MiB (keep / release) |
+| vllg | 7,332,352 | 8.8-8.8 -> 1.8-1.8 | 8.8-8.8 | 22.6-23.4 / 22.6-23.2 | 52.2-53.7 / 52.3-53.2 |
+| ghut | 10,377,320 | 11.7-11.7 -> 1.8-1.8 | 11.7-11.7 | 30.0-30.4 / 29.9-30.2 | 59.5-62.1 / 59.8-60.7 |
+| crss | 27,044,888 | 27.8-27.9 -> 2.0-2.0 | 27.8-27.9 | 79.2-79.4 / 79.3-79.5 | 80.4-80.9 / 80.4-80.7 |

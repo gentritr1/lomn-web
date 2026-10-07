@@ -44,7 +44,7 @@ struct Scene {
     tex = d->create_texture(2, 2, 2);
     s = d->create_sampler(SamplerDesc());
     p = d->create_mesh_pipeline(mesh_desc());
-    bg = d->create_bind_group(ub, 96, tex, s);
+    bg = d->create_bind_group({ub, 96, tex, s});
   }
   DrawIndexedDesc draw() const {
     DrawIndexedDesc x;
@@ -125,7 +125,7 @@ TEST_CASE("rhi mesh: invalid creations return 0 and are logged") {
   pd.vertex_stride = 34;
   CHECK(d->create_mesh_pipeline(pd) == 0);
   CHECK(d->last_frame_stats().pipelines_total == 0);
-  CHECK(d->create_bind_group(1, 96, 1, 1) == 0);  // nothing exists
+  CHECK(d->create_bind_group({1, 96, 1, 1}) == 0);  // nothing exists
   REQUIRE(log.size() == 14);
   for (const auto& l : log) CHECK(l.find("rejected: ") != std::string::npos);
   CHECK(log[6] == "create_texture 4x4 mips=4 rejected: mip count out of range -> 0");
@@ -133,11 +133,92 @@ TEST_CASE("rhi mesh: invalid creations return 0 and are logged") {
 
 TEST_CASE("rhi mesh: bind groups need a uniform buffer, a sampled texture and a sampler") {
   Scene sc;
-  CHECK(sc.d->create_bind_group(sc.vb, 96, sc.tex, sc.s) == 0);   // vertex buffer as uniforms
-  CHECK(sc.d->create_bind_group(sc.ub, 96, sc.rt, sc.s) == 0);    // render target as texture
-  CHECK(sc.d->create_bind_group(sc.ub, 96, sc.tex, 7) == 0);      // unknown sampler
-  CHECK(sc.d->create_bind_group(sc.ub, 257, sc.tex, sc.s) == 0);  // larger than kUniformAlign
-  CHECK(sc.d->create_bind_group(sc.ub, 96, sc.tex, sc.s) == 2);
+  CHECK(sc.d->create_bind_group({sc.vb, 96, sc.tex, sc.s}) == 0);     // vertex buffer as uniforms
+  CHECK(sc.d->create_bind_group({sc.ub, 96, sc.rt, sc.s}) == 0);      // render target as texture
+  CHECK(sc.d->create_bind_group({sc.ub, 96, sc.tex, 7}) == 0);        // unknown sampler
+  CHECK(sc.d->create_bind_group({sc.ub, 96, sc.tex, 0}) == 0);        // missing sampler (all 3 slots required in M1a-2)
+  CHECK(sc.d->create_bind_group({sc.ub, 0, sc.tex, sc.s}) == 0);
+  CHECK(sc.d->create_bind_group({sc.ub, 65537, sc.tex, sc.s}) == 0);  // over kMaxUniformBytes
+  CHECK(sc.d->create_bind_group({sc.ub, 513, sc.tex, sc.s}) == 0);    // stride 768 > the 512-byte buffer
+  CHECK(sc.d->create_bind_group({sc.ub, 96, sc.tex, sc.s}) == 2);
+  CHECK(sc.d->create_bind_group({sc.ub, 257, sc.tex, sc.s}) == 3);    // stride 512 == the buffer
+  CHECK(sc.d->last_frame_stats().rejected == 7);
+  CHECK(sc.log.back() == "create_bind_group uniforms=1 bytes=257 texture=2 sampler=1 -> 3");
+}
+
+TEST_CASE("rhi mesh: uniform blocks up to 65536 bytes use a 256-aligned slot stride") {
+  CHECK(uniform_stride(1) == 256);
+  CHECK(uniform_stride(256) == 256);
+  CHECK(uniform_stride(257) == 512);
+  CHECK(uniform_stride(65536) == 65536);
+  std::vector<std::string> log;
+  auto d = create_null_device(&log);
+  MeshPipelineDesc pd = mesh_desc();
+  pd.uniform_bytes = 65537;
+  CHECK(d->create_mesh_pipeline(pd) == 0);
+  pd.uniform_bytes = 65536;
+  CHECK(d->create_mesh_pipeline(pd) == 1);
+  pd.uniform_bytes = 257;
+  PipelineId p257 = d->create_mesh_pipeline(pd);
+  REQUIRE(p257 == 2);
+  RenderTargetDesc rd;
+  rd.width = rd.height = 4;
+  TextureId rt = d->create_render_target_ex(rd);
+  BufferId ub = d->create_uniform_buffer(1024), vb = d->create_vertex_buffer(144), ib = d->create_index_buffer(24);
+  TextureId tex = d->create_texture(1, 1, 1);
+  SamplerId s = d->create_sampler(SamplerDesc());
+  BindGroupId bg = d->create_bind_group({ub, 257, tex, s});
+  REQUIRE(bg != 0);
+  const float clear[4] = {0, 0, 0, 1};
+  d->begin_frame(rt, clear);
+  DrawIndexedDesc x{p257, vb, ib, 0, 6, bg, 0};
+  d->draw_indexed(x);       // slot [0, 512)
+  x.uniform_offset = 512;   // slot [512, 1024)
+  d->draw_indexed(x);
+  x.uniform_offset = 768;   // 256-aligned, but [768, 1280) leaves the buffer
+  d->draw_indexed(x);
+  x.uniform_offset = 256;   // dynamic offsets stay 256-aligned, not stride-aligned
+  d->draw_indexed(x);
+  pd.uniform_bytes = 96;    // stride 256 != 512: another layout
+  x.pipeline = d->create_mesh_pipeline(pd);
+  x.uniform_offset = 0;
+  d->draw_indexed(x);
+  d->end_frame();
+  CHECK(d->last_frame_stats().draws == 3);
+  CHECK(d->last_frame_stats().rejected == 2);
+  CHECK(log[log.size() - 5].find("bind_group=1+768 rejected: uniform range outside the buffer") != std::string::npos);
+  CHECK(log[log.size() - 2] == "draw_indexed pipeline=3 vb=2 ib=3 first=0 count=6 bind_group=1+0 rejected: bind group does not match the pipeline layout");
+}
+
+TEST_CASE("rhi mesh: M0 draw() is validated too (unknown ids, mesh pipelines, uniform range) and counts rejections") {
+  std::vector<std::string> log;
+  auto d = create_null_device(&log);
+  PipelineDesc m0;
+  m0.wgsl = "x";
+  m0.uniform_bytes = 16;
+  PipelineId p = d->create_pipeline(m0);
+  BufferId ub = d->create_uniform_buffer(256);
+  PipelineId mesh = d->create_mesh_pipeline(mesh_desc());
+  TextureId rt = d->create_render_target(4, 4);
+  const float clear[4] = {0, 0, 0, 1};
+  d->begin_frame(rt, clear);
+  d->draw(p, 3, ub, 0);
+  d->draw(9, 3, ub, 0);
+  d->draw(mesh, 3, ub, 0);
+  d->draw(p, 3, 7, 0);
+  d->draw(p, 3, ub, 256);
+  d->draw(p, 3, ub, 16);
+  d->end_frame();
+  CHECK(d->last_frame_stats().draws == 1);
+  CHECK(d->last_frame_stats().rejected == 5);
+  CHECK(log[5] == "draw pipeline=1 vertices=3 uniforms=1+0");  // valid M0 text unchanged
+  CHECK(log[6] == "draw pipeline=9 vertices=3 uniforms=1+0 rejected: unknown M0 pipeline");
+  CHECK(log[7] == "draw pipeline=2 vertices=3 uniforms=1+0 rejected: unknown M0 pipeline");
+  CHECK(log[8] == "draw pipeline=1 vertices=3 uniforms=7+0 rejected: unknown uniform buffer");
+  CHECK(log[9] == "draw pipeline=1 vertices=3 uniforms=1+256 rejected: uniform range outside the buffer");
+  CHECK(log[10] == "draw pipeline=1 vertices=3 uniforms=1+16 rejected: uniform_offset not aligned");
+  d->begin_frame(rt, clear);
+  CHECK(d->last_frame_stats().rejected == 0);  // per frame
 }
 
 TEST_CASE("rhi mesh: write_buffer validates ids, alignment and range (valid M0 writes unchanged)") {
@@ -186,11 +267,12 @@ TEST_CASE("rhi mesh: draw_indexed counts valid draws and rejects every bad id or
   m0.uniform_bytes = 16;
   x = sc.draw(); x.pipeline = sc.d->create_pipeline(m0); rejected(x, "unknown mesh pipeline");  // M0 pipeline
   MeshPipelineDesc other = mesh_desc();
-  other.uniform_bytes = 64;
+  other.uniform_bytes = 300;  // stride 512 vs the bind group's 256 (64 would share the 256 stride: compatible)
   x = sc.draw(); x.pipeline = sc.d->create_mesh_pipeline(other); rejected(x, "bind group does not match the pipeline layout");
   sc.d->end_frame();
   CHECK(sc.d->last_frame_stats().draws == 2);
   CHECK(sc.d->last_frame_stats().indices == 12);
+  CHECK(sc.d->last_frame_stats().rejected == 12);
   CHECK(sc.log.back() == "end_frame draws=2");
   CHECK(has_line(sc.log, "draw_indexed pipeline=1 vb=2 ib=3 first=0 count=6 bind_group=1+256"));
 }
@@ -224,6 +306,6 @@ TEST_CASE("rhi mesh: the additions are optional for M0-only devices (defaults re
   CHECK_FALSE(d.write_texture(1, 0, px, 4));
   CHECK(d.create_sampler(SamplerDesc()) == 0);
   CHECK(d.create_mesh_pipeline(mesh_desc()) == 0);
-  CHECK(d.create_bind_group(1, 96, 1, 1) == 0);
+  CHECK(d.create_bind_group({1, 96, 1, 1}) == 0);
   d.draw_indexed(DrawIndexedDesc());
 }

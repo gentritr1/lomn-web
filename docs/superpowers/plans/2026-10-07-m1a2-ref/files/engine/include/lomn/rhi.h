@@ -27,6 +27,10 @@ using BindGroupId = uint32_t;  // M1a-2; 0 = none
 constexpr uint32_t kMaxTextureSize = 4096;
 constexpr uint32_t kMaxRenderTargetSize = 8192;
 constexpr uint32_t kMaxVertexAttributes = 8;
+// Mesh uniform blocks: up to WebGPU's default maxUniformBufferBindingSize. A block occupies a slot of
+// uniform_stride(bytes) = bytes rounded up to kUniformAlign; dynamic offsets stay multiples of kUniformAlign.
+constexpr uint32_t kMaxUniformBytes = 65536;
+constexpr uint32_t uniform_stride(uint32_t bytes) { return (bytes + kUniformAlign - 1) / kUniformAlign * kUniformAlign; }
 
 struct PipelineDesc {
   std::string wgsl;               // must define the vertex/fragment entry points below
@@ -39,6 +43,7 @@ struct FrameStats {
   uint32_t draws = 0;            // M0 draws + M1a-2 indexed draws accepted this frame
   uint32_t pipelines_total = 0;  // M0 + mesh pipelines created so far
   uint64_t indices = 0;          // M1a-2: indices submitted by draw_indexed this frame
+  uint32_t rejected = 0;         // M1a-2: calls rejected by validation since this frame's begin_frame (any call kind)
 };
 
 // ---- M1a-2 additive types ----
@@ -61,15 +66,17 @@ enum class BlendMode : uint8_t { Opaque, AlphaBlend };
 enum class CompareFunc : uint8_t { Never, Less, Equal, LessEqual, Greater, NotEqual, GreaterEqual, Always };
 enum class CullMode : uint8_t { None, Front, Back };  // None = render mode 0x11 (D3DCULL_NONE)
 
-// Pipeline for indexed meshes. Bind group 0 layout (fixed): @binding(0) var<uniform> (dynamic offset, uniform_bytes),
-// @binding(1) texture_2d<f32>, @binding(2) sampler (filtering). One vertex buffer (slot 0), u32 indices, triangle list.
+// Pipeline for indexed meshes. Bind group 0: @binding(0) var<uniform> (dynamic offset, bound size
+// uniform_stride(uniform_bytes)), @binding(1) texture_2d<f32>, @binding(2) sampler (filtering). One vertex buffer
+// (slot 0), u32 indices, triangle list. A bind group is compatible with a pipeline when both have the same uniform
+// stride and the same populated slots (backends cache one layout per (stride, slots)).
 // Alpha test has no fixed-function equivalent in WebGPU: it is a `discard` in the fragment entry point (pick a
 // different fs_entry per pipeline).
 struct MeshPipelineDesc {
   std::string wgsl;
   std::string vs_entry = "vs";
   std::string fs_entry = "fs";
-  uint32_t uniform_bytes = 0;     // 1..kUniformAlign
+  uint32_t uniform_bytes = 0;     // 1..kMaxUniformBytes (slot stride uniform_stride(uniform_bytes))
   uint32_t vertex_stride = 0;     // 4..2048, multiple of 4
   std::vector<VertexAttribute> attributes;  // 1..kMaxVertexAttributes, each inside the stride
   BlendMode blend = BlendMode::Opaque;
@@ -92,8 +99,17 @@ struct DrawIndexedDesc {
   BufferId indices = 0;          // from create_index_buffer (u32 indices)
   uint32_t first_index = 0;      // in indices
   uint32_t index_count = 0;      // > 0, multiple of 3; first_index + index_count inside the index buffer
-  BindGroupId bind_group = 0;    // its uniform_bytes must equal the pipeline's
-  uint32_t uniform_offset = 0;   // multiple of kUniformAlign; offset + uniform_bytes inside the uniform buffer
+  BindGroupId bind_group = 0;    // its uniform stride and populated slots must equal the pipeline's
+  uint32_t uniform_offset = 0;   // multiple of kUniformAlign; offset + uniform_stride inside the uniform buffer
+};
+
+// Group 0 contents. Named fields (not positional args) so later milestones can add optional slots additively
+// (e.g. a per-frame uniform block or a second texture: 0 = absent) without breaking callers.
+struct BindGroupDesc {
+  BufferId uniforms = 0;       // uniform buffer, bound with a dynamic offset
+  uint32_t uniform_bytes = 0;  // 1..kMaxUniformBytes; the buffer must hold at least uniform_stride(uniform_bytes)
+  TextureId texture = 0;       // sampled texture (create_texture)
+  SamplerId sampler = 0;
 };
 
 class Device {
@@ -126,8 +142,8 @@ class Device {
   virtual bool write_texture(TextureId, uint32_t /*mip*/, const void* /*rgba*/, size_t /*bytes*/) { return false; }
   virtual SamplerId create_sampler(const SamplerDesc&) { return 0; }
   virtual PipelineId create_mesh_pipeline(const MeshPipelineDesc&) { return 0; }
-  // Group 0 of a mesh pipeline: [uniforms + dynamic offset, uniform_bytes], texture (sampled), sampler. 0 if invalid.
-  virtual BindGroupId create_bind_group(BufferId /*uniforms*/, uint32_t /*uniform_bytes*/, TextureId, SamplerId) { return 0; }
+  // Group 0 of a mesh pipeline (see BindGroupDesc). 0 if invalid.
+  virtual BindGroupId create_bind_group(const BindGroupDesc&) { return 0; }
   // Indexed triangle-list draw inside begin_frame/end_frame. Invalid draws are rejected and not counted.
   virtual void draw_indexed(const DrawIndexedDesc&) {}
 };
