@@ -53,6 +53,17 @@ class Cursor {
     p_ += 4;
     return true;
   }
+  bool u8(uint8_t& v) {  // M1a-3 (OSI reader)
+    if (!has(1)) return false;
+    v = d_[p_++];
+    return true;
+  }
+  bool str(uint64_t k, std::string& s) {  // M1a-3: k raw bytes as a string
+    if (!has(k)) return false;
+    s.assign(reinterpret_cast<const char*>(d_ + p_), static_cast<size_t>(k));
+    p_ += static_cast<size_t>(k);
+    return true;
+  }
   bool skip(uint64_t k) {
     if (!has(k)) return false;
     p_ += static_cast<size_t>(k);

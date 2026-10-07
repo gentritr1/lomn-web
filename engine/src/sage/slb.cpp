@@ -132,6 +132,29 @@ bool parse_light(const Slb& slb, std::vector<LightRecord>& out, std::string* err
   return true;
 }
 
+bool parse_spec_textures(const Slb& slb, std::vector<SpecTextureRecord>& out, std::string* err) {
+  out.clear();
+  uint32_t n = 0, base = 0;
+  if (!table(slb, 4, 8, kSpecTextureRecordSize, n, base, "textures", err)) return false;
+  out.resize(n);
+  const std::vector<uint8_t>& b = slb.bytes();
+  for (uint32_t i = 0; i < n; ++i) {
+    const uint64_t r = base + uint64_t(i) * kSpecTextureRecordSize;
+    SpecTextureRecord& t = out[i];
+    uint32_t name = 0;
+    if (!slb.read_ptr(r, name)) return fail(err, "textures: record " + std::to_string(i) + " name is not a fix-up slot");
+    for (uint64_t p = uint64_t(name) + 1; p < b.size() && b[static_cast<size_t>(p)] != 0; ++p) {
+      if (t.name.size() >= kMaxSpecTextureName) return fail(err, "textures: name longer than kMaxSpecTextureName");
+      t.name.push_back(static_cast<char>(b[static_cast<size_t>(p)]));
+    }
+    t.trans = lef32(b.data() + r + 4);
+    t.u = lef32(b.data() + r + 8);
+    t.v = lef32(b.data() + r + 12);
+    t.frames = le32(b.data() + r + 16);
+  }
+  return true;
+}
+
 Route route(uint32_t flags) {
   if (flags & 0x10) {
     if (flags & 0x20) return Route::Moveable;

@@ -236,3 +236,60 @@ TEST_CASE("slb: 4CC strings and cinematic table names") {
   CHECK_FALSE(is_cinematic_obj("vllg_OBJ.slb"));
   CHECK_FALSE(is_cinematic_obj("cin1_cam.slb"));
 }
+
+// M1a-3: <lev>/textures.slb (GcSpecTextureLoader::LoadTextures 0x0046f270): {n, n, ptr} + 20-byte records whose name
+// pointer targets a length-prefixed string read from name + 1; then the fix-up slots, their count and 0x00C0FFEE.
+namespace {
+Bytes make_textures(const std::vector<std::pair<std::string, float>>& recs, size_t name_len_override = 0) {
+  Bytes b;
+  put32(b, static_cast<uint32_t>(recs.size()));
+  put32(b, static_cast<uint32_t>(recs.size()));
+  put32(b, 12);
+  uint32_t str = static_cast<uint32_t>(12 + 20 * recs.size());
+  std::vector<uint32_t> slots = {8};
+  for (const auto& r : recs) {
+    slots.push_back(static_cast<uint32_t>(b.size()));
+    put32(b, str);
+    putf(b, r.second);
+    putf(b, 0.25f);
+    putf(b, 0.0f);
+    put32(b, 3);
+    str += static_cast<uint32_t>(r.first.size()) + 2;
+  }
+  for (const auto& r : recs) {
+    put8(b, static_cast<uint8_t>(name_len_override ? name_len_override : r.first.size()));  // ignored by the game
+    putstr(b, r.first);
+    put8(b, 0);
+  }
+  while (b.size() % 4) put8(b, 0);
+  for (size_t i = slots.size(); i-- > 0;) put32(b, slots[i]);
+  put32(b, static_cast<uint32_t>(slots.size()));
+  put32(b, 0x00C0FFEEu);
+  return b;
+}
+}  // namespace
+
+TEST_CASE("slb: textures.slb records (name read at ptr + 1, trans, U/V speeds, frames); long names are rejected") {
+  std::vector<SpecTextureRecord> t;
+  std::string err;
+  Slb s = parse_ok(make_textures({{"tfx", 0.5f}, {"a_longer_name.dds", 1.0f}}, 200));
+  REQUIRE_MESSAGE(parse_spec_textures(s, t, &err), err);
+  REQUIRE(t.size() == 2);
+  CHECK(t[0].name == "tfx");  // the length byte (200 here) is ignored: the C string at ptr + 1
+  CHECK(t[0].trans == 0.5f);
+  CHECK(t[0].u == 0.25f);
+  CHECK(t[0].v == 0.0f);
+  CHECK(t[0].frames == 3);
+  CHECK(t[1].name == "a_longer_name.dds");
+  Slb big = parse_ok(make_textures({{std::string(kMaxSpecTextureName + 1, 'n'), 1.0f}}));
+  CHECK_FALSE(parse_spec_textures(big, t, &err));
+  CHECK(err.find("kMaxSpecTextureName") != std::string::npos);
+  Slb ok = parse_ok(make_textures({{std::string(kMaxSpecTextureName, 'n'), 1.0f}}));
+  CHECK(parse_spec_textures(ok, t, &err));
+  // Every truncation of a valid file fails cleanly (or parses as a different valid table).
+  const Bytes good = make_textures({{"tfx", 0.5f}, {"cut", 1.0f}});
+  for (size_t len = 0; len < good.size(); ++len) {
+    Slb p;
+    if (p.parse(Bytes(good.begin(), good.begin() + static_cast<std::ptrdiff_t>(len)), &err)) parse_spec_textures(p, t, &err);
+  }
+}

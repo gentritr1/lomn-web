@@ -16,7 +16,8 @@ target_compile_options(lomn_core PRIVATE -Wall -Wextra)
 target_compile_options(lomn_core PUBLIC -ffp-contract=off)
 
 # M1a-1 data path (no GPU): SAGE blockfiles, lookup chain, SLB tables, binary .x meshes, DDS/TGA decoders.
-add_library(lomn_sage STATIC src/sage/blockfile.cpp src/sage/blockchain.cpp src/sage/slb.cpp src/sage/xfile.cpp src/sage/image.cpp)
+add_library(lomn_sage STATIC src/sage/blockfile.cpp src/sage/blockchain.cpp src/sage/slb.cpp src/sage/xfile.cpp src/sage/image.cpp
+            src/sage/osi.cpp)
 target_link_libraries(lomn_sage PUBLIC lomn_core)
 target_compile_options(lomn_sage PRIVATE -Wall -Wextra)
 
@@ -176,13 +177,20 @@ endif()
 
 # Unit tests: natively, and under Node when cross-compiled with emcmake (CMAKE_CROSSCOMPILING_EMULATOR=node).
 add_executable(lomn_tests tests/test_main.cpp tests/test_fs.cpp tests/test_rhi_null.cpp tests/test_loop.cpp tests/test_sage_blockfile.cpp tests/test_sage_blockchain.cpp tests/test_sage_slb.cpp tests/test_sage_xfile.cpp tests/test_sage_image.cpp
-               tests/test_rhi_mesh.cpp tests/test_view_mips.cpp tests/test_view_area.cpp tests/test_d3d.cpp)
+               tests/test_rhi_mesh.cpp tests/test_view_mips.cpp tests/test_view_area.cpp tests/test_d3d.cpp tests/test_sage_osi.cpp)
 target_link_libraries(lomn_tests PRIVATE lomn_area)
 target_include_directories(lomn_tests PRIVATE "${LOMN_TOOLCHAIN_DIR}/include")
 if(EMSCRIPTEN)
   target_link_options(lomn_tests PRIVATE -sNODERAWFS=1 -sALLOW_MEMORY_GROWTH=1)
 endif()
 add_test(NAME unit COMMAND lomn_tests)
+# REF3 revision 2: crafted-input time/memory probes of the OSI reader, natively and as wasm32 (2 GB linear memory).
+add_executable(lomn_osi_probe tests/probe_osi.cpp)
+target_link_libraries(lomn_osi_probe PRIVATE lomn_sage)
+if(EMSCRIPTEN)
+  target_link_options(lomn_osi_probe PRIVATE -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=2GB)
+endif()
+add_test(NAME osi_probe COMMAND lomn_osi_probe)
 
 # Internal JSON string escaper used by metrics.json (header lives in src/app, not in the public include dir).
 target_sources(lomn_tests PRIVATE tests/test_json_escape.cpp)

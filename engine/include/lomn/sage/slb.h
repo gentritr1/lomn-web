@@ -71,12 +71,28 @@ constexpr size_t kPosRecordSize = 20;
 struct LightRecord {
   uint32_t id = 0;        // +0x00
   float pos[3] = {};      // +0x04 position (point) or direction (directional)
-  float range = 0;        // +0x10 passed as the light's range
-  float param = 0;        // +0x14 |param| > const selects a light mode; INFERRED meaning
+  // M1a-3 (GcLightLoader::LoadLights 0x00470010 read in full): +0x10 is the INTENSITY (GcLight ctor -> SetIntensity,
+  // x1.2 above 0.9) and +0x14 the point light's RANGE (SetPointLight: > 0 -> attenuation1 = 1/(0.15 range), |v| > 1e-5
+  // selects attenuation algorithm 2). The M1a-1 field names are kept.
+  float range = 0;        // +0x10 intensity (see above)
+  float param = 0;        // +0x14 range (see above)
   float color[4] = {};    // +0x18 r, g, b, a
   uint32_t flags = 0;     // +0x28; 0x40 point light, 0x80 directional (+ opposite "Shad" fill)
 };
 constexpr size_t kLightRecordSize = 44;
+
+// M1a-3: <lev>/textures.slb (GcSpecTextureLoader::LoadTextures 0x0046f270): header {u32 n, u32 n, ptr records}, 20-byte
+// records {ptr name, f32 transparency, f32 u speed, f32 v speed, u32 animation frames}. The name pointer targets a
+// length-prefixed string; the game reads the C string at name + 1 (the length byte is ignored), so do we, bounded by
+// the buffer and kMaxSpecTextureName.
+struct SpecTextureRecord {
+  std::string name;
+  float trans = 1.0f, u = 0.0f, v = 0.0f;
+  uint32_t frames = 0;
+};
+constexpr size_t kSpecTextureRecordSize = 20;
+constexpr size_t kMaxSpecTextureName = 255;
+bool parse_spec_textures(const Slb& slb, std::vector<SpecTextureRecord>& out, std::string* err);
 
 bool parse_obj(const Slb& slb, std::vector<ObjRecord>& out, std::string* err);
 bool parse_pos(const Slb& slb, std::vector<PosRecord>& out, std::string* err);
