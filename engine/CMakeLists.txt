@@ -264,6 +264,22 @@ if(EMSCRIPTEN)
   target_link_options(lomn_tests PRIVATE -sNODERAWFS=1 -sALLOW_MEMORY_GROWTH=1)
 endif()
 add_test(NAME unit COMMAND lomn_tests)
+# M1a-4 cleanup S1 (batch-1 review I-1): native-only sanitizer run of the untrusted-.x tests. A Release build cannot see
+# every deleted bounds check in decode_mesh (xfile.cpp:216 `q >= ni.size()` stayed green in plain Release), so the x: cases
+# (test_sage_xfile.cpp, the crafted-input table included) and the fuzz fragments cases run again here under ASan + UBSan
+# with -fno-sanitize-recover=all, WebGPU off (this target links only the sage sources). Built and run by `make test-native`
+# (so `make check`), incrementally: 8 translation units at -O1. wasm32 has no sanitizers, hence NOT EMSCRIPTEN.
+if(NOT EMSCRIPTEN)
+  add_executable(lomn_tests_asan tests/test_main.cpp tests/test_sage_xfile.cpp tests/test_fuzz_fragments.cpp
+                 src/sage/blockfile.cpp src/sage/blockchain.cpp src/sage/slb.cpp src/sage/xfile.cpp src/sage/image.cpp src/sage/osi.cpp)
+  target_include_directories(lomn_tests_asan PRIVATE include "${LOMN_TOOLCHAIN_DIR}/include")
+  target_compile_definitions(lomn_tests_asan PRIVATE "LOMN_TESTS_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/tests\"")
+  target_compile_options(lomn_tests_asan PRIVATE -Wall -Wextra -ffp-contract=off -O1 -g -fno-omit-frame-pointer
+                         -fsanitize=address,undefined -fno-sanitize-recover=all)
+  target_link_options(lomn_tests_asan PRIVATE -fsanitize=address,undefined)
+  add_test(NAME unit_asan COMMAND lomn_tests_asan)
+  set_tests_properties(unit_asan PROPERTIES TIMEOUT 120)
+endif()
 # REF3 revision 2: crafted-input time/memory probes of the OSI reader, natively and as wasm32 (2 GB linear memory).
 add_executable(lomn_osi_probe tests/probe_osi.cpp)
 target_link_libraries(lomn_osi_probe PRIVATE lomn_sage)
