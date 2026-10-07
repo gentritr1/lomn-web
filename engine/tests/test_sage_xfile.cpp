@@ -279,6 +279,12 @@ double seconds_since(std::chrono::steady_clock::time_point t0) {
   return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
 }
 
+// Wall-clock bound for the DoS-regression cases below. Release takes ~0.005 s; ASan+UBSan Debug at loadavg 3.7
+// takes ~0.6 s, so a 1 s bound flaked. 10 s tolerates any sanitizer / host load and still catches hangs and
+// worse-than-quadratic growth. (The original 4.8 s native quadratic decode sits under it: wall time alone is a
+// coarse backstop, not the oracle for that bug.)
+constexpr double kSlowBound = 10.0;
+
 }  // namespace
 
 TEST_CASE("x: many material references stay linear (memoised Material decode)") {
@@ -292,7 +298,7 @@ TEST_CASE("x: many material references stay linear (memoised Material decode)") 
     double dt = seconds_since(t0);
     REQUIRE(ok);
     CHECK(xf.mesh.materials.size() == n);
-    CHECK(dt < 1.0);  // old code: ~4.8 s native
+    CHECK(dt < kSlowBound);  // old code: ~4.8 s native (Release now ~0.005 s)
   }
   {
     Bytes b = many_refs(n, 1);  // 40000 refs against nMaterials = 1: fail at the second one
@@ -301,7 +307,7 @@ TEST_CASE("x: many material references stay linear (memoised Material decode)") 
     double dt = seconds_since(t0);
     CHECK_FALSE(ok);
     CHECK(err.find("material count") != std::string::npos);
-    CHECK(dt < 1.0);
+    CHECK(dt < kSlowBound);
   }
 }
 
@@ -343,7 +349,7 @@ TEST_CASE("x: texture name x reference amplification is capped (both caps)") {
     auto t0 = std::chrono::steady_clock::now();
     CHECK_FALSE(parse_x(b.data(), b.size(), xf, &err));
     CHECK(err.find("texture name too long") != std::string::npos);
-    CHECK(seconds_since(t0) < 1.0);
+    CHECK(seconds_since(t0) < kSlowBound);
   }
   {  // texture name boundary: exactly the cap passes, +1 fails
     Bytes ok = tex_refs(1, kXMaxTextureName, 1);
