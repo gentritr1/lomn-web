@@ -16,7 +16,8 @@ BOOT_SET = ["data/Main.blk", "data/Base.osi", "data/Languages/lang_eng.blk", "da
 
 
 def census(install: Path) -> dict:
-    files = [p for p in install.rglob("*") if p.is_file()]
+    files = [p for p in install.rglob("*")
+             if p.is_file() and not any(part.startswith(".") for part in p.relative_to(install).parts)]
     by_ext = collections.defaultdict(lambda: {"count": 0, "bytes": 0})
     for p in files:
         e = by_ext[p.suffix.lower() or "(none)"]

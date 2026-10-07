@@ -56,7 +56,7 @@ Probe each route cheaply first: a one-day emulation fps test, a one-week decompi
 
 - **Always assert pixels and network**, never only a state flag.
 - **Reconcile frame counts:** dt samples must equal frames − 1. Measured p50 dt was 16.70 ms (vsync 60 Hz).
-- **`setInputFiles(dir)` on a `webkitdirectory` input passes paths, not bytes:** the 529-file, 1.10 GB install loads in 1.2 s, or 0.2 s with a persistent profile.
+- **`setInputFiles(dir)` on a `webkitdirectory` input passes paths, not bytes:** the 529-file, 1.10 GB install loads in 1.2 s, or 0.2 s with a persistent profile. (529 includes 2 macOS .DS_Store files; the game install itself is 527 files)
 - **Every runner needs a negative test.** The smoke test fails in 1.5 s against an empty site.
 
 ## 6. Performance method

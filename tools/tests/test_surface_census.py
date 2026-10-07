@@ -29,3 +29,14 @@ def test_census_areas(tmp_path):
 def test_real_census(lomn_data):
     c = census(lomn_data / "install")
     assert c["total_files"] >= 510 and c["largest_area"] is not None
+
+
+def test_census_skips_hidden_files(tmp_path):
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "a.blk").write_bytes(b"a" * 4)
+    (tmp_path / ".DS_Store").write_bytes(b"x" * 100)
+    (tmp_path / "data" / ".DS_Store").write_bytes(b"x" * 100)
+    (tmp_path / "data" / ".hidden").mkdir()
+    (tmp_path / "data" / ".hidden" / "b.blk").write_bytes(b"b")
+    c = census(tmp_path)
+    assert c["total_files"] == 1 and c["total_bytes"] == 4

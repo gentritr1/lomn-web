@@ -38,7 +38,7 @@ Canonical exe: `LEGOBionicle.exe`, SHA-256 `09b55e62…0f0f`, build 2001-10-22.
 
 | Fact | Value |
 |---|---|
-| Files / bytes | 529 / 1,102,338,267 |
+| Files / bytes | 527 / 1,102,325,971 |
 | `.blk` / Bink / mp3 | 737.6 MB / 245.1 MB / 101.3 MB |
 | `Base.osi` / `Main.blk` / `lang_eng.blk` / `Art.blk` | 486,274 / 54,108 / 50,232 / 166.8 MB |
 | Areas / largest (incl. level common blk) | 123 / `lev6/vllg` 35.0 MB |

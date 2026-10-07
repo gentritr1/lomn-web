@@ -1,6 +1,6 @@
 # Data census (player install, on-disk sizes)
 
-Total: 529 files, 1102.3 MB
+Total: 527 files, 1102.3 MB
 
 | Extension | Files | Size |
 |---|---|---|
@@ -15,7 +15,6 @@ Total: 529 files, 1102.3 MB
 | .db | 34 | 0.1 MB |
 | .t | 34 | 0.0 MB |
 | .txt | 4 | 0.0 MB |
-| (none) | 2 | 0.0 MB |
 | .info | 1 | 0.0 MB |
 | .jpg | 1 | 0.0 MB |
 | .conf | 1 | 0.0 MB |

@@ -8,7 +8,6 @@ import hashlib
 import os
 import re
 import sys
-import tempfile
 import urllib.request
 
 D3D8_H_COMMIT = "2bcf06abc9ec5f8f73c743896b815a7a7654f9ae"
@@ -57,9 +56,16 @@ def main(argv: list[str]) -> int:
     # Write atomically: to a .tmp file first, then replace
     out_dir = os.path.dirname(out) or "."
     tmp = os.path.join(out_dir, os.path.basename(out) + ".tmp")
-    with open(tmp, "w") as f:
-        f.write(text)
-    os.replace(tmp, out)
+    try:
+        with open(tmp, "w") as f:
+            f.write(text)
+        os.replace(tmp, out)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
+        raise
     print("wrote", out)
     return 0
 

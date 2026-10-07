@@ -102,3 +102,19 @@ def test_render_committed_data_roundtrip():
 
     assert "I IDirect3DDevice8 4" in lines
     assert "I IDirect3DTexture8 3" in lines
+
+
+def test_failed_replace_removes_tmp_and_keeps_output(monkeypatch, tmp_path):
+    out_file = tmp_path / "vtables.txt"
+    out_file.write_text("KEEP\n")
+    monkeypatch.setattr("d3d8_vtables.fetch", lambda: "")
+    monkeypatch.setattr("d3d8_vtables.render", lambda text: "NEW\n")
+
+    def boom(src, dst):
+        raise OSError("replace failed")
+
+    monkeypatch.setattr("d3d8_vtables.os.replace", boom)
+    with pytest.raises(OSError):
+        main([out_file.as_posix()])
+    assert out_file.read_text() == "KEEP\n"
+    assert not (tmp_path / "vtables.txt.tmp").exists()

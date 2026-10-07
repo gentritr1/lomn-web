@@ -16,6 +16,7 @@ import argparse
 import collections
 import html
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -56,8 +57,12 @@ def check(rows: list[dict], repo: Path, ctest_dir: Path | None) -> list[str]:
             if not r["test"] or ctest_dir is None:
                 errors.append(f"{r['addr']} {r['name']}: tested without a test name or ctest dir")
                 continue
-            res = subprocess.run(["ctest", "--test-dir", str(ctest_dir), "-R", f"^{r['test']}$", "--no-tests=error"],
-                                 capture_output=True, text=True, timeout=600)
+            try:
+                res = subprocess.run(["ctest", "--test-dir", str(ctest_dir), "-R", f"^{re.escape(r['test'])}$",
+                                      "--no-tests=error"], capture_output=True, text=True, timeout=600)
+            except FileNotFoundError:
+                errors.append(f"{r['addr']} {r['name']}: ctest not found on PATH, cannot verify test {r['test']}")
+                continue
             if res.returncode != 0:
                 errors.append(f"{r['addr']} {r['name']}: test {r['test']} failed or missing")
     return errors
@@ -100,7 +105,9 @@ def main(argv: list[str]) -> int:
     a = ap.parse_args(argv)
     if a.cmd == "set":
         st = load_status(a.status)
-        st[a.addr] = {k: v for k, v in {"status": a.new_status, "port_file": a.port_file, "test": a.test}.items() if v}
+        entry = dict(st.get(a.addr, {}))
+        entry.update({k: v for k, v in {"status": a.new_status, "port_file": a.port_file, "test": a.test}.items() if v})
+        st[a.addr] = entry
         a.status.parent.mkdir(parents=True, exist_ok=True)
         a.status.write_text(json.dumps(dict(sorted(st.items())), indent=1) + "\n")
         return 0

@@ -38,3 +38,36 @@ def test_tested_without_test_name_fails(tmp_path):
 def test_dashboard_counts(tmp_path):
     html = dashboard(build(gen_dir(tmp_path), {"0x1": {"status": "cleaned"}}))
     assert "<td>cleaned</td><td>1</td>" in html and "M1-required (1)" in html
+
+
+def test_set_merges_fields(tmp_path):
+    st = tmp_path / "status.json"
+    assert main(["set", str(st), "0x1", "ported", "--port-file", "X"]) == 0
+    assert main(["set", str(st), "0x1", "tested", "--test", "T"]) == 0
+    assert json.loads(st.read_text())["0x1"] == {"status": "tested", "port_file": "X", "test": "T"}
+
+
+def test_check_escapes_test_name(tmp_path, monkeypatch):
+    import subprocess
+    seen = []
+
+    def fake_run(argv, **kw):
+        seen.append(argv)
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr("worklist.subprocess.run", fake_run)
+    (tmp_path / "x.cpp").write_text("")
+    rows = build(gen_dir(tmp_path), {"0x1": {"status": "tested", "port_file": "x.cpp", "test": "a.b+c"}})
+    assert check(rows, tmp_path, tmp_path / "b") == []
+    assert seen[0][seen[0].index("-R") + 1] == r"^a\.b\+c$"
+
+
+def test_check_missing_ctest_reports_error(tmp_path, monkeypatch):
+    def fake_run(argv, **kw):
+        raise FileNotFoundError("ctest")
+
+    monkeypatch.setattr("worklist.subprocess.run", fake_run)
+    (tmp_path / "x.cpp").write_text("")
+    rows = build(gen_dir(tmp_path), {"0x1": {"status": "tested", "port_file": "x.cpp", "test": "t"}})
+    errs = check(rows, tmp_path, tmp_path / "b")
+    assert len(errs) == 1 and "ctest not found" in errs[0]
