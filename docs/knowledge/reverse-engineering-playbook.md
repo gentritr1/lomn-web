@@ -47,7 +47,15 @@ Measured results:
 Traps:
 - **`analyzeHeadless` exits 0 even when a script fails to compile or throws.** Scan the log for `REPORT SCRIPT ERROR` and `Script compile failed`.
 - **Decompiler limits hide your most important functions.** `GcLegoCamera::Process` (37 KB of code) failed with `process: timeout` at 120 s, then with `Response buffer size exceeded` at the default 50 MB payload. With `DecompileOptions.setMaxPayloadMBytes(1024)` and a 900 s limit it decompiles to 3,372 lines in about 5 minutes.
-- **Decompile in parallel.** `ghidra.app.decompiler.parallel.ParallelDecompiler` with a `DecompilerCallback` (one decompiler process per core), results sorted by entry address. Measured 325 s vs ~20 min sequential on 8 cores, byte-identical output. Wall time then equals the slowest single function (the camera, ~5 min).
+- **Decompile in parallel, but deterministically.**
+  - A work-stealing pool (`ParallelDecompiler`) looked identical to the sequential export in one comparison. Across full runs, 4–9 of 5,618 functions differed: float/double local numbering depends on which functions a decompiler instance handled before.
+  - Fix: **8 fixed, size-balanced contiguous chunks, one `DecompInterface` each**, results sorted by address.
+  - Measured: ~210 s (vs ~20 min sequential, 325 s work-stealing); 4 runs pairwise byte-identical.
+  - The chunk count is a **constant**, not the core count, because chunk boundaries are part of the output contract across machines.
+- **Ghidra project paths must not contain a dot-prefixed element** (`~/.cache/...` aborts with "Path element starting with '.' is not permitted"). Default to `~/Library/Caches/<tool>` on macOS and fail fast on dotted paths.
+- **`analyzeHeadless` does not `exec` Java.** A timeout or Ctrl-C that kills only the wrapper orphans the JVM, which keeps the project lock. Start it in its own session and kill the whole process group (SIGTERM, poll, then SIGKILL) on any exception.
+- **Key the analysis cache on its inputs** (exe hash, nb11 outputs, analysis scripts — not export-only scripts). Write the marker only after the script-stat checks pass, and require the project file to exist.
+- **Never claim determinism from one comparison, and assert outputs exist before diffing.** `diff -rq` on missing directories printed 0 twice in this project.
 - **Per-function timeouts make output load-dependent.** One run under load lost a second function: `decompiled_ok` 5616, `member_access` −432. Use a generous default (300 s) plus one 4× retry, and keep metric floors that fail when this happens.
 - **Metric floors must measure Ghidra's side**, not the inputs you fed it: script log counters (labels/structs/locals applied) plus corpus counters (member accesses, raw offsets). Counting your own `types.txt` proves nothing about whether Ghidra applied it.
 - **x87 compares decompile as status-word bit soup** (`NAN(a) || NAN(b)) << 10) >> 8 … == 0x40`). Rewrite them by evaluating the LT/EQ/GT truth table of C0/C2/C3 (`tools/decomp/x87fix.py`). That rewrote 695 sites, with 80 left in unhandled forms.

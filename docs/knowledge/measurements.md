@@ -27,11 +27,12 @@ Canonical exe: `LEGOBionicle.exe`, SHA-256 `09b55e62…0f0f`, build 2001-10-22.
 | x87 compare rewrites / remaining noise | 723 / 82 (after the camera fix; 695 / 80 before) |
 | `in_stack`/`in_EAX` artefacts (open gap) | 3,649 (3,279 before the camera decompiled) |
 | Corpus | 406 files; 494 functions in original source paths; 9.9 MB |
-| M1 seed set | 49 roots, 53 render call sites, 1,464 required, 1,906 candidates |
+| M1 seed set | 49 roots, 53 render call sites, 1,464 required = 1,428 exported functions + 36 imported (EXTERNAL) functions the M1 path calls; 1,906 candidates |
 | Determinism | two exports + a fresh re-analysis: 0 differing files |
 | `GcLegoCamera::Process` | 37,133 bytes; fails at 120 s (timeout) and at the 50 MB payload; with 1,024 MB / 900 s it decompiles to 3,372 lines in ~5 min |
 | `make decomp` wall time | ~6 min before the camera fix; 27.6 min fresh / 19.8 min cached after (all 5,618 decompiled; member accesses 45,891) |
-| Export with `ParallelDecompiler` (8 cores) | 325 s vs ~20 min sequential; output byte-identical (0 diffs over 5,618 functions + indexes); no retries needed |
+| Export with `ParallelDecompiler` (work-stealing, 8 cores) | 325 s, but NOT run-to-run deterministic: 4–9 of 5,618 functions differ per run pair (one early comparison happened to show 0) |
+| Export with 8 fixed chunks (adopted) | ~205–250 s; 4 runs pairwise byte-identical; `make decomp` fresh 5:32–5:56, cached 3:42–4:43 |
 
 ## Game data (player install, Beta 1.5.0)
 
