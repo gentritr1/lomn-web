@@ -1,12 +1,16 @@
-// lomn_view: render one area of a LOMN install, unlit, from the POS start (M1a-2 "first pixels").
+// lomn_view: render one area of a LOMN install from the POS start, replaying the game's D3D8 states (M1a-3).
 //   lomn_view --install <dir> --level lev1 --area vllg --out <file.png> [options]
-//   lomn_view --synthetic 1 --out <file> [options]          the A7 contract scene (no game data)
+//   lomn_view --synthetic 1|2 --out <file> [options]        the A7 contract scene / the A9 state scene (no game data)
 //   lomn_view --install <dir> --survey 1 --out <file.json>  CPU-load every area (no GPU), per-area counts + maxima
 // Options (every option takes a value):
 //   --backend webgpu|null   webgpu (default) writes <out> as PNG; null writes the rhi call log to <out>
 //   --width 1280 --height 720 --frames 1
 //   --fov 60 --near 0.5 --far 4000 --eye x,y,z --yaw deg --pitch deg --eye-height 3   (camera fallback overrides)
-//   --vertex-colors on|off  --alpha-ref 1  --routes main,trans,back,moveable,nolight
+//   --vertex-colors on|off  --routes main,trans,back,moveable,nolight
+//   --state-log FILE        write the D3D8 state log (A9): device init + frame 1 (+ frame 2 when --frames >= 2)
+//   --lighting faithful|forced   forced = GcRenderNodeGroup::SetLighting(true) on MainArea/MainTrans (half of the night-vision state: the special emissive colour is not modelled)
+//   --fog on|off            off drops fog from every draw (debug; the state log is unchanged)
+//   --write-install DIR     (--synthetic only, native) also write the synthetic install to DIR/data/... (for oracles)
 //   --keep-cpu on|off       keep the CPU vertex/index/mip copies after upload (default off: released)
 // Always writes <out>.json metrics (except --survey, whose output IS the JSON).
 // Exit codes (as lomn_native): 0 ok, 2 bad args, 3 no WebGPU adapter / install or area unreadable / survey found no
@@ -14,7 +18,7 @@
 // Arguments (Task 6): --synthetic and --survey take exactly 1 and exclude each other and --install/--level/--area
 // (--synthetic) or --level/--area (--survey). Integers are digits only (no sign, space or hex), parsed in 64 bits, then
 // range-checked. Floats must be finite: --fov (0,180), --near > 0 and < --far, --far <= 1e7, --eye |x,y,z| <= 1e6,
-// --yaw any finite value (normalised to (-180,180]), --pitch [-89.9,89.9], --eye-height |h| <= 1e4, --alpha-ref [0,255].
+// --yaw any finite value (normalised to (-180,180]), --pitch [-89.9,89.9], --eye-height |h| <= 1e4.
 // Outputs: <out> and <out>.json are deleted up front, so a failed run never leaves a stale output; every stream is
 // checked after close(). The null backend with --frames N > 1 keeps only the first frame's call log (creation calls +
 // frame 1; later frames are rendered but their identical lines are dropped) so memory stays bounded.
@@ -123,7 +127,8 @@ int usage(const char* why) {
   std::fprintf(stderr,
                "usage: lomn_view --install DIR --level LEV --area AREA --out FILE [--backend webgpu|null] [--width W --height H]\n"
                "                 [--fov DEG --near N --far F --eye x,y,z --yaw DEG --pitch DEG --eye-height H] [--frames N]\n"
-               "                 [--vertex-colors on|off] [--alpha-ref 0..255] [--routes main,trans,back,moveable,nolight]\n"
+               "                 [--vertex-colors on|off] [--routes main,trans,back,moveable,nolight] [--state-log FILE]\n"
+               "                 [--lighting faithful|forced] [--fog on|off]\n"
                "       lomn_view --synthetic 1 --out FILE [...]   |   lomn_view --install DIR --survey 1 --out FILE.json\n");
   return 2;
 }
@@ -349,8 +354,8 @@ int main(int argc, char** argv) {
   if ((argc - 1) % 2 != 0) return usage((std::string("option ") + argv[argc - 1] + " needs a value").c_str());
   std::map<std::string, std::string> a;
   static const char* known[] = {"--install", "--level", "--area", "--out", "--backend", "--width", "--height", "--frames", "--fov", "--near",
-                                "--far", "--eye", "--yaw", "--pitch", "--eye-height", "--vertex-colors", "--alpha-ref", "--routes",
-                                "--synthetic", "--survey", "--keep-cpu"};
+                                "--far", "--eye", "--yaw", "--pitch", "--eye-height", "--vertex-colors", "--routes",
+                                "--synthetic", "--survey", "--keep-cpu", "--state-log", "--lighting", "--fog", "--write-install"};
   for (int i = 1; i + 1 < argc; i += 2) {
     std::string k = argv[i];
     if (std::find_if(std::begin(known), std::end(known), [&](const char* x) { return k == x; }) == std::end(known))
@@ -360,7 +365,7 @@ int main(int argc, char** argv) {
   auto has = [&](const char* k) { return a.count(k) != 0; };
   const std::string out = has("--out") ? a["--out"] : "";
   if (out.empty()) return usage("--out is required");
-  if (has("--synthetic") && a["--synthetic"] != "1") return usage("--synthetic takes exactly 1");
+  if (has("--synthetic") && a["--synthetic"] != "1" && a["--synthetic"] != "2") return usage("--synthetic takes 1 (A7 scene) or 2 (A9 state scene)");
   if (has("--survey") && a["--survey"] != "1") return usage("--survey takes exactly 1");
   const bool synthetic = has("--synthetic");
   if (synthetic && (has("--install") || has("--level") || has("--area") || has("--survey")))
@@ -375,7 +380,8 @@ int main(int argc, char** argv) {
     return survey(a["--install"], out);
 #endif
   }
-  std::string level = synthetic ? view::kSyntheticLevel : a["--level"], area = synthetic ? view::kSyntheticArea : a["--area"];
+  std::string level = synthetic ? view::kSyntheticLevel : a["--level"];
+  std::string area = synthetic ? (a["--synthetic"] == "2" ? view::kSyntheticStateArea : view::kSyntheticArea) : a["--area"];
   if (!synthetic && (!has("--install") || level.empty() || area.empty())) return usage("--install, --level and --area are required");
   const std::string backend = has("--backend") ? a["--backend"] : "webgpu";
   if (backend != "webgpu" && backend != "null") return usage(("unknown backend " + backend).c_str());
@@ -413,7 +419,16 @@ int main(int argc, char** argv) {
     if (a["--vertex-colors"] != "on" && a["--vertex-colors"] != "off") return usage("bad --vertex-colors (on|off)");
     ro.vertex_colors = a["--vertex-colors"] == "on";
   }
-  if (has("--alpha-ref") && !parse_float_in(a["--alpha-ref"], 0.0f, 255.0f, ro.alpha_ref)) return usage("bad --alpha-ref [0,255]");
+  if (has("--lighting")) {
+    if (a["--lighting"] != "faithful" && a["--lighting"] != "forced") return usage("bad --lighting (faithful|forced)");
+    ro.force_area_lighting = a["--lighting"] == "forced";
+  }
+  if (has("--fog")) {
+    if (a["--fog"] != "on" && a["--fog"] != "off") return usage("bad --fog (on|off)");
+    ro.fog = a["--fog"] == "on";
+  }
+  const std::string state_log_path = has("--state-log") ? a["--state-log"] : "";
+  if (has("--state-log") && (state_log_path.empty() || state_log_path == out)) return usage("bad --state-log (a file other than --out)");
   bool keep_cpu = false;
   if (has("--keep-cpu")) {
     if (a["--keep-cpu"] != "on" && a["--keep-cpu"] != "off") return usage("bad --keep-cpu (on|off)");
@@ -434,12 +449,33 @@ int main(int argc, char** argv) {
   // Arguments are valid: only now drop whatever an earlier run left, so a usage error (exit 2) leaves existing outputs
   // untouched while any later failure (install, device, load, render) can never leave a stale one behind.
   if (int rc = remove_stale_outputs(out)) return rc;
+  if (!state_log_path.empty() && !remove_stale(state_log_path))
+    return std::fprintf(stderr, "cannot remove stale output %s: %s\n", state_log_path.c_str(), std::strerror(errno)), 4;
 
   // File system: the synthetic scene in memory, or the install on disk (case-insensitive VFS).
   std::unique_ptr<fs::FileSystem> fsp;
   if (synthetic) {
     auto mem = std::make_unique<fs::MemoryFileSystem>();
     if (!view::mount_synthetic_install(*mem)) return std::fprintf(stderr, "synthetic install failed\n"), 4;
+#if !defined(__EMSCRIPTEN__)
+    if (has("--write-install")) {  // the synthetic install as files, so independent oracles can read it like a real one
+      namespace sfs = std::filesystem;
+      const sfs::path root = a["--write-install"];
+      std::error_code ec;
+      sfs::create_directories(root / "data" / "levels" / "levt", ec);
+      for (const char* f : {"Levels/levt/levt.blk", "Levels/levt/test.blk", "Levels/levt/stat.blk", "Base.osi"}) {
+        std::vector<uint8_t> b;
+        if (mem->read(std::string("Root/Data/") + f, b) != fs::Error::None) return std::fprintf(stderr, "synthetic file %s missing\n", f), 4;
+        std::string rel = f;
+        for (char& c : rel) c = static_cast<char>(c >= 'A' && c <= 'Z' ? c - 'A' + 'a' : c);
+        if (rel == "base.osi") rel = "Base.osi";
+        std::ofstream o(root / "data" / rel, std::ios::binary);
+        o.write(reinterpret_cast<const char*>(b.data()), static_cast<std::streamsize>(b.size()));
+        o.close();
+        if (o.fail()) return std::fprintf(stderr, "cannot write %s\n", (root / "data" / rel).string().c_str()), 4;
+      }
+    }
+#endif
     fsp = std::move(mem);
   } else {
 #if defined(__EMSCRIPTEN__)
@@ -481,6 +517,8 @@ int main(int argc, char** argv) {
   rd.depth = true;
   rhi::TextureId rt = dev->create_render_target_ex(rd);
   view::AreaRenderer renderer;
+  std::vector<std::string> state_log;
+  if (!state_log_path.empty()) ro.state_log = &state_log;
   if (!rt || !renderer.upload(*dev, data, ro, &err)) {
     std::fprintf(stderr, "upload failed: %s\n", rt ? err.c_str() : "render target rejected");
     return 4;
@@ -492,13 +530,22 @@ int main(int argc, char** argv) {
   const uint64_t rss_after_release = rss_now(), fp_after_release = footprint_now(), heap_after_release = heap_in_use();
   const view::Camera cam = view::make_camera(data, cs, static_cast<float>(width) / static_cast<float>(height));
   std::vector<double> frame_ms;
-  size_t first_frame_lines = 0;
+  size_t first_frame_lines = 0, state_lines = 0;
   for (uint32_t f = 0; f < frames; ++f) {
     const auto t0 = Clock::now();
     if (!renderer.render(*dev, rt, data, cam)) return std::fprintf(stderr, "render refused\n"), 4;
     frame_ms.push_back(ms_since(t0));
     if (f == 0) first_frame_lines = calls.size();
     else calls.resize(first_frame_lines);  // null backend: keep only the first frame's log (bounded memory)
+    if (f <= 1) state_lines = state_log.size();
+    else state_log.resize(state_lines);  // state log: init + frames 1 and 2 (frame 2 shows the steady state)
+  }
+  const view::RenderStats rstats = renderer.last_stats();
+  if (!state_log_path.empty()) {
+    std::ofstream f(state_log_path);
+    for (const auto& c : state_log) f << c << '\n';
+    f.close();
+    if (f.fail()) return std::fprintf(stderr, "cannot write %s\n", state_log_path.c_str()), 4;
   }
   const rhi::FrameStats fstats = dev->last_frame_stats();
   double readback_ms = 0;
@@ -552,7 +599,18 @@ int main(int argc, char** argv) {
     << ",\"fov_deg\":" << num(cam.fov_deg) << ",\"fov_source\":" << js(fov_src) << ",\"near\":" << num(cam.near_z) << ",\"far\":"
     << num(cam.far_z) << ",\"clip_source\":" << js(clip_src) << ",\"aspect\":" << num(cam.aspect)
     << "},\n\"render\":{\"vertex_colors\":" << (ro.vertex_colors ? "true" : "false")
-    << ",\"alpha_ref\":" << num(ro.alpha_ref) << "},\n\"warnings_dropped\":" << data.warnings_dropped
+    << ",\"lighting\":" << js(ro.force_area_lighting ? "forced" : "faithful") << ",\"fog\":" << (ro.fog ? "true" : "false") << "}"
+    << ",\n\"states\":{\"state_calls_last_frame\":" << rstats.state_calls << ",\"draw_subsets_last_frame\":" << rstats.draw_subsets
+    << ",\"empty_subsets_last_frame\":" << rstats.empty_subsets << ",\"rhi_draws_last_frame\":" << rstats.rhi_draws << ",\"lit_draws\":" << rstats.lit_draws << ",\"fogged_draws\":"
+    << rstats.fogged_draws << ",\"blended_draws\":" << rstats.blended_draws << ",\"alpha_tested_draws\":" << rstats.alpha_tested_draws
+    << ",\"null_texture_draws\":" << rstats.null_texture_draws << ",\"shader_variants\":" << rstats.shader_variants
+    << ",\"unsupported_bits\":" << rstats.unsupported << "}"
+    << ",\n\"scene\":{\"level_type\":" << unsigned(data.level_type) << ",\"lights\":" << data.lights.size() << ",\"lights_source\":"
+    << js(data.lights_source) << ",\"fog\":{\"color\":" << data.fog.color << ",\"start\":" << num(data.fog.start) << ",\"end\":"
+    << num(data.fog.end) << ",\"density\":" << num(data.fog.density) << ",\"source\":" << js(data.fog.source) << "}"
+    << ",\"cave_lighting\":" << (data.cave_lighting ? "true" : "false") << ",\"script_class\":" << js(data.script_class)
+    << ",\"special_textures\":" << data.special_textures << ",\"special_matches\":" << data.special_matches << "}"
+    << ",\n\"warnings_dropped\":" << data.warnings_dropped
     << ",\"warnings\":" << warnings_json(data.warnings) << "\n}\n";
   m.close();
   if (m.fail()) return std::fprintf(stderr, "cannot write %s.json\n", out.c_str()), 4;

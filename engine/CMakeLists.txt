@@ -27,8 +27,8 @@ add_library(lomn_d3d STATIC src/view/math.cpp src/d3d/device8.cpp src/d3d/ffp.cp
 target_link_libraries(lomn_d3d PUBLIC lomn_core)
 target_compile_options(lomn_d3d PRIVATE -Wall -Wextra)
 
-# M1a-2 first pixels: CPU mips, area loader + unlit renderer on rhi, the A7 synthetic scene.
-add_library(lomn_area STATIC src/view/mips.cpp src/view/area.cpp src/view/synthetic.cpp)
+# M1a-2 first pixels + M1a-3: CPU mips, area loader, the SAGE frame replay on the shim, the A7/A9 synthetic scene.
+add_library(lomn_area STATIC src/view/mips.cpp src/view/area.cpp src/view/sage_frame.cpp src/view/synthetic.cpp)
 target_link_libraries(lomn_area PUBLIC lomn_sage lomn_d3d)
 target_compile_options(lomn_area PRIVATE -Wall -Wextra)
 
@@ -74,6 +74,9 @@ if(EMSCRIPTEN)
   target_link_options(lomn_view PRIVATE -sNODERAWFS=1 -sALLOW_MEMORY_GROWTH=1)
   add_test(NAME a7_null_calls COMMAND ${CMAKE_COMMAND} -DRUNNER=node -DEXE=$<TARGET_FILE:lomn_view> -DOUT=${CMAKE_CURRENT_BINARY_DIR}/a7
            -DEXPECTED=${CMAKE_CURRENT_SOURCE_DIR}/tests/data/a7_calls.txt -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/a7_calls.cmake)
+  # M1a-3 A9 under Node: the synthetic state scene's D3D8 state log equals the same checked-in expected log.
+  add_test(NAME a9_state_log COMMAND ${CMAKE_COMMAND} -DRUNNER=node -DEXE=$<TARGET_FILE:lomn_view> -DOUT=${CMAKE_CURRENT_BINARY_DIR}/a9
+           -DEXPECTED=${CMAKE_CURRENT_SOURCE_DIR}/tests/data/a9_state.txt -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/a9_state.cmake)
 else()
   add_executable(lomn_native src/app/main_native.cpp)
   target_link_libraries(lomn_native PRIVATE $<IF:$<BOOL:${LOMN_WEBGPU}>,lomn_webgpu,lomn_core>)
@@ -98,6 +101,18 @@ else()
   # A7 contract (no game data): the synthetic scene's null call log must equal the checked-in expected log, twice.
   add_test(NAME a7_null_calls COMMAND ${CMAKE_COMMAND} -DEXE=$<TARGET_FILE:lomn_view> -DOUT=${CMAKE_CURRENT_BINARY_DIR}/a7
            -DEXPECTED=${CMAKE_CURRENT_SOURCE_DIR}/tests/data/a7_calls.txt -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/a7_calls.cmake)
+  # M1a-3 A9 (no game data): the synthetic state scene's D3D8 state log equals the checked-in expected log, twice.
+  add_test(NAME a9_state_log COMMAND ${CMAKE_COMMAND} -DEXE=$<TARGET_FILE:lomn_view> -DOUT=${CMAKE_CURRENT_BINARY_DIR}/a9
+           -DEXPECTED=${CMAKE_CURRENT_SOURCE_DIR}/tests/data/a9_state.txt -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/a9_state.cmake)
+  # A9 against the independent Python oracle (tools/research/oracle/a9_oracle.py, written from the decompiled code):
+  # the synthetic state scene (written out as an install) always; vllg/ghut/crss when LOMN_DATA is set (else 77 = skip).
+  add_test(NAME a9_oracle_synthetic COMMAND sh -c
+           "rm -rf \"$1\" && \"$0\" --synthetic 2 --backend null --out \"$1/c.txt\" --state-log \"$1/s.txt\" --write-install \"$1/inst\" >/dev/null && timeout 120 python3 \"$2\" --install \"$1/inst\" --level levt --area stat --eye-height 0 --compare \"$1/s.txt\""
+           $<TARGET_FILE:lomn_view> ${CMAKE_CURRENT_BINARY_DIR}/a9_oracle_syn ${CMAKE_CURRENT_SOURCE_DIR}/../tools/research/oracle/a9_oracle.py)
+  add_test(NAME a9_oracle_real COMMAND sh -c
+           "if [ -z \"$LOMN_DATA\" ]; then echo 'SKIPPED (no LOMN_DATA)'; exit 77; fi; mkdir -p \"$1\"; for la in lev1:vllg lev2:ghut lev4:crss; do l=\${la%%:*}; a=\${la##*:}; \"$0\" --install \"$LOMN_DATA/install\" --level $l --area $a --backend null --out \"$1/$a.txt\" --state-log \"$1/$a.state.txt\" >/dev/null || exit 1; timeout 120 python3 \"$2\" --install \"$LOMN_DATA/install\" --level $l --area $a --compare \"$1/$a.state.txt\" || exit 1; done"
+           $<TARGET_FILE:lomn_view> ${CMAKE_CURRENT_BINARY_DIR}/a9_oracle_real ${CMAKE_CURRENT_SOURCE_DIR}/../tools/research/oracle/a9_oracle.py)
+  set_tests_properties(a9_oracle_real PROPERTIES SKIP_RETURN_CODE 77)
   add_test(NAME view_cli_dangling_flag COMMAND sh -c
            "\"$0\" --synthetic 1 --backend null --out \"$1\" --fov >/dev/null 2>&1; [ $? -eq 2 ]"
            $<TARGET_FILE:lomn_view> ${CMAKE_CURRENT_BINARY_DIR}/view_dangling.txt)
@@ -107,7 +122,7 @@ else()
   # Task 6 C1: non-finite and out-of-range camera/render floats are usage errors (exit 2), never exit 0 + invalid JSON;
   # edge values pass and --yaw is normalised to (-180, 180].
   add_test(NAME view_cli_nonfinite COMMAND sh -c
-           "for a in '--far inf' '--far nan' '--near inf' '--near -1' '--near 0' '--near 5000' '--far 1e8' '--fov inf' '--fov 0' '--fov 180' '--yaw inf' '--yaw nan' '--pitch nan' '--pitch 90' '--pitch -89.95' '--eye nan,0,0' '--eye 0,inf,0' '--eye 2e6,0,0' '--eye-height inf' '--eye-height -2e4' '--alpha-ref nan' '--alpha-ref 256' '--alpha-ref -1'; do \"$0\" --synthetic 1 --backend null --out \"$1\" $a >/dev/null 2>&1; rc=$?; if [ $rc -ne 2 ]; then echo \"$a: rc=$rc (want 2)\"; exit 1; fi; done; \"$0\" --synthetic 1 --backend null --out \"$1\" --yaw 400 --pitch 89.9 --far 1e7 --eye-height 1e4 --alpha-ref 255 >/dev/null 2>&1 || { echo 'edge values rejected'; exit 1; }; grep -q '\"yaw_deg\":40.000' \"$1.json\" || { echo 'yaw not normalised'; exit 1; }"
+           "for a in '--far inf' '--far nan' '--near inf' '--near -1' '--near 0' '--near 5000' '--far 1e8' '--fov inf' '--fov 0' '--fov 180' '--yaw inf' '--yaw nan' '--pitch nan' '--pitch 90' '--pitch -89.95' '--eye nan,0,0' '--eye 0,inf,0' '--eye 2e6,0,0' '--eye-height inf' '--eye-height -2e4' '--lighting on' '--fog maybe' '--alpha-ref 1'; do \"$0\" --synthetic 1 --backend null --out \"$1\" $a >/dev/null 2>&1; rc=$?; if [ $rc -ne 2 ]; then echo \"$a: rc=$rc (want 2)\"; exit 1; fi; done; \"$0\" --synthetic 1 --backend null --out \"$1\" --yaw 400 --pitch 89.9 --far 1e7 --eye-height 1e4 --lighting forced --fog off >/dev/null 2>&1 || { echo 'edge values rejected'; exit 1; }; grep -q '\"yaw_deg\":40.000' \"$1.json\" || { echo 'yaw not normalised'; exit 1; }"
            $<TARGET_FILE:lomn_view> ${CMAKE_CURRENT_BINARY_DIR}/view_nonfinite.txt)
   # C2: --synthetic / --survey take exactly 1; conflicting modes are usage errors.
   add_test(NAME view_cli_modes COMMAND sh -c
@@ -121,7 +136,7 @@ else()
   # existing outputs untouched), before any install/device/load step (exit 3 removes them), so a failed run never
   # leaves a stale output behind; an --out that cannot be written is exit 4.
   add_test(NAME view_cli_stale_outputs COMMAND sh -c
-           "o=\"$1/out.txt\"; rm -rf \"$1\"; mkdir -p \"$1/dir.txt\" || exit 1; printf stale > \"$o\"; printf stale > \"$o.json\"; \"$0\" --install /nonexistent/lomn --level lev1 --area vllg --backend null --out \"$o\" >/dev/null 2>&1; rc=$?; [ $rc -eq 3 ] || { echo \"missing install rc=$rc\"; exit 1; }; [ ! -e \"$o\" ] && [ ! -e \"$o.json\" ] || { echo 'stale output left after exit 3'; exit 1; }; printf stale > \"$o\"; printf stale > \"$o.json\"; \"$0\" --synthetic 1 --backend null --out \"$o\" --fov 0 >/dev/null 2>&1; [ $? -eq 2 ] || { echo 'bad --fov not exit 2'; exit 1; }; [ \"$(cat \"$o\")\" = stale ] && [ \"$(cat \"$o.json\")\" = stale ] || { echo 'exit 2 touched a pre-existing output'; exit 1; }; \"$0\" --synthetic 1 --backend null --out \"$o\" --synthetic 2 >/dev/null 2>&1; [ $? -eq 2 ] && [ -e \"$o\" ] && [ -e \"$o.json\" ] || { echo 'mode usage error touched a pre-existing output'; exit 1; }; \"$0\" --synthetic 1 --backend null --out \"$1/dir.txt\" >/dev/null 2>&1; rc=$?; [ $rc -eq 4 ] && [ -d \"$1/dir.txt\" ] || { echo \"directory out rc=$rc\"; exit 1; }"
+           "o=\"$1/out.txt\"; rm -rf \"$1\"; mkdir -p \"$1/dir.txt\" || exit 1; printf stale > \"$o\"; printf stale > \"$o.json\"; \"$0\" --install /nonexistent/lomn --level lev1 --area vllg --backend null --out \"$o\" >/dev/null 2>&1; rc=$?; [ $rc -eq 3 ] || { echo \"missing install rc=$rc\"; exit 1; }; [ ! -e \"$o\" ] && [ ! -e \"$o.json\" ] || { echo 'stale output left after exit 3'; exit 1; }; printf stale > \"$o\"; printf stale > \"$o.json\"; \"$0\" --synthetic 1 --backend null --out \"$o\" --fov 0 >/dev/null 2>&1; [ $? -eq 2 ] || { echo 'bad --fov not exit 2'; exit 1; }; [ \"$(cat \"$o\")\" = stale ] && [ \"$(cat \"$o.json\")\" = stale ] || { echo 'exit 2 touched a pre-existing output'; exit 1; }; \"$0\" --synthetic 1 --backend null --out \"$o\" --synthetic 3 >/dev/null 2>&1; [ $? -eq 2 ] && [ -e \"$o\" ] && [ -e \"$o.json\" ] || { echo 'mode usage error touched a pre-existing output'; exit 1; }; \"$0\" --synthetic 1 --backend null --out \"$1/dir.txt\" >/dev/null 2>&1; rc=$?; [ $rc -eq 4 ] && [ -d \"$1/dir.txt\" ] || { echo \"directory out rc=$rc\"; exit 1; }"
            $<TARGET_FILE:lomn_view> ${CMAKE_CURRENT_BINARY_DIR}/view_stale)
   # C5: the null backend keeps only the first frame's call log (bounded memory): --frames 3 writes the --frames 1 log.
   add_test(NAME view_cli_null_frames COMMAND sh -c
@@ -178,7 +193,7 @@ endif()
 # Unit tests: natively, and under Node when cross-compiled with emcmake (CMAKE_CROSSCOMPILING_EMULATOR=node).
 add_executable(lomn_tests tests/test_main.cpp tests/test_fs.cpp tests/test_rhi_null.cpp tests/test_loop.cpp tests/test_sage_blockfile.cpp tests/test_sage_blockchain.cpp tests/test_sage_slb.cpp tests/test_sage_xfile.cpp tests/test_sage_image.cpp
                tests/test_rhi_mesh.cpp tests/test_view_mips.cpp tests/test_view_area.cpp tests/test_d3d.cpp tests/test_sage_osi.cpp
-               tests/test_area_states.cpp)
+               tests/test_area_states.cpp tests/test_sage_frame.cpp)
 target_link_libraries(lomn_tests PRIVATE lomn_area)
 target_include_directories(lomn_tests PRIVATE "${LOMN_TOOLCHAIN_DIR}/include")
 if(EMSCRIPTEN)

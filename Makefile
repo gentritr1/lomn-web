@@ -47,6 +47,8 @@ test-wasm: wasm test-native $(VENV)/.ok
 	timeout 120 $(PY) tools/harness/compare.py trace build/native/determinism/a/trace.jsonl build/wasm/determinism/a/trace.jsonl
 	cmp build/native/determinism/a/calls.txt build/wasm/determinism/a/calls.txt
 	cmp build/native/a7/a/calls.txt build/wasm/a7/a/calls.txt
+	cmp build/native/a9/a/state.txt build/wasm/a9/a/state.txt
+	cmp build/native/a9/a/calls.txt build/wasm/a9/a/calls.txt
 
 test-web: site
 	cd web && timeout 60 node --test tests/serve_test.mjs

@@ -186,7 +186,7 @@ TEST_CASE("area: camera fallback from the POS start, yaw towards the bounds cent
   CHECK(c.eye[1] == 0.0f);  // --eye is used as given
 }
 
-TEST_CASE("area: null-backend frame draws opaque subsets before alpha ones and trans far-to-near") {
+TEST_CASE("area: null-backend frame follows the SAGE node order, DrawX's two passes and the trans SortIt order") {
   AreaData a = load_synthetic();
   std::vector<std::string> log;
   auto dev = rhi::create_null_device(&log);
@@ -195,29 +195,35 @@ TEST_CASE("area: null-backend frame draws opaque subsets before alpha ones and t
   AreaRenderer r;
   std::string err;
   REQUIRE_MESSAGE(r.upload(*dev, a, RenderOptions(), &err), err);
-  CHECK(r.pipelines() == 2);
+  CHECK(r.pipelines() == 0);         // M1a-3: pipelines are created per d3d::PipelineKey on first use
   CHECK(r.textures_created() == 3);  // white + 2
   log.clear();
   r.render(*dev, rt, a, make_camera(a, synthetic_camera(), 1.0f));
   CHECK(dev->last_frame_stats().draws == 10);
+  // Keys: area/nolight nodes cull CW -> 1 opaque, 2 alpha (cut, DrawX pass 2); back/trans nodes cull NONE -> 3 opaque,
+  // 4 alpha.
+  CHECK(r.pipelines() == 4);
   std::vector<std::string> draws;
   for (const auto& l : log)
     if (l.rfind("draw_indexed", 0) == 0) draws.push_back(l);
   REQUIRE(draws.size() == 10);
   for (const auto& d : draws) CHECK(d.find("rejected") == std::string::npos);
-  // Buffer ids: uniforms 1, quad vb/ib 2/3, blue vb/ib 4/5. Pipelines: 1 opaque, 2 alpha.
-  // main quad: red (opaque), missing->white (opaque), then cut (alpha pass); main blue; nolight blue; back blue;
-  // trans sorted far to near: blue @-70 before quad @-60 (record order is the opposite).
-  CHECK(draws[0] == "draw_indexed pipeline=1 vb=2 ib=3 first=0 count=6 bind_group=2+0");
-  CHECK(draws[1] == "draw_indexed pipeline=1 vb=2 ib=3 first=12 count=6 bind_group=1+256");
-  CHECK(draws[2] == "draw_indexed pipeline=2 vb=2 ib=3 first=6 count=6 bind_group=3+512");
-  CHECK(draws[3] == "draw_indexed pipeline=1 vb=4 ib=5 first=0 count=6 bind_group=1+768");
-  CHECK(draws[4].find("vb=4") != std::string::npos);  // nolight blue
-  CHECK(draws[5].find("vb=4") != std::string::npos);  // back blue
-  CHECK(draws[6].find("vb=4") != std::string::npos);  // trans blue @-70 (farther) first
-  CHECK(draws[7].find("pipeline=1 vb=2") != std::string::npos);  // trans quad @-60
-  CHECK(draws[9].find("pipeline=2 vb=2") != std::string::npos);  // its alpha subset last
-  CHECK(log.front().rfind("write_buffer 1 +0 2560 bytes sum=", 0) == 0);  // one uniform upload per frame
+  // Buffer ids: uniforms 1, quad vb/ib 2/3, blue vb/ib 4/5. MainArea: quad (red opaque, missing texture -> NULL ->
+  // white, then cut in pass 2), blue; NoLight: blue; Back: blue; Trans (SortIt, farthest greatest-Y point first): quad
+  // (|(50, -56) - (0, 10)| = 82.8) before blue (|(-8, -62) - (0, 10)| = 72.4).
+  CHECK(draws[0].rfind("draw_indexed pipeline=1 vb=2 ib=3 first=0 count=6 ", 0) == 0);
+  CHECK(draws[1].rfind("draw_indexed pipeline=1 vb=2 ib=3 first=12 count=6 ", 0) == 0);
+  CHECK(draws[2].rfind("draw_indexed pipeline=2 vb=2 ib=3 first=6 count=6 ", 0) == 0);
+  CHECK(draws[3].rfind("draw_indexed pipeline=1 vb=4 ", 0) == 0);  // main blue
+  CHECK(draws[4].rfind("draw_indexed pipeline=1 vb=4 ", 0) == 0);  // nolight blue (cull CW)
+  CHECK(draws[5].rfind("draw_indexed pipeline=3 vb=4 ", 0) == 0);  // back blue (cull NONE)
+  CHECK(draws[6].rfind("draw_indexed pipeline=3 vb=2 ib=3 first=0 ", 0) == 0);  // trans quad
+  CHECK(draws[8].rfind("draw_indexed pipeline=4 vb=2 ib=3 first=6 ", 0) == 0);  // its alpha subset in pass 2
+  CHECK(draws[9].rfind("draw_indexed pipeline=3 vb=4 ", 0) == 0);  // trans blue last
+  std::string wb;
+  for (const auto& l : log)
+    if (l.rfind("write_buffer 1 +0 ", 0) == 0) wb = l;
+  CHECK(wb.rfind("write_buffer 1 +0 10240 bytes sum=", 0) == 0);  // one 1024-byte slot per draw, one upload per frame
   CHECK(log.back() == "end_frame draws=10");
 }
 
@@ -503,7 +509,8 @@ TEST_CASE("area: interleaved vertex = position, normal, uv, colour (48-byte stri
   const Model& q = a.models[0];
   REQUIRE(q.vertices.size() == size_t(q.vertex_count) * kVertexFloats);
   const float* v1 = &q.vertices[1 * kVertexFloats];  // red quad corner (x1, 0, z0) = (-1, 0, -4), uv (1, 1)
-  CHECK(std::vector<float>(v1, v1 + 12) == std::vector<float>{-1, 0, -4, 0, -1, 0, 1, 1, 1, 0.5f, 1, 1});
+  // M1a-3: vertex colours are stored as the D3DCOLOR the vertex buffer holds: 0.5 -> 128 -> 128/255.
+  CHECK(std::vector<float>(v1, v1 + 12) == std::vector<float>{-1, 0, -4, 0, -1, 0, 1, 1, 1, 128.0f / 255.0f, 1, 1});
   const Model& b = a.models[1];  // no MeshNormals: zero normal; no MeshTextureCoords: uv 0; no colours: white
   CHECK(std::vector<float>(b.vertices.begin(), b.vertices.begin() + 12) == std::vector<float>{-8, 0, -2, 0, 0, 0, 0, 0, 1, 1, 1, 1});
 }
@@ -650,16 +657,18 @@ TEST_CASE("area: non-finite OBJ positions/orientations are skipped at load; the 
     CHECK(std::isfinite(a.bounds_min[k]));
     CHECK(std::isfinite(a.bounds_max[k]));
   }
-  // Buffers: uniforms 1, blue vb 2, quad vb 4, trio vb 6. Trans far-to-near from the origin: quad -30, trio -20, blue -10.
+  // Buffers: uniforms 1, blue vb 2, quad vb 4, trio vb 6. Trans order = GcTransDirector::SortIt from the eye (0,0,0): the
+  // farthest greatest-Y point (model space + position, xz only) first: quad (50, -26), trio (0, -19), blue (-8, -2).
   CameraSettings cs = synthetic_camera();
   cs.eye_set = true;
   CHECK(object_vbs(render_log(a, make_camera(a, cs, 1.0f))) == std::vector<int>{4, 6, 2});
-  // Non-finite distances (here injected after load) sort as +inf, i.e. farthest, ties in record order.
+  // Non-finite distances (injected after load): an infinite one is the farthest; a NaN one never wins a comparison, so
+  // that object is left over; the original would then keep a stale pick (no termination): we take the first remaining.
   AreaData b = a;
   b.placements[0].pos[0] = nan;  // blue
   b.placements[1].pos[2] = inf;  // quad
-  CHECK(object_vbs(render_log(b, make_camera(b, cs, 1.0f))) == std::vector<int>{2, 4, 6});
-  // A non-finite eye makes every distance non-finite: record order.
+  CHECK(object_vbs(render_log(b, make_camera(b, cs, 1.0f))) == std::vector<int>{4, 6, 2});
+  // A non-finite eye makes every distance NaN: each round takes the first remaining, i.e. record order.
   Camera c = make_camera(a, cs, 1.0f);
   c.eye[0] = nan;
   CHECK(object_vbs(render_log(a, c)) == std::vector<int>{2, 4, 6});

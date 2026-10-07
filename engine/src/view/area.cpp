@@ -7,13 +7,16 @@
 #include <cstring>
 #include <limits>
 #include <map>
+#include <tuple>
 #include <set>
 
 #include "lomn/d3d/device8.h"
+#include "lomn/d3d/ffp.h"
 #include "lomn/sage/blockchain.h"
 #include "lomn/sage/image.h"
 #include "lomn/sage/osi.h"
 #include "lomn/sage/xfile.h"
+#include "lomn/view/sage_frame.h"
 
 namespace lomn::view {
 namespace {
@@ -445,7 +448,8 @@ class Loader {
       for (int k = 0; k < 3; ++k) o[3 + k] = has_normals ? x.normals[v * 3 + k] : 0.0f;
       o[6] = has_uv ? x.uvs[v * 2] : 0.0f;
       o[7] = has_uv ? x.uvs[v * 2 + 1] : 0.0f;
-      for (int c = 0; c < 4; ++c) o[8 + c] = m.has_colors ? x.colors[v * 4 + c] : 1.0f;
+      // MeshVertexColors reach the D3D vertex buffer as a D3DCOLOR (8 bits per channel): quantised like D3DXCOLOR -> DWORD.
+      for (int c = 0; c < 4; ++c) o[8 + c] = m.has_colors ? d3d::quantize_unorm8(x.colors[v * 4 + c]) : 1.0f;
       if (v == 0 || p[1] >= m.greatest_y[1]) std::memcpy(m.greatest_y, p, sizeof m.greatest_y);  // GetGreatestZ: last max
       for (int k = 0; k < 3; ++k) {
         if (v == 0 || p[k] < m.bounds_min[k]) m.bounds_min[k] = p[k];
@@ -638,51 +642,9 @@ class Loader {
   uint64_t max_texture_bytes_ = kMaxAreaTextureBytes, max_geometry_bytes_ = kMaxAreaGeometryBytes;
 };
 
-const char* kWgsl = R"(// lomn M1a-2 unlit area shader. Uniform block per draw (dynamic offset).
-struct U {
-  wvp: mat4x4f,     // world * view * proj, D3D row-vector matrix uploaded as-is (column-major read == transpose)
-  diffuse: vec4f,   // material diffuse, used when the vertex has no colour
-  params: vec4f,    // x: 1 = use vertex colour, y: alpha reference (0..1), alpha pass discards a <= y
-}
-@group(0) @binding(0) var<uniform> u: U;
-@group(0) @binding(1) var tex: texture_2d<f32>;
-@group(0) @binding(2) var samp: sampler;
-struct VOut {
-  @builtin(position) pos: vec4f,
-  @location(0) uv: vec2f,
-  @location(1) color: vec4f,
-}
-// @location(1) is the vertex normal: declared so the layout is visible here, unused until M1a-3 lighting.
-@vertex fn vs(@location(0) p: vec3f, @location(1) n: vec3f, @location(2) uv: vec2f, @location(3) c: vec4f) -> VOut {
-  var o: VOut;
-  o.pos = u.wvp * vec4f(p, 1.0);
-  o.uv = uv;
-  o.color = select(u.diffuse, c, u.params.x > 0.5);
-  return o;
-}
-// Stage 0: COLOROP MODULATE(TEXTURE, DIFFUSE) (D3D default). Alpha: DrawX (0x005528c0) sets ALPHAOP SELECTARG2
-// (stage state 4 = 3) with ALPHAARG2 = TEXTURE (6 = 2), i.e. alpha = texture alpha, as below.
-// Not modelled (M1a-3 gap): DrawX ~lines 295-298 turn ALPHABLEND OFF for the alpha pass when the flag at
-// *param_2 + 0xc is set (alpha test only); this preview always blends.
-fn shade(i: VOut) -> vec4f {
-  let t = textureSample(tex, samp, i.uv);
-  return vec4f(t.rgb * i.color.rgb, t.a);
-}
-@fragment fn fs_opaque(i: VOut) -> @location(0) vec4f {
-  return vec4f(shade(i).rgb, 1.0);
-}
-@fragment fn fs_alpha(i: VOut) -> @location(0) vec4f {
-  let c = shade(i);
-  if (c.a <= u.params.y) {
-    discard;
-  }
-  return c;
-}
-)";
-
 }  // namespace
 
-const char* area_wgsl() { return kWgsl; }
+const char* area_wgsl() { return d3d::ffp_wgsl(); }
 
 bool load_area(const fs::FileSystem& fs, std::string_view level, std::string_view area, const AreaOptions& opt, AreaData& out,
                std::string* err, LoadError* kind) {
@@ -766,8 +728,122 @@ uint64_t release_cpu_copies(AreaData& a) {
 }
 
 namespace {
-constexpr uint32_t kSlot = rhi::uniform_stride(kAreaUniformBytes);  // one uniform slot per draw (256 bytes)
+constexpr uint32_t kSlot = static_cast<uint32_t>(rhi::uniform_stride(d3d::kFfpUniformBytes));  // one slot per draw
 }  // namespace
+
+// Everything that lives across frames: the D3D8 device (its state is history-dependent: the HUD view's mode carries
+// ALPHAREF 1 into the next frame), the game-side replay and the rhi object caches.
+struct AreaRenderer::Impl {
+  std::vector<std::string> local_log;
+  d3d::Device8 dev8;
+  SageFrame sage;
+  std::map<d3d::PipelineKey, rhi::PipelineId> pipelines;
+  std::map<std::tuple<int, int, int, int>, rhi::SamplerId> samplers;
+  std::map<std::pair<rhi::TextureId, rhi::SamplerId>, rhi::BindGroupId> groups;
+  bool initialised = false;
+  Impl(std::vector<std::string>* log, const std::vector<std::string>* names, const SageFrameOptions& so)
+      : dev8(log, names), sage(dev8, SageCaps(), so) {}
+};
+
+// DrawSink: one DrawSubset with faces -> one queued rhi draw (pipeline + bind group created on first use, before the
+// frame begins) with its own uniform slot.
+class AreaRenderer::Sink final : public d3d::DrawSink {
+ public:
+  struct Draw {
+    rhi::PipelineId pipeline;
+    rhi::BindGroupId group;
+    uint32_t model, first, count;
+  };
+  Sink(AreaRenderer& r, rhi::Device& dev, const AreaData& a) : r_(r), dev_(dev), a_(a) {}
+  std::vector<Draw> draws;
+  bool failed = false;
+  void draw(const d3d::State& s, const d3d::DrawRef& ref) override {
+    ++r_.stats_.draw_subsets;
+    if (ref.subset == UINT32_MAX || failed) return;  // an attribute id without faces
+    const Placement& p = a_.placements[ref.placement];
+    const Model& m = a_.models[p.model];
+    const SubsetDraw& sd = m.subsets[ref.subset];
+    if (draws.size() >= r_.uniform_slots_) {  // cannot happen: slots = placements x subsets
+      failed = true;
+      return;
+    }
+    uint32_t unsup = 0;
+    const d3d::PipelineKey key = d3d::pipeline_key(s, &unsup);
+    const rhi::SamplerDesc sdesc = d3d::sampler_desc(s, &unsup);
+    r_.stats_.unsupported |= unsup;
+    Impl& im = *r_.impl_;
+    rhi::PipelineId pipe = 0;
+    auto pit = im.pipelines.find(key);
+    if (pit != im.pipelines.end()) {
+      pipe = pit->second;
+    } else {
+      pipe = dev_.create_mesh_pipeline(d3d::pipeline_desc(key));
+      if (!pipe) {
+        failed = true;
+        return;
+      }
+      im.pipelines[key] = pipe;
+      ++r_.pipelines_created_;
+    }
+    const auto skey = std::make_tuple(int(sdesc.mag), int(sdesc.min), int(sdesc.mip), int(sdesc.max_anisotropy));
+    rhi::SamplerId samp = 0;
+    auto sit = im.samplers.find(skey);
+    if (sit != im.samplers.end()) {
+      samp = sit->second;
+    } else {
+      samp = dev_.create_sampler(sdesc);
+      if (!samp) {
+        failed = true;
+        return;
+      }
+      im.samplers[skey] = samp;
+    }
+    const uint32_t handle = s.texture[0];
+    const rhi::TextureId tex = handle && handle <= r_.gpu_textures_.size() ? r_.gpu_textures_[handle - 1] : r_.white_texture_;
+    rhi::BindGroupId bg = 0;
+    auto git = im.groups.find({tex, samp});
+    if (git != im.groups.end()) {
+      bg = git->second;
+    } else {
+      bg = dev_.create_bind_group({r_.uniforms_, d3d::kFfpUniformBytes, tex, samp});
+      if (!bg) {
+        failed = true;
+        return;
+      }
+      im.groups[{tex, samp}] = bg;
+    }
+    d3d::DrawInputs in;
+    in.vertex_has_diffuse = m.has_colors && r_.opt_.vertex_colors;
+    in.texture_bound = handle != 0;
+    float* u = reinterpret_cast<float*>(&r_.uniform_data_[draws.size() * size_t(kSlot)]);
+    d3d::pack_uniforms(s, in, u);
+    if (!r_.opt_.fog) u[89] = 0.0f;  // debug: fog flag (d.y) off
+    RenderStats& st = r_.stats_;
+    if (s.rs[d3d::rs::LIGHTING]) ++st.lit_draws;
+    if (s.rs[d3d::rs::FOGENABLE] && r_.opt_.fog) ++st.fogged_draws;
+    if (s.rs[d3d::rs::ALPHABLENDENABLE]) ++st.blended_draws;
+    if (s.rs[d3d::rs::ALPHATESTENABLE]) ++st.alpha_tested_draws;
+    if (!handle) ++st.null_texture_draws;
+    draws.push_back({pipe, bg, p.model, sd.first_index, sd.index_count});
+    // The shader-relevant state of this draw (lighting, colour source, stage-0 ops/args, alpha test, fog, texture
+    // transform, NULL texture) on top of the pipeline key.
+    char sig[160];
+    const uint32_t* t = s.tss[0];
+    std::snprintf(sig, sizeof sig, "%s|%u%u%u|%u%u%u%u%u%u|%u%u|%u%u|%u%u", key.str().c_str(), s.rs[d3d::rs::LIGHTING], in.vertex_has_diffuse ? 1u : 0u,
+                  in.texture_bound ? 1u : 0u, t[d3d::tss::COLOROP], t[d3d::tss::COLORARG1], t[d3d::tss::COLORARG2], t[d3d::tss::ALPHAOP],
+                  t[d3d::tss::ALPHAARG1], t[d3d::tss::ALPHAARG2], s.rs[d3d::rs::ALPHATESTENABLE], s.rs[d3d::rs::ALPHAFUNC],
+                  s.rs[d3d::rs::FOGENABLE], s.rs[d3d::rs::FOGTABLEMODE], t[d3d::tss::TEXTURETRANSFORMFLAGS], s.rs[d3d::rs::ALPHABLENDENABLE]);
+    if (variants_.insert(sig).second) ++st.shader_variants;
+  }
+  std::set<std::string> variants_;
+
+ private:
+  AreaRenderer& r_;
+  rhi::Device& dev_;
+  const AreaData& a_;
+};
+
+AreaRenderer::~AreaRenderer() { delete impl_; }
 
 bool AreaRenderer::upload(rhi::Device& dev, const AreaData& a, const RenderOptions& opt, std::string* err) {
   if (a.cpu_released) return fail(err, "render: area CPU copies were already released");
@@ -775,42 +851,17 @@ bool AreaRenderer::upload(rhi::Device& dev, const AreaData& a, const RenderOptio
   if (upload_attempted_) return fail(err, "render: renderer already uploaded (one upload per AreaRenderer)");
   upload_attempted_ = true;
   opt_ = opt;
-  rhi::MeshPipelineDesc pd;
-  pd.wgsl = kWgsl;
-  pd.uniform_bytes = kAreaUniformBytes;
-  pd.vertex_stride = kVertexFloats * 4;
-  pd.attributes = {{rhi::VertexFormat::Float32x3, 0, 0},
-                   {rhi::VertexFormat::Float32x3, 12, 1},
-                   {rhi::VertexFormat::Float32x2, 24, 2},
-                   {rhi::VertexFormat::Float32x4, 32, 3}};
-  pd.cull = rhi::CullMode::None;               // render mode 0x11: D3DCULL_NONE
-  pd.depth_compare = rhi::CompareFunc::LessEqual;  // D3DRS_ZFUNC LESSEQUAL
-  pd.depth_write = true;                       // ZWRITE on in both DrawX passes
-  pd.fs_entry = "fs_opaque";
-  pd.blend = rhi::BlendMode::Opaque;
-  opaque_ = dev.create_mesh_pipeline(pd);
-  pd.fs_entry = "fs_alpha";
-  // DrawX pass 2: ALPHABLENDENABLE 1 (SRCALPHA/INVSRCALPHA from SrPushRenderMode), ALPHATESTENABLE 1, ALPHAFUNC GREATER.
-  pd.blend = rhi::BlendMode::AlphaBlend;
-  alpha_ = dev.create_mesh_pipeline(pd);
-  if (!opaque_ || !alpha_) return fail(err, "render: mesh pipeline rejected");
-  pipelines_created_ = 2;
-  // MAG/MIN ANISOTROPIC (max 3) and MIP LINEAR set globally; GcArea::Render forces MAGFILTER LINEAR; ADDRESS never set.
-  rhi::SamplerDesc sd;
-  sd.max_anisotropy = 3;
-  sampler_ = dev.create_sampler(sd);
-  if (!sampler_) return fail(err, "render: sampler rejected");
   uniform_slots_ = a.stats.draws ? a.stats.draws : 1;
   uniforms_ = dev.create_uniform_buffer(uniform_slots_ * kSlot);
   if (!uniforms_) return fail(err, "render: uniform buffer rejected");
+  // Stands in for a NULL stage-0 texture (D3D8 leaves the texture argument undefined there; white keeps the colour).
   const uint8_t white[4] = {255, 255, 255, 255};
-  rhi::TextureId wt = dev.create_texture(1, 1, 1);
-  if (!wt || !dev.write_texture(wt, 0, white, 4)) return fail(err, "render: white texture rejected");
-  white_group_ = dev.create_bind_group({uniforms_, kAreaUniformBytes, wt, sampler_});
-  if (!white_group_) return fail(err, "render: bind group rejected");
+  white_texture_ = dev.create_texture(1, 1, 1);
+  if (!white_texture_ || !dev.write_texture(white_texture_, 0, white, 4)) return fail(err, "render: white texture rejected");
   textures_created_ = 1;
   uploaded_texture_bytes_ = 4;
-  texture_groups_.clear();
+  gpu_textures_.clear();
+  texture_names_.clear();
   for (const Texture& t : a.textures) {
     const MipLevel& top = t.mips.front();
     rhi::TextureId id = dev.create_texture(top.width, top.height, static_cast<uint32_t>(t.mips.size()));
@@ -820,9 +871,9 @@ bool AreaRenderer::upload(rhi::Device& dev, const AreaData& a, const RenderOptio
       uploaded_texture_bytes_ += t.mips[m].rgba.size();
     }
     ++textures_created_;
-    const rhi::BindGroupId bg = dev.create_bind_group({uniforms_, kAreaUniformBytes, id, sampler_});
-    if (!bg) return fail(err, "render: bind group rejected: " + t.request);
-    texture_groups_.push_back(bg);
+    gpu_textures_.push_back(id);
+    const size_t slash = t.request.find_last_of('/');
+    texture_names_.push_back(slash == std::string::npos ? t.request : t.request.substr(slash + 1));
   }
   models_.clear();
   for (const Model& m : a.models) {
@@ -836,77 +887,59 @@ bool AreaRenderer::upload(rhi::Device& dev, const AreaData& a, const RenderOptio
     models_.push_back(g);
   }
   uniform_data_.assign(size_t(uniform_slots_) * kSlot, 0);
+  SageFrameOptions so;
+  so.force_area_lighting = opt.force_area_lighting;
+  delete impl_;
+  impl_ = new Impl(opt.state_log, &texture_names_, so);
   uploaded_ = &a;
   return true;
 }
 
 bool AreaRenderer::render(rhi::Device& dev, rhi::TextureId target, const AreaData& a, const Camera& cam) {
-  if (uploaded_ != &a) {  // never uploaded, upload failed, or a different AreaData: no rhi call at all
+  if (uploaded_ != &a || !impl_) {  // never uploaded, upload failed, or a different AreaData: no rhi call at all
     if (!render_refused_logged_) {
       render_refused_logged_ = true;
       std::fprintf(stderr, "[area] render skipped: %s\n", uploaded_ ? "not the AreaData that was uploaded" : "no successful upload");
     }
     return false;
   }
-  // Object order: route groups, record order inside a group; trans sorted far-to-near (GcTransDirector::SortIt; the
-  // direction is INFERRED). Distances in double so the order is identical on every platform for equal floats. The sort
-  // key is a total order: a non-finite distance (NaN/Inf position or eye) counts as +inf (farthest); ties keep record
-  // order (stable sort).
-  static const sage::Route kOrder[] = {sage::Route::Main, sage::Route::Moveable, sage::Route::NoLightMoveable, sage::Route::Back};
-  std::vector<uint32_t> objects;
-  for (sage::Route r : kOrder)
-    for (uint32_t i = 0; i < a.placements.size(); ++i)
-      if (a.placements[i].route == r) objects.push_back(i);
-  std::vector<std::pair<double, uint32_t>> trans;
-  for (uint32_t i = 0; i < a.placements.size(); ++i)
-    if (a.placements[i].route == sage::Route::Trans) {
-      double d = 0;
-      for (int k = 0; k < 3; ++k) {
-        const double v = double(a.placements[i].pos[k]) - cam.eye[k];
-        d += v * v;
-      }
-      trans.push_back({std::isfinite(d) ? d : std::numeric_limits<double>::infinity(), i});
-    }
-  std::stable_sort(trans.begin(), trans.end(), [](const auto& x, const auto& y) { return x.first > y.first; });
-  for (const auto& t : trans) objects.push_back(t.second);
-
-  struct Item {
-    uint32_t placement, subset;
-  };
-  std::vector<Item> items;
-  for (uint32_t o : objects) {
-    const Model& m = a.models[a.placements[o].model];
-    for (int pass = 0; pass < 2; ++pass)
-      for (uint32_t s = 0; s < m.subsets.size(); ++s)
-        if (m.subsets[s].alpha == (pass == 1)) items.push_back({o, s});
+  Impl& im = *impl_;
+  stats_ = RenderStats();
+  if (!im.initialised) {
+    im.initialised = true;
+    im.sage.init_device();
+    // The area script's GcAreaDirector::SetFog only stores the statics (SetFogValue); SetFog(true) applies them.
+    im.sage.set_fog_value(a.fog.color, a.fog.start, a.fog.end, a.fog.density);
   }
-  const Mat4 vp = mat_mul(cam.view, cam.proj);
-  const uint32_t n = static_cast<uint32_t>(std::min<size_t>(items.size(), uniform_slots_));
-  for (uint32_t i = 0; i < n; ++i) {
-    const Placement& p = a.placements[items[i].placement];
-    const SubsetDraw& sd = a.models[p.model].subsets[items[i].subset];
-    float u[24];
-    const Mat4 wvp = mat_mul(p.world, vp);
-    std::memcpy(u, wvp.m, 64);
-    std::memcpy(u + 16, sd.diffuse, 16);
-    u[20] = opt_.vertex_colors && a.models[p.model].has_colors ? 1.0f : 0.0f;
-    u[21] = opt_.alpha_ref / 255.0f;
-    u[22] = 0.0f;
-    u[23] = 0.0f;
-    std::memcpy(&uniform_data_[size_t(i) * kSlot], u, sizeof u);
+  Sink sink(*this, dev, a);
+  im.dev8.set_sink(&sink);
+  const uint32_t calls0 = im.dev8.state_calls();
+  const uint64_t empty0 = im.sage.empty_subsets();
+  im.sage.frame(a, cam, frames_++);
+  im.dev8.set_sink(nullptr);
+  stats_.state_calls = im.dev8.state_calls() - calls0;
+  stats_.empty_subsets = static_cast<uint32_t>(im.sage.empty_subsets() - empty0);
+  if (sink.failed) {
+    std::fprintf(stderr, "[area] render failed: an rhi object was rejected\n");
+    return false;
   }
+  const uint32_t n = static_cast<uint32_t>(sink.draws.size());
+  stats_.rhi_draws = n;
   if (n) dev.write_buffer(uniforms_, 0, uniform_data_.data(), n * kSlot);
-  dev.begin_frame(target, opt_.clear);
+  // The frame starts from the last whole-viewport clear (ScRenderer::ClearRect: 0x00000000, z 1.0). Its alpha is not
+  // kept: the D3D8 back buffer is X8R8G8B8, so the PNG gets alpha 1 like every opaque draw.
+  const d3d::Color4 cc = d3d::argb_to_color(im.dev8.last_clear_argb());
+  const float clear[4] = {cc.r, cc.g, cc.b, 1.0f};
+  dev.begin_frame(target, clear);
   for (uint32_t i = 0; i < n; ++i) {
-    const Placement& p = a.placements[items[i].placement];
-    const SubsetDraw& sd = a.models[p.model].subsets[items[i].subset];
+    const Sink::Draw& s = sink.draws[i];
     rhi::DrawIndexedDesc d;
-    d.pipeline = sd.alpha ? alpha_ : opaque_;
-    d.vertices = models_[p.model].vb;
-    d.indices = models_[p.model].ib;
-    d.first_index = sd.first_index;
-    d.index_count = sd.index_count;
-    d.bind_group = sd.texture == kNoTexture ? white_group_ : texture_groups_[sd.texture];
+    d.pipeline = s.pipeline;
+    d.vertices = models_[s.model].vb;
+    d.indices = models_[s.model].ib;
+    d.first_index = s.first;
+    d.index_count = s.count;
+    d.bind_group = s.group;
     d.uniform_offset = i * kSlot;
     dev.draw_indexed(d);
   }

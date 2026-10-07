@@ -1,5 +1,6 @@
-// M1a-2 "first pixels": an area's static geometry, loaded the way GcAreaLoader::LoadArea does and drawn UNLIT and
-// textured straight on rhi (no D3D8 shim yet; that is M1a-3).
+// M1a-2 "first pixels" + M1a-3 "faithful states": an area's static geometry, loaded the way GcAreaLoader::LoadArea does,
+// and drawn by replaying the decompiled D3D8 call sequence (lomn/view/sage_frame.h) on the state shim (lomn/d3d/), which
+// compiles every DrawSubset to rhi.
 //
 // Load (CPU only, no device): Art.blk header (optional), enter_area (second = <lev>.blk, current = <area>.blk),
 // <area>_OBJ.slb -> route() per record -> for every record routed main / trans / back / moveable / no-light moveable:
@@ -12,8 +13,8 @@
 // (GcLightLoader::LoadLights 0x00470010, GrSetDefaultLighting 0x00470560), and the area script's fog / cave-lighting
 // literals from data/Base.osi (lomn/sage/osi.h).
 // Upload + render (rhi): one vertex and index buffer per model, one RGBA8 texture per resolved name (+ a 1x1 white
-// texture for untextured or missing ones), 2 mesh pipelines (opaque; alpha = blend + alpha test), one bind group per
-// texture, one 256-byte uniform slot per draw. See REPORT.md (M1a-2 reference bundle) for every decision.
+// texture standing in for a NULL stage-0 texture), pipelines created lazily per d3d::PipelineKey, one bind group per
+// (texture, sampler), one 1024-byte uniform slot per draw. See the M1a-2 and M1a-3 reference REPORTs.
 #pragma once
 #include <cstdint>
 #include <string>
@@ -210,13 +211,22 @@ struct Camera {
 Camera make_camera(const AreaData& area, const CameraSettings& s, float aspect);
 
 struct RenderOptions {
-  bool vertex_colors = true;  // diffuse = vertex colour when present (D3DMCS_COLOR1), else material diffuse
-  // ALPHAREF (0..255): the alpha pass discards a*255 <= ref (DrawX sets ALPHAFUNC 5 = D3DCMP_GREATER). The game's
-  // value is HISTORY-DEPENDENT: SrPushRenderMode (0x00531100) sets ALPHAREF 0 when ENTERING a 0x80000 mode and 1 only
-  // when LEAVING one; the D3D8 default is 0; area mode 0x11 itself sets nothing. 1 assumes a 0x80000 (sprite/HUD) mode
-  // ran earlier in the frame (INFERRED); --alpha-ref overrides. M1a-3 settles it from the real frame's mode sequence.
-  float alpha_ref = 1.0f;
-  float clear[4] = {0.0f, 0.0f, 0.0f, 1.0f};  // 0xff000000
+  bool vertex_colors = true;          // false: draw as if the vertex format had no DIFFUSE (debug)
+  bool force_area_lighting = false;   // true: LIGHTING on for the area nodes, as with night vision (debug / evidence)
+  bool fog = true;                    // false: never fog (debug)
+  std::vector<std::string>* state_log = nullptr;  // the D3D8 state log (A9), appended per rendered frame when set
+};
+// Per-frame counters of the last render() (metrics JSON).
+struct RenderStats {
+  uint32_t state_calls = 0;      // state-setting D3D8 calls that reached the device in the frame
+  uint32_t draw_subsets = 0;     // DrawSubset calls that drew faces (one DrawIndexedPrimitive each)
+  uint32_t empty_subsets = 0;    // DrawSubset calls on attribute ids without faces (no device call)
+  uint32_t rhi_draws = 0;        // indexed draws handed to rhi
+  uint32_t unsupported = 0;      // OR of d3d::Unsupported bits seen at draws
+  // Distinct (pipeline key + every state the uber-shader branches on) in the frame: the pipeline count a design that
+  // generated one WGSL variant per fixed-function state would need (the uber-shader needs only `pipelines`).
+  uint32_t shader_variants = 0;
+  uint32_t lit_draws = 0, fogged_draws = 0, blended_draws = 0, alpha_tested_draws = 0, null_texture_draws = 0;
 };
 
 // Frees the CPU-side vertex/index arrays and texture mip chains once they are on the GPU (upload copies them).
@@ -230,36 +240,40 @@ class AreaRenderer {
   // ONE upload per renderer: rhi has no destroy calls, so a repeat upload (after success or failure) is rejected
   // without creating anything; use a new AreaRenderer (and device) for another area.
   bool upload(rhi::Device& dev, const AreaData& area, const RenderOptions& opt, std::string* err);
-  // One frame into `target` (a render target with depth). Draw order: main, moveable, no-light, back, then trans
-  // sorted far-to-near from the eye (non-finite distances count as farthest); within each object the opaque subsets,
-  // then the alpha subsets (DrawX's 2 passes). Returns false, makes no rhi call and logs once on stderr unless upload()
-  // succeeded for this very AreaData object.
+  // One frame into `target` (a render target with depth): the SageFrame replay (sage_frame.h) on a d3d::Device8 whose
+  // DrawSink compiles every DrawSubset to an rhi draw (pipelines and (texture, sampler) bind groups created on first
+  // use, one uniform slot per draw). Returns false, makes no rhi call and logs once on stderr unless upload() succeeded
+  // for this very AreaData object. The D3D8 device persists across frames (render states are history-dependent).
   bool render(rhi::Device& dev, rhi::TextureId target, const AreaData& area, const Camera& cam);
   uint32_t pipelines() const { return pipelines_created_; }
   uint64_t uploaded_texture_bytes() const { return uploaded_texture_bytes_; }
   uint32_t textures_created() const { return textures_created_; }
+  const RenderStats& last_stats() const { return stats_; }
+  ~AreaRenderer();
 
  private:
   struct GpuModel {
     rhi::BufferId vb = 0, ib = 0;
   };
+  class Sink;
   RenderOptions opt_;
-  rhi::PipelineId opaque_ = 0, alpha_ = 0;
-  rhi::SamplerId sampler_ = 0;
   rhi::BufferId uniforms_ = 0;
   uint32_t uniform_slots_ = 0;
   std::vector<GpuModel> models_;
-  std::vector<rhi::BindGroupId> texture_groups_;  // per AreaData::textures index
-  rhi::BindGroupId white_group_ = 0;
-  uint32_t pipelines_created_ = 0, textures_created_ = 0;
+  std::vector<rhi::TextureId> gpu_textures_;  // per AreaData::textures index
+  rhi::TextureId white_texture_ = 0;
+  uint32_t pipelines_created_ = 0, textures_created_ = 0, frames_ = 0;
   uint64_t uploaded_texture_bytes_ = 0;
   std::vector<uint8_t> uniform_data_;
+  std::vector<std::string> texture_names_;  // device texture handle k -> texture_names_[k-1] (state log)
   const AreaData* uploaded_ = nullptr;  // set only by a successful upload
   bool upload_attempted_ = false, render_refused_logged_ = false;
+  RenderStats stats_;
+  struct Impl;
+  Impl* impl_ = nullptr;  // d3d::Device8 + SageFrame + pipeline / sampler / bind-group caches (lives across frames)
 };
 
-// The WGSL used by both pipelines (exposed for tests and the call-log checksum).
+// The fixed-function uber-shader (lomn/d3d/ffp.h), exposed for tests and the call-log checksum.
 const char* area_wgsl();
-constexpr uint32_t kAreaUniformBytes = 96;  // mat4 wvp, vec4 diffuse, vec4 params
 
 }  // namespace lomn::view
