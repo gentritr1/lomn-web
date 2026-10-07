@@ -99,6 +99,7 @@ class Parser {
   bool object(std::string type, int depth, uint32_t& idx) {
     if (depth > kXMaxDepth) return bad("nesting deeper than 64");
     idx = static_cast<uint32_t>(objs.size());
+    if (objs.size() >= kXMaxObjects) return bad("too many objects");
     objs.emplace_back();
     objs[idx].type = std::move(type);
     uint16_t t;
@@ -259,15 +260,23 @@ bool decode_mesh(const std::vector<Obj>& objs, const Obj& m, XMesh& out, std::st
     std::unordered_map<std::string, uint32_t> named;  // like the reference parser: the last object of a name wins
     for (uint32_t i = 0; i < objs.size(); ++i)
       if (!objs[i].name.empty()) named[objs[i].name] = i;
+    std::unordered_map<uint32_t, XMaterial> decoded;  // each Material object is decoded at most once
     for (const Member& mem : ml->members) {
-      const Obj* mo = nullptr;
+      uint32_t oi = 0;
       if (mem.is_ref) {
         auto it = named.find(mem.ref);
-        if (it != named.end()) mo = &objs[it->second];
+        if (it == named.end()) continue;
+        oi = it->second;
       } else {
-        mo = &objs[mem.child];
+        oi = mem.child;
       }
-      if (!mo || mo->type != "Material") continue;
+      const Obj* mo = &objs[oi];
+      if (mo->type != "Material") continue;
+      if (auto hit = decoded.find(oi); hit != decoded.end()) {
+        out.materials.push_back(hit->second);
+        if (out.materials.size() > nmat) return fail(err, "x: material count differs from MeshMaterialList");
+        continue;
+      }
       if (mo->floats.size() < 11) return fail(err, "x: Material floats short");
       XMaterial mat;
       std::copy(mo->floats.begin(), mo->floats.begin() + 4, mat.diffuse);
@@ -280,7 +289,8 @@ bool decode_mesh(const std::vector<Obj>& objs, const Obj& m, XMesh& out, std::st
           mat.texture = tf->strings.front();
         }
       }
-      out.materials.push_back(std::move(mat));
+      out.materials.push_back(decoded.emplace(oi, std::move(mat)).first->second);
+      if (out.materials.size() > nmat) return fail(err, "x: material count differs from MeshMaterialList");
     }
     if (out.materials.size() != nmat) return fail(err, "x: material count differs from MeshMaterialList");
   }

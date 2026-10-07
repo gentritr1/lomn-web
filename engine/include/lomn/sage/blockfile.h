@@ -30,6 +30,11 @@ constexpr size_t kBlockNameSize = 40;
 // LZSS can expand at most 144 output bytes per 17 input bytes (one flag byte + 8 pairs of 18 bytes): a declared
 // full size above 9 x stored size cannot come from a valid stream and is rejected before any allocation.
 constexpr uint64_t kLzssMaxRatio = 9;
+// Absolute caps (spec §5), from measurements over every .blk of the Beta install (189 files; Python scan of
+// the entry tables, 2026-10-07): the largest full_size is 2,511,728 bytes, so 64 MiB leaves >= 26x headroom.
+// The longest StrCmp run past an unterminated 40-byte name is 2 bytes (2 such names exist); 512 is 256x that.
+constexpr uint64_t kMaxEntrySize = 64u << 20;
+constexpr size_t kMaxNameRun = 512;
 
 // ScBlock::StrCmp (0x0060fd70): byte compare that folds only 'A'..'Z' with |0x60; a shorter string sorts first.
 int block_strcmp(std::string_view a, std::string_view b);

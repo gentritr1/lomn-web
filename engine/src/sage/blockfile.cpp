@@ -76,6 +76,18 @@ bool decode_lzss(const uint8_t* in, size_t in_size, uint32_t out_size, std::vect
   return true;
 }
 
+// Extends a 40-byte unterminated name with the in-memory bytes StrCmp keeps reading, up to the next NUL or the end
+// of the table. false when the run is longer than kMaxNameRun (hostile table: each name would copy up to the whole
+// remaining table, count^2 bytes overall).
+static bool extend_name_run(const std::vector<uint8_t>& table, size_t entry, std::string& lookup_name) {
+  size_t ext = 0;
+  for (size_t k = entry * kBlockEntrySize + kBlockNameSize; k < table.size() && table[k] != 0; ++k) {
+    if (++ext > kMaxNameRun) return false;
+    lookup_name.push_back(static_cast<char>(table[k]));
+  }
+  return true;
+}
+
 bool BlockFile::open(uint64_t file_size, RangeReader reader, std::string* err) {
   *this = BlockFile();
   std::vector<uint8_t> head;
@@ -98,8 +110,7 @@ bool BlockFile::open(uint64_t file_size, RangeReader reader, std::string* err) {
     be.name_terminated = len < kBlockNameSize;
     be.lookup_name = be.name;
     if (!be.name_terminated)  // StrCmp keeps reading the in-memory table after the 40 name bytes
-      for (size_t k = static_cast<size_t>(i) * kBlockEntrySize + kBlockNameSize; k < table.size() && table[k] != 0; ++k)
-        be.lookup_name.push_back(static_cast<char>(table[k]));
+      if (!extend_name_run(table, i, be.lookup_name)) return fail(err, "blk: unterminated name run exceeds 512 bytes");
     be.stored_size = le32(e + 40);
     be.full_size = le32(e + 44);
     be.flags = le32(e + 48);
@@ -151,6 +162,7 @@ bool BlockFile::read(size_t index, std::vector<uint8_t>& out, std::string* err) 
   if (!open_) return fail(err, "blk: not open");
   if (index >= entries_.size()) return fail(err, "blk: entry index out of range");
   const BlockEntry& e = entries_[index];
+  if (e.full_size > kMaxEntrySize) return fail(err, "blk: entry too large");
   bool compressed = (e.flags & 1) != 0;
   uint64_t span = compressed ? e.stored_size : e.full_size;
   if (!in_range(file_size_, e.offset, span)) return fail(err, "blk: entry '" + e.name + "' offset+size outside the file");

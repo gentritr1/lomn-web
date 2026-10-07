@@ -153,6 +153,47 @@ TEST_CASE("blockfile: a 40-byte name without NUL runs on into the size fields, a
   CHECK_FALSE(last.read(0, out, &err));  // offset 0x44444444 is outside the file
 }
 
+TEST_CASE("blockfile: unterminated name runs are capped (no quadratic table copy)") {
+  // Hostile table with no NUL anywhere: each name would run to the end of the table, count^2 * 28 bytes in total.
+  // 12000 entries (672 KB) aborted wasm32 before the cap; it must be a prompt error now.
+  {
+    Bytes b;
+    putstr(b, "BLKF");
+    put32(b, 1);
+    put32(b, 12000);
+    b.insert(b.end(), size_t{12000} * 56, 'A');
+    BlockFile bf;
+    std::string err;
+    CHECK_FALSE(bf.open_bytes(std::move(b), &err));
+    CHECK(err.find("unterminated name run") != std::string::npos);
+  }
+  // A short, real-looking run (the Beta files have 1 and 2 bytes) still resolves exactly as before.
+  {
+    std::string longname(36, 'q');
+    longname += ".dds";
+    Bytes raw = make_blk({stored("a.dds", "1"), stored(longname, "x")});
+    // entry 1: mBlkSize bytes "ABC\0" -> the C string is the 40 name bytes + "ABC"
+    set32(raw, 12 + 56 + 40, 0x00434241u);
+    BlockFile bf = open_ok(raw);
+    CHECK(bf.entries()[1].lookup_name == longname + "ABC");
+    CHECK(bf.find(longname + "abc") == 1);
+  }
+  // Boundary: a run of exactly 512 bytes after the name is accepted, 513 is rejected.
+  for (size_t ext : {size_t{512}, size_t{513}}) {
+    Bytes b;
+    putstr(b, "BLKF");
+    put32(b, 1);
+    put32(b, 10);
+    b.resize(12 + 560, 0);
+    for (size_t k = 0; k < 40; ++k) b[12 + k] = 'q';
+    for (size_t k = 0; k < ext; ++k) b[12 + 40 + k] = 'A';
+    BlockFile bf;
+    std::string err;
+    CHECK(bf.open_bytes(std::move(b), &err) == (ext == 512));
+    if (ext == 513) CHECK(err.find("unterminated name run") != std::string::npos);
+  }
+}
+
 TEST_CASE("blockfile: malformed containers are rejected") {
   BlockFile bf;
   std::string err;
@@ -195,6 +236,28 @@ TEST_CASE("blockfile: entry offset/size are overflow-checked against the file") 
     BlockFile bf = open_ok(c);
     REQUIRE(bf.read(0, out, &err));
     CHECK(out.empty());
+  }
+}
+
+TEST_CASE("blockfile: an entry larger than kMaxEntrySize is refused before any allocation") {
+  Bytes b = make_blk({stored("a", "12345678")});
+  std::vector<uint8_t> out(3, 9);
+  std::string err;
+  {
+    Bytes c = b;
+    set32(c, 12 + 44, static_cast<uint32_t>(kMaxEntrySize + 1));  // stored (flags 2): full_size bytes would be read
+    BlockFile bf = open_ok(c);
+    CHECK_FALSE(bf.read(0, out, &err));
+    CHECK(err.find("entry too large") != std::string::npos);
+  }
+  {
+    Bytes c = b;
+    set32(c, 12 + 48, 3);                                          // compressed: full_size is the output size
+    set32(c, 12 + 40, 8);
+    set32(c, 12 + 44, static_cast<uint32_t>(kMaxEntrySize + 1));
+    BlockFile bf = open_ok(c);
+    CHECK_FALSE(bf.read(0, out, &err));
+    CHECK(err.find("entry too large") != std::string::npos);
   }
 }
 

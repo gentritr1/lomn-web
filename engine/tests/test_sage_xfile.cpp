@@ -1,3 +1,4 @@
+#include <chrono>
 #include <initializer_list>
 
 #include "doctest.h"
@@ -255,4 +256,63 @@ TEST_CASE("x: mesh index validation") {
   bad_colors.obj("Mesh").ints({3}).floats({0, 0, 0, 1, 0, 0, 1, 1, 0}).ints({1, 3, 0, 1, 2});
   bad_colors.obj("MeshVertexColors").ints({1, 3}).floats({1, 1, 1, 1}).close().close();  // colour for vertex 3 of 3
   CHECK_FALSE(parse_x(bad_colors.b.data(), bad_colors.b.size(), xf, &err));
+}
+
+namespace {
+
+// Material "M" with n empty child objects, and a MeshMaterialList that references {M} n times (all faces use
+// material 0). Decoding M once per reference is n^2 work: 40000 refs took 4.8 s before the memo.
+Bytes many_refs(uint32_t n, uint32_t nmat) {
+  X x;
+  x.obj("Mesh").ints({3}).floats({0, 0, 0, 1, 0, 0, 1, 1, 0}).ints({1, 3, 0, 1, 2});
+  x.name("Material").name("M").open().floats({1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0});
+  for (uint32_t i = 0; i < n; ++i) x.obj("A").close();
+  x.close();
+  x.obj("MeshMaterialList").ints({nmat, 1, 0});
+  for (uint32_t i = 0; i < n; ++i) x.ref("M");
+  x.close();
+  x.close();
+  return x.b;
+}
+
+double seconds_since(std::chrono::steady_clock::time_point t0) {
+  return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+}
+
+}  // namespace
+
+TEST_CASE("x: many material references stay linear (memoised Material decode)") {
+  XFile xf;
+  std::string err;
+  const uint32_t n = 40000;
+  {
+    Bytes b = many_refs(n, n);
+    auto t0 = std::chrono::steady_clock::now();
+    bool ok = parse_x(b.data(), b.size(), xf, &err);
+    double dt = seconds_since(t0);
+    REQUIRE(ok);
+    CHECK(xf.mesh.materials.size() == n);
+    CHECK(dt < 1.0);  // old code: ~4.8 s native
+  }
+  {
+    Bytes b = many_refs(n, 1);  // 40000 refs against nMaterials = 1: fail at the second one
+    auto t0 = std::chrono::steady_clock::now();
+    bool ok = parse_x(b.data(), b.size(), xf, &err);
+    double dt = seconds_since(t0);
+    CHECK_FALSE(ok);
+    CHECK(err.find("material count") != std::string::npos);
+    CHECK(dt < 1.0);
+  }
+}
+
+TEST_CASE("x: the object arena is capped at kXMaxObjects") {
+  XFile xf;
+  std::string err;
+  for (uint32_t count : {kXMaxObjects, kXMaxObjects + 1}) {
+    X x;
+    for (uint32_t i = 0; i < count; ++i) x.obj("A").close();
+    bool ok = parse_x(x.b.data(), x.b.size(), xf, &err);
+    CHECK(ok == (count == kXMaxObjects));
+    if (!ok) CHECK(err.find("too many objects") != std::string::npos);
+  }
 }

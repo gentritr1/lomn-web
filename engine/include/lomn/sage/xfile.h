@@ -17,6 +17,9 @@
 namespace lomn::sage {
 
 constexpr int kXMaxDepth = 64;
+// Cap on data objects per file (the parser keeps an arena entry per object). Measured over all 2,653 .x entries of
+// the Beta install: at most 5,489 objects (vllg.blk main1.x). 16 x 5,489 = 87,824, rounded up to a power of two.
+constexpr uint32_t kXMaxObjects = 131072;
 
 struct XMaterial {
   float diffuse[4] = {};   // faceColor RGBA
