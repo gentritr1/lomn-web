@@ -145,10 +145,16 @@ class WebGpuDevice final : public Device {
   }
 
   BufferId create_uniform_buffer(uint32_t bytes) override {
+    const uint64_t cap = detail::uniform_capacity(bytes);
+    if (bytes && cap == 0) {
+      // Over kMaxBufferBytes: registered without storage and no Dawn buffer (every later use is rejected by the registry).
+      reject("create_uniform_buffer", "size over kMaxBufferBytes (id registered without storage)");
+      return reg_.add_buffer({BufKind::Uniform, 0});
+    }
     WGPUBufferDescriptor bd = WGPU_BUFFER_DESCRIPTOR_INIT;
-    bd.size = (uint64_t(bytes) + kUniformAlign - 1) / kUniformAlign * kUniformAlign;
+    bd.size = cap;
     bd.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
-    BufferId id = reg_.add_buffer({BufKind::Uniform, static_cast<uint32_t>(bd.size)});
+    BufferId id = reg_.add_buffer({BufKind::Uniform, static_cast<uint32_t>(cap)});
     buffers_[id] = wgpuDeviceCreateBuffer(dev_, &bd);
     return id;
   }
@@ -247,12 +253,12 @@ class WebGpuDevice final : public Device {
     pass_depth_ = false;
     WGPUTextureView view = nullptr;
     const Target* tgt = nullptr;
+    // An unknown id, a sampled texture or 0 without a surface: a counted rejection (shared rule with the null backend);
+    // draw/end_frame become no-ops for this frame.
+    const std::string why = reg_.check_begin_frame(target, surface_ != nullptr);
+    if (!why.empty()) return reject("begin_frame", why);
     if (target == 0) {
-      // Skip the frame (draw/end_frame become no-ops) rather than touching a null surface or texture.
-      if (!surface_) {
-        log_skip_once("no presentation surface (headless device)");
-        return;
-      }
+      // A transient surface failure (browser) still skips the frame with a once-only log: it is not a caller error.
       WGPUSurfaceTexture st = WGPU_SURFACE_TEXTURE_INIT;
       wgpuSurfaceGetCurrentTexture(surface_, &st);
       const bool ok = (st.status == WGPUSurfaceGetCurrentTextureStatus_SuccessOptimal ||
@@ -267,10 +273,7 @@ class WebGpuDevice final : public Device {
       pass_format_ = surface_format_;
     } else {
       auto it = targets_.find(target);
-      if (it == targets_.end()) {
-        log_skip_once("unknown render target " + std::to_string(target));
-        return;
-      }
+      if (it == targets_.end()) return reject("begin_frame", "unknown render target");  // registry and targets_ agree
       tgt = &it->second;
       view = tgt->view;
       pass_format_ = WGPUTextureFormat_RGBA8Unorm;
@@ -485,7 +488,7 @@ class WebGpuDevice final : public Device {
     p.mesh = true;
     p.mesh_desc = d;
     p.module = shader(d.wgsl);
-    p.layout = mesh_layout(uniform_stride(d.uniform_bytes), detail::kMeshSlots);
+    p.layout = mesh_layout(static_cast<uint32_t>(uniform_stride(d.uniform_bytes)), detail::kMeshSlots);  // <= 65536: validated
     WGPUPipelineLayoutDescriptor pl = WGPU_PIPELINE_LAYOUT_DESCRIPTOR_INIT;
     pl.bindGroupLayoutCount = 1;
     pl.bindGroupLayouts = &p.layout;
@@ -502,7 +505,7 @@ class WebGpuDevice final : public Device {
       reject("create_bind_group", why);
       return 0;
     }
-    const uint32_t stride = uniform_stride(d.uniform_bytes), slots = detail::bind_slots(d);
+    const uint32_t stride = static_cast<uint32_t>(uniform_stride(d.uniform_bytes)), slots = detail::bind_slots(d);
     std::vector<WGPUBindGroupEntry> e;  // one entry per populated slot, matching mesh_layout(stride, slots)
     if (slots & detail::kSlotUniforms) {
       WGPUBindGroupEntry x = WGPU_BIND_GROUP_ENTRY_INIT;

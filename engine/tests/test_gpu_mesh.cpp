@@ -1,6 +1,10 @@
 // rhi WebGPU backend on Dawn (headless), without lomn_area: local WGSL only. Exits 77 (ctest SKIP) without an adapter.
 //  1. Blend: an opaque quad (blue), then an AlphaBlend quad (red, texture alpha 128) over it -> SRCALPHA/INVSRCALPHA
 //     = (128, 0, 127) and the target's alpha stays 255.
+//  1b. Depth state that can fail: the NEAR quad drawn first, then the far one -> LessEqual + depth write keeps the
+//     near colour; near with depth_write = false lets the far one through; compare Always keeps the last-drawn.
+//  1c. begin_frame on an unknown id, a sampled texture or 0 (headless) is a counted rejection; its draws are skipped.
+//  1d. A uniform buffer over kMaxBufferBytes gets an id without storage (no Dawn buffer); every use is rejected.
 //  2. An M0 pipeline drawn into a depth-enabled target keeps its pixels: byte-identical to the same draw into a target
 //     without depth, and it is not depth-tested against a mesh quad drawn first nearer the camera (compare Always).
 //  3. Invalid M0 draws (unknown pipeline, a mesh pipeline, unknown uniform buffer) are rejected and counted, never
@@ -113,6 +117,61 @@ int main() {
   if (!dev->read_pixels(rt, px)) return 1;
   report(near(&px[(4 * 8 + 4) * 4], 128, 0, 127, 255) && dev->last_frame_stats().draws == 2,
          "blend (4,4) want 128,0,127,255: SRCALPHA/INVSRCALPHA, target alpha kept", &px[(4 * 8 + 4) * 4]);
+
+  // 1b. Depth state that can fail: the NEAR quad (red, z 0.25) is drawn FIRST, then the FAR one (blue, z 0.5).
+  //   LessEqual + depth write: the far quad fails the test -> red.
+  //   Near drawn with depth_write = false: nothing was written, the far quad passes -> blue.
+  //   Compare Always (depth write on): the last-drawn quad wins -> blue.
+  pd.fs_entry = "fs_opaque";
+  pd.blend = BlendMode::Opaque;
+  pd.depth_write = false;
+  PipelineId nowrite = dev->create_mesh_pipeline(pd);
+  pd.depth_write = true;
+  pd.depth_compare = CompareFunc::Always;
+  PipelineId always = dev->create_mesh_pipeline(pd);
+  if (!nowrite || !always) return std::printf("FAIL setup (depth pipelines)\n"), 1;
+  struct DepthCase {
+    PipelineId near_pipe, far_pipe;
+    int r, g, b;
+    const char* what;
+  };
+  const DepthCase depth_cases[] = {
+      {opaque, opaque, 255, 0, 0, "near then far, LessEqual + depth write: far rejected (want red)"},
+      {nowrite, opaque, 0, 0, 255, "near (depth_write=false) then far: far passes (want blue)"},
+      {always, always, 0, 0, 255, "near then far, compare Always: last drawn wins (want blue)"},
+  };
+  for (const DepthCase& dc : depth_cases) {
+    dev->begin_frame(rt, clear);
+    dev->draw_indexed({dc.near_pipe, vb, ib, 6, 6, bw, 0});
+    dev->draw_indexed({dc.far_pipe, vb, ib, 0, 6, bw, 0});
+    dev->end_frame();
+    if (!dev->read_pixels(rt, px)) return 1;
+    report(near(&px[(4 * 8 + 4) * 4], dc.r, dc.g, dc.b, 255) && dev->last_frame_stats().draws == 2, dc.what, &px[(4 * 8 + 4) * 4]);
+  }
+
+  // 1c. begin_frame on an unknown id, a sampled texture or 0 (no surface: headless) is a counted rejection, and the
+  //     frame's draws are skipped (not drawn, not counted); the next valid frame renders normally.
+  for (TextureId bad : {TextureId(999), tw, TextureId(0)}) {
+    dev->begin_frame(bad, clear);
+    dev->draw_indexed({opaque, vb, ib, 0, 6, bw, 0});
+    dev->end_frame();
+    const FrameStats bs = dev->last_frame_stats();
+    std::printf("%s begin_frame(%u) rejected=%u draws=%u (want 1, 0)\n", bs.rejected == 1 && bs.draws == 0 ? "ok  " : "FAIL", bad,
+                bs.rejected, bs.draws);
+    ok = ok && bs.rejected == 1 && bs.draws == 0;
+  }
+
+  // 1d. A uniform buffer over kMaxBufferBytes: an id without storage (no Dawn buffer, so no Dawn error); its creation,
+  //     a write and a bind group using it are 3 counted rejections.
+  dev->begin_frame(rt, clear);  // resets the per-frame counters
+  dev->end_frame();
+  const BufferId huge = dev->create_uniform_buffer(0xFFFFFFFFu);
+  dev->write_buffer(huge, 0, tint, sizeof tint);
+  const BindGroupId hb = dev->create_bind_group({huge, 16, tw, s});
+  const uint32_t hr = dev->last_frame_stats().rejected;
+  std::printf("%s oversized uniform buffer: id=%u bind_group=%u rejected=%u (want id != 0, 0, 3)\n", huge && !hb && hr == 3 ? "ok  " : "FAIL",
+              huge, hb, hr);
+  ok = ok && huge && !hb && hr == 3;
 
   // 2. M0 pipeline into a depth target.
   PipelineDesc m0;

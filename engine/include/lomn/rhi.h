@@ -7,7 +7,13 @@
 // Ids are never reused within a device; every new call validates its ids and sizes in BOTH backends (shared rules in
 // src/rhi/registry.h): an invalid create returns 0, an invalid write/draw is rejected (logged by the null backend,
 // reported on stderr by WebGPU) and never reaches the GPU.
+// Not validated (documented limits of the M1a-2 surface):
+//  - index VALUES are not checked against the vertex count: WebGPU's robust buffer access keeps an out-of-range vertex
+//    fetch inside the buffer, and the data path (parse_x + lomn_area) already bounds every index;
+//  - WGSL vs pipeline/bind-group layout mismatches (missing entry point, wrong binding type) are not detected here: they
+//    surface only as a Dawn uncaptured-error message on stderr and that pipeline's frame draws nothing.
 #pragma once
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -30,7 +36,9 @@ constexpr uint32_t kMaxVertexAttributes = 8;
 // Mesh uniform blocks: up to WebGPU's default maxUniformBufferBindingSize. A block occupies a slot of
 // uniform_stride(bytes) = bytes rounded up to kUniformAlign; dynamic offsets stay multiples of kUniformAlign.
 constexpr uint32_t kMaxUniformBytes = 65536;
-constexpr uint32_t uniform_stride(uint32_t bytes) { return (bytes + kUniformAlign - 1) / kUniformAlign * kUniformAlign; }
+// Computed in u64 so it never wraps (uniform_stride(0xFFFFFFFF) == 4 GiB, not 0); for valid sizes (<= kMaxUniformBytes)
+// the result fits in uint32_t.
+constexpr uint64_t uniform_stride(uint32_t bytes) { return (uint64_t(bytes) + kUniformAlign - 1) / kUniformAlign * kUniformAlign; }
 
 struct PipelineDesc {
   std::string wgsl;               // must define the vertex/fragment entry points below
@@ -43,7 +51,9 @@ struct FrameStats {
   uint32_t draws = 0;            // M0 draws + M1a-2 indexed draws accepted this frame
   uint32_t pipelines_total = 0;  // M0 + mesh pipelines created so far
   uint64_t indices = 0;          // M1a-2: indices submitted by draw_indexed this frame
-  uint32_t rejected = 0;         // M1a-2: calls rejected by validation since this frame's begin_frame (any call kind)
+  // M1a-2: calls rejected by validation since the last begin_frame (any call kind, creation calls included; before the
+  // first begin_frame: since the device was created). A rejected begin_frame counts 1 and resets the others.
+  uint32_t rejected = 0;
 };
 
 // ---- M1a-2 additive types ----
@@ -64,12 +74,16 @@ struct VertexAttribute {
 enum class BlendMode : uint8_t { Opaque, AlphaBlend };
 // Numbered like D3DCMPFUNC - 1 (D3DCMP_NEVER = 1 ... D3DCMP_ALWAYS = 8).
 enum class CompareFunc : uint8_t { Never, Less, Equal, LessEqual, Greater, NotEqual, GreaterEqual, Always };
-enum class CullMode : uint8_t { None, Front, Back };  // None = render mode 0x11 (D3DCULL_NONE)
+// None = render mode 0x11 (D3DCULL_NONE). Front/Back follow WebGPU's front face, counter-clockwise (CCW). D3D8's default
+// front face is clockwise (D3DCULL_CCW culls counter-clockwise = back faces): M1a-3 maps D3DCULL_* onto these.
+enum class CullMode : uint8_t { None, Front, Back };
 
 // Pipeline for indexed meshes. Bind group 0: @binding(0) var<uniform> (dynamic offset, bound size
 // uniform_stride(uniform_bytes)), @binding(1) texture_2d<f32>, @binding(2) sampler (filtering). One vertex buffer
 // (slot 0), u32 indices, triangle list. A bind group is compatible with a pipeline when both have the same uniform
-// stride and the same populated slots (backends cache one layout per (stride, slots)).
+// stride and the same populated slots (backends cache one layout per (stride, slots)). Visibility: the uniform block is
+// visible to both stages; the texture and sampler bindings are FRAGMENT-ONLY (no vertex texture fetch).
+// Every enum field (and SamplerDesc's) is range-checked: a value past the last enumerator is rejected.
 // Alpha test has no fixed-function equivalent in WebGPU: it is a `discard` in the fragment entry point (pick a
 // different fs_entry per pipeline).
 struct MeshPipelineDesc {
@@ -118,9 +132,13 @@ class Device {
   virtual std::string backend() const = 0;   // "null" | "webgpu"
   virtual std::string adapter() const = 0;   // adapter description, or "none"
   virtual TextureId create_render_target(uint32_t width, uint32_t height) = 0;  // RGBA8, readable
+  // Capacity = bytes rounded up to kUniformAlign. Over 256 MiB (M1a-2): the id is returned but has no storage (counted as
+  // a rejection); every later write, bind group or draw using it is rejected.
   virtual BufferId create_uniform_buffer(uint32_t bytes) = 0;
   virtual void write_buffer(BufferId buffer, uint32_t offset, const void* data, uint32_t size) = 0;
   virtual PipelineId create_pipeline(const PipelineDesc& desc) = 0;
+  // target: a render target, or 0 = the presentation surface. An unknown id, a sampled texture, or 0 on a headless
+  // device is a counted rejection (M1a-2) and that frame's draws are skipped (not drawn, not counted).
   virtual void begin_frame(TextureId target, const float clear_rgba[4]) = 0;
   virtual void draw(PipelineId pipeline, uint32_t vertex_count, BufferId uniforms, uint32_t uniform_offset) = 0;
   virtual void end_frame() = 0;
@@ -139,7 +157,7 @@ class Device {
   // Sampled RGBA8 (unorm, no sRGB: D3D8 had none) texture with mip_levels levels (1..floor(log2(max(w,h)))+1). 0 if invalid.
   virtual TextureId create_texture(uint32_t /*width*/, uint32_t /*height*/, uint32_t /*mip_levels*/) { return 0; }
   // Uploads one whole mip level, tightly packed RGBA8: bytes must be max(1,w>>mip) * max(1,h>>mip) * 4. False if rejected.
-  virtual bool write_texture(TextureId, uint32_t /*mip*/, const void* /*rgba*/, size_t /*bytes*/) { return false; }
+  virtual bool write_texture(TextureId, uint32_t /*mip*/, const void* /*rgba*/, std::size_t /*bytes*/) { return false; }
   virtual SamplerId create_sampler(const SamplerDesc&) { return 0; }
   virtual PipelineId create_mesh_pipeline(const MeshPipelineDesc&) { return 0; }
   // Group 0 of a mesh pipeline (see BindGroupDesc). 0 if invalid.

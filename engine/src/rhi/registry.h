@@ -13,6 +13,14 @@ namespace lomn::rhi::detail {
 
 constexpr uint64_t kMaxBufferBytes = 256ull << 20;  // WebGPU default maxBufferSize
 
+// Uniform buffer capacity as the WebGPU backend allocates it: bytes rounded up to kUniformAlign, in u64. A size whose
+// capacity exceeds kMaxBufferBytes gets 0: the id is still returned (M0 contract, M0 log text) but it has no storage,
+// so every later write, bind group or draw that uses it is rejected (and no Dawn buffer is ever created for it).
+inline uint64_t uniform_capacity(uint32_t bytes) {
+  const uint64_t cap = (uint64_t(bytes) + kUniformAlign - 1) / kUniformAlign * kUniformAlign;
+  return cap > kMaxBufferBytes ? 0 : cap;
+}
+
 enum class BufKind { Uniform, Vertex, Index };
 struct BufInfo {
   BufKind kind = BufKind::Uniform;
@@ -116,6 +124,7 @@ class Registry {
   std::string check_write_buffer(BufferId b, uint32_t off, uint32_t size, bool data_null) const {
     auto it = buffers.find(b);
     if (it == buffers.end()) return "unknown buffer";
+    if (it->second.bytes == 0) return "buffer has no storage";
     if (data_null && size) return "null data";
     if (off % 4 || size % 4) return "offset/size not a multiple of 4";
     if (uint64_t(off) + size > it->second.bytes) return "write outside the buffer";
@@ -130,6 +139,12 @@ class Registry {
     return "";
   }
   static std::string check_sampler(const SamplerDesc& s) {
+    const FilterMode filters[3] = {s.mag, s.min, s.mip};
+    for (FilterMode f : filters)
+      if (static_cast<unsigned>(f) > static_cast<unsigned>(FilterMode::Linear)) return "bad filter mode";
+    if (static_cast<unsigned>(s.u) > static_cast<unsigned>(AddressMode::Mirror) ||
+        static_cast<unsigned>(s.v) > static_cast<unsigned>(AddressMode::Mirror))
+      return "bad address mode";
     if (s.max_anisotropy < 1 || s.max_anisotropy > 16) return "max_anisotropy out of range";
     if (s.max_anisotropy > 1 && (s.mag != FilterMode::Linear || s.min != FilterMode::Linear || s.mip != FilterMode::Linear))
       return "anisotropy needs linear filters";
@@ -142,11 +157,14 @@ class Registry {
     if (d.attributes.empty() || d.attributes.size() > kMaxVertexAttributes) return "attribute count out of range";
     uint32_t used = 0;
     for (const VertexAttribute& a : d.attributes) {
+      if (static_cast<unsigned>(a.format) > static_cast<unsigned>(VertexFormat::Float32x4)) return "bad vertex format";
       if (a.location >= kMaxVertexAttributes || (used >> a.location) & 1u) return "attribute location invalid or repeated";
       used |= 1u << a.location;
       if (a.offset % 4 || uint64_t(a.offset) + vertex_format_bytes(a.format) > d.vertex_stride) return "attribute outside the stride";
     }
-    if (static_cast<unsigned>(d.depth_compare) > 7) return "bad depth compare";
+    if (static_cast<unsigned>(d.blend) > static_cast<unsigned>(BlendMode::AlphaBlend)) return "bad blend mode";
+    if (static_cast<unsigned>(d.cull) > static_cast<unsigned>(CullMode::Back)) return "bad cull mode";
+    if (static_cast<unsigned>(d.depth_compare) > static_cast<unsigned>(CompareFunc::Always)) return "bad depth compare";
     return "";
   }
   std::string check_bind_group(const BindGroupDesc& d) const {
@@ -157,6 +175,14 @@ class Registry {
     auto tx = textures.find(d.texture);
     if (tx == textures.end() || tx->second.kind != TexKind::Sampled) return "unknown sampled texture";
     if (!samplers.count(d.sampler)) return "unknown sampler";
+    return "";
+  }
+  // begin_frame: a render target (create_render_target / _ex), or 0 = the presentation surface when the device has one.
+  // An unknown id, a sampled texture or 0 on a headless device is a counted rejection; that frame's draws are skipped.
+  std::string check_begin_frame(TextureId t, bool has_surface) const {
+    if (t == 0) return has_surface ? "" : "no presentation surface (headless device)";
+    auto it = textures.find(t);
+    if (it == textures.end() || it->second.kind != TexKind::RenderTarget) return "unknown render target";
     return "";
   }
   // M0 draw(): the pipeline must be an M0 pipeline; with a uniform block, the buffer must hold [off, off + bytes).

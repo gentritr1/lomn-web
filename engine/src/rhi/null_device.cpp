@@ -24,8 +24,11 @@ class NullDevice final : public Device {
     return id;
   }
   BufferId create_uniform_buffer(uint32_t bytes) override {
-    // Capacity as the WebGPU backend allocates it (rounded up to kUniformAlign), so both validate writes alike.
-    BufferId id = reg_.add_buffer({BufKind::Uniform, static_cast<uint32_t>((uint64_t(bytes) + kUniformAlign - 1) / kUniformAlign * kUniformAlign)});
+    // Capacity as the WebGPU backend allocates it (rounded up to kUniformAlign, u64), so both validate writes alike. Over
+    // kMaxBufferBytes: registered without storage (counted as a rejection, M0 log text kept; every later use is rejected).
+    const uint64_t cap = detail::uniform_capacity(bytes);
+    if (bytes && cap == 0) ++stats_.rejected;
+    BufferId id = reg_.add_buffer({BufKind::Uniform, static_cast<uint32_t>(cap)});
     rec("create_uniform_buffer %u -> %u", bytes, id);
     return id;
   }
@@ -49,9 +52,20 @@ class NullDevice final : public Device {
     stats_.draws = 0;
     stats_.indices = 0;
     stats_.rejected = 0;
+    std::string why = reg_.check_begin_frame(t, false);  // the null device never has a presentation surface
+    frame_rejected_ = !why.empty();
+    if (frame_rejected_) {
+      ++stats_.rejected;
+      rec("begin_frame target=%u clear=%.3f,%.3f,%.3f,%.3f rejected: %s", t, c[0], c[1], c[2], c[3], why.c_str());
+      return;
+    }
     rec("begin_frame target=%u clear=%.3f,%.3f,%.3f,%.3f", t, c[0], c[1], c[2], c[3]);
   }
   void draw(PipelineId p, uint32_t n, BufferId u, uint32_t off) override {
+    if (frame_rejected_) {  // as WebGPU: a rejected frame's draws are not drawn and not counted (not rejected again)
+      rec("draw pipeline=%u vertices=%u uniforms=%u+%u skipped: frame rejected", p, n, u, off);
+      return;
+    }
     std::string why = reg_.check_draw(p, u, off);
     if (!why.empty()) {
       ++stats_.rejected;
@@ -61,7 +75,10 @@ class NullDevice final : public Device {
     ++stats_.draws;
     rec("draw pipeline=%u vertices=%u uniforms=%u+%u", p, n, u, off);
   }
-  void end_frame() override { rec("end_frame draws=%u", stats_.draws); }
+  void end_frame() override {
+    frame_rejected_ = false;
+    rec("end_frame draws=%u", stats_.draws);
+  }
   bool read_pixels(TextureId, std::vector<uint8_t>&) override { return false; }
   FrameStats last_frame_stats() const override { return stats_; }
 
@@ -146,11 +163,16 @@ class NullDevice final : public Device {
       rec("create_bind_group uniforms=%u bytes=%u texture=%u sampler=%u rejected: %s -> 0", u, ubytes, t, s, why.c_str());
       return 0;
     }
-    BindGroupId id = reg_.add_bind_group({d, uniform_stride(ubytes), detail::bind_slots(d)});
+    BindGroupId id = reg_.add_bind_group({d, static_cast<uint32_t>(uniform_stride(ubytes)), detail::bind_slots(d)});
     rec("create_bind_group uniforms=%u bytes=%u texture=%u sampler=%u -> %u", u, ubytes, t, s, id);
     return id;
   }
   void draw_indexed(const DrawIndexedDesc& d) override {
+    if (frame_rejected_) {
+      rec("draw_indexed pipeline=%u vb=%u ib=%u first=%u count=%u bind_group=%u+%u skipped: frame rejected", d.pipeline, d.vertices,
+          d.indices, d.first_index, d.index_count, d.bind_group, d.uniform_offset);
+      return;
+    }
     std::string why = reg_.check_draw_indexed(d);
     if (!why.empty()) {
       ++stats_.rejected;
@@ -199,6 +221,7 @@ class NullDevice final : public Device {
   std::vector<std::string>* log_;
   Registry reg_;
   FrameStats stats_;
+  bool frame_rejected_ = false;  // the current frame's begin_frame was rejected
 };
 
 }  // namespace

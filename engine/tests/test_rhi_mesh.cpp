@@ -1,4 +1,5 @@
 // M1a-2 rhi additions on the null backend: stable log text, shared validation (no UB on bad ids or sizes).
+#include <cmath>
 #include <string>
 #include <vector>
 
@@ -308,4 +309,185 @@ TEST_CASE("rhi mesh: the additions are optional for M0-only devices (defaults re
   CHECK(d.create_mesh_pipeline(mesh_desc()) == 0);
   CHECK(d.create_bind_group({1, 96, 1, 1}) == 0);
   d.draw_indexed(DrawIndexedDesc());
+}
+
+// ---- Task 6 cleanup (A2-A5, A7) ----
+
+TEST_CASE("rhi mesh: an oversized uniform buffer keeps its M0 log line but has no storage (every use rejected)") {
+  std::vector<std::string> log;
+  auto d = create_null_device(&log);
+  const BufferId huge = d->create_uniform_buffer(0xFFFFFFFFu);       // rounds up to 4 GiB: wrapped to 0 before
+  const BufferId over = d->create_uniform_buffer((256u << 20) + 1);  // rounds up past kMaxBufferBytes
+  const BufferId fits = d->create_uniform_buffer(256u << 20);        // exactly kMaxBufferBytes: usable
+  REQUIRE(huge != 0);
+  REQUIRE(over != 0);
+  REQUIRE(fits != 0);
+  CHECK(log[0] == "create_uniform_buffer 4294967295 -> 1");  // M0 text unchanged
+  CHECK(log[1] == "create_uniform_buffer 268435457 -> 2");
+  CHECK(d->last_frame_stats().rejected == 2);
+  const uint32_t data[4] = {};
+  d->write_buffer(huge, 0, data, 16);
+  d->write_buffer(over, 0, data, 16);
+  d->write_buffer(over, 0, data, 0);  // even an empty write: there is no buffer behind the id
+  d->write_buffer(fits, (256u << 20) - 16, data, 16);
+  CHECK(log[3] == "write_buffer 1 +0 16 bytes rejected: buffer has no storage");
+  CHECK(log[4] == "write_buffer 2 +0 16 bytes rejected: buffer has no storage");
+  CHECK(log[5] == "write_buffer 2 +0 0 bytes rejected: buffer has no storage");
+  CHECK(log[6].rfind("write_buffer 3 +268435440 16 bytes sum=", 0) == 0);
+  const TextureId tex = d->create_texture(1, 1, 1);
+  const SamplerId s = d->create_sampler(SamplerDesc());
+  CHECK(d->create_bind_group({huge, 96, tex, s}) == 0);
+  CHECK(d->create_bind_group({over, 96, tex, s}) == 0);
+  CHECK(d->create_bind_group({fits, 96, tex, s}) != 0);
+  // M0 draw with a uniform block from a storage-less buffer.
+  PipelineDesc m0;
+  m0.wgsl = "x";
+  m0.uniform_bytes = 16;
+  const PipelineId p = d->create_pipeline(m0);
+  const TextureId rt = d->create_render_target(4, 4);
+  const float clear[4] = {0, 0, 0, 1};
+  d->begin_frame(rt, clear);
+  d->draw(p, 3, over, 0);
+  d->end_frame();
+  CHECK(d->last_frame_stats().draws == 0);
+  CHECK(d->last_frame_stats().rejected == 1);
+}
+
+TEST_CASE("rhi mesh: uniform_stride is computed in 64 bits and never wraps to 0") {
+  static_assert(sizeof(uniform_stride(1)) == 8, "uniform_stride returns uint64_t");
+  CHECK(uniform_stride(0xFFFFFFFFu) == 0x100000000ull);
+  CHECK(uniform_stride(0xFFFFFF01u) == 0x100000000ull);
+  CHECK(uniform_stride(0xFFFFFF00u) == 0xFFFFFF00ull);
+  CHECK(uniform_stride(0) == 0);
+}
+
+TEST_CASE("rhi mesh: every enum in a desc is range-checked (one value past the last enumerator is rejected)") {
+  std::vector<std::string> log;
+  auto d = create_null_device(&log);
+  SamplerDesc sd;
+  sd.mag = static_cast<FilterMode>(2);
+  CHECK(d->create_sampler(sd) == 0);
+  sd = SamplerDesc();
+  sd.min = static_cast<FilterMode>(2);
+  CHECK(d->create_sampler(sd) == 0);
+  sd = SamplerDesc();
+  sd.mip = static_cast<FilterMode>(2);
+  CHECK(d->create_sampler(sd) == 0);
+  sd = SamplerDesc();
+  sd.u = static_cast<AddressMode>(3);
+  CHECK(d->create_sampler(sd) == 0);
+  sd = SamplerDesc();
+  sd.v = static_cast<AddressMode>(3);
+  CHECK(d->create_sampler(sd) == 0);
+  sd = SamplerDesc();
+  sd.mag = FilterMode::Nearest;
+  sd.u = AddressMode::Mirror;  // the last valid values still pass
+  CHECK(d->create_sampler(sd) == 1);
+  MeshPipelineDesc pd = mesh_desc();
+  pd.attributes[0].format = static_cast<VertexFormat>(3);
+  CHECK(d->create_mesh_pipeline(pd) == 0);
+  pd = mesh_desc();
+  pd.blend = static_cast<BlendMode>(2);
+  CHECK(d->create_mesh_pipeline(pd) == 0);
+  pd = mesh_desc();
+  pd.cull = static_cast<CullMode>(3);
+  CHECK(d->create_mesh_pipeline(pd) == 0);
+  pd = mesh_desc();
+  pd.depth_compare = static_cast<CompareFunc>(8);
+  CHECK(d->create_mesh_pipeline(pd) == 0);
+  pd = mesh_desc();
+  pd.attributes[2].format = VertexFormat::Float32x4;
+  pd.blend = BlendMode::AlphaBlend;
+  pd.cull = CullMode::Back;
+  pd.depth_compare = CompareFunc::Always;
+  CHECK(d->create_mesh_pipeline(pd) == 1);
+  CHECK(d->last_frame_stats().rejected == 9);
+  CHECK(has_line(log, "create_sampler rejected: bad filter mode -> 0"));
+  CHECK(has_line(log, "create_sampler rejected: bad address mode -> 0"));
+  CHECK(has_line(log, "create_mesh_pipeline rejected: bad vertex format -> 0"));
+  CHECK(has_line(log, "create_mesh_pipeline rejected: bad blend mode -> 0"));
+  CHECK(has_line(log, "create_mesh_pipeline rejected: bad cull mode -> 0"));
+  CHECK(has_line(log, "create_mesh_pipeline rejected: bad depth compare -> 0"));
+}
+
+TEST_CASE("rhi mesh: begin_frame on an unknown, sampled or (headless) 0 target is a counted rejection; its draws are skipped") {
+  Scene sc;
+  const float clear[4] = {0, 0, 0, 1};
+  for (TextureId bad : {TextureId(99), sc.tex, TextureId(0)}) {
+    sc.log.clear();
+    sc.d->begin_frame(bad, clear);
+    sc.d->draw_indexed(sc.draw());
+    sc.d->end_frame();
+    const FrameStats st = sc.d->last_frame_stats();
+    CHECK(st.rejected == 1);
+    CHECK(st.draws == 0);
+    REQUIRE(sc.log.size() == 3);
+    CHECK(sc.log[1].find("skipped: frame rejected") != std::string::npos);
+    CHECK(sc.log[2] == "end_frame draws=0");
+  }
+  sc.log.clear();
+  sc.d->begin_frame(99, clear);
+  CHECK(sc.log[0] == "begin_frame target=99 clear=0.000,0.000,0.000,1.000 rejected: unknown render target");
+  sc.d->begin_frame(sc.tex, clear);
+  CHECK(sc.log[1] == "begin_frame target=2 clear=0.000,0.000,0.000,1.000 rejected: unknown render target");
+  sc.d->begin_frame(0, clear);
+  CHECK(sc.log[2] == "begin_frame target=0 clear=0.000,0.000,0.000,1.000 rejected: no presentation surface (headless device)");
+  // A valid frame afterwards draws normally (M0 text unchanged).
+  sc.d->begin_frame(sc.rt, clear);
+  sc.d->draw_indexed(sc.draw());
+  sc.d->end_frame();
+  CHECK(sc.log[3] == "begin_frame target=1 clear=0.000,0.000,0.000,1.000");
+  CHECK(sc.d->last_frame_stats().draws == 1);
+  CHECK(sc.d->last_frame_stats().rejected == 0);
+}
+
+TEST_CASE("rhi mesh: boundaries are pinned (buffers, targets, textures, mips, writes, uniform blocks)") {
+  std::vector<std::string> log;
+  auto d = create_null_device(&log);
+  CHECK(d->create_vertex_buffer(256u << 20) != 0);         // exactly kMaxBufferBytes
+  CHECK(d->create_vertex_buffer((256u << 20) + 1) == 0);
+  CHECK(d->create_index_buffer(256u << 20) != 0);
+  RenderTargetDesc rd;
+  rd.width = rd.height = 8192;
+  CHECK(d->create_render_target_ex(rd) != 0);
+  rd.width = 8193;
+  CHECK(d->create_render_target_ex(rd) == 0);
+  rd.width = 8192;
+  rd.height = 8193;
+  CHECK(d->create_render_target_ex(rd) == 0);
+  rd.height = 8;
+  rd.clear_depth = std::nanf("");
+  CHECK(d->create_render_target_ex(rd) == 0);
+  rd.clear_depth = 0.0f;
+  CHECK(d->create_render_target_ex(rd) != 0);
+  CHECK(d->create_texture(4096, 4096, 13) != 0);  // full chain 4096 -> 1
+  CHECK(d->create_texture(4096, 4096, 14) == 0);
+  CHECK(d->create_texture(4097, 1, 1) == 0);
+  CHECK(d->create_texture(1, 4097, 1) == 0);
+  // Non-square chain: 4x1 -> 2x1 -> 1x1 (3 levels).
+  const TextureId t41 = d->create_texture(4, 1, 3);
+  REQUIRE(t41 != 0);
+  CHECK(d->create_texture(4, 1, 4) == 0);
+  const uint8_t px[16] = {};
+  CHECK(d->write_texture(t41, 0, px, 16));
+  CHECK(d->write_texture(t41, 1, px, 8));
+  CHECK(d->write_texture(t41, 2, px, 4));
+  CHECK_FALSE(d->write_texture(t41, 1, px, 4));
+  CHECK(has_line(log, "write_texture " + std::to_string(t41) + " mip=1 2x1 8 bytes sum="));
+  CHECK(has_line(log, "write_texture " + std::to_string(t41) + " mip=2 1x1 4 bytes sum="));
+  // write_buffer: exact fit at the end; an offset + size that would wrap in 32 bits.
+  const BufferId vb = d->create_vertex_buffer(144);
+  log.clear();
+  d->write_buffer(vb, 136, px, 8);
+  d->write_buffer(vb, 0xFFFFFFFCu, px, 8);
+  d->write_buffer(vb, 140, px, 8);
+  CHECK(log[0].rfind("write_buffer " + std::to_string(vb) + " +136 8 bytes sum=", 0) == 0);
+  CHECK(log[1].find("rejected: write outside the buffer") != std::string::npos);
+  CHECK(log[2].find("rejected: write outside the buffer") != std::string::npos);
+  // Uniform blocks: 65536 bytes bind; 65537 does not (kMaxUniformBytes), even with room in the buffer.
+  const BufferId ub = d->create_uniform_buffer(2 * 65536);
+  const TextureId tex = d->create_texture(1, 1, 1);
+  const SamplerId s = d->create_sampler(SamplerDesc());
+  CHECK(d->create_bind_group({ub, 65536, tex, s}) != 0);
+  CHECK(d->create_bind_group({ub, 65537, tex, s}) == 0);
 }
