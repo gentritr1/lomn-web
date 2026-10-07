@@ -224,7 +224,7 @@ std::FILE* g_last = nullptr;
 uint64_t g_test_hang_seed = UINT64_MAX;
 
 // Rewrites the --last-input line in place. Every line is padded to one width, so a shorter line never leaves the tail
-// of a longer one behind.
+// of a longer one behind. Whoever prints the file trims the trailing spaces (Makefile fuzz-formats, fuzz_warmup_hang.sh).
 void note_last(const char* line) {
   if (!g_last) return;
   std::rewind(g_last);

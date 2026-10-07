@@ -498,8 +498,13 @@ TEST_CASE("x: MeshVertexColors with fewer entries than nColors is rejected ('Mes
 // crafted input per check (per sub-condition where a line holds several), each reaching exactly that check, asserting
 // the exact message. Rows are doctest SUBCASEs so a mutation run can name one row: `lomn_tests -tc="x: crafted*"
 // -sc="<id>"`. The mutation table (check deleted in a scratch copy -> which row fails) is in the M1a-4 cleanup report.
-//   - "ASan" in a row's note = deleting the check reads past the end of the std::vector; the row's list size is a power
-//     of two (vector capacity == size), so ASan reports a heap-buffer-overflow. Plain builds see garbage instead.
+//   - "ASan" in a row's note = deleting the check reads past the end of the std::vector. The sanitizer report is a
+//     heap-buffer-overflow when the list's size equals its capacity (most rows use power-of-two sizes for that); rows whose
+//     list size is not (L191 with its 22 ints, L194, L216c) report a container-overflow instead, which depends on libc++'s
+//     container annotations. A plain build reads garbage (or a null data() of an empty vector, a SIGSEGV natively).
+//     Most rows still fail in Release (own message mismatch, accepted file, or that SIGSEGV); the one that cannot is L216a,
+//     whose garbage read usually re-produces the same message. That is why `lomn_tests_asan` (ctest unit_asan, cleanup S1)
+//     runs this table under ASan+UBSan inside `make test-native`.
 //   - None of the seven lines is redundant: every row below is an input that passes every EARLIER check and is only
 //     stopped by this one (see the per-row reach notes).
 namespace {
@@ -579,13 +584,13 @@ std::vector<XRow> count_length_rows() {
 
   // ---- cleanup C1-b: the MeshVertexColors / MeshMaterialList / Material checks (line numbers at 043226f).
   // L235 "MeshVertexColors header truncated": colours without the nColors count. Without it mc->ints[0] dereferences an
-  // empty vector (SEGV in every build).
+  // empty vector (SIGSEGV natively; wasm32 does not trap on a null read, there the row fails by message mismatch).
   r.push_back({"L235-colors-0-ints",
                mesh_obj([](X& x) { tri_mesh(x); x.obj("MeshVertexColors").floats({1, 1, 1, 1}).close(); }),
                "x: MeshVertexColors header truncated"});
   // L252 "MeshMaterialList header truncated": < 2 ints (nMaterials, nFaceIndexes); the Material itself is valid.
   //   1 int: without it ci[1] is read past a size-1 list (ASan heap-buffer-overflow; garbage nFaceIndexes otherwise).
-  //   0 ints: without it ci[0] dereferences an empty vector (SEGV).
+  //   0 ints: without it ci[0] dereferences an empty vector (SIGSEGV natively; no trap on wasm32, the message differs there).
   r.push_back({"L252-mml-1-int",
                mesh_obj([](X& x) {
                  tri_mesh(x);

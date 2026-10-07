@@ -8,6 +8,8 @@
 drv=$1
 last=$2
 shift 2
+# The last-input lines are padded to a fixed width by the driver; print them without the trailing spaces.
+trimmed() { sed 's/  *$//' "$last" 2>/dev/null; }
 /bin/rm -f "$last"
 "$@" "$drv" --smoke --formats x --n 1 --last-input "$last" --test-hang-seed 1 &
 pid=$!
@@ -20,7 +22,7 @@ while [ $i -lt 600 ]; do
     kill $pid 2>/dev/null
     wait $pid 2>/dev/null
     rc=$?
-    echo "last input: $(cat "$last") (driver still running when read: $alive)"
+    echo "last input: $(trimmed) (driver still running when read: $alive)"
     [ $alive = yes ] && exit 0
     # Natively the 10 s CPU watchdog may have ended the spin first (exit 4, "FINDING x seed #1 ... (hang)").
     [ $rc -eq 4 ] && exit 0
@@ -29,7 +31,7 @@ while [ $i -lt 600 ]; do
   fi
   if ! kill -0 $pid 2>/dev/null; then
     wait $pid
-    echo "FAIL: driver exited (rc=$?) and the last-input file does not name seed #1: '$(cat "$last" 2>/dev/null)'"
+    echo "FAIL: driver exited (rc=$?) and the last-input file does not name seed #1: '$(trimmed)'"
     exit 1
   fi
   sleep 0.1
@@ -37,5 +39,5 @@ while [ $i -lt 600 ]; do
 done
 kill $pid 2>/dev/null
 wait $pid 2>/dev/null
-echo "FAIL: after ~60 s the last-input file does not name the hanging seed: '$(cat "$last" 2>/dev/null)'"
+echo "FAIL: after ~60 s the last-input file does not name the hanging seed: '$(trimmed)'"
 exit 1
