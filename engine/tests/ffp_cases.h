@@ -124,6 +124,12 @@ inline std::vector<FfpCase> gpu_ffp_cases() {
   test.rs[rs::ALPHATESTENABLE] = 0;
   test.rs[rs::TEXTUREFACTOR] = 0xb2000000u;  // 178 = round(255 * 0.7): the vllg river's textures.slb trans
   out.push_back({"TFACTOR alpha 178 blended", test, true});
+  // M1a-4 (d): ALPHABLENDENABLE with the D3D8 default factors ONE/ZERO blends src * 1 + dst * 0 = src: pipeline_key draws
+  // it opaque (Task 8B B3), so the expected colour is the fragment itself, not a mix with the clear colour.
+  State one_zero = test;
+  one_zero.rs[rs::SRCBLEND] = kBlendOne;
+  one_zero.rs[rs::DESTBLEND] = kBlendZero;
+  out.push_back({"ALPHABLENDENABLE with ONE/ZERO (TFACTOR alpha 178): opaque", one_zero, true});
   State mod = unlit;  // vertex alpha through ALPHAOP MODULATE(TFACTOR, TEXTURE) (DrawX's mTransparency < 1 path)
   mod.rs[rs::ALPHABLENDENABLE] = 1;
   mod.tss[0][tss::ALPHAOP] = kTopModulate;

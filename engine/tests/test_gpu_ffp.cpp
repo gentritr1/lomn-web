@@ -2,10 +2,12 @@
 // Each case builds a d3d::State, compiles it (pipeline_key / pipeline_desc / sampler_desc / pack_uniforms), draws one
 // triangle covering the 8x8 target's centre with constant per-vertex inputs (the three vertices are equidistant from
 // the point light, so the per-vertex lighting is the same at every vertex), and compares the centre pixel with
-// reference_vertex_color + reference_fragment (+-2 per channel; blending against the clear colour computed here).
+// reference_vertex_color + reference_fragment (+-2 per channel; blending against the clear colour computed here when
+// the compiled pipeline blends, pipeline_key(s).blend).
 // The cases live in tests/ffp_cases.h; tools/research/oracle/ffp_oracle.py checks the CPU reference itself on the same
 // cases plus seeded random samples (ctest ffp_oracle).
 // Exits 77 (ctest SKIP) without an adapter.
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -80,15 +82,21 @@ int main() {
     const Color4 texel = tex2x2 ? test::ffp_tex2x2_texel(tuv) : Color4{1, 1, 1, 1};
     Color4 f;
     float want[3] = {clear[0], clear[1], clear[2]};
+    int want_a = 255;  // the clear alpha (1) where nothing is written; a blended draw keeps the destination alpha
     if (reference_fragment(s, d, texel, true, test::ffp_eye_w(s, pos), f)) {  // Task 8B B4: the case's own eye w
-      const float a = s.rs[rs::ALPHABLENDENABLE] ? f.a : 1.0f;
+      // M1a-4 (d): blending follows the pipeline that is drawn, pipeline_key(s).blend, not RS ALPHABLENDENABLE (ONE/ZERO
+      // with ALPHABLENDENABLE is an opaque pipeline: the colour is the fragment's).
+      const float a = key.blend ? f.a : 1.0f;
       want[0] = f.r * a + clear[0] * (1 - a);
       want[1] = f.g * a + clear[1] * (1 - a);
       want[2] = f.b * a + clear[2] * (1 - a);
+      // An opaque pipeline writes the shader's alpha: 1 when ALPHABLENDENABLE is off, else the stage alpha
+      // (pack_uniforms e.z), which only the ONE/ZERO case reaches.
+      if (!key.blend && s.rs[rs::ALPHABLENDENABLE]) want_a = static_cast<int>(std::lround(std::min(1.0f, std::max(0.0f, f.a)) * 255.0f));
     }
     const uint8_t* c = &px[(4 * 8 + 4) * 4];
     int w8[3];
-    bool hit = c[3] == 255 && unsup == 0;
+    bool hit = std::abs(int(c[3]) - want_a) <= 2 && unsup == 0;
     for (int k = 0; k < 3; ++k) {
       w8[k] = static_cast<int>(std::lround(std::min(1.0f, std::max(0.0f, want[k])) * 255.0f));
       hit = hit && std::abs(int(c[k]) - w8[k]) <= 2;
