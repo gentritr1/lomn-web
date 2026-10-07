@@ -268,9 +268,12 @@ add_test(NAME unit COMMAND lomn_tests)
 # every deleted bounds check in decode_mesh (xfile.cpp:216 `q >= ni.size()` stayed green in plain Release), so the x: cases
 # (test_sage_xfile.cpp, the crafted-input table included) and the fuzz fragments cases run again here under ASan + UBSan
 # with -fno-sanitize-recover=all, WebGPU off (this target links only the sage sources). Built and run by `make test-native`
-# (so `make check`), incrementally: 8 translation units at -O1. wasm32 has no sanitizers, hence NOT EMSCRIPTEN.
+# (so `make check`), incrementally: 11 translation units at -O1. wasm32 has no sanitizers, hence NOT EMSCRIPTEN.
+# M1a-4 final F1 (Fable M-3): also runs test_sage_blockfile/slb/image.cpp, the T1 no-partial-state tests (LZSS/BLK/SLB/DDS/TGA
+# rejections), which otherwise run Release-only and could not see an out-of-bounds read or a UB-shift in a rejected path.
 if(NOT EMSCRIPTEN)
   add_executable(lomn_tests_asan tests/test_main.cpp tests/test_sage_xfile.cpp tests/test_fuzz_fragments.cpp
+                 tests/test_sage_blockfile.cpp tests/test_sage_slb.cpp tests/test_sage_image.cpp
                  src/sage/blockfile.cpp src/sage/blockchain.cpp src/sage/slb.cpp src/sage/xfile.cpp src/sage/image.cpp src/sage/osi.cpp)
   target_include_directories(lomn_tests_asan PRIVATE include "${LOMN_TOOLCHAIN_DIR}/include")
   target_compile_definitions(lomn_tests_asan PRIVATE "LOMN_TESTS_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/tests\"")

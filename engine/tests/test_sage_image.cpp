@@ -207,8 +207,16 @@ TEST_CASE("tga: uncompressed 24/32 bpp, origin handling, RLE packets and their b
   for (uint8_t v : {0x82, 10, 20, 30, 40}) over.push_back(v);
   CHECK_FALSE(decode_tga(over.data(), over.size(), img, &ti, &err));
   CHECK(err.find("past the image") != std::string::npos);
-  for (size_t n = 0; n < r.size(); ++n) CHECK_FALSE(decode_tga(r.data(), n, img, &ti, &err));
-  for (size_t n = 0; n < t.size(); ++n) CHECK_FALSE(decode_tga(t.data(), n, img, &ti, &err));
+  // Every truncation is an exact-size copy (M1a-4 final F1): a prefix view into the longer vector hides a read of the byte
+  // after the end (e.g. a deleted `pos >= size` in the RLE loop) from AddressSanitizer, which `unit_asan` now runs here.
+  for (size_t n = 0; n < r.size(); ++n) {
+    Bytes cut(r.begin(), r.begin() + static_cast<std::ptrdiff_t>(n));
+    CHECK_FALSE(decode_tga(cut.data(), cut.size(), img, &ti, &err));
+  }
+  for (size_t n = 0; n < t.size(); ++n) {
+    Bytes cut(t.begin(), t.begin() + static_cast<std::ptrdiff_t>(n));
+    CHECK_FALSE(decode_tga(cut.data(), cut.size(), img, &ti, &err));
+  }
   // Unsupported kinds.
   Bytes cm = header(1, 2, 2, 8, 0);
   cm.resize(cm.size() + 64, 0);
