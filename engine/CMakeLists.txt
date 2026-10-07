@@ -29,7 +29,7 @@ target_compile_options(lomn_d3d PRIVATE -Wall -Wextra)
 
 # M1a-2 first pixels + M1a-3: CPU mips, area loader, the SAGE frame replay on the shim, the A7/A9 synthetic scene.
 add_library(lomn_area STATIC src/view/mips.cpp src/view/area.cpp src/view/sage_frame.cpp src/view/synthetic.cpp
-            src/view/prefetch.cpp)  # M1b: prefetch helpers
+            src/view/fly_camera.cpp src/view/prefetch.cpp)  # M1b: free-fly camera, prefetch helpers
 target_link_libraries(lomn_area PUBLIC lomn_sage lomn_d3d)
 target_compile_options(lomn_area PRIVATE -Wall -Wextra)
 
@@ -245,7 +245,7 @@ endif()
 add_executable(lomn_tests tests/test_main.cpp tests/test_fs.cpp tests/test_rhi_null.cpp tests/test_loop.cpp tests/test_sage_blockfile.cpp tests/test_sage_blockchain.cpp tests/test_sage_slb.cpp tests/test_sage_xfile.cpp tests/test_sage_image.cpp
                tests/test_rhi_mesh.cpp tests/test_view_mips.cpp tests/test_view_area.cpp tests/test_d3d.cpp tests/test_sage_osi.cpp
                tests/test_area_states.cpp tests/test_sage_frame.cpp
-               tests/test_rhi_destroy.cpp tests/test_prefetch_fs.cpp)  # M1b
+               tests/test_rhi_destroy.cpp tests/test_prefetch_fs.cpp tests/test_fly_camera.cpp)  # M1b
 target_link_libraries(lomn_tests PRIVATE lomn_area)
 target_include_directories(lomn_tests PRIVATE "${LOMN_TOOLCHAIN_DIR}/include")
 if(EMSCRIPTEN)
