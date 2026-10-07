@@ -468,6 +468,7 @@ class Loader {
     // (-> lego_area.setcurrent -> GcAreaDirector::SetCurrentArea 0x0048a540 -> LoadArea 0x004892f0 -> GcAreaLoader::
     // LoadArea 0x004fedd0 -> GcLightLoader::LoadLights 0x00470010, synchronously) before areasetactive, and InitFull is
     // reached later from areasetactivenow (Base.osi bytecode, tools/research/osi.py). The last call wins.
+    // N-3: night-vision/underwater transitions call SetCaveLighting again in play (0048e700/0048e760/0048f840); we model post-InitFull only.
     if (out_.cave_lighting_set) {
       const float v = out_.cave_lighting ? 0.25f : 1.0f;
       for (SceneLight& l : out_.lights)
