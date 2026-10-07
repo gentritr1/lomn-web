@@ -285,3 +285,59 @@ Each format's input stream is independent of the others, so the input numbers ar
 **Control:** removing the `textures.slb` record-COUNT cap (`kMaxSpecTextures`) instead gives 0 findings in 200,000
 inputs. Mutation cannot build 1,025+ records that each have their own fix-up slot. `slb_probe` catches that one: it
 accepts the 64 MiB table at +651 MB and fails.
+
+## Texture decode cache across area loads (M1a-4 Task 3, 2026-10-07, `lomn_view --survey 1 [--texture-cache on]`)
+
+**Setup:**
+- Host and build: Release, Apple M1 Pro (8 cores), Beta 1.5.0 install, 123 areas.
+- Metric: Σ per-area `decode_ms`. That covers DDS/TGA decode plus CPU mips; with the cache on it also includes the
+  SHA-256 of the entry bytes, the lookup and the mip copy.
+- Order: interleaved A B A B A B (A = flag absent / OFF, B = `--texture-cache on`), 3 reps per arm.
+- Load: 1-min loadavg recorded at the start and end of every rep.
+
+**Reconciliation:** every rep loaded 123/123 areas with 0 failures. Every ON rep had hits + misses = 1828 + 812 = 2640
+= Σ textures (0 decode failures), with 382 evictions. Resident bytes ended at 267,565,168 of the 268,435,456-byte cap.
+
+**Final code (ARMv8 SHA-256 path), commit 3fe8f2b:**
+
+| rep | arm | Σ decode_ms | survey total_load_ms | wall s | loadavg 1-min start / end |
+|---|---|---|---|---|---|
+| 1 | OFF | 1183.4 | 6150.1 | 8.16 | 11.66 / 11.45 |
+| 2 | ON | 676.2 | 1740.7 | 3.22 | 11.45 / 10.85 |
+| 3 | OFF | 1125.7 | 2120.1 | 3.58 | 10.85 / 10.94 |
+| 4 | ON | 651.1 | 1672.6 | 3.14 | 10.94 / 10.94 |
+| 5 | OFF | 1127.7 | 2218.7 | 3.70 | 10.94 / 10.46 |
+| 6 | ON | 670.4 | 1850.1 | 3.34 | 10.46 / 10.35 |
+
+- **decode_ms:** OFF median 1127.7 ms, with an OFF-vs-OFF null spread of 57.6 ms. ON median 670.4 ms, spread 25.1 ms.
+  - Effect: **−457 ms (−40.5 %)**.
+  - The ranges do not overlap, and the effect is 7.9× the null spread.
+  - The reviewer's independent run replicated it (2 reps per arm, loadavg 5-6): −472 ms (−40.0 %), no overlap.
+- **total_load_ms:** no claim. Rep 1's 6.1 s outlier (load_ms 4964, I/O) makes the OFF null spread 4030 ms.
+- The 15-min loadavg was about 17-22, so these numbers are provisional under TEST-005.
+
+**Superseded first build (portable SHA-256 only): ON was SLOWER.** Same method, 3 reps per arm, 1-min loadavg
+about 6.2-7.0 (15-min about 24-25).
+
+| rep | arm | Σ decode_ms | survey total_load_ms | wall s | loadavg 1-min start / end |
+|---|---|---|---|---|---|
+| 1 | OFF | 1110.6 | 2675.2 | 4.13 | 7.04 / 6.80 |
+| 2 | ON | 1606.7 | 2676.9 | 4.13 | 6.80 / 6.57 |
+| 3 | OFF | 1118.3 | 2174.7 | 3.63 | 6.57 / 6.57 |
+| 4 | ON | 1626.3 | 2688.0 | 4.16 | 6.57 / 6.37 |
+| 5 | OFF | 1104.7 | 2103.8 | 3.54 | 6.37 / 6.18 |
+| 6 | ON | 1605.8 | 2625.0 | 4.09 | 6.18 / 6.40 |
+
+- decode_ms: OFF median 1110.6 ms (spread 13.6). ON median 1606.7 ms (spread 20.5).
+- Effect: **+496 ms (+44.7 %)**. The ranges do not overlap.
+- **Cause:** SHA-256 throughput on a 256 MiB buffer is 208-215 MB/s with the portable rounds and 1267-1377 MB/s with
+  the ARMv8 SHA-2 instructions. That led to the ARMv8 path, which gives the same digest: tested against `shasum` and
+  the portable path, and by the reviewer at 20 sizes on arm64 ARMv8, arm64 portable and x86-64 under Rosetta.
+
+**Where the cache pays off:**
+- Only on native arm64 with the SHA-2 extension.
+- **x86-64** (no SHA-NI path) and **wasm32** use the portable rounds. There the cache is likely slower than no cache,
+  as measured above for portable code on arm64. INFERRED; x86-64 and wasm32 timings were not measured.
+- The flag defaults to off everywhere and stays off in the browser and on x86-64 (controller ruling T3-1). A cheaper
+  wasm key is future work, only if the browser ever enables the cache.
+- Outside `--survey`, a run loads one area and can never hit, so lomn_view warns on stderr.

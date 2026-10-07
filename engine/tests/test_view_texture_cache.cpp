@@ -1,4 +1,5 @@
 // M1a-4 Task 3: the texture decode cache across area loads (lomn/view/texture_cache.h) and its use by load_area.
+#include <algorithm>
 #include <memory>
 #include <string>
 #include <vector>
@@ -45,17 +46,40 @@ sage_test::Bytes tga32(uint16_t w, uint16_t h, uint8_t alpha_bits, const uint8_t
   for (uint32_t i = 0; i < uint32_t(w) * h; ++i) b.insert(b.end(), bgra, bgra + 4);
   return b;
 }
+// Uncompressed 24-bpp TGA (type 2), bottom-up (descriptor 0), every pixel `bgr`. The LAST file byte is the red channel
+// of the last stored pixel, which a bottom-up image places at (x = w-1, y = 0).
+sage_test::Bytes tga24(uint16_t w, uint16_t h, const uint8_t bgr[3]) {
+  using namespace sage_test;
+  Bytes b = {0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+  put16(b, w);
+  put16(b, h);
+  put8(b, 24);
+  put8(b, 0);
+  for (uint32_t i = 0; i < uint32_t(w) * h; ++i) b.insert(b.end(), bgr, bgr + 3);
+  return b;
+}
 // The synthetic area "test" in level "levg", whose level blockfile holds red.tga (2x2, opaque) and cut.tga (4x2,
-// alpha): the model's two textured subsets resolve to them (after the .dds misses). `red` sets red.tga's pixel.
-void mount_tga_level(fs::MemoryFileSystem& mfs, const uint8_t red[4]) {
+// alpha): the model's two textured subsets resolve to them (after the .dds misses). `red` sets red.tga's pixel;
+// mount_tga_level_bytes takes red.tga's whole file instead.
+void mount_tga_level_bytes(fs::MemoryFileSystem& mfs, const sage_test::Bytes& red_tga) {
   fs::MemoryFileSystem base;
   REQUIRE(mount_synthetic_install(base));
   std::vector<uint8_t> area;
   REQUIRE(base.read("Root/Data/Levels/levt/test.blk", area) == fs::Error::None);
   const uint8_t cut[4] = {10, 20, 30, 0};
-  REQUIRE(mfs.mount("Root/Data/Levels/levg/levg.blk",
-                    sage_test::make_blk({entry("cut.tga", tga32(4, 2, 8, cut)), entry("red.tga", tga32(2, 2, 0, red))})));
+  REQUIRE(mfs.mount("Root/Data/Levels/levg/levg.blk", sage_test::make_blk({entry("cut.tga", tga32(4, 2, 8, cut)), entry("red.tga", red_tga)})));
   REQUIRE(mfs.mount("Root/Data/Levels/levg/test.blk", std::move(area)));
+}
+void mount_tga_level(fs::MemoryFileSystem& mfs, const uint8_t red[4]) { mount_tga_level_bytes(mfs, tga32(2, 2, 0, red)); }
+AreaData load_tga_bytes(const sage_test::Bytes& red_tga, TextureCache* cache) {
+  fs::MemoryFileSystem mfs;
+  mount_tga_level_bytes(mfs, red_tga);
+  AreaOptions o;
+  o.texture_cache = cache;
+  AreaData a;
+  std::string err;
+  REQUIRE_MESSAGE(load_area(mfs, "levg", "test", o, a, &err), err);
+  return a;
 }
 AreaData load_tga(const uint8_t red[4], TextureCache* cache, uint64_t max_texture_bytes = kMaxAreaTextureBytes, bool* ok = nullptr,
                   std::string* err_out = nullptr) {
@@ -284,6 +308,41 @@ TEST_CASE("texture cache: load_area remount with the same path but different byt
   CHECK(b.textures[0].mips[0].rgba[0] == 0);
   check_same_textures(load_tga(green, nullptr), b);
   CHECK(a.textures[0].mips[0].rgba[0] == 255);
+}
+
+TEST_CASE("texture cache: same path, same size (>= 4 KB), only the LAST byte differs -> miss, and the new last texel is decoded (fix1 I-1)") {
+  // 64x64 24-bpp: 18 + 12,288 bytes. Both files have the same size and differ only in their final byte (the red channel
+  // of texel (63, 0)), so a digest over a prefix, or a (path, size) shortcut, would serve the stale texel.
+  const uint8_t bgr[3] = {10, 20, 200};
+  const sage_test::Bytes v1 = tga24(64, 64, bgr);
+  sage_test::Bytes v2 = v1;
+  v2.back() = 17;
+  REQUIRE(v1.size() == 18 + 64 * 64 * 3);
+  REQUIRE(v1.size() >= 4096);
+  REQUIRE(v1.size() == v2.size());
+  REQUIRE(std::equal(v1.begin(), v1.end() - 1, v2.begin()));
+  const size_t last_texel = (0 * 64 + 63) * 4;  // (x 63, y 0), RGBA
+  TextureCache c;
+  AreaData a = load_tga_bytes(v1, &c);
+  CHECK(a.stats.texture_cache_misses == 2);
+  REQUIRE(a.textures.size() == 2);
+  REQUIRE(a.textures[0].request == "Root/Data/Levels/levg/textures/red.tga");
+  CHECK(a.textures[0].format == "TGA24");
+  CHECK(a.textures[0].mips[0].rgba[last_texel] == 200);
+  AreaData b = load_tga_bytes(v2, &c);
+  CHECK(b.stats.texture_cache_misses == 1);  // red.tga: new content
+  CHECK(b.stats.texture_cache_hits == 1);    // cut.tga: unchanged
+  REQUIRE(b.textures.size() == 2);
+  CHECK(b.textures[0].mips[0].rgba[last_texel] == 17);  // the new last texel, not the cached 200
+  CHECK(b.textures[0].mips[0].rgba[last_texel - 4] == 200);
+  check_same_textures(load_tga_bytes(v2, nullptr), b);
+  // Both versions now live side by side under the one path: each reload hits its own entry.
+  AreaData a2 = load_tga_bytes(v1, &c);
+  CHECK(a2.stats.texture_cache_hits == 2);
+  CHECK(a2.textures[0].mips[0].rgba[last_texel] == 200);
+  AreaData b2 = load_tga_bytes(v2, &c);
+  CHECK(b2.stats.texture_cache_hits == 2);
+  CHECK(b2.textures[0].mips[0].rgba[last_texel] == 17);
 }
 
 TEST_CASE("texture cache: a tiny cache evicts between loads and the pixels stay right; area caps still apply on a hit") {

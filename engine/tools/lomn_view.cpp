@@ -16,8 +16,11 @@
 //   --texture-cache on|off  M1a-4 Task 3 (default off): a decode cache across area loads (lomn/view/texture_cache.h,
 //                           256 MiB, LRU, keyed by path + SHA-256 of the bytes). Off constructs no cache and leaves every
 //                           output byte-identical; on adds "texture_cache":{hits,misses,bytes,evictions} to the metrics
-//                           (and, with --survey, to every area row: this load's hits/misses/evictions and the bytes
-//                           resident after it, plus the run's totals at the top level).
+//                           (and, with --survey, to every area row, failed rows included: this load's hits/misses/
+//                           evictions and the bytes resident after it, plus the run's totals at the top level; the rows
+//                           sum to the totals). Without --survey it can never hit (one area per process) and only costs
+//                           time and heap: lomn_view warns on stderr. Native arm64 only pays off (ARMv8 SHA-256); on
+//                           x86-64 and wasm32 the portable SHA-256 makes it slower (docs/knowledge/measurements.md).
 // Always writes <out>.json metrics (except --survey, whose output IS the JSON).
 // Exit codes (as lomn_native): 0 ok, 2 bad args, 3 no WebGPU adapter / install or area unreadable / survey found no
 // area, 4 failure (bad area data, an exceeded cap, a write error).
@@ -349,15 +352,21 @@ int survey(const std::string& install, const std::string& out_path, view::Textur
     const auto t0 = Clock::now();
     view::AreaOptions ao;
     ao.texture_cache = cache;
-    const uint64_t evictions_before = cache ? cache->stats().evictions : 0;
+    // fix1 M-4: the row's block is the cache's own counter deltas over this load, so it exists on a FAILED row too (a
+    // load can look up, store and evict before it fails; AreaData is reset on failure) and the rows sum to the totals.
+    const view::TextureCacheStats before = cache ? cache->stats() : view::TextureCacheStats();
     bool ok = view::load_area(*fsp, la.first, la.second, ao, a, &err);
     const double ms = ms_since(t0);
     total_ms += ms;
+    const std::string cache_row =
+        cache ? ",\"texture_cache\":" + texture_cache_json(cache->stats().hits - before.hits, cache->stats().misses - before.misses,
+                                                            cache->stats().bytes, cache->stats().evictions - before.evictions)
+              : std::string();
     const std::string where = la.first + "/" + la.second;
     rows += std::string(rows.empty() ? "" : ",\n") + "{\"area\":" + js(where) + ",\"ok\":" + (ok ? "true" : "false");
     if (!ok) {
       ++failures;
-      rows += ",\"error\":" + js(err) + "}";
+      rows += ",\"error\":" + js(err) + cache_row + "}";
       continue;
     }
     // M1a-3: one null-backend frame through the D3D8 replay -> pipelines, state calls, draw kinds per area.
@@ -392,11 +401,7 @@ int survey(const std::string& install, const std::string& out_path, view::Textur
             ",\"scene\":{\"level_type\":" + std::to_string(a.level_type) + ",\"lights\":" + std::to_string(a.lights.size()) +
             ",\"lights_source\":" + js(a.lights_source) + ",\"fog_source\":" + js(a.fog.source) + ",\"fog_start\":" + num(a.fog.start) +
             ",\"fog_end\":" + num(a.fog.end) + ",\"cave_lighting\":" + (a.cave_lighting ? "true" : "false") + ",\"script_class\":" +
-            js(a.script_class) + ",\"special_matches\":" + std::to_string(a.special_matches) + "}" +
-            (cache ? ",\"texture_cache\":" + texture_cache_json(a.stats.texture_cache_hits, a.stats.texture_cache_misses, cache->stats().bytes,
-                                                              cache->stats().evictions - evictions_before)
-                   : std::string()) +
-            "}";
+            js(a.script_class) + ",\"special_matches\":" + std::to_string(a.special_matches) + "}" + cache_row + "}";
     max_records = std::max<uint64_t>(max_records, a.stats.obj_records);
     track(a.stats.placements, max_place, max_place_at, where);
     track(a.stats.draws, max_draws, max_draws_at, where);
@@ -605,6 +610,8 @@ int main(int argc, char** argv) {
   }
 
   if (texture_cache_on) {
+    // fix1 M-5: one area per process can never hit; the cache only hashes, copies and holds a second copy.
+    std::fprintf(stderr, "lomn_view: warning: --texture-cache on without --survey loads one area and can never hit (cost only)\n");
     texture_cache = std::make_unique<view::TextureCache>();
     ao.texture_cache = texture_cache.get();
   }

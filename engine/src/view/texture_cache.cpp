@@ -49,8 +49,10 @@ void compress(uint32_t h[8], const uint8_t* p) {
 #endif
 
 // `blocks` 64-byte blocks. Portable FIPS 180-4 rounds everywhere (wasm32 included); on arm64 with the SHA-2 extension
-// (Apple silicon) the same rounds via the ARMv8 SHA256H/H2/SU0/SU1 instructions: 210 MB/s portable vs several GB/s
-// (measured 2026-10-07, see the M1a-4 Task 3 report). Both give the same digest (the FIPS vectors run on both builds).
+// (Apple silicon) the same rounds via the ARMv8 SHA256H/H2/SU0/SU1 instructions: ~210 MB/s portable vs ~1.3 GB/s
+// ARMv8 (measured 2026-10-07 on a 256 MiB buffer, Apple M1 Pro: 208-215 vs 1267-1377 MB/s; docs/knowledge/
+// measurements.md). x86-64 and wasm32 take the portable rounds. Both paths give the same digest (the FIPS vectors run on
+// both builds).
 void compress_blocks(uint32_t h[8], const uint8_t* p, size_t blocks) {
 #if defined(LOMN_SHA256_ARMV8)
   uint32x4_t abcd = vld1q_u32(&h[0]), efgh = vld1q_u32(&h[4]);
