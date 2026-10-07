@@ -9,9 +9,13 @@
 //     pixels byte-identical every cycle, live counts back to the baseline after every release.
 //  REF4 r2: destroy_texture/destroy_buffer now Destroy the GPU object (deferred to end_frame inside a frame): probes 2
 //  and 5 cover both paths. 6. the lost handler receives the first uncaptured GPU error once.
+//  T8 P4: the lost handler is installed before probe 1 and records every reason it receives, so probes 1-4 assert that
+//  no GPU error happened (none reached it, after a queue wait), and probe 6 asserts WHICH error arrived: the provoked
+//  WGSL compile error (a stale error left by an earlier probe would arrive first, and fail that check).
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <string>
 #include <vector>
 
 #include "lomn/fs.h"
@@ -58,6 +62,9 @@ int main() {
     std::printf("%s %s\n", hit ? "ok  " : "FAIL", what);
     ok = ok && hit;
   };
+  // T8 P4: every reason the lost handler receives (the device forwards only the first uncaptured error / loss).
+  std::vector<std::string> gpu_errors;
+  dev->set_lost_handler([&](const std::string& why) { gpu_errors.push_back(why); });
 
   // 1. Dependency rule.
   MeshPipelineDesc pd;
@@ -126,6 +133,16 @@ int main() {
   const uint32_t rej1 = dev->last_frame_stats().rejected;
   check(!dev->set_surface_depth(true, 1.0f) && !dev->resize(64, 64) && dev->last_frame_stats().rejected == rej1 + 2,
         "4. set_surface_depth / resize without a surface: counted rejections");
+  {
+    // T8 P4: wait for the queue (a frame + read-back), so any asynchronous error from probes 1-4 has been reported.
+    const TextureId ft = dev->create_render_target_ex(RenderTargetDesc{8, 8, true, 1.0f});
+    dev->begin_frame(ft, clear);
+    dev->end_frame();
+    std::vector<uint8_t> fpx;
+    const bool flushed = dev->read_pixels(ft, fpx) && dev->destroy_texture(ft);
+    for (const std::string& e : gpu_errors) std::printf("     unexpected GPU error: %s\n", e.c_str());
+    check(flushed && gpu_errors.empty(), "1-4. no GPU error (0 uncaptured errors reached the lost handler after a queue wait)");
+  }
 
   // 5. AreaRenderer::release cycles on the synthetic A7 scene.
   fs::MemoryFileSystem mfs;
@@ -173,12 +190,6 @@ int main() {
   //    WGSL) and fails inside Dawn as an uncaptured validation error; that first error reaches the handler exactly once,
   //    with a readable reason.
   {
-    int calls = 0;
-    std::string why;
-    dev->set_lost_handler([&](const std::string& r) {
-      ++calls;
-      why = r;
-    });
     MeshPipelineDesc bad = pd;
     bad.wgsl = "this is not WGSL";
     const PipelineId bp = dev->create_mesh_pipeline(bad);
@@ -191,8 +202,12 @@ int main() {
     dev->draw_indexed({bp, vb, ib, 0, 6, g6, 0});  // outside a frame: a counted rejection, not a second GPU error
     std::vector<uint8_t> px6;
     dev->read_pixels(t6, px6);  // waits for the queue: any asynchronous error has been reported by now
-    std::printf("     lost handler: %d call(s): %s\n", calls, why.c_str());
-    check(calls == 1 && why.rfind("GPU error (validation)", 0) == 0, "6. the first uncaptured GPU error reaches the lost handler once");
+    const std::string why = gpu_errors.empty() ? std::string() : gpu_errors.front();
+    std::printf("     lost handler: %zu call(s): %s\n", gpu_errors.size(), why.c_str());
+    check(gpu_errors.size() == 1 && why.rfind("GPU error (validation)", 0) == 0, "6. the first uncaptured GPU error reaches the lost handler once");
+    // T8 P4: and it is the error this probe provoked (Dawn's WGSL parse error quoting the bad source), not a stale one.
+    check(why.find("Error while parsing WGSL") != std::string::npos && why.find("this is not WGSL") != std::string::npos,
+          "6. the handler's reason is the provoked WGSL compile error");
   }
   std::printf("adapter=%s\n", dev->adapter().c_str());
   return ok ? 0 : 1;

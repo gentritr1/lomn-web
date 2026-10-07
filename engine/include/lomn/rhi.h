@@ -234,6 +234,10 @@ class Device {
   // reason other than the device's own destruction, or the first uncaptured GPU error (a validation error the shared
   // checks could not see, e.g. bad WGSL). A loss that happened before the handler was set is delivered when it is set.
   // The null backend never loses its device (it logs the call). Default: no-op.
+  // T8 P6: on WebGPU the handler runs INSIDE Dawn's device-lost / uncaptured-error callback (natively during whichever
+  // Dawn call or queue wait reported the error; in the browser from the event loop), or inside set_lost_handler for a
+  // pending loss. It must not destroy the device and must not re-enter rhi (no create/destroy/write/draw/frame/read
+  // call, no set_lost_handler): record the reason and stop work (e.g. cancel the main loop), act on it later.
   virtual void set_lost_handler(std::function<void(const std::string& reason)> /*handler*/) {}
 };
 

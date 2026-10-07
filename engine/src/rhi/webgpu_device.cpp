@@ -85,6 +85,8 @@ WGPUAddressMode addr(AddressMode a) {
 // REF4 r2 (C1): where the device-lost and uncaptured-error callbacks report. It is the callbacks' userdata, so it is
 // created before the device and deliberately never freed (Dawn may still deliver a Destroyed loss while the device is
 // released; one small object per device, and a page creates one device).
+// T8 P6: notify() runs the caller's handler inside the Dawn callback (re-entrantly, from within a Dawn call on this
+// device natively): the handler must not destroy the device or re-enter rhi (see Device::set_lost_handler in rhi.h).
 struct LostSink {
   std::function<void(const std::string&)> handler;
   bool fired = false;
@@ -684,6 +686,8 @@ class WebGpuDevice final : public Device {
   }
   LiveObjects live_objects() const override { return reg_.live(); }
 
+  // T8 P6: a pending loss is delivered from here; a later one from the Dawn callbacks below. Either way the handler must
+  // not destroy this device or call back into it (documented on Device::set_lost_handler).
   void set_lost_handler(std::function<void(const std::string&)> h) override {
     if (!lost_) return;
     lost_->handler = std::move(h);
