@@ -1,0 +1,299 @@
+// rhi WebGPU backend on Dawn (headless), without lomn_area: local WGSL only. Exits 77 (ctest SKIP) without an adapter.
+//  1. Blend: an opaque quad (blue), then an AlphaBlend quad (red, texture alpha 128) over it -> SRCALPHA/INVSRCALPHA
+//     = (128, 0, 127) and the target's alpha stays 255.
+//  1b. Depth state that can fail: the NEAR quad drawn first, then the far one -> LessEqual + depth write keeps the
+//     near colour; near with depth_write = false lets the far one through; compare Always keeps the last-drawn.
+//  1c. begin_frame on an unknown id, a sampled texture or 0 (headless) is a counted rejection; its draws are skipped.
+//  1d. A uniform buffer over kMaxBufferBytes gets an id without storage (no Dawn buffer); every use is rejected.
+//  2. An M0 pipeline drawn into a depth-enabled target keeps its pixels: byte-identical to the same draw into a target
+//     without depth, and it is not depth-tested against a mesh quad drawn first nearer the camera (compare Always).
+//  3. Invalid M0 draws (unknown pipeline, a mesh pipeline, unknown uniform buffer) are rejected and counted, never
+//     reach Dawn and never throw; the frame's pixels are unchanged.
+//  4. (M1a-3) Winding: with front_face = CW (D3D's front face), a triangle that is clockwise ON SCREEN (NDC y up:
+//     bottom-left, top, bottom-right) is culled by CullMode::Front (= D3DCULL_CW) and drawn by CullMode::Back
+//     (= D3DCULL_CCW); its reverse the other way round. This pins the d3d -> rhi cull mapping of lomn/d3d/ffp.h.
+//  5. (M1a-3) depth_bias: a quad at the same depth as an earlier one, compare LESS, passes only with depth_bias < 0.
+#include <cstdio>
+#include <cstdlib>
+
+#include "lomn/rhi.h"
+
+using namespace lomn::rhi;
+
+namespace {
+
+const char* kMeshWgsl = R"(
+struct U { tint: vec4f }
+@group(0) @binding(0) var<uniform> u: U;
+@group(0) @binding(1) var tex: texture_2d<f32>;
+@group(0) @binding(2) var samp: sampler;
+struct VOut { @builtin(position) pos: vec4f, @location(0) color: vec4f }
+@vertex fn vs(@location(0) p: vec3f, @location(1) c: vec4f) -> VOut {
+  var o: VOut;
+  o.pos = vec4f(p, 1.0);
+  o.color = c * u.tint;
+  return o;
+}
+@fragment fn fs_opaque(i: VOut) -> @location(0) vec4f {
+  return vec4f(textureSample(tex, samp, vec2f(0.5, 0.5)).rgb * i.color.rgb, 1.0);
+}
+@fragment fn fs_alpha(i: VOut) -> @location(0) vec4f {
+  let t = textureSample(tex, samp, vec2f(0.5, 0.5));
+  if (t.a <= 1.0 / 255.0) { discard; }
+  return vec4f(t.rgb * i.color.rgb, t.a);
+}
+)";
+
+// The M0 triangle (as lomn::TriangleScene, angle 0): orange on the clear colour.
+const char* kM0Wgsl = R"(
+struct U { angle: f32 }
+@group(0) @binding(0) var<uniform> u: U;
+@vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
+  var p = array<vec2f, 3>(vec2f(0.0, 0.8), vec2f(-0.8, -0.8), vec2f(0.8, -0.8));
+  let c = cos(u.angle);
+  let s = sin(u.angle);
+  let v = p[i];
+  return vec4f(c * v.x - s * v.y, s * v.x + c * v.y, 0.0, 1.0);
+}
+@fragment fn fs() -> @location(0) vec4f { return vec4f(1.0, 0.5, 0.0, 1.0); }
+)";
+
+bool near(const uint8_t* c, int r, int g, int b, int a) {
+  return std::abs(c[0] - r) <= 2 && std::abs(c[1] - g) <= 2 && std::abs(c[2] - b) <= 2 && c[3] == a;
+}
+
+}  // namespace
+
+int main() {
+  std::unique_ptr<Device> dev;
+  std::string err;
+  create_webgpu_device(nullptr, 0, 0, [&](std::unique_ptr<Device> d, std::string e) {
+    dev = std::move(d);
+    err = std::move(e);
+  });
+  if (!dev) {
+    std::printf("SKIPPED (no WebGPU adapter: %s)\n", err.c_str());
+    return 77;
+  }
+  bool ok = true;
+  auto report = [&](bool hit, const char* what, const uint8_t* c) {
+    std::printf("%s %s = %u,%u,%u,%u\n", hit ? "ok  " : "FAIL", what, c[0], c[1], c[2], c[3]);
+    ok = ok && hit;
+  };
+
+  // Shared mesh objects: two full-target quads (z 0.5 blue, z 0.25 red), 1x1 textures (alpha 255 and 128).
+  MeshPipelineDesc pd;
+  pd.wgsl = kMeshWgsl;
+  pd.uniform_bytes = 16;
+  pd.vertex_stride = 28;
+  pd.attributes = {{VertexFormat::Float32x3, 0, 0}, {VertexFormat::Float32x4, 12, 1}};
+  pd.fs_entry = "fs_opaque";
+  PipelineId opaque = dev->create_mesh_pipeline(pd);
+  pd.fs_entry = "fs_alpha";
+  pd.blend = BlendMode::AlphaBlend;
+  PipelineId alpha = dev->create_mesh_pipeline(pd);
+  const float verts[2][4][7] = {
+      {{-1, -1, 0.5f, 0, 0, 1, 1}, {1, -1, 0.5f, 0, 0, 1, 1}, {1, 1, 0.5f, 0, 0, 1, 1}, {-1, 1, 0.5f, 0, 0, 1, 1}},
+      {{-1, -1, 0.25f, 1, 0, 0, 1}, {1, -1, 0.25f, 1, 0, 0, 1}, {1, 1, 0.25f, 1, 0, 0, 1}, {-1, 1, 0.25f, 1, 0, 0, 1}}};
+  const uint32_t idx[12] = {0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7};
+  BufferId vb = dev->create_vertex_buffer(sizeof verts), ib = dev->create_index_buffer(sizeof idx);
+  BufferId ub = dev->create_uniform_buffer(kUniformAlign);
+  dev->write_buffer(vb, 0, verts, sizeof verts);
+  dev->write_buffer(ib, 0, idx, sizeof idx);
+  const float tint[4] = {1, 1, 1, 1};
+  dev->write_buffer(ub, 0, tint, sizeof tint);
+  const uint8_t white[4] = {255, 255, 255, 255}, half[4] = {255, 255, 255, 128};
+  TextureId tw = dev->create_texture(1, 1, 1), th = dev->create_texture(1, 1, 1);
+  dev->write_texture(tw, 0, white, 4);
+  dev->write_texture(th, 0, half, 4);
+  SamplerId s = dev->create_sampler(SamplerDesc());
+  BindGroupId bw = dev->create_bind_group({ub, 16, tw, s}), bh = dev->create_bind_group({ub, 16, th, s});
+  if (!opaque || !alpha || !vb || !ib || !ub || !tw || !th || !s || !bw || !bh) return std::printf("FAIL setup\n"), 1;
+  const float clear[4] = {0, 0, 0.25f, 1};
+
+  // 1. Blend.
+  TextureId rt = dev->create_render_target_ex(RenderTargetDesc{8, 8, true, 1.0f});
+  dev->begin_frame(rt, clear);
+  dev->draw_indexed({opaque, vb, ib, 0, 6, bw, 0});
+  dev->draw_indexed({alpha, vb, ib, 6, 6, bh, 0});
+  dev->end_frame();
+  std::vector<uint8_t> px;
+  if (!dev->read_pixels(rt, px)) return 1;
+  report(near(&px[(4 * 8 + 4) * 4], 128, 0, 127, 255) && dev->last_frame_stats().draws == 2,
+         "blend (4,4) want 128,0,127,255: SRCALPHA/INVSRCALPHA, target alpha kept", &px[(4 * 8 + 4) * 4]);
+
+  // 1b. Depth state that can fail: the NEAR quad (red, z 0.25) is drawn FIRST, then the FAR one (blue, z 0.5).
+  //   LessEqual + depth write: the far quad fails the test -> red.
+  //   Near drawn with depth_write = false: nothing was written, the far quad passes -> blue.
+  //   Compare Always (depth write on): the last-drawn quad wins -> blue.
+  pd.fs_entry = "fs_opaque";
+  pd.blend = BlendMode::Opaque;
+  pd.depth_write = false;
+  PipelineId nowrite = dev->create_mesh_pipeline(pd);
+  pd.depth_write = true;
+  pd.depth_compare = CompareFunc::Always;
+  PipelineId always = dev->create_mesh_pipeline(pd);
+  if (!nowrite || !always) return std::printf("FAIL setup (depth pipelines)\n"), 1;
+  struct DepthCase {
+    PipelineId near_pipe, far_pipe;
+    int r, g, b;
+    const char* what;
+  };
+  const DepthCase depth_cases[] = {
+      {opaque, opaque, 255, 0, 0, "near then far, LessEqual + depth write: far rejected (want red)"},
+      {nowrite, opaque, 0, 0, 255, "near (depth_write=false) then far: far passes (want blue)"},
+      {always, always, 0, 0, 255, "near then far, compare Always: last drawn wins (want blue)"},
+  };
+  for (const DepthCase& dc : depth_cases) {
+    dev->begin_frame(rt, clear);
+    dev->draw_indexed({dc.near_pipe, vb, ib, 6, 6, bw, 0});
+    dev->draw_indexed({dc.far_pipe, vb, ib, 0, 6, bw, 0});
+    dev->end_frame();
+    if (!dev->read_pixels(rt, px)) return 1;
+    report(near(&px[(4 * 8 + 4) * 4], dc.r, dc.g, dc.b, 255) && dev->last_frame_stats().draws == 2, dc.what, &px[(4 * 8 + 4) * 4]);
+  }
+
+  // 1c. begin_frame on an unknown id, a sampled texture or 0 (no surface: headless) is a counted rejection, and the
+  //     frame's draws are skipped (not drawn, not counted); the next valid frame renders normally.
+  for (TextureId bad : {TextureId(999), tw, TextureId(0)}) {
+    dev->begin_frame(bad, clear);
+    dev->draw_indexed({opaque, vb, ib, 0, 6, bw, 0});
+    dev->end_frame();
+    const FrameStats bs = dev->last_frame_stats();
+    std::printf("%s begin_frame(%u) rejected=%u draws=%u (want 1, 0)\n", bs.rejected == 1 && bs.draws == 0 ? "ok  " : "FAIL", bad,
+                bs.rejected, bs.draws);
+    ok = ok && bs.rejected == 1 && bs.draws == 0;
+  }
+
+  // 1d. A uniform buffer over kMaxBufferBytes: an id without storage (no Dawn buffer, so no Dawn error); its creation,
+  //     a write and a bind group using it are 3 counted rejections.
+  dev->begin_frame(rt, clear);  // resets the per-frame counters
+  dev->end_frame();
+  const BufferId huge = dev->create_uniform_buffer(0xFFFFFFFFu);
+  dev->write_buffer(huge, 0, tint, sizeof tint);
+  const BindGroupId hb = dev->create_bind_group({huge, 16, tw, s});
+  const uint32_t hr = dev->last_frame_stats().rejected;
+  std::printf("%s oversized uniform buffer: id=%u bind_group=%u rejected=%u (want id != 0, 0, 3)\n", huge && !hb && hr == 3 ? "ok  " : "FAIL",
+              huge, hb, hr);
+  ok = ok && huge && !hb && hr == 3;
+
+  // 2. M0 pipeline into a depth target.
+  PipelineDesc m0;
+  m0.wgsl = kM0Wgsl;
+  m0.uniform_bytes = 16;
+  PipelineId tri = dev->create_pipeline(m0);
+  BufferId tu = dev->create_uniform_buffer(kUniformAlign);
+  const float angle[4] = {0, 0, 0, 0};
+  dev->write_buffer(tu, 0, angle, sizeof angle);
+  TextureId plain = dev->create_render_target(64, 64);
+  TextureId depth = dev->create_render_target_ex(RenderTargetDesc{64, 64, true, 1.0f});
+  std::vector<uint8_t> a, b;
+  for (TextureId t : {plain, depth}) {
+    dev->begin_frame(t, clear);
+    dev->draw(tri, 3, tu, 0);
+    dev->end_frame();
+    if (!dev->read_pixels(t, t == plain ? a : b)) return 1;
+  }
+  report(a == b && near(&b[(32 * 64 + 32) * 4], 255, 128, 0, 255), "M0 triangle in a depth target == without depth (centre)",
+         &b[(32 * 64 + 32) * 4]);
+  // A mesh quad written to depth 0.25 first; the M0 triangle (z 0, compare Always) still covers it.
+  dev->begin_frame(depth, clear);
+  dev->draw_indexed({opaque, vb, ib, 6, 6, bw, 0});
+  dev->draw(tri, 3, tu, 0);
+  dev->end_frame();
+  if (!dev->read_pixels(depth, b)) return 1;
+  report(near(&b[(32 * 64 + 32) * 4], 255, 128, 0, 255), "M0 triangle over a nearer mesh quad (not depth-tested)", &b[(32 * 64 + 32) * 4]);
+  report(near(&b[(2 * 64 + 2) * 4], 255, 0, 0, 255), "mesh quad outside the triangle", &b[(2 * 64 + 2) * 4]);
+
+  // 3. Invalid M0 draws are rejected: same pixels as a frame with only the valid draw.
+  dev->begin_frame(depth, clear);
+  dev->draw(99, 3, tu, 0);
+  dev->draw(opaque, 3, tu, 0);
+  dev->draw(tri, 3, 99, 0);
+  dev->draw(tri, 3, tu, 0);
+  dev->end_frame();
+  const FrameStats st = dev->last_frame_stats();
+  std::vector<uint8_t> c;
+  if (!dev->read_pixels(depth, c)) return 1;
+  report(st.rejected == 3 && st.draws == 1 && c == a, "3 invalid M0 draws rejected, 1 drawn, pixels == the valid frame", &c[(32 * 64 + 32) * 4]);
+  // 4. Winding / cull mapping.
+  {
+    const float tri_v[2][3][7] = {
+        {{-0.8f, -0.8f, 0.5f, 0, 1, 0, 1}, {0.0f, 0.8f, 0.5f, 0, 1, 0, 1}, {0.8f, -0.8f, 0.5f, 0, 1, 0, 1}},   // clockwise on screen
+        {{-0.8f, -0.8f, 0.5f, 0, 1, 0, 1}, {0.8f, -0.8f, 0.5f, 0, 1, 0, 1}, {0.0f, 0.8f, 0.5f, 0, 1, 0, 1}}};  // counter-clockwise
+    const uint32_t tri_i[6] = {0, 1, 2, 3, 4, 5};
+    BufferId tvb = dev->create_vertex_buffer(sizeof tri_v), tib = dev->create_index_buffer(sizeof tri_i);
+    dev->write_buffer(tvb, 0, tri_v, sizeof tri_v);
+    dev->write_buffer(tib, 0, tri_i, sizeof tri_i);
+    MeshPipelineDesc cd = pd;
+    cd.fs_entry = "fs_opaque";
+    cd.blend = BlendMode::Opaque;
+    cd.depth_compare = CompareFunc::LessEqual;
+    cd.depth_write = true;
+    cd.front_face = FrontFace::CW;
+    cd.cull = CullMode::Front;
+    PipelineId cull_cw = dev->create_mesh_pipeline(cd);  // D3DCULL_CW
+    cd.cull = CullMode::Back;
+    PipelineId cull_ccw = dev->create_mesh_pipeline(cd);  // D3DCULL_CCW
+    if (!tvb || !tib || !cull_cw || !cull_ccw) return std::printf("FAIL setup (winding)\n"), 1;
+    struct WCase {
+      PipelineId p;
+      uint32_t first;
+      bool drawn;
+      const char* what;
+    };
+    const WCase wc[] = {{cull_cw, 0, false, "screen-clockwise triangle, D3DCULL_CW: culled"},
+                        {cull_ccw, 0, true, "screen-clockwise triangle, D3DCULL_CCW: drawn"},
+                        {cull_cw, 3, true, "screen-counter-clockwise triangle, D3DCULL_CW: drawn"},
+                        {cull_ccw, 3, false, "screen-counter-clockwise triangle, D3DCULL_CCW: culled"}};
+    for (const WCase& w : wc) {
+      dev->begin_frame(rt, clear);
+      dev->draw_indexed({w.p, tvb, tib, w.first, 3, bw, 0});
+      dev->end_frame();
+      if (!dev->read_pixels(rt, px)) return 1;
+      const uint8_t* c = &px[(4 * 8 + 4) * 4];
+      report(w.drawn ? near(c, 0, 255, 0, 255) : near(c, 0, 0, 64, 255), w.what, c);
+    }
+  }
+  // 5. Depth bias.
+  {
+    MeshPipelineDesc bd = pd;
+    bd.fs_entry = "fs_opaque";
+    bd.blend = BlendMode::Opaque;
+    bd.depth_write = true;
+    bd.depth_compare = CompareFunc::LessEqual;
+    PipelineId first = dev->create_mesh_pipeline(bd);
+    bd.depth_compare = CompareFunc::Less;
+    PipelineId nobias = dev->create_mesh_pipeline(bd);
+    bd.depth_bias = -16;
+    PipelineId bias = dev->create_mesh_pipeline(bd);
+    if (!first || !nobias || !bias) return std::printf("FAIL setup (bias)\n"), 1;
+    // The red quad's vertices moved to z 0.5 (the blue quad's depth): same depth, drawn second with compare LESS.
+    const float same[4][7] = {{-1, -1, 0.5f, 1, 0, 0, 1}, {1, -1, 0.5f, 1, 0, 0, 1}, {1, 1, 0.5f, 1, 0, 0, 1}, {-1, 1, 0.5f, 1, 0, 0, 1}};
+    BufferId svb = dev->create_vertex_buffer(sizeof verts);
+    dev->write_buffer(svb, 0, verts, sizeof verts);
+    dev->write_buffer(svb, 4 * 7 * 4, same, sizeof same);
+    for (int k = 0; k < 2; ++k) {
+      dev->begin_frame(rt, clear);
+      dev->draw_indexed({first, svb, ib, 0, 6, bw, 0});
+      dev->draw_indexed({k ? bias : nobias, svb, ib, 6, 6, bw, 0});
+      dev->end_frame();
+      if (!dev->read_pixels(rt, px)) return 1;
+      const uint8_t* c = &px[(4 * 8 + 4) * 4];
+      report(k ? near(c, 255, 0, 0, 255) : near(c, 0, 0, 255, 255),
+             k ? "equal depth, compare LESS, depth_bias -16: passes (want red)" : "equal depth, compare LESS, no bias: rejected (want blue)", c);
+    }
+  }
+  // 6. (M1a-3) A draw after end_frame is a counted rejection (null-backend parity), not a silent no-op.
+  {
+    dev->begin_frame(rt, clear);
+    dev->end_frame();
+    dev->draw_indexed({opaque, vb, ib, 0, 6, bw, 0});
+    const FrameStats fs = dev->last_frame_stats();
+    std::printf("%s out-of-frame draw_indexed rejected=%u draws=%u (want 1, 0)\n", fs.rejected == 1 && fs.draws == 0 ? "ok  " : "FAIL",
+                fs.rejected, fs.draws);
+    ok = ok && fs.rejected == 1 && fs.draws == 0;
+  }
+  std::printf("adapter=%s\n", dev->adapter().c_str());
+  return ok ? 0 : 1;
+}

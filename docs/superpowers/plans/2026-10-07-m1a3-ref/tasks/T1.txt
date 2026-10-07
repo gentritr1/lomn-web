@@ -1,0 +1,9 @@
+T1: rhi additive: FrontFace + depth_bias in MeshPipelineDesc; draws outside a frame rejected on null AND WebGPU
+Apply after BASE f47cc91: copy T1/files/* over the tree (full file contents as of the end of T1).
+
+M engine/include/lomn/rhi.h  -- full (final)
+M engine/src/rhi/registry.h  -- full (final)
+M engine/src/rhi/null_device.cpp  -- full (final)
+M engine/src/rhi/webgpu_device.cpp  -- full (final)
+M engine/tests/test_rhi_mesh.cpp  -- full (final): null out-of-frame rejection
+M engine/tests/test_gpu_mesh.cpp  -- full (final): winding / depth-bias / out-of-frame probes on Dawn

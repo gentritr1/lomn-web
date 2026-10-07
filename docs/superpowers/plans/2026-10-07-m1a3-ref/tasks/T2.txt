@@ -1,0 +1,13 @@
+T2: lomn_d3d: D3D8 state shim (device8) + compiler to rhi (ffp: pipeline keys, uber-shader WGSL, uniforms, CPU reference) + gpu_ffp + independent Python check of the reference (ffp_oracle)
+Apply after T1: copy T2/files/* over the tree (full file contents as of the end of T2).
+
+A engine/include/lomn/d3d/device8.h  -- new (final)
+A engine/src/d3d/device8.cpp  -- new (final)
+A engine/include/lomn/d3d/ffp.h  -- new (final)
+A engine/src/d3d/ffp.cpp  -- new (final)
+A engine/tests/test_d3d.cpp  -- new (final)
+A engine/tests/test_gpu_ffp.cpp  -- new (final)
+A engine/tests/ffp_cases.h  -- new (final)
+A engine/tests/ffp_cases.cpp  -- new (final)
+A tools/research/oracle/ffp_oracle.py  -- new (final)
+M engine/CMakeLists.txt  -- partial: lomn_d3d library (math.cpp moves into it; lomn_area links it), gpu_ffp, lomn_ffp_cases + ffp_oracle ctest, test_d3d.cpp in lomn_tests

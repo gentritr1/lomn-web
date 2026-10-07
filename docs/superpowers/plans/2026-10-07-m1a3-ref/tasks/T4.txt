@@ -1,0 +1,9 @@
+T4: area loader additions (data only; the M1a-2 renderer still draws): per-subset D3DMATERIAL8, textures.slb, LIGHT.slb / default lights, Base.osi fog + cave lighting, level type, greatest-Y; synthetic A9 "stat" scene data
+Apply after T3: copy T4/files/* over the tree (full file contents as of the end of T4).
+
+M engine/include/lomn/view/area.h  -- partial: AreaData / SubsetDraw / Model / AreaStats M1a-3 fields, SceneLight, FogSettings (renderer API and camera defaults unchanged)
+M engine/src/view/area.cpp  -- partial: the loader half of the final file (build_material, load_spec_textures / apply_spec_textures, load_lights, load_script, level type, greatest-Y, untextured-material warning); the M1a-2 renderer kept verbatim; vertex colours NOT yet quantised (that changes the A7 log: T5)
+M engine/include/lomn/view/synthetic.h  -- full (final)
+M engine/src/view/synthetic.cpp  -- full (final): stat area, LIGHT table, textures.slb, Base.osi, extra textures (the A7 "test" area is unchanged)
+A engine/tests/test_area_states.cpp  -- new (final)
+M engine/CMakeLists.txt  -- partial: test_area_states.cpp in lomn_tests

@@ -1,8 +1,9 @@
 # Deliberate defects in the M1a-3 state logic; each must make at least one ctest fail (unit / a7_* / a9_* / gpu_mesh /
-# gpu_ffp; a9_oracle_real runs when LOMN_DATA is set). The no-op control must SURVIVE. Restores every file.
+# gpu_ffp / osi_probe / ffp_oracle; a9_oracle_real runs when LOMN_DATA is set). The no-op control must SURVIVE. Restores every file.
 # Usage: python3 mutate3.py <work dir>
 import os, subprocess, sys
 W = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'work')
+OSI = 'engine/src/sage/osi.cpp'
 SF, FFP, DEV, AREA, RHI = 'engine/src/view/sage_frame.cpp', 'engine/src/d3d/ffp.cpp', 'engine/src/d3d/device8.cpp', 'engine/src/view/area.cpp', 'engine/src/rhi'
 M = [
  (SF, 'd.dx_set_rs(rs::LIGHTING, (m & 1) ? 1u : 0u);', 'd.dx_set_rs(rs::LIGHTING, 1u);', 'render mode bit 0 ignored: area nodes lit'),
@@ -37,12 +38,23 @@ M = [
  (RHI + '/null_device.cpp', '    if (!frame_open_) {  // M1a-3 parity with WebGPU: a draw outside begin_frame/end_frame is a counted rejection', '    if (false) {', 'null out-of-frame draw accepted'),
  (RHI + '/webgpu_device.cpp', 'rpd.primitive.frontFace = p.mesh_desc.front_face == FrontFace::CW ? WGPUFrontFace_CW : WGPUFrontFace_CCW;', 'rpd.primitive.frontFace = WGPUFrontFace_CCW;', 'WebGPU front face ignored'),
  (FFP, '  const float c = x >= 1.0f ? 1.0f : x > 0.0f ? x : 0.0f;', '  const float c = x >= 1.0f ? 1.0f : x <= 0.0f ? 0.0f : x;', 'NaN vertex colour reaches the int conversion (UBSan finding; caught under -fsanitize only: expected MISSED here)'),
+ # REF3 revision 2: OSI caps (unit + osi_probe) and the CPU reference of the FFP formulas (ffp_oracle; gpu_ffp's own
+ # cases cannot see these: attenuation2 = 0, w = 1, alpha on exact bytes).
+ (OSI, '        if (out.size() >= kMaxOsiCallsPerMethod) return fail(err, "method exceeds kMaxOsiCallsPerMethod");\n', '', 'OSI calls-per-method cap removed'),
+ (OSI, '        if (args_total > kMaxOsiArgsPerMethod) return fail(err, "method exceeds kMaxOsiArgsPerMethod");\n', '', 'OSI args-per-method cap removed'),
+ (OSI, '    if (st.size() > kMaxOsiStackDepth) return fail(err, "literal stack exceeds kMaxOsiStackDepth");\n', '', 'OSI literal-stack cap removed'),
+ (OSI, '        if (string_bytes > kMaxOsiStringArgBytes) return fail(err, "method exceeds kMaxOsiStringArgBytes");\n', '', 'OSI string-bytes cap removed'),
+ (OSI, '    if (!seen.insert(off).second) return true;\n', '    seen.insert(off);\n', 'check_all re-walks shared bytecode'),
+ (OSI, '  *this = OsiFile();  // no partial state after an error\n', '', 'failed OSI parse keeps partial tables'),
+ (FFP, '      att = 1.0f / std::max(l.attenuation0 + l.attenuation1 * dist + l.attenuation2 * dist * dist, 1e-20f);', '      att = 1.0f / std::max(l.attenuation0 + l.attenuation1 * dist, 1e-20f);', 'reference attenuation drops a2 (CPU reference)'),
+ (FFP, '    else if (mode == kFogExp2) f = std::exp(-(de * w) * (de * w));', '    else if (mode == kFogExp2) f = std::exp(-de * w * w);', 'reference EXP2 fog squares only w (CPU reference)'),
+ (FFP, '    const float a8 = std::floor(std::min(1.0f, std::max(0.0f, alp.a)) * 255.0f + 0.5f), r = float(s.rs[rs::ALPHAREF] & 0xff);', '    const float a8 = std::floor(std::min(1.0f, std::max(0.0f, alp.a)) * 255.0f), r = float(s.rs[rs::ALPHAREF] & 0xff);', 'reference alpha test truncates instead of rounding (CPU reference)'),
  (SF, '  d.note("node StaticLight");', '  d.note("node StaticLight" "");', 'no-op control (must SURVIVE)'),
 ]
 env = dict(os.environ)
 def run(cmd):
     return subprocess.run(cmd, cwd=W, shell=True, capture_output=True, text=True, env=env)
-tests = 'unit|a7_|a9_|gpu_mesh|gpu_ffp'
+tests = 'unit|a7_|a9_|gpu_mesh|gpu_ffp|osi_probe|ffp_oracle'
 results = []
 for path, old, new, what in M:
     p = os.path.join(W, path); src = open(p).read()

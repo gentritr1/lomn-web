@@ -1,0 +1,10 @@
+T1 (6 files): make test-native test-wasm rc=0 in 34s | native: 100% tests passed, 0 tests failed out of 18 | wasm32: 100% tests passed, 0 tests failed out of 3
+T2 (10 files): make test-native test-wasm rc=0 in 13s | native: 100% tests passed, 0 tests failed out of 20 | wasm32: 100% tests passed, 0 tests failed out of 3
+T3 (12 files): make test-native test-wasm rc=0 in 20s | native: 100% tests passed, 0 tests failed out of 21 | wasm32: 100% tests passed, 0 tests failed out of 4
+T4 (6 files): make test-native test-wasm rc=0 in 16s | native: 100% tests passed, 0 tests failed out of 21 | wasm32: 100% tests passed, 0 tests failed out of 4
+T5 (14 files): make test-native test-wasm rc=0 in 19s | native: 100% tests passed, 0 tests failed out of 24 | wasm32: 100% tests passed, 0 tests failed out of 5
+T6 (8 files): make test-native test-wasm rc=0 in 27s | native: 100% tests passed, 0 tests failed out of 24 | wasm32: 100% tests passed, 0 tests failed out of 5
+T7 (3 files): make test-native test-wasm rc=0 in 7s | native: 100% tests passed, 0 tests failed out of 24 | wasm32: 100% tests passed, 0 tests failed out of 5
+task chain: T1..T7 each built and passed make test-native + make test-wasm
+exit=0
+after T7: chain tree == reference tree (diff -rq engine/ tools/ + cmp Makefile)

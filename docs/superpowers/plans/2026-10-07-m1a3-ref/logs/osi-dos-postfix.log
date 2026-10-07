@@ -1,0 +1,4 @@
+POST-FIX calls: Base.osi 600337 bytes rc=0 0.02s maxrss=12.5 MB warning: osi: subroutine exceeds kMaxOsiInstructions
+POST-FIX stack: Base.osi 600337 bytes rc=0 0.02s maxrss=12.5 MB warning: osi: subroutine exceeds kMaxOsiInstructions
+POST-FIX funcs: Base.osi 824617 bytes rc=0 0.02s maxrss=15.5 MB warning: osi: subroutine exceeds kMaxOsiInstructions
+POST-FIX nops: Base.osi 1048912 bytes rc=0 0.02s maxrss=13.0 MB warning: osi: subroutine exceeds kMaxOsiInstructions

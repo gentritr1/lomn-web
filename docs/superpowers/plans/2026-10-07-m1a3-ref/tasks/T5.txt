@@ -1,0 +1,17 @@
+T5: SAGE frame replay (SageFrame) + AreaRenderer on the D3D8 shim: draw order complete (node order, DrawX passes, SortIt, moveables); vertex colours quantised; A7 regenerated, A9 state log + A9 Python oracle introduced; lomn_view --synthetic 2 / --state-log / --write-install / --lighting / --fog
+Apply after T4: copy T5/files/* over the tree (full file contents as of the end of T5).
+
+A engine/include/lomn/view/sage_frame.h  -- new (final)
+A engine/src/view/sage_frame.cpp  -- new (final)
+A engine/tests/test_sage_frame.cpp  -- new (final)
+A engine/tests/a9_state.cmake  -- new (final)
+A engine/tests/data/a9_state.txt  -- new (final)
+A tools/research/oracle/a9_oracle.py  -- new (final)
+M engine/src/view/area.cpp  -- full (final): renderer half (Impl, Sink, SageFrame replay) + quantised vertex colours
+M engine/include/lomn/view/area.h  -- partial: RenderOptions / RenderStats / AreaRenderer (camera defaults unchanged)
+M engine/tests/test_view_area.cpp  -- full (final)
+M engine/tests/test_gpu_area.cpp  -- full (final)
+M engine/tests/data/a7_calls.txt  -- full (final): REGENERATED here (lazy pipelines, uber WGSL, 1024-byte slots, quantised colours, SortIt order); M1a-2 content until this task
+M engine/tools/lomn_view.cpp  -- partial: --synthetic 2, --state-log, --write-install, --lighting, --fog, --alpha-ref removed (RenderOptions lost it), metrics "states" block
+M engine/CMakeLists.txt  -- partial: sage_frame.cpp in lomn_area, a9_state_log (native + Node), a9_oracle_synthetic, a9_oracle_real, CLI tests updated (--alpha-ref and --synthetic 3 rejected), test_sage_frame.cpp in lomn_tests
+M Makefile  -- partial: test-wasm also cmp's the native and wasm32 A9 state / call logs

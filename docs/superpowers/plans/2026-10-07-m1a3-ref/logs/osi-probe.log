@@ -1,0 +1,24 @@
+# native (Release): build/native/lomn_osi_probe
+ok   calls            600371 bytes  0.001 s  peak +2.6 MB (5.1 MB)  -> osi: subroutine exceeds kMaxOsiInstructions
+ok   calls-in-cap     192371 bytes  0.001 s  peak +2.7 MB (8.2 MB)  -> osi: method exceeds kMaxOsiArgsPerMethod
+ok   calls-argc0      112371 bytes  0.000 s  peak +0.1 MB (8.2 MB)  -> osi: method exceeds kMaxOsiCallsPerMethod
+ok   stack             96371 bytes  0.000 s  peak +0.1 MB (8.4 MB)  -> osi: literal stack exceeds kMaxOsiStackDepth
+ok   string-args       30371 bytes  0.000 s  peak +0.0 MB (8.5 MB)  -> osi: method exceeds kMaxOsiStringArgBytes
+ok   funcs-shared     557418 bytes  0.002 s  peak +3.4 MB (12.0 MB)  -> (accepted)
+ok   funcs-distinct   289138 bytes  0.019 s  peak +0.1 MB (12.1 MB)  -> osi: file exceeds kMaxOsiTotalInstructions
+ok   nops            8387955 bytes  0.000 s  peak +0.0 MB (28.1 MB)  -> osi: subroutine exceeds kMaxOsiInstructions
+ok   too-large       8388609 bytes  0.000 s  peak +0.0 MB (36.2 MB)  -> osi: file too large
+osi_probe: all probes bounded
+rc=0
+# wasm32 under Node (Release, -sMAXIMUM_MEMORY=2GB; peak = linear-memory size)
+ok   calls            600371 bytes  0.002 s  peak +0.0 MB (16.0 MB)  -> osi: subroutine exceeds kMaxOsiInstructions
+ok   calls-in-cap     192371 bytes  0.001 s  peak +0.0 MB (16.0 MB)  -> osi: method exceeds kMaxOsiArgsPerMethod
+ok   calls-argc0      112371 bytes  0.001 s  peak +0.0 MB (16.0 MB)  -> osi: method exceeds kMaxOsiCallsPerMethod
+ok   stack             96371 bytes  0.001 s  peak +0.0 MB (16.0 MB)  -> osi: literal stack exceeds kMaxOsiStackDepth
+ok   string-args       30371 bytes  0.000 s  peak +0.0 MB (16.0 MB)  -> osi: method exceeds kMaxOsiStringArgBytes
+ok   funcs-shared     557418 bytes  0.003 s  peak +0.0 MB (16.0 MB)  -> (accepted)
+ok   funcs-distinct   289138 bytes  0.031 s  peak +0.0 MB (16.0 MB)  -> osi: file exceeds kMaxOsiTotalInstructions
+ok   nops            8387955 bytes  0.001 s  peak +0.0 MB (19.2 MB)  -> osi: subroutine exceeds kMaxOsiInstructions
+ok   too-large       8388609 bytes  0.000 s  peak +0.0 MB (19.2 MB)  -> osi: file too large
+osi_probe: all probes bounded
+rc=0

@@ -30,6 +30,15 @@
 ('null out-of-frame draw accepted', 'CAUGHT unit')
 ('WebGPU front face ignored', 'CAUGHT a7_gpu_pixels,gpu_mesh')
 ('NaN vertex colour reaches the int conversion (UBSan finding; caught under -fsanitize only: expected MISSED here)', 'MISSED')
+('OSI calls-per-method cap removed', 'CAUGHT unit,osi_probe')
+('OSI args-per-method cap removed', 'CAUGHT unit,osi_probe')
+('OSI literal-stack cap removed', 'CAUGHT unit,osi_probe')
+('OSI string-bytes cap removed', 'CAUGHT unit,osi_probe')
+('check_all re-walks shared bytecode', 'CAUGHT unit,osi_probe')
+('failed OSI parse keeps partial tables', 'CAUGHT unit')
+('reference attenuation drops a2 (CPU reference)', 'CAUGHT ffp_oracle')
+('reference EXP2 fog squares only w (CPU reference)', 'CAUGHT ffp_oracle,gpu_ffp')
+('reference alpha test truncates instead of rounding (CPU reference)', 'CAUGHT ffp_oracle')
 ('no-op control (must SURVIVE)', 'MISSED')
-caught 31 of 33 (the no-op control must be MISSED); restored build rc 0, full ctest rc 0
+caught 40 of 42 (the no-op control must be MISSED); restored build rc 0, full ctest rc 0
 exit=0

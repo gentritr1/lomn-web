@@ -81,6 +81,12 @@ bool OsiValue::number(double& out) const {
 
 bool OsiFile::parse(std::vector<uint8_t> bytes, std::string* err) {
   *this = OsiFile();
+  if (parse_tables(std::move(bytes), err)) return true;
+  *this = OsiFile();  // no partial state after an error
+  return false;
+}
+
+bool OsiFile::parse_tables(std::vector<uint8_t> bytes, std::string* err) {
   if (bytes.size() > kMaxOsiBytes) return fail(err, "file too large");
   d_ = std::move(bytes);
   Cursor c(d_.data(), d_.size());
@@ -102,6 +108,7 @@ bool OsiFile::parse(std::vector<uint8_t> bytes, std::string* err) {
   uint16_t nc = 0;
   if (!c.u16(nc) || uint64_t(nc) * 2 > c.remaining()) return fail(err, "bad class table");
   classes_.resize(nc);
+  std::vector<uint16_t> method_sym;  // symbol index per method, in class order; resolved below
   for (uint32_t i = 0; i < nc; ++i) {
     uint8_t np = 0, nm = 0;
     if (!c.u8(np) || !c.skip(uint64_t(np) * 2) || !c.u8(nm) || uint64_t(nm) * 6 > c.remaining()) return fail(err, "truncated class");
@@ -109,7 +116,8 @@ bool OsiFile::parse(std::vector<uint8_t> bytes, std::string* err) {
       uint16_t sym = 0;
       uint32_t off = 0;
       if (!c.u16(sym) || !c.u32(off)) return fail(err, "truncated method");
-      classes_[i].methods.push_back({std::to_string(sym), off});  // symbol index; resolved below
+      classes_[i].methods.push_back({std::string(), off});
+      method_sym.push_back(sym);
     }
   }
   for (uint32_t i = 0; i < nc; ++i) {
@@ -117,9 +125,10 @@ bool OsiFile::parse(std::vector<uint8_t> bytes, std::string* err) {
     if (!c.u8(len) || !c.str(len, classes_[i].name) || !c.skip(1)) return fail(err, "truncated class names");
   }
   if (!read_strings(c, symbols_) || !read_strings(c, sources_)) return fail(err, "truncated symbol/source table");
+  size_t mi = 0;
   for (OsiClass& k : classes_)
     for (OsiMethod& m : k.methods) {
-      const unsigned long sym = std::stoul(m.name);
+      const uint16_t sym = method_sym[mi++];
       if (sym >= symbols_.size()) return fail(err, "method symbol out of range");
       m.name = symbols_[sym];
       if (m.offset >= d_.size()) return fail(err, "method offset outside the file");
@@ -191,26 +200,37 @@ bool OsiFile::disasm(uint32_t start, std::vector<Insn>& out, std::string* err) c
   return fail(err, "subroutine exceeds kMaxOsiInstructions");
 }
 
-bool OsiFile::check_all(uint64_t* count, std::string* err) const {
-  uint64_t n = 0;
+bool OsiFile::check_all(uint64_t* count, std::string* err, uint64_t* calls) const {
+  uint64_t n = 0, nc = 0;
   std::vector<Insn> ins;
-  std::set<uint32_t> seen;
-  for (const auto& f : functions_) {
-    if (!disasm(f.second, ins, err)) return false;
+  std::set<uint32_t> seen;  // functions and methods that share bytecode are walked once
+  auto walk = [&](uint32_t off) {
+    if (!seen.insert(off).second) return true;
+    if (!disasm(off, ins, err)) return false;
     n += ins.size();
-  }
+    for (const Insn& in : ins) nc += in.op == 0x82;
+    if (n > kMaxOsiTotalInstructions) return fail(err, "file exceeds kMaxOsiTotalInstructions");
+    if (nc > kMaxOsiTotalCalls) return fail(err, "file exceeds kMaxOsiTotalCalls");
+    return true;
+  };
+  for (const auto& f : functions_)
+    if (!walk(f.second)) return false;
   for (const OsiClass& k : classes_)
-    for (const OsiMethod& m : k.methods) {
-      if (!seen.insert(m.offset).second) continue;  // inherited methods share bytecode
-      if (!disasm(m.offset, ins, err)) return false;
-      n += ins.size();
-    }
+    for (const OsiMethod& m : k.methods)
+      if (!walk(m.offset)) return false;
   if (count) *count = n;
+  if (calls) *calls = nc;
   return true;
 }
 
-bool OsiFile::find_calls(const std::string& cls, const std::string& method, std::vector<OsiCall>& out, std::string* err) const {
+bool OsiFile::eval_calls(const std::string& cls, const std::string& method, std::vector<OsiCall>& out, std::string* err) const {
   out.clear();
+  if (eval_impl(cls, method, out, err)) return true;
+  out.clear();  // no partial list after an error
+  return false;
+}
+
+bool OsiFile::eval_impl(const std::string& cls, const std::string& method, std::vector<OsiCall>& out, std::string* err) const {
   const OsiClass* k = find_class(cls);
   if (!k) return fail(err, "no class " + cls);
   const OsiMethod* m = nullptr;
@@ -226,6 +246,7 @@ bool OsiFile::find_calls(const std::string& cls, const std::string& method, std:
       targets.insert(uint64_t(int64_t(next) + ins[i].a));
     }
   std::vector<OsiValue> st;
+  uint64_t args_total = 0, string_bytes = 0;
   auto pop = [&]() {
     if (st.empty()) return OsiValue();
     OsiValue v = st.back();
@@ -272,19 +293,27 @@ bool OsiFile::find_calls(const std::string& cls, const std::string& method, std:
         break;
       }
       case 0x82: {
+        if (in.c < 0 || in.c > static_cast<int64_t>(kMaxOsiArgc)) return fail(err, "CallGameFunction argc out of range");
+        if (out.size() >= kMaxOsiCallsPerMethod) return fail(err, "method exceeds kMaxOsiCallsPerMethod");
+        args_total += static_cast<uint64_t>(in.c);
+        if (args_total > kMaxOsiArgsPerMethod) return fail(err, "method exceeds kMaxOsiArgsPerMethod");
         OsiCall call;
         call.cls = in.a >= 0 && static_cast<size_t>(in.a) < strings_.size() ? strings_[static_cast<size_t>(in.a)] : "?";
         call.fn = in.b >= 0 && static_cast<size_t>(in.b) < strings_.size() ? strings_[static_cast<size_t>(in.b)] : "?";
         call.offset = in.at;
-        const int64_t argc = std::max<int64_t>(0, in.c);
-        call.args.resize(static_cast<size_t>(argc));
-        for (int64_t j = argc - 1; j >= 0; --j) call.args[static_cast<size_t>(j)] = pop();
+        call.args.resize(static_cast<size_t>(in.c));
+        for (int64_t j = in.c - 1; j >= 0; --j) {
+          call.args[static_cast<size_t>(j)] = pop();
+          string_bytes += call.args[static_cast<size_t>(j)].s.size();
+        }
+        if (string_bytes > kMaxOsiStringArgBytes) return fail(err, "method exceeds kMaxOsiStringArgBytes");
         out.push_back(std::move(call));
         st.push_back(OsiValue());  // the call's result
         break;
       }
       default: st.clear(); break;  // any other effect is not modelled: forget every value
     }
+    if (st.size() > kMaxOsiStackDepth) return fail(err, "literal stack exceeds kMaxOsiStackDepth");
   }
   return true;
 }

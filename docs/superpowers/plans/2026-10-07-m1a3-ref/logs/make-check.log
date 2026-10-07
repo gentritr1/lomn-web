@@ -1,6 +1,6 @@
 source .toolchain/emsdk/emsdk_env.sh >/dev/null 2>&1; timeout 1800 .venv/bin/pytest -q -rs tools
 ...................................................................      [100%]
-67 passed in 29.43s
+67 passed in 34.21s
 timeout 600 cmake -S engine -B build/native -G Ninja -DCMAKE_BUILD_TYPE=Release && timeout 1800 cmake --build build/native
 -- Configuring done (0.1s)
 -- Generating done (0.0s)
@@ -9,97 +9,105 @@ ninja: no work to do.
 ctest --test-dir build/native --output-on-failure --timeout 300
 Test project $W/work/build/native
       Start  1: determinism_null
- 1/22 Test  #1: determinism_null .................   Passed    0.08 sec
-      Start  2: a7_null_calls
- 2/22 Test  #2: a7_null_calls ....................   Passed    0.06 sec
-      Start  3: a9_state_log
- 3/22 Test  #3: a9_state_log .....................   Passed    0.05 sec
-      Start  4: a9_oracle_synthetic
- 4/22 Test  #4: a9_oracle_synthetic ..............   Passed    0.13 sec
-      Start  5: a9_oracle_real
- 5/22 Test  #5: a9_oracle_real ...................   Passed    0.85 sec
-      Start  6: view_cli_dangling_flag
- 6/22 Test  #6: view_cli_dangling_flag ...........   Passed    0.02 sec
-      Start  7: view_cli_missing_install
- 7/22 Test  #7: view_cli_missing_install .........   Passed    0.02 sec
-      Start  8: view_cli_nonfinite
- 8/22 Test  #8: view_cli_nonfinite ...............   Passed    0.27 sec
-      Start  9: view_cli_modes
- 9/22 Test  #9: view_cli_modes ...................   Passed    0.08 sec
-      Start 10: view_cli_ints
-10/22 Test #10: view_cli_ints ....................   Passed    0.12 sec
-      Start 11: view_cli_stale_outputs
-11/22 Test #11: view_cli_stale_outputs ...........   Passed    0.10 sec
-      Start 12: view_cli_null_frames
-12/22 Test #12: view_cli_null_frames .............   Passed    0.06 sec
-      Start 13: view_cli_survey_empty
-13/22 Test #13: view_cli_survey_empty ............   Passed    0.03 sec
-      Start 14: view_cli_camera_json
-14/22 Test #14: view_cli_camera_json .............   Passed    0.16 sec
-      Start 15: cli_dangling_flag
-15/22 Test #15: cli_dangling_flag ................   Passed    0.02 sec
-      Start 16: gpu_triangle
-16/22 Test #16: gpu_triangle .....................   Passed    0.11 sec
-      Start 17: gpu_no_adapter
-17/22 Test #17: gpu_no_adapter ...................   Passed    0.02 sec
-      Start 18: a7_gpu_pixels
-18/22 Test #18: a7_gpu_pixels ....................   Passed    0.45 sec
-      Start 19: gpu_mesh
-19/22 Test #19: gpu_mesh .........................   Passed    0.07 sec
-      Start 20: gpu_ffp
-20/22 Test #20: gpu_ffp ..........................   Passed    0.42 sec
-      Start 21: a7_gpu_no_adapter
-21/22 Test #21: a7_gpu_no_adapter ................   Passed    0.03 sec
-      Start 22: unit
-22/22 Test #22: unit .............................   Passed    0.59 sec
+ 1/24 Test  #1: determinism_null .................   Passed    0.16 sec
+      Start  2: ffp_oracle
+ 2/24 Test  #2: ffp_oracle .......................   Passed    0.35 sec
+      Start  3: a7_null_calls
+ 3/24 Test  #3: a7_null_calls ....................   Passed    0.08 sec
+      Start  4: a9_state_log
+ 4/24 Test  #4: a9_state_log .....................   Passed    0.06 sec
+      Start  5: a9_oracle_synthetic
+ 5/24 Test  #5: a9_oracle_synthetic ..............   Passed    0.15 sec
+      Start  6: a9_oracle_real
+ 6/24 Test  #6: a9_oracle_real ...................   Passed    0.78 sec
+      Start  7: view_cli_dangling_flag
+ 7/24 Test  #7: view_cli_dangling_flag ...........   Passed    0.02 sec
+      Start  8: view_cli_missing_install
+ 8/24 Test  #8: view_cli_missing_install .........   Passed    0.02 sec
+      Start  9: view_cli_nonfinite
+ 9/24 Test  #9: view_cli_nonfinite ...............   Passed    0.33 sec
+      Start 10: view_cli_modes
+10/24 Test #10: view_cli_modes ...................   Passed    0.10 sec
+      Start 11: view_cli_ints
+11/24 Test #11: view_cli_ints ....................   Passed    0.13 sec
+      Start 12: view_cli_stale_outputs
+12/24 Test #12: view_cli_stale_outputs ...........   Passed    0.08 sec
+      Start 13: view_cli_null_frames
+13/24 Test #13: view_cli_null_frames .............   Passed    0.05 sec
+      Start 14: view_cli_survey_empty
+14/24 Test #14: view_cli_survey_empty ............   Passed    0.03 sec
+      Start 15: view_cli_camera_json
+15/24 Test #15: view_cli_camera_json .............   Passed    0.15 sec
+      Start 16: cli_dangling_flag
+16/24 Test #16: cli_dangling_flag ................   Passed    0.02 sec
+      Start 17: gpu_triangle
+17/24 Test #17: gpu_triangle .....................   Passed    0.11 sec
+      Start 18: gpu_no_adapter
+18/24 Test #18: gpu_no_adapter ...................   Passed    0.03 sec
+      Start 19: a7_gpu_pixels
+19/24 Test #19: a7_gpu_pixels ....................   Passed    0.07 sec
+      Start 20: gpu_mesh
+20/24 Test #20: gpu_mesh .........................   Passed    0.07 sec
+      Start 21: gpu_ffp
+21/24 Test #21: gpu_ffp ..........................   Passed    0.07 sec
+      Start 22: a7_gpu_no_adapter
+22/24 Test #22: a7_gpu_no_adapter ................   Passed    0.03 sec
+      Start 23: unit
+23/24 Test #23: unit .............................   Passed    0.46 sec
+      Start 24: osi_probe
+24/24 Test #24: osi_probe ........................   Passed    0.08 sec
 
-100% tests passed, 0 tests failed out of 22
+100% tests passed, 0 tests failed out of 24
 
 Label Time Summary:
-gpu    =   1.11 sec*proc (6 tests)
+gpu    =   0.38 sec*proc (6 tests)
 
-Total Test time (real) =   3.79 sec
+Total Test time (real) =   3.45 sec
 source .toolchain/emsdk/emsdk_env.sh >/dev/null 2>&1 && timeout 600 emcmake cmake -S engine -B build/wasm -G Ninja -DCMAKE_BUILD_TYPE=Release && timeout 1800 cmake --build build/wasm
 emcmake: cmake -S engine -B build/wasm -G Ninja -DCMAKE_BUILD_TYPE=Release '-DCMAKE_TOOLCHAIN_FILE=$R/.toolchain/emsdk/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake' '-DCMAKE_CROSSCOMPILING_EMULATOR=$R/.toolchain/emsdk/node/24.19.0_64bit/bin/node' in directory $W/work
 -- Configuring done (0.7s)
 -- Generating done (0.0s)
 -- Build files have been written to: $W/work/build/wasm
-[1/22] Building CXX object CMakeFiles/lomn_d3d.dir/src/d3d/device8.cpp.o
-[2/22] Building CXX object CMakeFiles/lomn_d3d.dir/src/d3d/ffp.cpp.o
-[3/22] Building CXX object CMakeFiles/lomn_core.dir/src/rhi/null_device.cpp.o
-[4/22] Building CXX object CMakeFiles/lomn_area.dir/src/view/sage_frame.cpp.o
-[5/22] Building CXX object CMakeFiles/lomn_sage.dir/src/sage/osi.cpp.o
-[6/22] Building CXX object CMakeFiles/lomn_webgpu.dir/src/rhi/webgpu_device.cpp.o
-[7/22] Linking CXX static library liblomn_core.a
-[8/22] Building CXX object CMakeFiles/lomn_area.dir/src/view/synthetic.cpp.o
-[9/22] Building CXX object CMakeFiles/lomn_view.dir/tools/lomn_view.cpp.o
-[10/22] Building CXX object CMakeFiles/lomn_area.dir/src/view/area.cpp.o
-[11/22] Linking CXX static library liblomn_webgpu.a
-[12/22] Linking CXX static library liblomn_d3d.a
-[13/22] Linking CXX static library liblomn_sage.a
-[14/22] Linking CXX static library liblomn_area.a
-[15/22] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_sage_osi.cpp.o
-[16/22] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_d3d.cpp.o
-[17/22] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_view_area.cpp.o
-[18/22] Linking CXX executable lomn_web.js
-[19/22] Linking CXX executable lomn_native.js
-[20/22] Linking CXX executable lomn_datacheck.js
-[21/22] Linking CXX executable lomn_view.js
-[22/22] Linking CXX executable lomn_tests.js
+[1/24] Building CXX object CMakeFiles/lomn_d3d.dir/src/d3d/device8.cpp.o
+[2/24] Building CXX object CMakeFiles/lomn_d3d.dir/src/d3d/ffp.cpp.o
+[3/24] Building CXX object CMakeFiles/lomn_area.dir/src/view/sage_frame.cpp.o
+[4/24] Building CXX object CMakeFiles/lomn_core.dir/src/rhi/null_device.cpp.o
+[5/24] Building CXX object CMakeFiles/lomn_sage.dir/src/sage/osi.cpp.o
+[6/24] Linking CXX static library liblomn_core.a
+[7/24] Building CXX object CMakeFiles/lomn_view.dir/tools/lomn_view.cpp.o
+[8/24] Building CXX object CMakeFiles/lomn_area.dir/src/view/synthetic.cpp.o
+[9/24] Building CXX object CMakeFiles/lomn_webgpu.dir/src/rhi/webgpu_device.cpp.o
+[10/24] Linking CXX static library liblomn_sage.a
+[11/24] Linking CXX static library liblomn_d3d.a
+[12/24] Building CXX object CMakeFiles/lomn_area.dir/src/view/area.cpp.o
+[13/24] Linking CXX static library liblomn_webgpu.a
+[14/24] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_d3d.cpp.o
+[15/24] Linking CXX static library liblomn_area.a
+[16/24] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_area_states.cpp.o
+[17/24] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_sage_frame.cpp.o
+[18/24] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_view_area.cpp.o
+[19/24] Linking CXX executable lomn_osi_probe.js
+[20/24] Linking CXX executable lomn_native.js
+[21/24] Linking CXX executable lomn_web.js
+[22/24] Linking CXX executable lomn_datacheck.js
+[23/24] Linking CXX executable lomn_view.js
+[24/24] Linking CXX executable lomn_tests.js
 source .toolchain/emsdk/emsdk_env.sh >/dev/null 2>&1 && ctest --test-dir build/wasm --output-on-failure --timeout 300
 Test project $W/work/build/wasm
     Start 1: determinism_null
-1/4 Test #1: determinism_null .................   Passed    0.23 sec
+1/5 Test #1: determinism_null .................   Passed    0.16 sec
     Start 2: a7_null_calls
-2/4 Test #2: a7_null_calls ....................   Passed    0.13 sec
+2/5 Test #2: a7_null_calls ....................   Passed    0.16 sec
     Start 3: a9_state_log
-3/4 Test #3: a9_state_log .....................   Passed    0.36 sec
+3/5 Test #3: a9_state_log .....................   Passed    0.45 sec
     Start 4: unit
-4/4 Test #4: unit .............................   Passed    0.58 sec
+4/5 Test #4: unit .............................   Passed    0.70 sec
+    Start 5: osi_probe
+5/5 Test #5: osi_probe ........................   Passed    0.16 sec
 
-100% tests passed, 0 tests failed out of 4
+100% tests passed, 0 tests failed out of 5
 
-Total Test time (real) =   1.32 sec
+Total Test time (real) =   1.64 sec
 timeout 120 .venv/bin/python tools/harness/compare.py trace build/native/determinism/a/trace.jsonl build/wasm/determinism/a/trace.jsonl
 traces identical
 cmp build/native/determinism/a/calls.txt build/wasm/determinism/a/calls.txt
@@ -112,22 +120,22 @@ TAP version 13
 # Subtest: serves index.html for / and by name
 ok 1 - serves index.html for / and by name
   ---
-  duration_ms: 40.41225
+  duration_ms: 50.061708
   ...
 # Subtest: sibling directory sharing the root prefix is not reachable (..%2f)
 ok 2 - sibling directory sharing the root prefix is not reachable (..%2f)
   ---
-  duration_ms: 2.067125
+  duration_ms: 2.026541
   ...
 # Subtest: sibling directory is not reachable (%2e%2e%2f)
 ok 3 - sibling directory is not reachable (%2e%2e%2f)
   ---
-  duration_ms: 1.858083
+  duration_ms: 1.58625
   ...
 # Subtest: malformed percent escape answers 400 and the server keeps serving
 ok 4 - malformed percent escape answers 400 and the server keeps serving
   ---
-  duration_ms: 2.47875
+  duration_ms: 2.706334
   ...
 1..4
 # tests 4
@@ -137,9 +145,9 @@ ok 4 - malformed percent escape answers 400 and the server keeps serving
 # cancelled 0
 # skipped 0
 # todo 0
-# duration_ms 150.121291
+# duration_ms 182.0545
 cd web && timeout 180 node tests/smoke.mjs ../build/site ../build/pw-profile
-adapter=apple/metal-3 frames=120 dt_samples=119 window_ms=1983 p50_dt_ms=16.70 expected_at_60hz=119
+adapter=apple/metal-3 frames=120 dt_samples=119 window_ms=1979 p50_dt_ms=16.70 expected_at_60hz=119
 pixels {"centre":[255,128,0,255],"corner":[0,0,64,255]}
 requests ["/index.html","/lomn_web.js","/lomn_web.wasm","/favicon.ico"]
 console_errors [] page_errors []
@@ -150,7 +158,7 @@ timeout 600 cmake -S engine -B build/native -G Ninja -DCMAKE_BUILD_TYPE=Release 
 ninja: no work to do.
 timeout 1200 .venv/bin/python tools/research/oracle/check_datacheck.py --exe build/native/lomn_datacheck --install "$LOMN_DATA/install"
 PASS  lomn_datacheck exits 0
-(C++ wall 2685 ms)
+(C++ wall 2946 ms)
 PASS  A1 all .blk found by both walkers  -- python 189, c++ 189
 PASS  A1 per-file entry names and order equal blk.py  -- mismatches []
 PASS  A1 every table sorted (blk.py sortedci == c++ sorted)  -- python-unsorted []
@@ -195,7 +203,7 @@ PASS  A5 BC1-3 bit-exact vs bcdec.py on every block of 20 sampled textures (+6 A
 PASS  TGA: every .tga entry decodes  -- 2566 files, kinds {'type10_32bpp_a8_bottom': 1550, 'type2_24bpp_a0_bottom': 43, 'type2_24bpp_a0_top': 3, 'type2_32bpp_a0_bottom': 242, 'type2_32bpp_a8_bottom': 728}
 PASS  SLB: every .slb passes the bounded fix-up reader  -- 1177 tables, 1097 with 0x00C0FFEE trailer
 
-39/39 checks passed (24.0 s)
+39/39 checks passed (28.8 s)
 source .toolchain/emsdk/emsdk_env.sh >/dev/null 2>&1 && timeout 600 emcmake cmake -S engine -B build/wasm -G Ninja -DCMAKE_BUILD_TYPE=Release && timeout 1800 cmake --build build/wasm
 emcmake: cmake -S engine -B build/wasm -G Ninja -DCMAKE_BUILD_TYPE=Release '-DCMAKE_TOOLCHAIN_FILE=$R/.toolchain/emsdk/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake' '-DCMAKE_CROSSCOMPILING_EMULATOR=$R/.toolchain/emsdk/node/24.19.0_64bit/bin/node' in directory $W/work
 -- Configuring done (0.8s)
@@ -204,7 +212,7 @@ emcmake: cmake -S engine -B build/wasm -G Ninja -DCMAKE_BUILD_TYPE=Release '-DCM
 ninja: no work to do.
 source .toolchain/emsdk/emsdk_env.sh >/dev/null 2>&1 && timeout 1800 .venv/bin/python tools/research/oracle/check_datacheck.py --exe build/wasm/lomn_datacheck_node.sh --install "$LOMN_DATA/install"
 PASS  lomn_datacheck exits 0
-(C++ wall 3825 ms)
+(C++ wall 4303 ms)
 PASS  A1 all .blk found by both walkers  -- python 189, c++ 189
 PASS  A1 per-file entry names and order equal blk.py  -- mismatches []
 PASS  A1 every table sorted (blk.py sortedci == c++ sorted)  -- python-unsorted []
@@ -249,7 +257,7 @@ PASS  A5 BC1-3 bit-exact vs bcdec.py on every block of 20 sampled textures (+6 A
 PASS  TGA: every .tga entry decodes  -- 2566 files, kinds {'type10_32bpp_a8_bottom': 1550, 'type2_24bpp_a0_bottom': 43, 'type2_24bpp_a0_top': 3, 'type2_32bpp_a0_bottom': 242, 'type2_32bpp_a8_bottom': 728}
 PASS  SLB: every .slb passes the bounded fix-up reader  -- 1177 tables, 1097 with 0x00C0FFEE trailer
 
-39/39 checks passed (26.3 s)
+39/39 checks passed (30.3 s)
 source .toolchain/emsdk/emsdk_env.sh >/dev/null 2>&1 && for la in lev1:vllg lev2:ghut lev4:crss; do l=${la%%:*}; a=${la##*:}; \
 	  timeout 300 build/native/lomn_view --install "$LOMN_DATA/install" --level $l --area $a --backend null --out build/native/$a.calls.txt --state-log build/native/$a.state.txt >/dev/null && \
 	  timeout 300 node build/wasm/lomn_view.js --install "$LOMN_DATA/install" --level $l --area $a --backend null --out build/wasm/$a.calls.txt --state-log build/wasm/$a.state.txt >/dev/null && \
@@ -258,5 +266,5 @@ native == wasm32: real-area null logs
 timeout 1800 .venv/bin/python tools/decomp/worklist.py check gen/decomp worklist/status.json . --ctest-dir build/native
 worklist check: 5618 functions, 0 errors
 make check: all layers green
-timeout 3500 make check  109.45s user 15.04s system 119% cpu 1:43.95 total
+timeout 3500 make check  138.10s user 17.56s system 129% cpu 2:00.54 total
 exit=0

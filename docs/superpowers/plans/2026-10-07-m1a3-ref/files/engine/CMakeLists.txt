@@ -101,6 +101,12 @@ else()
   target_link_libraries(lomn_view PRIVATE lomn_area $<$<BOOL:${LOMN_WEBGPU}>:lomn_webgpu>)
   target_include_directories(lomn_view PRIVATE src/app "${LOMN_TOOLCHAIN_DIR}/include")
   target_compile_options(lomn_view PRIVATE -Wall -Wextra)
+  # REF3 revision 2: the CPU reference of the D3D8 fixed-function formulas (the GPU probe's expectation) against an
+  # independent Python implementation from the D3D8 documentation, on gpu_ffp's cases + 4000 seeded random samples.
+  add_executable(lomn_ffp_cases tests/ffp_cases.cpp)
+  target_link_libraries(lomn_ffp_cases PRIVATE lomn_d3d)
+  add_test(NAME ffp_oracle COMMAND sh -c "\"$0\" 4000 1 > \"$1\" && timeout 300 python3 \"$2\" \"$1\""
+           $<TARGET_FILE:lomn_ffp_cases> ${CMAKE_CURRENT_BINARY_DIR}/ffp_cases.jsonl ${CMAKE_CURRENT_SOURCE_DIR}/../tools/research/oracle/ffp_oracle.py)
   # A7 contract (no game data): the synthetic scene's null call log must equal the checked-in expected log, twice.
   add_test(NAME a7_null_calls COMMAND ${CMAKE_COMMAND} -DEXE=$<TARGET_FILE:lomn_view> -DOUT=${CMAKE_CURRENT_BINARY_DIR}/a7
            -DEXPECTED=${CMAKE_CURRENT_SOURCE_DIR}/tests/data/a7_calls.txt -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/a7_calls.cmake)
@@ -195,13 +201,21 @@ endif()
 
 # Unit tests: natively, and under Node when cross-compiled with emcmake (CMAKE_CROSSCOMPILING_EMULATOR=node).
 add_executable(lomn_tests tests/test_main.cpp tests/test_fs.cpp tests/test_rhi_null.cpp tests/test_loop.cpp tests/test_sage_blockfile.cpp tests/test_sage_blockchain.cpp tests/test_sage_slb.cpp tests/test_sage_xfile.cpp tests/test_sage_image.cpp
-               tests/test_rhi_mesh.cpp tests/test_view_mips.cpp tests/test_view_area.cpp tests/test_d3d.cpp tests/test_sage_osi.cpp)
+               tests/test_rhi_mesh.cpp tests/test_view_mips.cpp tests/test_view_area.cpp tests/test_d3d.cpp tests/test_sage_osi.cpp
+               tests/test_area_states.cpp tests/test_sage_frame.cpp)
 target_link_libraries(lomn_tests PRIVATE lomn_area)
 target_include_directories(lomn_tests PRIVATE "${LOMN_TOOLCHAIN_DIR}/include")
 if(EMSCRIPTEN)
   target_link_options(lomn_tests PRIVATE -sNODERAWFS=1 -sALLOW_MEMORY_GROWTH=1)
 endif()
 add_test(NAME unit COMMAND lomn_tests)
+# REF3 revision 2: crafted-input time/memory probes of the OSI reader, natively and as wasm32 (2 GB linear memory).
+add_executable(lomn_osi_probe tests/probe_osi.cpp)
+target_link_libraries(lomn_osi_probe PRIVATE lomn_sage)
+if(EMSCRIPTEN)
+  target_link_options(lomn_osi_probe PRIVATE -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=2GB)
+endif()
+add_test(NAME osi_probe COMMAND lomn_osi_probe)
 
 # Internal JSON string escaper used by metrics.json (header lives in src/app, not in the public include dir).
 target_sources(lomn_tests PRIVATE tests/test_json_escape.cpp)

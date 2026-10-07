@@ -195,3 +195,169 @@ This resolves R15. `begin_frame_ex` is not needed.
 - **T5:** SageFrame plus the AreaRenderer rewrite, the synthetic "stat" scene, the A7/A9 logs and the A9 oracle.
 - **T6:** lomn_view CLI, survey and metrics; node disk FS; datacheck-wasm; material floats in A4.
 - **T7:** documentation, evidence and measurements.
+
+## Revision 2 (2026-10-07): the controller's review round
+
+The builder ran every check below in the same scratch copy, and the repo was not touched. The bundle was rebuilt in place, and this REPORT is kept. New in the bundle:
+- `tasks/`: the task chain.
+- `scripts/`: `changes.py`, `build_tasks.py` and `apply_tasks.sh`.
+- `logs/`:
+  - `osi-*`, `fuzz-osi-*`, `ffp-oracle.log`
+  - `task-chain.log` and `chain/T1..T7.log`
+  - `renders-r2-vs-r1.log`, `oracle-r2.log`
+
+**Task split.** B2 below replaces the r1 "Proposed task split" section above.
+
+**r1 bundle defect.** The r1 bundle shipped a stray `engine/tests/data/a7_calls.txt.json`. It holds the timing metrics `lomn_view` writes next to `--out`; it was produced when the A7 log was regenerated. r2 deletes it, so remove it from the committed r1 as well.
+
+### B1. OSI reader denial of service: fixed
+**The pre-fix failure reproduced (executed).**
+- **End to end:** `lomn_view` on a written synthetic install whose `Base.osi` was replaced (`tools/research/osi_craft.py calls`). The file is 600,337 bytes: 100,000 × CallGameFunction with argc 127.
+  - Result: **485.8 MB max RSS**, against 9.8 MB for the benign install (`logs/osi-dos-prefix.log`).
+- **In process:** the same `probe_osi.cpp`, compiled against the r1 `osi.cpp` (`logs/osi-probe-prefix.log`).
+  - The `calls` probe grew memory by **+540.7 MB natively** and **+413.0 MB as wasm32**.
+  - Next, `funcs-shared` (65,535 functions sharing one 32,767-instruction subroutine) **hung for more than 60 s** on both targets. The r1 `check_all` re-walked shared bytecode once per function.
+
+**Caps.** Every cap is measured against the real `Base.osi` (Beta 1.5.0, 486,274 bytes) with `tools/research/osi_maxima.py`, which uses the independent Python reader (`logs/osi-maxima.json`).
+
+| Quantity | Measured max (where) | Cap | Headroom |
+|---|---|---|---|
+| File size | 486,274 B | 8 MiB (was 64 MiB) | 17× |
+| Instructions per subroutine | 1,707 (`setupshoefitterscreen`) | 32,768 (was 1,048,576) | 19× |
+| Instructions per file (`check_all`, unique subroutines) | 151,522 (3,606 subroutines) | 4,194,304 | 27× |
+| CallGameFunction per file (`check_all`) | 4,402 | 131,072 | 29× |
+| Calls per method (`eval_calls`) | 78 (`onakoro_puzzle.initfull`) | 2,048 | 26× |
+| argc per call | 9 | 127 | 14×: the s8 operand's own bound; negative argc is now an error (it was clamped) |
+| Arguments per method (sum of argc) | 128 | 4,096 | 32× |
+| String bytes copied into arguments per method | 570 (longest string: 145 B) | 16,384 | 28× |
+| Literal-stack depth | 16 | 256 | 16× |
+
+The argc cap is the only one under 16×, because the format cannot express more. The memory bound comes from arguments per method instead.
+
+**Semantics.**
+- A cap hit is an error with no partial state:
+  - `parse()` leaves an empty `OsiFile` (the r1 version left partial tables);
+  - `eval_calls()` leaves an empty list.
+- `check_all` walks each distinct bytecode offset once, across functions and methods together.
+- The `std::stoul` symbol round trip is gone.
+- The area path (`load_script`) calls only `parse` and `eval_calls("initfull")`. An error there becomes a warning, and the area keeps its default fog.
+
+**After the fix (executed).**
+- **`osi_probe`** (a new ctest: `engine/tests/probe_osi.cpp`, native and wasm32 under Node, 2 GB cap) runs 9 crafted inputs. Each must end with its named cap error (`funcs-shared` must be accepted) within 5 s and +64 MB.
+  - Release, native: every probe takes ≤ 0.02 s and adds ≤ +3.4 MB peak RSS.
+  - Release, wasm32: every probe takes ≤ 0.031 s. Linear memory stayed at the initial 16 MiB except for building the 8 MiB input (19.2 MB).
+  - ASan build: every probe takes ≤ 1.05 s and adds ≤ +10.8 MB (`logs/osi-probe.log`, `logs/asan-run.log`).
+- **End to end:** the four crafted installs load with a warning at **12.5–15.5 MB RSS** in 0.02 s (`logs/osi-dos-postfix.log`). Under ASan the crafted installs give rc 0 and empty stderr.
+- **Unit tests:** 3 new cases.
+  - Every per-method cap sits exactly at its limit and one past it.
+  - `check_all` walks shared bytecode once, and its total-instruction and total-call caps are hit.
+  - A failed parse leaves no tables, and an oversized file is rejected.
+- **Sanitizer mutation fuzz** (`engine/tests/fuzz_osi.cpp`, `make fuzz-osi`; ASan+UBSan with `-fno-sanitize-recover=all`; invariants: caps hold on every accepted input, and a failed parse or eval leaves nothing):
+
+| Target | Seeds | Inputs | Accepted | Findings |
+|---|---|---|---|---|
+| Native | synthetic | 2,000,000 | 290,448 | 0 |
+| Native | synthetic + real `Base.osi` | 40,000 | 9,926 | 0 |
+| wasm32 (Node) | synthetic | 300,000 | 43,370 | 0 |
+| wasm32 (Node) | synthetic + real `Base.osi` | 3,000 | 730 | 0 |
+
+- **Canary:** `osi.cpp` with the PushString bounds widened by 8. Both targets stop on it: native aborts with rc 134, and wasm32 reports an ASan container-overflow. A zero-finding run is therefore meaningful (`logs/fuzz-osi-canary.log`).
+
+### B2. The task chain builds and passes step by step
+`scripts/apply_tasks.sh tasks <fresh BASE tree>` copies `tasks/Tn/files/` cumulatively over a fresh copy of BASE `f47cc91`. After every task it runs `make test-native test-wasm`. Each `tasks/Tn.txt` lists every file the task carries, marks it full or partial, and says what the partial hunk holds. After T7 the tree is byte-identical to the reference (`diff -rq` over `engine/`, `tools/` and `Makefile`). Results are in `logs/task-chain.log`, with per-task logs in `logs/chain/`:
+
+| Task | Files | Content | `make test-native test-wasm` | Native ctest | wasm32 ctest |
+|---|---|---|---|---|---|
+| T1 | 6 | rhi additions + probes | rc 0, 34 s | 18/18 | 3/3 |
+| T2 | 10 | lomn_d3d, gpu_ffp, ffp_oracle | rc 0, 13 s | 20/20 | 3/3 |
+| T3 | 12 | OSI reader + caps, textures.slb, osi.py, osi_probe | rc 0, 20 s | 21/21 | 4/4 |
+| T4 | 6 | loader data and the synthetic stat scene; A7 still M1a-2 | rc 0, 16 s | 21/21 | 4/4 |
+| T5 | 14 | SageFrame + renderer; A7 regenerated, A9 introduced | rc 0, 19 s | 24/24 | 5/5 |
+| T6 | 8 | survey / camera / Node disk FS / datacheck-wasm / mat_sum | rc 0, 27 s | 24/24 | 5/5 |
+| T7 | 3 | `make fuzz-osi`, `osi_craft.py` | rc 0, 7 s | 24/24 | 5/5 |
+
+Restructuring that made this possible:
+- **`test_d3d.cpp` split into three:**
+  - `test_d3d.cpp` (T2): d3d and ffp only;
+  - `test_area_states.cpp` (T4): lights, fog and textures.slb from the loader;
+  - `test_sage_frame.cpp` (T5): SageFrame plus A10.
+- **`test_sage_osi.cpp`** builds its OSI with `tests/osi_builder.h` and no longer needs `mount_synthetic_install` (T3). `synthetic.cpp` writes the same program for the A9 scene.
+- **textures.slb parser:** a new direct unit test in `test_sage_slb.cpp` (T3).
+- **T4 keeps the M1a-2 renderer.** Vertex-colour quantisation moved to T5, because it changes the A7 vertex-buffer checksum. A7 keeps its M1a-2 content until T5, where it is regenerated, and A9 starts in the same task.
+- **`lomn_view` is split:**
+  - T5: `--synthetic 2`, `--state-log`, `--write-install`, `--lighting`, `--fog`, the `states` metrics, and `--alpha-ref` removed;
+  - T6: the survey, the exe camera defaults and sources, `untextured_materials`, and the disk file system under Node.
+- **T7 is tooling only:** `make fuzz-osi` and `osi_craft.py`. `osi_maxima.py` sits in T3 with the caps it justifies.
+
+### S3. An independent check of the FFP formulas
+- **`tools/research/oracle/ffp_oracle.py`:** written from the DirectX 8.1 SDK formula pages in float64, not from `ffp.cpp`. It covers:
+  - lighting: ambient, diffuse, emissive, point attenuation with range cut-off, directional;
+  - the COLOR1 source;
+  - LINEAR / EXP / EXP2 fog;
+  - the 8-bit alpha-test comparison;
+  - stage-0 operations and arguments.
+- **`engine/tests/ffp_cases.cpp` (`lomn_ffp_cases`):** dumps every input the C++ reference reads, plus its results. The cases are:
+  - gpu_ffp's 14 cases, through the shared `tests/ffp_cases.h`, which `test_gpu_ffp.cpp` now draws from;
+  - 4,000 seeded random samples: rigid world matrices, 0–8 lights, every op and argument, alphas on the 8-bit grid half the time.
+- **ctest `ffp_oracle`:** 4,014 cases with 0 mismatches.
+  - Max |vertex difference|: 1.3e-5; max |fragment difference|: 1.2e-7.
+  - 2,875 fragments kept and 1,061 discarded, all agreeing.
+  - 78 fragment checks skipped: FOGENABLE with both fog modes NONE, where D3D8 takes the factor from the specular alpha. The area path never does this.
+- **Conventions shared on purpose:** an unbound texture samples white (V3), and alpha is 1 when blending is off.
+- **Known limit:** the C++ reference and the shader transform normals by W. The oracle uses W⁻ᵀ. The two agree for the rigid worlds the area path builds (RotX × translation), but a scaled world would diverge (forward note F3).
+- **Mutations to the C++ reference:**
+  - attenuation drops a2: caught only by `ffp_oracle`;
+  - the alpha test truncates instead of rounding: caught only by `ffp_oracle`;
+  - EXP2 squares only w: caught by `ffp_oracle` and `gpu_ffp`.
+
+  The first two are invisible to gpu_ffp, whose cases use a2 = 0 and exact-byte alphas.
+
+### S4. The call finders, renamed
+- **C++:** `OsiFile::find_calls` is now **`eval_calls`**, the same algorithm and name as Python's `osi.eval_calls`.
+- **Python:** `find_calls` is now **`find_plain_push_calls`**, and the CLI flag `--calls` is now **`--plain-calls`**. The docstring explains that a computed argument such as vllg's `0 - 40` reads as None and the slots shift, so the fog colour prints 0.
+- **New CLI:** `osi.py Base.osi --eval CLASS METHOD`. For `--eval lego_area_vllg initfull` it prints SetFog(−402183, −40.0, −1200.0, 0.05), which equals the C++ value.
+
+### S5. User-eyeball gates (A8) and forward notes
+**A8 gates.** None of these is closed by code. Each needs the user to compare against the original game.
+- **G1, ghut net:**
+  - Fable confirmed the TFACTOR leak is faithful to the code.
+  - Still to check: does the original show the net as a translucent sheet, like `ghut.png`?
+- **G2, vllg fog colour:** pink-white 0xFFF9DCF9 from 40 to 1200 (`vllg.png` against `vllg_nofog.png`).
+- **G3, vertex colours out of [0, 1] are clamped:**
+  - Ghut has 1,146 values above 1 and 3,086 below 0. On D3DXCOLOR → DWORD the original could wrap instead.
+  - Where to look: the gradients on ghut's lightstones.
+- **G4, camera framing:** FOV 72 (vertical) and near 0.01, compared with screenshots of the original at the POS start.
+
+**Forward notes.**
+- **F1 (V2, ZBIAS → depth_bias −1 per step):** check on a device at the first moveable or mTransparency < 1 fade (M1b/M2). The original sets ZBIAS 16 for faded models, and the WebGPU depth-bias scale is not the D3D8 one.
+- **F2 (8 lights and V6, per-draw light packing):** revisit when lighting turns on (night vision, M2). Then check:
+  - GetLightID cycling over 8 slots;
+  - which lights each draw sees;
+  - the look against the original.
+- **F3:** non-rigid world matrices (any future scaled placement) need W⁻ᵀ normals, both in the shader and in the CPU reference.
+
+### Must-hold results (executed on the final tree)
+- **`make check`:** exit 0 in 2:01 (`logs/make-check.log`).
+  - pytest: 67.
+  - Native ctest: 24/24. New: `ffp_oracle` and `osi_probe`.
+  - wasm ctest: 5/5. New: `osi_probe`.
+  - Traces and the A7/A9 `cmp`s identical.
+  - Web smoke pixels 255,128,0 / 0,0,64.
+  - datacheck: 39/39 native and 39/39 wasm32.
+  - native == wasm32 on the vllg/ghut/crss null and state logs.
+  - worklist: 0 errors.
+- **Unit tests:** 132 cases, 172,064 assertions.
+- **ASan+UBSan** (`logs/asan-run.log`):
+  - ctest 24/24 and unit 132/132;
+  - `osi_probe` bounded;
+  - vllg/ghut/crss renders: rc 0, empty stderr, 0 px different from Release;
+  - 2-frame null and state logs identical to Release;
+  - survey 123/0 with empty stderr;
+  - crafted installs: rc 0, empty stderr.
+- **Renders against r1 evidence:**
+  - vllg, ghut and crss PNGs are **byte-identical**, and crss at yaw 67.5 differs by 0 px.
+  - The 2-frame null call logs and D3D8 state logs are identical: 579, 422 and 660 lines.
+  - In the 123-area survey, 0 areas differ outside timing fields; maxima and frames are equal (`logs/renders-r2-vs-r1.log`).
+  - There are no differing pixel classes to explain.
+- **A9 oracle:** synthetic stat 246 lines equal; real vllg/ghut/crss equal (ctest `a9_oracle_synthetic` and `a9_oracle_real`).
+- **Mutations:** **40 of 42 caught**. 9 are new: 6 in the OSI caps (caught by `unit` and `osi_probe`) and 3 in the CPU reference (caught by `ffp_oracle`). The 2 survivors are expected: the no-op control, and the NaN mutation that only UBSan catches. After restoring, the build rc is 0 and the full ctest rc is 0 (`logs/mutations3.log`).

@@ -1,0 +1,2 @@
+ffp_oracle: 4014 cases (2875 fragments kept, 1061 discarded by the alpha test, 78 fragment checks skipped: fog with no fog mode), max |vertex diff| 1.32e-05, max |fragment diff| 1.20e-07, 0 mismatches (tolerance 0.0001)
+rc=0

@@ -1,0 +1,6 @@
+T7: research tooling: `make fuzz-osi` (ASan+UBSan mutation fuzz of the OSI reader, native + wasm32), osi_craft.py (end-to-end hostile Base.osi probes)
+Apply after T6: copy T7/files/* over the tree (full file contents as of the end of T7).
+
+A engine/tests/fuzz_osi.cpp  -- new (final)
+A tools/research/osi_craft.py  -- new (final)
+M Makefile  -- full (final): fuzz-osi target (on demand, not in check)

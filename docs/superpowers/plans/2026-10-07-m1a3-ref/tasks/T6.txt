@@ -1,0 +1,11 @@
+T6: lomn_view survey / metrics / exe camera defaults; wasm32 disk FS under Node (NODERAWFS) for lomn_view + lomn_datacheck; datacheck-wasm (native == wasm32 on real data); material floats in the A4 datacheck
+Apply after T5: copy T6/files/* over the tree (full file contents as of the end of T6).
+
+M engine/tools/lomn_view.cpp  -- full (final): survey frame + scene columns, camera "exe" sources, untextured_materials, disk FS under Node
+M engine/include/lomn/view/area.h  -- full (final): CameraSettings defaults fov 72 / near 0.01 / far 4700 (exe)
+M engine/include/lomn/fs.h  -- full (final)
+M engine/src/fs/disk_fs.cpp  -- full (final)
+M engine/tools/lomn_datacheck.cpp  -- full (final)
+M tools/research/oracle/check_datacheck.py  -- full (final)
+M engine/CMakeLists.txt  -- full (final): wasm32 lomn_view / lomn_datacheck with disk_fs + NODERAWFS, lomn_datacheck_node.sh
+M Makefile  -- partial: datacheck-wasm target, check runs it

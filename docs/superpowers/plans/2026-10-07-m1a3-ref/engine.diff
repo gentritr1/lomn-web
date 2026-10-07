@@ -1,6 +1,6 @@
 diff -ruN base/engine/CMakeLists.txt work/engine/CMakeLists.txt
 --- base/engine/CMakeLists.txt	2026-10-07 10:09:37
-+++ work/engine/CMakeLists.txt	2026-10-07 11:23:45
++++ work/engine/CMakeLists.txt	2026-10-07 12:44:26
 @@ -16,13 +16,20 @@
  target_compile_options(lomn_core PUBLIC -ffp-contract=off)
  
@@ -53,7 +53,16 @@ diff -ruN base/engine/CMakeLists.txt work/engine/CMakeLists.txt
  else()
    add_executable(lomn_native src/app/main_native.cpp)
    target_link_libraries(lomn_native PRIVATE $<IF:$<BOOL:${LOMN_WEBGPU}>,lomn_webgpu,lomn_core>)
-@@ -85,6 +104,18 @@
+@@ -82,9 +101,27 @@
+   target_link_libraries(lomn_view PRIVATE lomn_area $<$<BOOL:${LOMN_WEBGPU}>:lomn_webgpu>)
+   target_include_directories(lomn_view PRIVATE src/app "${LOMN_TOOLCHAIN_DIR}/include")
+   target_compile_options(lomn_view PRIVATE -Wall -Wextra)
++  # REF3 revision 2: the CPU reference of the D3D8 fixed-function formulas (the GPU probe's expectation) against an
++  # independent Python implementation from the D3D8 documentation, on gpu_ffp's cases + 4000 seeded random samples.
++  add_executable(lomn_ffp_cases tests/ffp_cases.cpp)
++  target_link_libraries(lomn_ffp_cases PRIVATE lomn_d3d)
++  add_test(NAME ffp_oracle COMMAND sh -c "\"$0\" 4000 1 > \"$1\" && timeout 300 python3 \"$2\" \"$1\""
++           $<TARGET_FILE:lomn_ffp_cases> ${CMAKE_CURRENT_BINARY_DIR}/ffp_cases.jsonl ${CMAKE_CURRENT_SOURCE_DIR}/../tools/research/oracle/ffp_oracle.py)
    # A7 contract (no game data): the synthetic scene's null call log must equal the checked-in expected log, twice.
    add_test(NAME a7_null_calls COMMAND ${CMAKE_COMMAND} -DEXE=$<TARGET_FILE:lomn_view> -DOUT=${CMAKE_CURRENT_BINARY_DIR}/a7
             -DEXPECTED=${CMAKE_CURRENT_SOURCE_DIR}/tests/data/a7_calls.txt -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/a7_calls.cmake)
@@ -72,7 +81,7 @@ diff -ruN base/engine/CMakeLists.txt work/engine/CMakeLists.txt
    add_test(NAME view_cli_dangling_flag COMMAND sh -c
             "\"$0\" --synthetic 1 --backend null --out \"$1\" --fov >/dev/null 2>&1; [ $? -eq 2 ]"
             $<TARGET_FILE:lomn_view> ${CMAKE_CURRENT_BINARY_DIR}/view_dangling.txt)
-@@ -94,7 +125,7 @@
+@@ -94,7 +131,7 @@
    # Task 6 C1: non-finite and out-of-range camera/render floats are usage errors (exit 2), never exit 0 + invalid JSON;
    # edge values pass and --yaw is normalised to (-180, 180].
    add_test(NAME view_cli_nonfinite COMMAND sh -c
@@ -81,7 +90,7 @@ diff -ruN base/engine/CMakeLists.txt work/engine/CMakeLists.txt
             $<TARGET_FILE:lomn_view> ${CMAKE_CURRENT_BINARY_DIR}/view_nonfinite.txt)
    # C2: --synthetic / --survey take exactly 1; conflicting modes are usage errors.
    add_test(NAME view_cli_modes COMMAND sh -c
-@@ -108,7 +139,7 @@
+@@ -108,7 +145,7 @@
    # existing outputs untouched), before any install/device/load step (exit 3 removes them), so a failed run never
    # leaves a stale output behind; an --out that cannot be written is exit 4.
    add_test(NAME view_cli_stale_outputs COMMAND sh -c
@@ -90,7 +99,7 @@ diff -ruN base/engine/CMakeLists.txt work/engine/CMakeLists.txt
             $<TARGET_FILE:lomn_view> ${CMAKE_CURRENT_BINARY_DIR}/view_stale)
    # C5: the null backend keeps only the first frame's call log (bounded memory): --frames 3 writes the --frames 1 log.
    add_test(NAME view_cli_null_frames COMMAND sh -c
-@@ -150,6 +181,11 @@
+@@ -150,6 +187,11 @@
      target_link_libraries(lomn_gpu_mesh_test PRIVATE lomn_webgpu)
      add_test(NAME gpu_mesh COMMAND lomn_gpu_mesh_test)
      set_tests_properties(gpu_mesh PROPERTIES SKIP_RETURN_CODE 77 LABELS gpu)
@@ -102,18 +111,32 @@ diff -ruN base/engine/CMakeLists.txt work/engine/CMakeLists.txt
      add_test(NAME a7_gpu_no_adapter COMMAND sh -c
               "out=$(\"$0\" --synthetic 1 --out \"$1\" 2>&1); rc=$?; printf '%s\\n' \"$out\"; [ \"$rc\" -eq 3 ] && printf '%s' \"$out\" | grep -q \"webgpu unavailable: no WebGPU adapter\""
               $<TARGET_FILE:lomn_view> ${CMAKE_CURRENT_BINARY_DIR}/a7_noadapter.png)
-@@ -159,7 +195,7 @@
+@@ -159,13 +201,21 @@
  
  # Unit tests: natively, and under Node when cross-compiled with emcmake (CMAKE_CROSSCOMPILING_EMULATOR=node).
  add_executable(lomn_tests tests/test_main.cpp tests/test_fs.cpp tests/test_rhi_null.cpp tests/test_loop.cpp tests/test_sage_blockfile.cpp tests/test_sage_blockchain.cpp tests/test_sage_slb.cpp tests/test_sage_xfile.cpp tests/test_sage_image.cpp
 -               tests/test_rhi_mesh.cpp tests/test_view_mips.cpp tests/test_view_area.cpp)
-+               tests/test_rhi_mesh.cpp tests/test_view_mips.cpp tests/test_view_area.cpp tests/test_d3d.cpp tests/test_sage_osi.cpp)
++               tests/test_rhi_mesh.cpp tests/test_view_mips.cpp tests/test_view_area.cpp tests/test_d3d.cpp tests/test_sage_osi.cpp
++               tests/test_area_states.cpp tests/test_sage_frame.cpp)
  target_link_libraries(lomn_tests PRIVATE lomn_area)
  target_include_directories(lomn_tests PRIVATE "${LOMN_TOOLCHAIN_DIR}/include")
  if(EMSCRIPTEN)
+   target_link_options(lomn_tests PRIVATE -sNODERAWFS=1 -sALLOW_MEMORY_GROWTH=1)
+ endif()
+ add_test(NAME unit COMMAND lomn_tests)
++# REF3 revision 2: crafted-input time/memory probes of the OSI reader, natively and as wasm32 (2 GB linear memory).
++add_executable(lomn_osi_probe tests/probe_osi.cpp)
++target_link_libraries(lomn_osi_probe PRIVATE lomn_sage)
++if(EMSCRIPTEN)
++  target_link_options(lomn_osi_probe PRIVATE -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=2GB)
++endif()
++add_test(NAME osi_probe COMMAND lomn_osi_probe)
+ 
+ # Internal JSON string escaper used by metrics.json (header lives in src/app, not in the public include dir).
+ target_sources(lomn_tests PRIVATE tests/test_json_escape.cpp)
 diff -ruN base/engine/include/lomn/d3d/device8.h work/engine/include/lomn/d3d/device8.h
 --- base/engine/include/lomn/d3d/device8.h	1970-01-01 01:00:00
-+++ work/engine/include/lomn/d3d/device8.h	2026-10-07 11:32:03
++++ work/engine/include/lomn/d3d/device8.h	2026-10-07 12:58:33
 @@ -0,0 +1,159 @@
 +// M1a-3 "faithful states": the subset of IDirect3DDevice8 fixed-function state the area path uses, as a recording state
 +// machine (no GPU). The game-side code (lomn/view/sage_frame.h) replays the decompiled call sequence against it; every
@@ -413,8 +436,8 @@ diff -ruN base/engine/include/lomn/rhi.h work/engine/include/lomn/rhi.h
  enum class FilterMode : uint8_t { Nearest, Linear };
 diff -ruN base/engine/include/lomn/sage/osi.h work/engine/include/lomn/sage/osi.h
 --- base/engine/include/lomn/sage/osi.h	1970-01-01 01:00:00
-+++ work/engine/include/lomn/sage/osi.h	2026-10-07 10:44:15
-@@ -0,0 +1,78 @@
++++ work/engine/include/lomn/sage/osi.h	2026-10-07 12:43:03
+@@ -0,0 +1,93 @@
 +// OSI (compiled SAGE script, data/Base.osi) - a bounded TABLE reader plus a straight-line literal finder, enough to
 +// recover the constant arguments that area scripts pass to engine functions (M1a-3: GcAreaDirector::SetFog,
 +// GcLightDirector::SetCaveLighting). It is not a VM (M2).
@@ -425,12 +448,16 @@ diff -ruN base/engine/include/lomn/sage/osi.h work/engine/include/lomn/sage/osi.
 +//   class names, symbol table, source table (version 4). String-like tables: u16 count, then {u8 len, chars, NUL}.
 +// Bytecode: u8 opcode + fixed operands (see osi.cpp). A subroutine is walked linearly until a Return that lies past the
 +// furthest forward branch target.
-+// Literal evaluation (find_calls): a stack of literal values; push-constant opcodes push, Add/Subtract/Multiply/Divide
-+// fold numbers, Pop/PopN drop, CallGameFunction pops its argc arguments (recording them) and pushes an unknown result.
-+// Every other opcode, every branch and every branch target CLEARS the stack (values become unknown), so a reported
-+// literal is always one computed in straight-line code right before the call.
-+// Untrusted input (spec §5): every read bounds-checked; table counts bounded by the remaining bytes; file <= 64 MiB;
-+// at most kMaxOsiInstructions per subroutine.
++// Literal evaluation (eval_calls; the Python oracle's osi.eval_calls is the same evaluator): a stack of literal values;
++// push-constant opcodes push, Add/Subtract/Multiply/Divide fold numbers, Pop/PopN drop, CallGameFunction pops its argc
++// arguments (recording them) and pushes an unknown result. Every other opcode, every branch and every branch target
++// CLEARS the stack (values become unknown), so a reported literal is always one computed in straight-line code right
++// before the call. (Not to be confused with osi.py's find_plain_push_calls / --plain-calls, which only decodes the argc
++// instructions right before a call when they are plain pushes: a computed argument such as 0 - 40 reads as None there.)
++// Untrusted input (spec section 5, M1a-1 audit rules): every read bounds-checked; table counts bounded by the remaining
++// bytes; every attacker-controlled count below is capped from a value MEASURED on the real Base.osi (Beta 1.5.0, 486,274
++// bytes; tools/research/osi_maxima.py) with >= 16x headroom where the format allows it. A cap hit is an error: parse() leaves
++// an empty OsiFile, eval_calls() an empty list.
 +#pragma once
 +#include <cstdint>
 +#include <string>
@@ -438,8 +465,16 @@ diff -ruN base/engine/include/lomn/sage/osi.h work/engine/include/lomn/sage/osi.
 +
 +namespace lomn::sage {
 +
-+constexpr uint32_t kMaxOsiInstructions = 1u << 20;
-+constexpr uint64_t kMaxOsiBytes = 64ull << 20;
++// Caps (measured maximum on the real Base.osi -> cap, headroom).
++constexpr uint64_t kMaxOsiBytes = 8ull << 20;               // file: 486,274 bytes -> 8 MiB (17x)
++constexpr uint32_t kMaxOsiInstructions = 1u << 15;          // per subroutine: 1,707 -> 32,768 (19x)
++constexpr uint64_t kMaxOsiTotalInstructions = 1ull << 22;   // check_all, unique subroutines: 151,522 -> 4,194,304 (27x)
++constexpr uint64_t kMaxOsiTotalCalls = 1ull << 17;          // check_all, CallGameFunction per file: 4,402 -> 131,072 (29x)
++constexpr uint32_t kMaxOsiCallsPerMethod = 2048;            // eval_calls: 78 -> 2,048 (26x)
++constexpr uint32_t kMaxOsiArgc = 127;                       // per call: 9 -> 127 (14x; the s8 operand's own bound)
++constexpr uint32_t kMaxOsiArgsPerMethod = 4096;             // eval_calls, sum of argc: 128 -> 4,096 (32x)
++constexpr uint32_t kMaxOsiStringArgBytes = 16384;           // eval_calls, string bytes copied into args: 570 -> 16,384 (28x)
++constexpr uint32_t kMaxOsiStackDepth = 256;                 // eval_calls literal stack: 16 -> 256 (16x)
 +
 +struct OsiValue {
 +  enum Kind { Unknown, Int, Float, String } kind = Unknown;
@@ -473,9 +508,10 @@ diff -ruN base/engine/include/lomn/sage/osi.h work/engine/include/lomn/sage/osi.
 +  const std::vector<OsiClass>& classes() const { return classes_; }
 +  const OsiClass* find_class(const std::string& name) const;  // case-insensitive
 +  // Every CallGameFunction in class.method (case-insensitive names), with literal arguments where recoverable.
-+  bool find_calls(const std::string& cls, const std::string& method, std::vector<OsiCall>& out, std::string* err) const;
-+  // Disassembles every function and method (bounds/opcode check of the whole file); returns the instruction count.
-+  bool check_all(uint64_t* instructions, std::string* err) const;
++  bool eval_calls(const std::string& cls, const std::string& method, std::vector<OsiCall>& out, std::string* err) const;
++  // Disassembles every distinct function and method subroutine (bounds/opcode check of the whole file) within
++  // kMaxOsiTotalInstructions / kMaxOsiTotalCalls; returns the instruction and CallGameFunction counts.
++  bool check_all(uint64_t* instructions, std::string* err, uint64_t* calls = nullptr) const;
 +
 + private:
 +  struct Insn {
@@ -484,7 +520,9 @@ diff -ruN base/engine/include/lomn/sage/osi.h work/engine/include/lomn/sage/osi.
 +    int64_t a = 0, b = 0, c = 0;
 +    float f = 0;
 +  };
++  bool parse_tables(std::vector<uint8_t> bytes, std::string* err);
 +  bool disasm(uint32_t start, std::vector<Insn>& out, std::string* err) const;
++  bool eval_impl(const std::string& cls, const std::string& method, std::vector<OsiCall>& out, std::string* err) const;
 +  std::vector<uint8_t> d_;
 +  uint16_t major_ = 0, minor_ = 0;
 +  std::vector<std::string> strings_, globals_, symbols_, sources_;
@@ -1091,7 +1129,7 @@ diff -ruN base/engine/src/d3d/device8.cpp work/engine/src/d3d/device8.cpp
 +}  // namespace lomn::d3d
 diff -ruN base/engine/src/d3d/ffp.cpp work/engine/src/d3d/ffp.cpp
 --- base/engine/src/d3d/ffp.cpp	1970-01-01 01:00:00
-+++ work/engine/src/d3d/ffp.cpp	2026-10-07 11:32:56
++++ work/engine/src/d3d/ffp.cpp	2026-10-07 12:59:36
 @@ -0,0 +1,420 @@
 +#include "lomn/d3d/ffp.h"
 +
@@ -1530,7 +1568,7 @@ diff -ruN base/engine/src/fs/disk_fs.cpp work/engine/src/fs/disk_fs.cpp
        if (!it->is_regular_file(ec2) || ec2) continue;
 diff -ruN base/engine/src/rhi/null_device.cpp work/engine/src/rhi/null_device.cpp
 --- base/engine/src/rhi/null_device.cpp	2026-10-07 10:09:37
-+++ work/engine/src/rhi/null_device.cpp	2026-10-07 11:32:11
++++ work/engine/src/rhi/null_device.cpp	2026-10-07 12:58:43
 @@ -54,6 +54,7 @@
      stats_.rejected = 0;
      std::string why = reg_.check_begin_frame(t, false);  // the null device never has a presentation surface
@@ -1611,7 +1649,7 @@ diff -ruN base/engine/src/rhi/registry.h work/engine/src/rhi/registry.h
    std::string check_bind_group(const BindGroupDesc& d) const {
 diff -ruN base/engine/src/rhi/webgpu_device.cpp work/engine/src/rhi/webgpu_device.cpp
 --- base/engine/src/rhi/webgpu_device.cpp	2026-10-07 10:09:37
-+++ work/engine/src/rhi/webgpu_device.cpp	2026-10-07 11:32:16
++++ work/engine/src/rhi/webgpu_device.cpp	2026-10-07 12:58:49
 @@ -220,6 +220,7 @@
        // M0 pipelines ignore depth (always pass, never write) so they keep their M0 output in a depth pass.
        ds.depthWriteEnabled = p.mesh && p.mesh_desc.depth_write ? WGPUOptionalBool_True : WGPUOptionalBool_False;
@@ -1699,8 +1737,8 @@ diff -ruN base/engine/src/sage/bytes.h work/engine/src/sage/bytes.h
      p_ += static_cast<size_t>(k);
 diff -ruN base/engine/src/sage/osi.cpp work/engine/src/sage/osi.cpp
 --- base/engine/src/sage/osi.cpp	1970-01-01 01:00:00
-+++ work/engine/src/sage/osi.cpp	2026-10-07 11:29:09
-@@ -0,0 +1,292 @@
++++ work/engine/src/sage/osi.cpp	2026-10-07 12:59:22
+@@ -0,0 +1,321 @@
 +#include "lomn/sage/osi.h"
 +
 +#include <algorithm>
@@ -1784,6 +1822,12 @@ diff -ruN base/engine/src/sage/osi.cpp work/engine/src/sage/osi.cpp
 +
 +bool OsiFile::parse(std::vector<uint8_t> bytes, std::string* err) {
 +  *this = OsiFile();
++  if (parse_tables(std::move(bytes), err)) return true;
++  *this = OsiFile();  // no partial state after an error
++  return false;
++}
++
++bool OsiFile::parse_tables(std::vector<uint8_t> bytes, std::string* err) {
 +  if (bytes.size() > kMaxOsiBytes) return fail(err, "file too large");
 +  d_ = std::move(bytes);
 +  Cursor c(d_.data(), d_.size());
@@ -1805,6 +1849,7 @@ diff -ruN base/engine/src/sage/osi.cpp work/engine/src/sage/osi.cpp
 +  uint16_t nc = 0;
 +  if (!c.u16(nc) || uint64_t(nc) * 2 > c.remaining()) return fail(err, "bad class table");
 +  classes_.resize(nc);
++  std::vector<uint16_t> method_sym;  // symbol index per method, in class order; resolved below
 +  for (uint32_t i = 0; i < nc; ++i) {
 +    uint8_t np = 0, nm = 0;
 +    if (!c.u8(np) || !c.skip(uint64_t(np) * 2) || !c.u8(nm) || uint64_t(nm) * 6 > c.remaining()) return fail(err, "truncated class");
@@ -1812,7 +1857,8 @@ diff -ruN base/engine/src/sage/osi.cpp work/engine/src/sage/osi.cpp
 +      uint16_t sym = 0;
 +      uint32_t off = 0;
 +      if (!c.u16(sym) || !c.u32(off)) return fail(err, "truncated method");
-+      classes_[i].methods.push_back({std::to_string(sym), off});  // symbol index; resolved below
++      classes_[i].methods.push_back({std::string(), off});
++      method_sym.push_back(sym);
 +    }
 +  }
 +  for (uint32_t i = 0; i < nc; ++i) {
@@ -1820,9 +1866,10 @@ diff -ruN base/engine/src/sage/osi.cpp work/engine/src/sage/osi.cpp
 +    if (!c.u8(len) || !c.str(len, classes_[i].name) || !c.skip(1)) return fail(err, "truncated class names");
 +  }
 +  if (!read_strings(c, symbols_) || !read_strings(c, sources_)) return fail(err, "truncated symbol/source table");
++  size_t mi = 0;
 +  for (OsiClass& k : classes_)
 +    for (OsiMethod& m : k.methods) {
-+      const unsigned long sym = std::stoul(m.name);
++      const uint16_t sym = method_sym[mi++];
 +      if (sym >= symbols_.size()) return fail(err, "method symbol out of range");
 +      m.name = symbols_[sym];
 +      if (m.offset >= d_.size()) return fail(err, "method offset outside the file");
@@ -1894,26 +1941,37 @@ diff -ruN base/engine/src/sage/osi.cpp work/engine/src/sage/osi.cpp
 +  return fail(err, "subroutine exceeds kMaxOsiInstructions");
 +}
 +
-+bool OsiFile::check_all(uint64_t* count, std::string* err) const {
-+  uint64_t n = 0;
++bool OsiFile::check_all(uint64_t* count, std::string* err, uint64_t* calls) const {
++  uint64_t n = 0, nc = 0;
 +  std::vector<Insn> ins;
-+  std::set<uint32_t> seen;
-+  for (const auto& f : functions_) {
-+    if (!disasm(f.second, ins, err)) return false;
++  std::set<uint32_t> seen;  // functions and methods that share bytecode are walked once
++  auto walk = [&](uint32_t off) {
++    if (!seen.insert(off).second) return true;
++    if (!disasm(off, ins, err)) return false;
 +    n += ins.size();
-+  }
++    for (const Insn& in : ins) nc += in.op == 0x82;
++    if (n > kMaxOsiTotalInstructions) return fail(err, "file exceeds kMaxOsiTotalInstructions");
++    if (nc > kMaxOsiTotalCalls) return fail(err, "file exceeds kMaxOsiTotalCalls");
++    return true;
++  };
++  for (const auto& f : functions_)
++    if (!walk(f.second)) return false;
 +  for (const OsiClass& k : classes_)
-+    for (const OsiMethod& m : k.methods) {
-+      if (!seen.insert(m.offset).second) continue;  // inherited methods share bytecode
-+      if (!disasm(m.offset, ins, err)) return false;
-+      n += ins.size();
-+    }
++    for (const OsiMethod& m : k.methods)
++      if (!walk(m.offset)) return false;
 +  if (count) *count = n;
++  if (calls) *calls = nc;
 +  return true;
 +}
 +
-+bool OsiFile::find_calls(const std::string& cls, const std::string& method, std::vector<OsiCall>& out, std::string* err) const {
++bool OsiFile::eval_calls(const std::string& cls, const std::string& method, std::vector<OsiCall>& out, std::string* err) const {
 +  out.clear();
++  if (eval_impl(cls, method, out, err)) return true;
++  out.clear();  // no partial list after an error
++  return false;
++}
++
++bool OsiFile::eval_impl(const std::string& cls, const std::string& method, std::vector<OsiCall>& out, std::string* err) const {
 +  const OsiClass* k = find_class(cls);
 +  if (!k) return fail(err, "no class " + cls);
 +  const OsiMethod* m = nullptr;
@@ -1929,6 +1987,7 @@ diff -ruN base/engine/src/sage/osi.cpp work/engine/src/sage/osi.cpp
 +      targets.insert(uint64_t(int64_t(next) + ins[i].a));
 +    }
 +  std::vector<OsiValue> st;
++  uint64_t args_total = 0, string_bytes = 0;
 +  auto pop = [&]() {
 +    if (st.empty()) return OsiValue();
 +    OsiValue v = st.back();
@@ -1975,19 +2034,27 @@ diff -ruN base/engine/src/sage/osi.cpp work/engine/src/sage/osi.cpp
 +        break;
 +      }
 +      case 0x82: {
++        if (in.c < 0 || in.c > static_cast<int64_t>(kMaxOsiArgc)) return fail(err, "CallGameFunction argc out of range");
++        if (out.size() >= kMaxOsiCallsPerMethod) return fail(err, "method exceeds kMaxOsiCallsPerMethod");
++        args_total += static_cast<uint64_t>(in.c);
++        if (args_total > kMaxOsiArgsPerMethod) return fail(err, "method exceeds kMaxOsiArgsPerMethod");
 +        OsiCall call;
 +        call.cls = in.a >= 0 && static_cast<size_t>(in.a) < strings_.size() ? strings_[static_cast<size_t>(in.a)] : "?";
 +        call.fn = in.b >= 0 && static_cast<size_t>(in.b) < strings_.size() ? strings_[static_cast<size_t>(in.b)] : "?";
 +        call.offset = in.at;
-+        const int64_t argc = std::max<int64_t>(0, in.c);
-+        call.args.resize(static_cast<size_t>(argc));
-+        for (int64_t j = argc - 1; j >= 0; --j) call.args[static_cast<size_t>(j)] = pop();
++        call.args.resize(static_cast<size_t>(in.c));
++        for (int64_t j = in.c - 1; j >= 0; --j) {
++          call.args[static_cast<size_t>(j)] = pop();
++          string_bytes += call.args[static_cast<size_t>(j)].s.size();
++        }
++        if (string_bytes > kMaxOsiStringArgBytes) return fail(err, "method exceeds kMaxOsiStringArgBytes");
 +        out.push_back(std::move(call));
 +        st.push_back(OsiValue());  // the call's result
 +        break;
 +      }
 +      default: st.clear(); break;  // any other effect is not modelled: forget every value
 +    }
++    if (st.size() > kMaxOsiStackDepth) return fail(err, "literal stack exceeds kMaxOsiStackDepth");
 +  }
 +  return true;
 +}
@@ -2028,7 +2095,7 @@ diff -ruN base/engine/src/sage/slb.cpp work/engine/src/sage/slb.cpp
      if (flags & 0x20) return Route::Moveable;
 diff -ruN base/engine/src/view/area.cpp work/engine/src/view/area.cpp
 --- base/engine/src/view/area.cpp	2026-10-07 10:09:37
-+++ work/engine/src/view/area.cpp	2026-10-07 11:31:21
++++ work/engine/src/view/area.cpp	2026-10-07 12:57:43
 @@ -7,11 +7,16 @@
  #include <cstring>
  #include <limits>
@@ -2223,7 +2290,7 @@ diff -ruN base/engine/src/view/area.cpp work/engine/src/view/area.cpp
 +    if (!osi.find_class(cls)) return;
 +    out_.script_class = cls;
 +    std::vector<sage::OsiCall> calls;
-+    if (!osi.find_calls(cls, "initfull", calls, &e)) {
++    if (!osi.eval_calls(cls, "initfull", calls, &e)) {
 +      warn(e);
 +      return;
 +    }
@@ -2686,7 +2753,7 @@ diff -ruN base/engine/src/view/area.cpp work/engine/src/view/area.cpp
    }
 diff -ruN base/engine/src/view/sage_frame.cpp work/engine/src/view/sage_frame.cpp
 --- base/engine/src/view/sage_frame.cpp	1970-01-01 01:00:00
-+++ work/engine/src/view/sage_frame.cpp	2026-10-07 11:32:25
++++ work/engine/src/view/sage_frame.cpp	2026-10-07 12:59:40
 @@ -0,0 +1,417 @@
 +#include "lomn/view/sage_frame.h"
 +
@@ -3435,24 +3502,6 @@ diff -ruN base/engine/tests/data/a7_calls.txt work/engine/tests/data/a7_calls.tx
 +draw_indexed pipeline=4 vb=2 ib=3 first=6 count=6 bind_group=3+8192
 +draw_indexed pipeline=3 vb=4 ib=5 first=0 count=6 bind_group=2+9216
  end_frame draws=10
-diff -ruN base/engine/tests/data/a7_calls.txt.json work/engine/tests/data/a7_calls.txt.json
---- base/engine/tests/data/a7_calls.txt.json	1970-01-01 01:00:00
-+++ work/engine/tests/data/a7_calls.txt.json	2026-10-07 11:05:22
-@@ -0,0 +1,14 @@
-+{
-+"tool":"lomn_view","level":"levt","area":"test","synthetic":true,
-+"backend":"null","adapter":"none","width":64,"height":64,
-+"frames":1,"frames_rendered":1,"load_ms":0.196,"decode_ms":0.017,"upload_ms":0.015,"frame_submit_ms_first":0.136,"frame_submit_ms_p50":0.136,"readback_ms":0.000,
-+"rss_after_upload_bytes":9486336,"cpu_bytes_released":1288,"rss_after_release_bytes":9535488,"rss_peak_bytes":9617408,"footprint_after_upload_bytes":1950128,"footprint_after_release_bytes":1999280,"heap_in_use_after_upload_bytes":148288,"heap_in_use_after_release_bytes":146672,"rejected_last_frame":0,
-+"draws_last_frame":10,"indices_last_frame":60,"pipelines":4,"gpu_textures":3,"texture_bytes_uploaded":428,
-+"art_blk":false,"obj_records":8,"placements":6,"routes":{"main":2,"trans":2,"back":1,"moveable":0,"nolight":1},"nonfinite_records":0,"ignored_records":1,"disabled_records":0,"missing_models":1,"placements_with_orientation":0,"models":2,"models_without_colors":1,"subsets":4,"alpha_subsets":1,"untextured_subsets":2,"draws":10,"vertices":16,"triangles":8,"geometry_bytes":864,"textures":2,"textures_alpha":1,"textures_missing":1,"textures_failed":0,"texture_bytes_with_mips":424,"pos_records":2,"start":{"record":1,"pos":[0.000,0.000,10.000]},"bounds":{"min":[-8.000,-4.000,-80.000],"max":[60.000,8.000,0.000]},
-+"model_ids":["blue","quad"],
-+"camera":{"fallback":true,"eye":[0.000,0.000,10.000],"at":[0.000,0.000,9.000],"eye_source":"pos_start","yaw_deg":0.000,"yaw_source":"cli","pitch_deg":0.000,"pitch_source":"fallback","fov_deg":90.000,"fov_source":"fallback","near":0.100,"far":100.000,"clip_source":"fallback","aspect":1.000},
-+"render":{"vertex_colors":true,"lighting":"faithful","fog":true},
-+"states":{"state_calls_last_frame":107,"draw_subsets_last_frame":10,"empty_subsets_last_frame":0,"rhi_draws_last_frame":10,"lit_draws":0,"fogged_draws":6,"blended_draws":2,"alpha_tested_draws":2,"null_texture_draws":6,"unsupported_bits":0},
-+"scene":{"level_type":68,"lights":2,"lights_source":"default","fog":{"color":4294967295,"start":4701.000,"end":4702.000,"density":0.001,"source":"default"},"cave_lighting":false,"script_class":"","special_textures":3,"special_matches":1},
-+"warnings_dropped":0,"warnings":["art.blk not opened: blockchain: cannot open Root/Data/Art/Art.blk","model blue: a used material has no texture (the original would fault)","model miss: not found: Root/Data/Levels/levt/test/Xs/miss.x","texture nothere: not found"]
-+}
 diff -ruN base/engine/tests/data/a9_state.txt work/engine/tests/data/a9_state.txt
 --- base/engine/tests/data/a9_state.txt	1970-01-01 01:00:00
 +++ work/engine/tests/data/a9_state.txt	2026-10-07 11:21:18
@@ -3714,12 +3763,618 @@ diff -ruN base/engine/tests/data/a9_state.txt work/engine/tests/data/a9_state.tx
 +LIGHTENABLE 6 0
 +LIGHTENABLE 7 0
 +ENDSCENE
-diff -ruN base/engine/tests/test_d3d.cpp work/engine/tests/test_d3d.cpp
---- base/engine/tests/test_d3d.cpp	1970-01-01 01:00:00
-+++ work/engine/tests/test_d3d.cpp	2026-10-07 11:29:21
-@@ -0,0 +1,387 @@
-+// M1a-3: the D3D8 state shim (lomn/d3d/device8.h), its compiler (lomn/d3d/ffp.h) and the SAGE frame replay
-+// (lomn/view/sage_frame.h). Expected values come from the decompiled functions named in each case.
+diff -ruN base/engine/tests/ffp_cases.cpp work/engine/tests/ffp_cases.cpp
+--- base/engine/tests/ffp_cases.cpp	1970-01-01 01:00:00
++++ work/engine/tests/ffp_cases.cpp	2026-10-07 12:35:58
+@@ -0,0 +1,158 @@
++// lomn_ffp_cases: prints, one JSON object per line, every input the CPU reference of the D3D8 fixed-function formulas
++// (lomn/d3d/ffp.h reference_vertex_color / reference_fragment) reads, and its results, for gpu_ffp's cases
++// (tests/ffp_cases.h) followed by N seeded random samples. tools/research/oracle/ffp_oracle.py recomputes every result
++// from the D3D8 documentation's formulas and compares (ctest ffp_oracle). Usage: lomn_ffp_cases [N] [SEED]
++#include <cmath>
++#include <cstdio>
++#include <cstdlib>
++#include <string>
++
++#include "ffp_cases.h"
++#include "lomn/d3d/ffp.h"
++
++using namespace lomn;
++using namespace lomn::d3d;
++
++namespace {
++uint64_t g_rng = 1;
++uint32_t rnd(uint32_t n) {
++  g_rng = g_rng * 6364136223846793005ull + 1442695040888963407ull;
++  return static_cast<uint32_t>((g_rng >> 33) % n);
++}
++float uni(float lo, float hi) { return lo + (hi - lo) * static_cast<float>(rnd(1u << 24)) / static_cast<float>(1u << 24); }
++Color4 col() { return Color4{uni(0, 1), uni(0, 1), uni(0, 1), uni(0, 1)}; }
++uint32_t argb() { return (rnd(256) << 24) | (rnd(256) << 16) | (rnd(256) << 8) | rnd(256); }
++
++std::string f(float x) {
++  char b[32];
++  std::snprintf(b, sizeof b, "%.9g", static_cast<double>(x));
++  return b;
++}
++std::string c4(const Color4& c) { return "[" + f(c.r) + "," + f(c.g) + "," + f(c.b) + "," + f(c.a) + "]"; }
++
++void emit(const char* what, const State& s, bool has_vcol, const Color4& vcol, const float p[3], const float n[3],
++          const Color4& d, const Color4& texel, bool bound, float w) {
++  const Color4 v = reference_vertex_color(s, has_vcol, vcol, p, n);
++  Color4 o;
++  const bool kept = reference_fragment(s, d, texel, bound, w, o);
++  std::string j = std::string("{\"what\":\"") + what + "\",\"rs\":{";
++  const uint32_t rsl[] = {rs::LIGHTING, rs::COLORVERTEX, rs::DIFFUSEMATERIALSOURCE, rs::AMBIENT, rs::TEXTUREFACTOR,
++                          rs::ALPHATESTENABLE, rs::ALPHAFUNC, rs::ALPHAREF, rs::ALPHABLENDENABLE, rs::FOGENABLE,
++                          rs::FOGTABLEMODE, rs::FOGVERTEXMODE, rs::FOGSTART, rs::FOGEND, rs::FOGDENSITY, rs::FOGCOLOR};
++  for (size_t i = 0; i < sizeof rsl / sizeof rsl[0]; ++i)
++    j += (i ? ",\"" : "\"") + rs_name(rsl[i]) + "\":" + std::to_string(s.rs[rsl[i]]);
++  j += "},\"tss0\":{";
++  const uint32_t tl[] = {tss::COLOROP, tss::COLORARG1, tss::COLORARG2, tss::ALPHAOP, tss::ALPHAARG1, tss::ALPHAARG2};
++  for (size_t i = 0; i < 6; ++i) j += (i ? ",\"" : "\"") + tss_name(tl[i]) + "\":" + std::to_string(s.tss[0][tl[i]]);
++  j += "},\"world\":[";
++  for (int i = 0; i < 16; ++i) j += (i ? "," : "") + f(s.world.m[i]);
++  j += "],\"material\":{\"diffuse\":" + c4(s.material.diffuse) + ",\"ambient\":" + c4(s.material.ambient) +
++       ",\"emissive\":" + c4(s.material.emissive) + "},\"lights\":[";
++  bool first = true;
++  for (uint32_t i = 0; i < kMaxLights; ++i) {
++    if (!s.light_on[i]) continue;
++    const Light8& l = s.lights[i];
++    j += std::string(first ? "" : ",") + "{\"type\":" + std::to_string(l.type) + ",\"diffuse\":" + c4(l.diffuse) +
++         ",\"ambient\":" + c4(l.ambient) + ",\"position\":[" + f(l.position[0]) + "," + f(l.position[1]) + "," +
++         f(l.position[2]) + "],\"direction\":[" + f(l.direction[0]) + "," + f(l.direction[1]) + "," + f(l.direction[2]) +
++         "],\"range\":" + f(l.range) + ",\"att\":[" + f(l.attenuation0) + "," + f(l.attenuation1) + "," + f(l.attenuation2) + "]}";
++    first = false;
++  }
++  j += "],\"has_vcol\":" + std::string(has_vcol ? "true" : "false") + ",\"vcol\":" + c4(vcol) + ",\"p\":[" + f(p[0]) + "," +
++       f(p[1]) + "," + f(p[2]) + "],\"n\":[" + f(n[0]) + "," + f(n[1]) + "," + f(n[2]) + "],\"d\":" + c4(d) +
++       ",\"texel\":" + c4(texel) + ",\"bound\":" + (bound ? "true" : "false") + ",\"w\":" + f(w) +
++       ",\"out_vertex\":" + c4(v) + ",\"out_kept\":" + (kept ? "true" : "false") + ",\"out_fragment\":" + (kept ? c4(o) : "null") + "}";
++  std::puts(j.c_str());
++}
++}  // namespace
++
++int main(int argc, char** argv) {
++  const uint32_t n = argc > 1 ? static_cast<uint32_t>(std::strtoul(argv[1], nullptr, 10)) : 4000;
++  g_rng = argc > 2 ? std::strtoull(argv[2], nullptr, 10) : 1;
++  // 1. gpu_ffp's cases with gpu_ffp's inputs: vertex 0 of the triangle, normal (0,0,-1), white texel, w = 1, the fragment
++  //    fed with the case's own lit vertex colour (as the GPU test does).
++  float verts[3][12];
++  test::ffp_triangle(verts);
++  const float nrm[3] = {0, 0, -1};
++  const Color4 vc{test::kFfpVcol[0], test::kFfpVcol[1], test::kFfpVcol[2], test::kFfpVcol[3]};
++  for (const test::FfpCase& c : test::gpu_ffp_cases()) {
++    const Color4 d = reference_vertex_color(c.s, c.has_vcol, vc, verts[0], nrm);
++    emit(c.what, c.s, c.has_vcol, vc, verts[0], nrm, d, Color4{1, 1, 1, 1}, true, 1.0f);
++  }
++  // 2. Seeded random samples over every state the reference reads. World matrices are rigid (rotation about a random
++  //    axis + translation): the area path only builds RotX * translation.
++  const uint32_t ops[] = {kTopDisable, kTopSelectArg1, kTopSelectArg2, kTopModulate};
++  const uint32_t args[] = {kTaDiffuse, kTaCurrent, kTaTexture, kTaTFactor};
++  for (uint32_t k = 0; k < n; ++k) {
++    State s = default_state();
++    s.rs[rs::LIGHTING] = rnd(4) != 0;
++    s.rs[rs::COLORVERTEX] = rnd(4) != 0;
++    s.rs[rs::DIFFUSEMATERIALSOURCE] = rnd(3);
++    s.rs[rs::AMBIENT] = argb();
++    s.material.diffuse = col();
++    s.material.ambient = col();
++    s.material.emissive = Color4{uni(0, 0.3f), uni(0, 0.3f), uni(0, 0.3f), 1};
++    const float ax[3] = {uni(-1, 1), uni(-1, 1), uni(-1, 1)};
++    const float len = std::sqrt(ax[0] * ax[0] + ax[1] * ax[1] + ax[2] * ax[2]) + 1e-6f;
++    const float u[3] = {ax[0] / len, ax[1] / len, ax[2] / len}, th = uni(-3.14159f, 3.14159f), cs = std::cos(th), sn = std::sin(th);
++    for (int i = 0; i < 3; ++i)  // Rodrigues, row-vector convention: row i is the image of basis vector i
++      for (int j = 0; j < 3; ++j) {
++        const float e = (i == j ? cs : 0.0f) + (1 - cs) * u[i] * u[j];
++        const int ijk = (i + 1) % 3 == j ? 1 : (j + 1) % 3 == i ? -1 : 0;
++        const int other = 3 - i - j;
++        s.world.m[i * 4 + j] = e + (ijk ? ijk * sn * u[other] : 0.0f);
++      }
++    s.world.m[12] = uni(-20, 20);
++    s.world.m[13] = uni(-20, 20);
++    s.world.m[14] = uni(-20, 20);
++    s.world.m[15] = 1;
++    for (uint32_t i = 0; i < kMaxLights; ++i) {
++      if (rnd(3) != 0) continue;
++      Light8& l = s.lights[i];
++      l.type = rnd(2) ? kLightPoint : kLightDirectional;
++      l.diffuse = col();
++      l.ambient = Color4{uni(0, 0.3f), uni(0, 0.3f), uni(0, 0.3f), 1};
++      for (int a = 0; a < 3; ++a) {
++        l.position[a] = uni(-30, 30);
++        l.direction[a] = uni(-1, 1);
++      }
++      l.range = uni(0, 60);
++      l.attenuation0 = rnd(2) ? 0.0f : uni(0, 1);
++      l.attenuation1 = uni(0.01f, 1);
++      l.attenuation2 = rnd(2) ? 0.0f : uni(0, 0.05f);
++      s.light_on[i] = true;
++    }
++    s.rs[rs::TEXTUREFACTOR] = argb();
++    s.tss[0][tss::COLOROP] = ops[rnd(4)];
++    s.tss[0][tss::COLORARG1] = args[rnd(4)];
++    s.tss[0][tss::COLORARG2] = args[rnd(4)];
++    s.tss[0][tss::ALPHAOP] = ops[rnd(4)];
++    s.tss[0][tss::ALPHAARG1] = args[rnd(4)];
++    s.tss[0][tss::ALPHAARG2] = args[rnd(4)];
++    s.rs[rs::ALPHATESTENABLE] = rnd(2);
++    s.rs[rs::ALPHAFUNC] = 1 + rnd(8);
++    s.rs[rs::ALPHAREF] = rnd(256);
++    s.rs[rs::ALPHABLENDENABLE] = rnd(2);
++    s.rs[rs::FOGENABLE] = rnd(2);
++    s.rs[rs::FOGTABLEMODE] = rnd(4);
++    s.rs[rs::FOGVERTEXMODE] = rnd(4);
++    const float st = uni(-50, 1500);
++    s.rs[rs::FOGSTART] = float_to_bits(st);
++    s.rs[rs::FOGEND] = float_to_bits(st + uni(0.5f, 3000));
++    s.rs[rs::FOGDENSITY] = float_to_bits(uni(0, 0.2f));
++    s.rs[rs::FOGCOLOR] = argb();
++    const Color4 vcol = col();
++    const float p[3] = {uni(-10, 10), uni(-10, 10), uni(-10, 10)};
++    float nn[3] = {uni(-1, 1), uni(-1, 1), uni(-1, 1)};
++    const float nl = std::sqrt(nn[0] * nn[0] + nn[1] * nn[1] + nn[2] * nn[2]) + 1e-6f;
++    for (float& x : nn) x /= nl;
++    // Alpha inputs on the 8-bit grid half the time (the quantisation edge: TFACTOR and texel alphas are bytes).
++    Color4 d = col(), texel = col();
++    if (rnd(2)) {
++      d.a = static_cast<float>(rnd(256)) / 255.0f;
++      texel.a = static_cast<float>(rnd(256)) / 255.0f;
++    }
++    emit("random", s, rnd(2) != 0, vcol, p, nn, d, texel, rnd(4) != 0, uni(0, 3000));
++  }
++  return 0;
++}
+diff -ruN base/engine/tests/ffp_cases.h work/engine/tests/ffp_cases.h
+--- base/engine/tests/ffp_cases.h	1970-01-01 01:00:00
++++ work/engine/tests/ffp_cases.h	2026-10-07 12:34:56
+@@ -0,0 +1,113 @@
++// The fixed-function cases gpu_ffp draws (test_gpu_ffp.cpp), shared with lomn_ffp_cases (ffp_cases.cpp), which dumps
++// them - plus seeded random samples - with the CPU reference's results for the independent Python check
++// tools/research/oracle/ffp_oracle.py (REF3 revision 2, item 3).
++#pragma once
++#include <cmath>
++#include <vector>
++
++#include "lomn/d3d/device8.h"
++
++namespace lomn::test {
++
++struct FfpCase {
++  const char* what;
++  d3d::State s;
++  bool has_vcol;
++};
++
++// One triangle (circumradius 3) around the origin in the z = 0.5 plane, normal (0,0,-1), vertex colour kFfpVcol.
++constexpr float kFfpVcol[4] = {0.8f, 0.6f, 0.4f, 0.5f};
++inline void ffp_triangle(float verts[3][12]) {
++  for (int i = 0; i < 3; ++i) {
++    const double a = 1.5707963 + i * 2.0943951;
++    const float v[12] = {static_cast<float>(3 * std::cos(a)), static_cast<float>(3 * std::sin(a)), 0.5f, 0, 0, -1, 0.5f, 0.5f,
++                         kFfpVcol[0], kFfpVcol[1], kFfpVcol[2], kFfpVcol[3]};
++    for (int k = 0; k < 12; ++k) verts[i][k] = v[k];
++  }
++}
++
++inline std::vector<FfpCase> gpu_ffp_cases() {
++  using namespace d3d;
++  std::vector<FfpCase> out;
++  State base = default_state();
++  base.rs[rs::ZENABLE] = kZbTrue;
++  base.rs[rs::CULLMODE] = kCullNone;
++  base.rs[rs::SRCBLEND] = kBlendSrcAlpha;
++  base.rs[rs::DESTBLEND] = kBlendInvSrcAlpha;
++  base.tss[0][tss::COLORARG2] = kTaDiffuse;
++  base.tss[0][tss::MAGFILTER] = base.tss[0][tss::MINFILTER] = kTexfLinear;
++  base.tss[0][tss::MIPFILTER] = kTexfLinear;
++
++  State lit = base;  // LIGHTING on: emissive + ambient (global + lights) + diffuse (point light + directional)
++  lit.rs[rs::LIGHTING] = 1;
++  lit.rs[rs::AMBIENT] = 0xff1a1a26u;
++  lit.material.ambient = {0.7f, 0.7f, 0.7f, 1};
++  lit.material.emissive = {0.05f, 0.0f, 0.1f, 1};
++  lit.material.diffuse = {0.2f, 0.9f, 0.3f, 1};
++  Light8 pt;
++  pt.type = kLightPoint;
++  pt.position[2] = -1.5f;  // on the axis, |P - L| = sqrt(9 + 4) for every vertex
++  pt.range = 10;
++  pt.attenuation1 = 1.0f / (0.15f * 10.0f);
++  pt.diffuse = {0.75f, 0.56f, 0.16f, 0};
++  pt.ambient = {0.1f, 0.1f, 0.1f, 1};
++  Light8 dl;
++  dl.type = kLightDirectional;
++  dl.direction[2] = 2;  // L = -dir = (0,0,-1) = the normal: N.L = 1
++  dl.diffuse = {0.3f, 0.3f, 0.3f, 1};
++  lit.lights[0] = pt;
++  lit.lights[2] = dl;
++  lit.light_on[0] = lit.light_on[2] = true;
++  out.push_back({"lit: vertex colour as COLOR1 diffuse, point (attenuated) + directional + ambients", lit, true});
++  out.push_back({"lit: no vertex colour -> material diffuse", lit, false});
++  State lit_far = lit;
++  lit_far.lights[0].range = 3.0f;  // every vertex is sqrt(13) > 3 away: the point light contributes nothing
++  out.push_back({"lit: point light out of range", lit_far, true});
++  State back = lit_far;  // a directional light from behind the surface: N.L = -1 is clamped to 0
++  back.lights[2].direction[2] = -2;
++  out.push_back({"lit: directional light behind the surface (N.L clamped to 0)", back, true});
++  State unlit = base;
++  unlit.rs[rs::LIGHTING] = 0;
++  out.push_back({"LIGHTING off: vertex colour", unlit, true});
++  out.push_back({"LIGHTING off, no vertex colour: opaque white", unlit, false});
++  State fog = unlit;
++  fog.rs[rs::FOGENABLE] = 1;
++  fog.rs[rs::FOGTABLEMODE] = kFogLinear;
++  fog.rs[rs::FOGSTART] = float_to_bits(0.0f);
++  fog.rs[rs::FOGEND] = float_to_bits(4.0f);
++  fog.rs[rs::FOGCOLOR] = 0xffff0000u;
++  out.push_back({"fog LINEAR at w 1 (start 0, end 4): f 0.75", fog, true});
++  fog.rs[rs::FOGTABLEMODE] = kFogExp;
++  fog.rs[rs::FOGDENSITY] = float_to_bits(0.7f);
++  out.push_back({"fog EXP density 0.7 at w 1", fog, true});
++  fog.rs[rs::FOGTABLEMODE] = kFogExp2;
++  out.push_back({"fog EXP2 density 0.7 at w 1", fog, true});
++  State test = unlit;  // alpha test only (GcArea::Render's plnt/tre1 context flag: DrawX turns blending off), TFACTOR alpha
++  test.rs[rs::ALPHABLENDENABLE] = 0;
++  test.rs[rs::ALPHATESTENABLE] = 1;
++  test.rs[rs::ALPHAFUNC] = kCmpGreater;
++  test.rs[rs::ALPHAREF] = 1;
++  test.tss[0][tss::ALPHAOP] = kTopSelectArg2;
++  test.tss[0][tss::ALPHAARG2] = kTaTFactor;
++  test.rs[rs::TEXTUREFACTOR] = 0x01000000u;  // alpha 1: 1 > 1 fails -> discarded
++  out.push_back({"alpha test GREATER ref 1, alpha 1: discarded", test, true});
++  test.rs[rs::TEXTUREFACTOR] = 0x02000000u;
++  out.push_back({"alpha test GREATER ref 1, alpha 2: kept (unblended)", test, true});
++  test.rs[rs::ALPHAREF] = 0;
++  test.rs[rs::TEXTUREFACTOR] = 0x01000000u;
++  out.push_back({"alpha test GREATER ref 0, alpha 1: kept (R13: ALPHAREF 0 keeps alpha 1/255)", test, true});
++  test.rs[rs::ALPHABLENDENABLE] = 1;
++  test.rs[rs::ALPHATESTENABLE] = 0;
++  test.rs[rs::TEXTUREFACTOR] = 0xb2000000u;  // 178 = round(255 * 0.7): the vllg river's textures.slb trans
++  out.push_back({"TFACTOR alpha 178 blended", test, true});
++  State mod = unlit;  // vertex alpha through ALPHAOP MODULATE(TFACTOR, TEXTURE) (DrawX's mTransparency < 1 path)
++  mod.rs[rs::ALPHABLENDENABLE] = 1;
++  mod.tss[0][tss::ALPHAOP] = kTopModulate;
++  mod.tss[0][tss::ALPHAARG1] = kTaTFactor;
++  mod.tss[0][tss::ALPHAARG2] = kTaTexture;
++  mod.rs[rs::TEXTUREFACTOR] = 0x80000000u;
++  out.push_back({"ALPHAOP MODULATE(TFACTOR 128, TEXTURE 255)", mod, true});
++  return out;
++}
++
++}  // namespace lomn::test
+diff -ruN base/engine/tests/fuzz_osi.cpp work/engine/tests/fuzz_osi.cpp
+--- base/engine/tests/fuzz_osi.cpp	1970-01-01 01:00:00
++++ work/engine/tests/fuzz_osi.cpp	2026-10-07 12:43:03
+@@ -0,0 +1,100 @@
++// M1a-3 REF3 revision 2: deterministic mutation fuzzer for the OSI reader (lomn/sage/osi.h), built with ASan+UBSan
++// (-fno-sanitize-recover=all) natively and as wasm32 (emcc, Node) by `make fuzz-osi` (not part of check). Seeds: the
++// synthetic InitFull program, a small cap-edge program, and optionally a real Base.osi (argv[3]; user data, never
++// committed). Every accepted input is checked against the caps; a failed parse / eval must leave no partial state.
++// Usage: fuzz_osi ITERATIONS SEED [REAL_BASE_OSI]
++#include <cstdio>
++#include <cstdlib>
++#include <fstream>
++#include <iterator>
++#include <string>
++#include <vector>
++
++#include "lomn/sage/osi.h"
++#include "osi_builder.h"
++
++using namespace lomn;
++static uint64_t rng = 1;
++static uint32_t rnd(uint32_t n) {
++  rng = rng * 6364136223846793005ull + 1442695040888963407ull;
++  return n ? static_cast<uint32_t>((rng >> 33) % n) : 0;
++}
++static void die(const char* what, uint64_t it) {
++  std::printf("INVARIANT FAILED at iteration %llu: %s\n", static_cast<unsigned long long>(it), what);
++  std::exit(1);
++}
++
++int main(int argc, char** argv) {
++  setvbuf(stdout, nullptr, _IONBF, 0);
++  const uint64_t iters = argc > 1 ? std::strtoull(argv[1], nullptr, 10) : 10000;
++  rng = argc > 2 ? std::strtoull(argv[2], nullptr, 10) : 1;
++  std::vector<std::vector<uint8_t>> seeds = {test::statt_osi()};
++  {
++    test::OsiSpec s;
++    s.strings.push_back(std::string(255, 'x'));
++    s.code = {0x46, 4, 0, 0x46, 4, 0, 0x82, 0, 0, 1, 0, 2, 0x30, 0x53, 2, 0, 0x45, 0x45, 0x31, 2, 0x52};
++    s.functions = 3;
++    s.function_stride = 3;
++    seeds.push_back(test::build_osi(s));
++  }
++  if (argc > 3) {
++    std::ifstream f(argv[3], std::ios::binary);
++    seeds.emplace_back(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
++  }
++  const uint8_t interesting[] = {0, 1, 0x7f, 0x80, 0xff, 0x82, 0x46, 0x53, 0x54, 0x52, 0x31, 0x30, 0x45, 0x70, 0x73};
++  uint64_t accepted = 0, evaluated = 0, calls_seen = 0;
++  for (uint64_t it = 0; it < iters; ++it) {
++    const size_t si = rnd(static_cast<uint32_t>(seeds.size()));
++    std::vector<uint8_t> b = seeds[si];
++    const bool real = si >= 2;
++    const uint32_t nmut = 1 + rnd(real ? 4 : 8);
++    for (uint32_t m = 0; m < nmut && !b.empty(); ++m) {
++      const uint32_t at = rnd(static_cast<uint32_t>(b.size()));
++      switch (rnd(7)) {
++        case 0: b[at] ^= static_cast<uint8_t>(1u << rnd(8)); break;
++        case 1: b[at] = interesting[rnd(sizeof interesting)]; break;
++        case 2: b[at] = 0xff; if (at + 1 < b.size()) b[at + 1] = 0xff; break;   // u16 count/index to 0xffff
++        case 3: b.insert(b.begin() + at, static_cast<uint8_t>(rnd(256))); break;
++        case 4: b.erase(b.begin() + at, b.begin() + std::min<size_t>(b.size(), at + 1 + rnd(16))); break;
++        case 5: { const uint32_t len = std::min<uint32_t>(1 + rnd(64), static_cast<uint32_t>(b.size() - at));
++                  std::vector<uint8_t> chunk(b.begin() + at, b.begin() + at + len);
++                  for (uint32_t k = rnd(64); k > 0; --k) b.insert(b.begin() + at, chunk.begin(), chunk.end()); break; }
++        case 6: b.resize(at); break;
++      }
++    }
++    sage::OsiFile o;
++    std::string err;
++    if (!o.parse(std::move(b), &err)) {
++      if (!o.classes().empty() || !o.strings().empty()) die("failed parse left tables", it);
++      continue;
++    }
++    ++accepted;
++    uint64_t n = 0, nc = 0;
++    if (o.check_all(&n, &err, &nc) && (n > sage::kMaxOsiTotalInstructions || nc > sage::kMaxOsiTotalCalls)) die("check_all over cap", it);
++    uint32_t budget = real ? 16 : 1u << 30;  // the real seed has 8,406 methods: sample a few per input
++    for (const sage::OsiClass& k : o.classes())
++      for (const sage::OsiMethod& m : k.methods) {
++        if (real && rnd(512) != 0) continue;
++        if (budget-- == 0) break;
++        std::vector<sage::OsiCall> calls(2);
++        ++evaluated;
++        if (!o.eval_calls(k.name, m.name, calls, &err)) {
++          if (!calls.empty()) die("failed eval left calls", it);
++          continue;
++        }
++        if (calls.size() > sage::kMaxOsiCallsPerMethod) die("calls over cap", it);
++        uint64_t args = 0, sb = 0;
++        for (const sage::OsiCall& c : calls) {
++          if (c.args.size() > sage::kMaxOsiArgc) die("argc over cap", it);
++          args += c.args.size();
++          for (const sage::OsiValue& v : c.args) sb += v.s.size();
++        }
++        if (args > sage::kMaxOsiArgsPerMethod || sb > sage::kMaxOsiStringArgBytes) die("args/string bytes over cap", it);
++        calls_seen += calls.size();
++      }
++  }
++  std::printf("fuzz_osi: %llu inputs, %llu accepted, %llu method evaluations, %llu calls, 0 invariant failures\n",
++              static_cast<unsigned long long>(iters), static_cast<unsigned long long>(accepted),
++              static_cast<unsigned long long>(evaluated), static_cast<unsigned long long>(calls_seen));
++  return 0;
++}
+diff -ruN base/engine/tests/osi_builder.h work/engine/tests/osi_builder.h
+--- base/engine/tests/osi_builder.h	1970-01-01 01:00:00
++++ work/engine/tests/osi_builder.h	2026-10-07 12:16:46
+@@ -0,0 +1,109 @@
++// Test-only OSI 4.1 writer (lomn/sage/osi.h layout): one class with one method "initfull", optional functions that
++// all point at the method's bytecode (or at offsets inside it), and the program the synthetic Base.osi carries
++// (lomn/view/synthetic.cpp writes the same bytes for the A9 scene). Shared by test_sage_osi.cpp and probe_osi.cpp so
++// the OSI reader's tests need nothing above lomn_sage.
++#pragma once
++#include <cstdint>
++#include <cstring>
++#include <string>
++#include <vector>
++
++namespace lomn::test {
++
++struct OsiSpec {
++  std::vector<std::string> strings = {"gcareadirector", "setfog", "gclightdirector", "setcavelighting"};
++  std::string cls = "lego_area_statt";
++  std::vector<uint8_t> code;               // the method's bytecode
++  uint32_t functions = 0;                  // function-table entries
++  uint32_t function_stride = 0;            // function k starts at code + k * stride (0: all share the method's code)
++};
++
++inline void osi_put16(std::vector<uint8_t>& b, uint32_t v) {
++  b.push_back(static_cast<uint8_t>(v));
++  b.push_back(static_cast<uint8_t>(v >> 8));
++}
++inline void osi_put32(std::vector<uint8_t>& b, uint32_t v) {
++  for (int i = 0; i < 4; ++i) b.push_back(static_cast<uint8_t>(v >> (8 * i)));
++}
++
++inline std::vector<uint8_t> build_osi(const OsiSpec& s) {
++  std::vector<uint8_t> b = {'O', 'S', 'I', 0};
++  osi_put16(b, 4);
++  osi_put16(b, 1);
++  auto table = [&](const std::vector<std::string>& v) {
++    osi_put16(b, static_cast<uint32_t>(v.size()));
++    for (const std::string& x : v) {
++      b.push_back(static_cast<uint8_t>(x.size()));
++      b.insert(b.end(), x.begin(), x.end());
++      b.push_back(0);
++    }
++  };
++  table(s.strings);
++  table({});  // globals
++  osi_put16(b, s.functions);
++  std::vector<size_t> fpatch;
++  for (uint32_t k = 0; k < s.functions; ++k) {
++    b.push_back(1);
++    b.push_back('f');
++    fpatch.push_back(b.size());
++    osi_put32(b, 0);
++    osi_put16(b, 0);
++  }
++  osi_put16(b, 1);  // one class, no properties, one method: symbol 0 = "initfull"
++  b.push_back(0);
++  b.push_back(1);
++  osi_put16(b, 0);
++  const size_t mpatch = b.size();
++  osi_put32(b, 0);
++  b.push_back(static_cast<uint8_t>(s.cls.size()));
++  b.insert(b.end(), s.cls.begin(), s.cls.end());
++  b.push_back(0);
++  table({"initfull"});
++  table({});  // sources
++  const uint32_t code = static_cast<uint32_t>(b.size());
++  auto patch = [&](size_t at, uint32_t v) {
++    for (int i = 0; i < 4; ++i) b[at + i] = static_cast<uint8_t>(v >> (8 * i));
++  };
++  patch(mpatch, code);
++  for (uint32_t k = 0; k < s.functions; ++k) patch(fpatch[k], code + k * s.function_stride);
++  b.insert(b.end(), s.code.begin(), s.code.end());
++  return b;
++}
++
++// The synthetic scene's InitFull: SetFog(0xff808080, 0 - 5, 0 - 50, 0.1f); SetCaveLighting(1).
++inline std::vector<uint8_t> osi_statt_program() {
++  std::vector<uint8_t> c;
++  auto f32 = [&](float f) {
++    uint32_t x;
++    std::memcpy(&x, &f, 4);
++    osi_put32(c, x);
++  };
++  c.push_back(0x40);
++  osi_put32(c, 0xff808080u);  // PushConstanti32
++  c.push_back(0x45);          // PushConstant0
++  c.push_back(0x44);
++  f32(5.0f);
++  c.push_back(0x71);          // Subtract -> -5
++  c.push_back(0x45);
++  c.push_back(0x44);
++  f32(50.0f);
++  c.push_back(0x71);          // -> -50
++  c.push_back(0x44);
++  f32(0.1f);
++  c.insert(c.end(), {0x82, 0, 0, 1, 0, 4});  // CallGameFunction gcareadirector.setfog/4
++  c.push_back(0x30);                         // Pop
++  c.insert(c.end(), {0x43, 1});              // PushConstanti8 1
++  c.insert(c.end(), {0x82, 2, 0, 3, 0, 1});  // CallGameFunction gclightdirector.setcavelighting/1
++  c.push_back(0x30);
++  c.push_back(0x47);  // PushNothing
++  c.push_back(0x52);  // Return
++  return c;
++}
++
++inline std::vector<uint8_t> statt_osi() {
++  OsiSpec s;
++  s.code = osi_statt_program();
++  return build_osi(s);
++}
++
++}  // namespace lomn::test
+diff -ruN base/engine/tests/probe_osi.cpp work/engine/tests/probe_osi.cpp
+--- base/engine/tests/probe_osi.cpp	1970-01-01 01:00:00
++++ work/engine/tests/probe_osi.cpp	2026-10-07 12:51:15
+@@ -0,0 +1,106 @@
++// REF3 revision 2: crafted-input TIME and MEMORY probes for the OSI reader (lomn/sage/osi.h), one per loop whose count
++// an attacker controls (M1a-1 audit rule). Each probe builds a hostile Base.osi in memory, runs parse + check_all +
++// eval_calls, and must finish with the expected cap error in <= kMaxSeconds and grow the process peak memory by
++// <= kMaxGrowthMB. Runs natively (peak RSS) and as wasm32 under Node (linear-memory size, 2 GB cap; it only grows when
++// the allocator runs out of the initial 16 MiB, so +0.0 there means every probe fit in it): ctest osi_probe.
++// Before the caps, "calls" (Fable's 600 KB call flood) took 486 MB natively.
++#include <chrono>
++#include <cstdio>
++#include <string>
++#include <vector>
++
++#include "lomn/sage/osi.h"
++#include "osi_builder.h"
++
++#if defined(__EMSCRIPTEN__)
++static double peak_mb() { return __builtin_wasm_memory_size(0) * 65536.0 / 1048576.0; }
++#else
++#include <sys/resource.h>
++static double peak_mb() {
++  rusage u{};
++  getrusage(RUSAGE_SELF, &u);
++#if defined(__APPLE__)
++  return u.ru_maxrss / 1048576.0;  // bytes
++#else
++  return u.ru_maxrss / 1024.0;  // KiB
++#endif
++}
++#endif
++
++using namespace lomn;
++
++namespace {
++constexpr double kMaxSeconds = 5.0, kMaxGrowthMB = 64.0;
++
++std::vector<uint8_t> rep(std::vector<uint8_t> unit, uint32_t n, bool ret = true) {
++  std::vector<uint8_t> c;
++  c.reserve(unit.size() * n + 1);
++  for (uint32_t i = 0; i < n; ++i) c.insert(c.end(), unit.begin(), unit.end());
++  if (ret) c.push_back(0x52);
++  return c;
++}
++
++bool probe(const char* name, std::vector<uint8_t> file, const char* want) {  // want == nullptr: must be accepted
++  const double m0 = peak_mb();
++  const auto t0 = std::chrono::steady_clock::now();
++  const size_t bytes = file.size();
++  std::string err, got;
++  {
++    sage::OsiFile o;
++    if (!o.parse(std::move(file), &err)) {
++      got = err;
++    } else {
++      uint64_t n = 0;
++      if (!o.check_all(&n, &err)) got = err;
++      std::vector<sage::OsiCall> calls;
++      if (!o.eval_calls("lego_area_statt", "initfull", calls, &err) && got.empty()) got = err;
++    }
++  }
++  const double s = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
++  const double grow = peak_mb() - m0;
++  const bool want_ok = want == nullptr ? got.empty() : got.find(want) != std::string::npos;
++  const bool ok = want_ok && s <= kMaxSeconds && grow <= kMaxGrowthMB;
++  std::printf("%s %-14s %8zu bytes  %.3f s  peak +%.1f MB (%.1f MB)  -> %s\n", ok ? "ok  " : "FAIL", name, bytes, s, grow,
++              peak_mb(), got.empty() ? "(accepted)" : got.c_str());
++  return ok;
++}
++}  // namespace
++
++int main() {
++  std::setvbuf(stdout, nullptr, _IONBF, 0);  // every line survives a timeout kill
++  bool ok = true;
++  test::OsiSpec s;
++  s.strings.push_back(std::string(255, 'x'));  // string 4: the longest a u8 length allows
++  // 1. Fable's call flood: 100,000 x CallGameFunction argc 127 (600 KB): one subroutine past the instruction cap.
++  s.code = rep({0x82, 0, 0, 1, 0, 127}, 100000);
++  ok &= probe("calls", test::build_osi(s), "kMaxOsiInstructions");
++  // 1b. The same flood inside the instruction cap: the per-method argument cap stops it.
++  s.code = rep({0x82, 0, 0, 1, 0, 127}, 32000);
++  ok &= probe("calls-in-cap", test::build_osi(s), "kMaxOsiArgsPerMethod");
++  // 1c. argc-0 calls with their results popped: the per-method call cap.
++  s.code = rep({0x82, 0, 0, 1, 0, 0, 0x30}, 16000);
++  ok &= probe("calls-argc0", test::build_osi(s), "kMaxOsiCallsPerMethod");
++  // 2. String-push flood (each push copied a 255-byte string onto the literal stack).
++  s.code = rep({0x46, 4, 0}, 32000);
++  ok &= probe("stack", test::build_osi(s), "kMaxOsiStackDepth");
++  // 2b. 255-byte strings passed one per call: the string-bytes cap.
++  s.code = rep({0x46, 4, 0, 0x82, 0, 0, 1, 0, 1, 0x30}, 3000);
++  ok &= probe("string-args", test::build_osi(s), "kMaxOsiStringArgBytes");
++  // 3. 65,535 functions sharing one 32,767-Nop run (walked once), then 32,000 functions starting at distinct offsets of
++  // it (each walk legal, 32,000 x ~16,000 instructions in total): check_all's total-instruction cap.
++  s.code = rep({0x00}, sage::kMaxOsiInstructions - 1);
++  s.functions = 65535;
++  s.function_stride = 0;
++  ok &= probe("funcs-shared", test::build_osi(s), nullptr);  // shared bytecode: accepted (no cap hit), walked once
++  s.functions = 32000;
++  s.function_stride = 1;
++  ok &= probe("funcs-distinct", test::build_osi(s), "kMaxOsiTotalInstructions");
++  s.functions = 0;
++  // 4. A subroutine as long as the file cap allows.
++  s.code = rep({0x00}, static_cast<uint32_t>(sage::kMaxOsiBytes) - 1024);
++  ok &= probe("nops", test::build_osi(s), "kMaxOsiInstructions");
++  // 5. One byte over the file cap.
++  ok &= probe("too-large", std::vector<uint8_t>(static_cast<size_t>(sage::kMaxOsiBytes) + 1, 0), "too large");
++  std::printf("%s\n", ok ? "osi_probe: all probes bounded" : "osi_probe: FAILED");
++  return ok ? 0 : 1;
++}
+diff -ruN base/engine/tests/test_area_states.cpp work/engine/tests/test_area_states.cpp
+--- base/engine/tests/test_area_states.cpp	1970-01-01 01:00:00
++++ work/engine/tests/test_area_states.cpp	2026-10-07 12:40:43
+@@ -0,0 +1,87 @@
++// M1a-3 area-loader additions (lomn/view/area.h): LIGHT.slb / default lights (GcLightLoader::LoadLights 0x00470010,
++// GrSetDefaultLighting 0x00470560), the Base.osi fog / cave-lighting literals and textures.slb, on the synthetic state scene.
 +#include <algorithm>
 +#include <cmath>
 +#include <limits>
@@ -3728,24 +4383,14 @@ diff -ruN base/engine/tests/test_d3d.cpp work/engine/tests/test_d3d.cpp
 +
 +#include "doctest.h"
 +#include "lomn/d3d/device8.h"
-+#include "lomn/d3d/ffp.h"
 +#include "lomn/fs.h"
-+#include "lomn/rhi.h"
 +#include "lomn/view/area.h"
-+#include "lomn/view/sage_frame.h"
 +#include "lomn/view/synthetic.h"
 +
 +using namespace lomn;
 +using namespace lomn::d3d;
 +
 +namespace {
-+
-+std::vector<std::string> state_lines(const std::vector<std::string>& log) {
-+  std::vector<std::string> o;
-+  for (const auto& l : log)
-+    if (l.rfind("# ", 0) != 0) o.push_back(l);
-+  return o;
-+}
 +
 +view::AreaData synthetic_area() {
 +  fs::MemoryFileSystem mfs;
@@ -3757,6 +4402,83 @@ diff -ruN base/engine/tests/test_d3d.cpp work/engine/tests/test_d3d.cpp
 +}
 +
 +}  // namespace
++
++TEST_CASE("area: lights, fog and special textures come from LIGHT.slb, Base.osi and textures.slb") {
++  view::AreaData a = synthetic_area();
++  // LIGHT.slb: a point light and a directional one (+ the opposite "Shad" fill for the first directional).
++  REQUIRE(a.lights.size() == 3);
++  CHECK(a.lights_source == "light_slb");
++  const Light8& pt = a.lights[0].light;
++  CHECK(pt.type == kLightPoint);
++  CHECK(pt.range == 20.0f);
++  CHECK(pt.attenuation1 == doctest::Approx(1.0f / (0.15f * 20.0f)));
++  // intensity 1.0 > 0.9 -> x 1.2; then SetCaveLighting(1) from the script: style 0 -> SetIntensity(0.25) on the base.
++  CHECK(pt.diffuse.g == doctest::Approx(0.5f * 0.25f));
++  CHECK(a.lights[1].name == "sun1");
++  CHECK(a.lights[1].light.direction[1] == -1.0f);
++  CHECK(a.lights[2].name == "Shad");
++  CHECK(a.lights[2].light.direction[0] == -0.5f);
++  CHECK(a.cave_lighting);
++  CHECK(a.fog.source == "osi");
++  CHECK(a.fog.color == 0xff808080u);
++  CHECK(a.fog.start == 5.0f);  // GcAreaDirector::SetFog negates the script's -5 / -50
++  CHECK(a.fog.end == 50.0f);
++  CHECK(a.fog.density == doctest::Approx(0.1f));
++  CHECK(a.script_class == "lego_area_statt");
++  CHECK(a.special_textures == 3);
++  CHECK(a.special_matches == 2);  // "tfx" (trans) and "cut" (scroll); "red" is (1, 0, 0) and skipped
++  CHECK(a.level_type == uint8_t('t' - '0'));
++}
++
++TEST_CASE("area: default lighting by level type (GrSetDefaultLighting)") {
++  fs::MemoryFileSystem mfs;
++  REQUIRE(view::mount_synthetic_install(mfs));
++  std::vector<uint8_t> blk;
++  REQUIRE(mfs.read("Root/Data/Levels/levt/levt.blk", blk) == fs::Error::None);
++  for (const char* lev : {"lev1", "lev4"}) {
++    fs::MemoryFileSystem m2;
++    REQUIRE(m2.mount(std::string("Root/Data/Levels/") + lev + "/" + lev + ".blk", blk));
++    std::vector<uint8_t> area;
++    REQUIRE(mfs.read("Root/Data/Levels/levt/test.blk", area) == fs::Error::None);
++    REQUIRE(m2.mount(std::string("Root/Data/Levels/") + lev + "/quad.blk", area));  // no quad_light.slb in it
++    view::AreaData a;
++    std::string err;
++    REQUIRE_MESSAGE(view::load_area(m2, lev, "quad", view::AreaOptions(), a, &err), err);
++    CHECK(a.lights_source == "default");
++    if (std::string(lev) == "lev1") {
++      REQUIRE(a.lights.size() == 1);  // "LmbA": ambient 120/255 grey
++      CHECK(a.lights[0].name == "LmbA");
++      CHECK(a.lights[0].light.ambient.r == doctest::Approx(0.47058824f));
++      CHECK(a.lights[0].light.diffuse.r == 0.0f);
++    } else {
++      REQUIRE(a.lights.size() == 2);  // SunL white x 1.2, Shad blue-grey (level type 4)
++      CHECK(a.lights[0].name == "SunL");
++      CHECK(a.lights[0].light.diffuse.r == doctest::Approx(1.2f));
++      CHECK(a.lights[0].light.direction[0] == doctest::Approx(0.85570401f));
++      CHECK(a.lights[1].light.diffuse.b == doctest::Approx(0.54901963f * 1.2f));
++    }
++  }
++}
++
+diff -ruN base/engine/tests/test_d3d.cpp work/engine/tests/test_d3d.cpp
+--- base/engine/tests/test_d3d.cpp	1970-01-01 01:00:00
++++ work/engine/tests/test_d3d.cpp	2026-10-07 12:40:43
+@@ -0,0 +1,190 @@
++// M1a-3: the D3D8 state shim (lomn/d3d/device8.h) and its compiler to rhi (lomn/d3d/ffp.h): defaults, the ScDxStates
++// filter, pipeline keys, the uniform layout and the CPU reference of the fixed-function formulas. The SAGE frame replay
++// is tested in test_sage_frame.cpp, the M1a-3 area-loader additions in test_area_states.cpp.
++#include <algorithm>
++#include <cmath>
++#include <limits>
++#include <string>
++#include <vector>
++
++#include "doctest.h"
++#include "lomn/d3d/device8.h"
++#include "lomn/d3d/ffp.h"
++
++using namespace lomn;
++using namespace lomn::d3d;
 +
 +TEST_CASE("d3d: defaults are the D3D8 ones the area path reads") {
 +  const State s = default_state();
@@ -3926,179 +4648,6 @@ diff -ruN base/engine/tests/test_d3d.cpp work/engine/tests/test_d3d.cpp
 +  CHECK(out.r == doctest::Approx(0.0f));  // beyond FOGEND: all fog
 +}
 +
-+TEST_CASE("sage: SrPushRenderMode carries ALPHAREF across the HUD's 0x80000 mode (R13 history)") {
-+  std::vector<std::string> log;
-+  Device8 d(&log);
-+  view::SageFrame f(d, view::SageCaps(), view::SageFrameOptions());
-+  f.push_render_mode(view::kModeMainView);  // from gLastRenderMode 0: nothing about ALPHAREF
-+  CHECK(d.get_rs(rs::ALPHAREF) == 0);
-+  CHECK(d.get_rs(rs::LIGHTING) == 1);
-+  CHECK(d.get_rs(rs::CULLMODE) == kCullCW);
-+  f.push_render_mode(view::kModeHud);  // entering 0x80000: ALPHAREF 0, blend + test on, z write off
-+  CHECK(d.get_rs(rs::ALPHAREF) == 0);
-+  CHECK(d.get_rs(rs::ALPHABLENDENABLE) == 1);
-+  CHECK(d.get_rs(rs::ZWRITEENABLE) == 0);
-+  f.push_render_mode(view::kModeArea);  // leaving it: ALPHAREF 1
-+  CHECK(d.get_rs(rs::ALPHAREF) == 1);
-+  CHECK(d.get_rs(rs::ALPHABLENDENABLE) == 0);
-+  CHECK(d.get_rs(rs::ZWRITEENABLE) == 1);
-+  CHECK(d.get_rs(rs::LIGHTING) == 0);  // 0x14634 bit 0 clear: the area nodes are unlit
-+  CHECK(d.get_rs(rs::ZENABLE) == kZbUseW);
-+  CHECK(d.get_rs(rs::FILLMODE) == kFillSolid);
-+  CHECK(d.get_rs(rs::FOGENABLE) == 1);  // 0x200
-+  f.push_render_mode(view::kModeTrans);  // 0x10034: no 0x200 -> fog off, cull none
-+  CHECK(d.get_rs(rs::FOGENABLE) == 0);
-+  CHECK(d.get_rs(rs::CULLMODE) == kCullNone);
-+}
-+
-+TEST_CASE("sage: SetFog writes the statics' bit patterns once, then only toggles FOGENABLE") {
-+  std::vector<std::string> log;
-+  Device8 d(&log);
-+  view::SageFrame f(d, view::SageCaps(), view::SageFrameOptions());
-+  f.set_fog_value(0xfff9dcf9u, 40.0f, 1200.0f, 0.05f);
-+  f.set_fog(true);
-+  f.set_fog(true);  // mFogOn already set: returns early
-+  f.set_fog(false);
-+  f.set_fog(true);
-+  // FOGTABLEMODE: the D3D8 default is NONE; SetFog writes LINEAR (AppMain did too, on the real device).
-+  const std::vector<std::string> want = {"RS FOGENABLE 1",       "RS FOGTABLEMODE 3", "RS FOGCOLOR 0xfff9dcf9",         "RS FOGSTART 0x42200000 (40)",
-+                                         "RS FOGEND 0x44960000 (1200)", "RS FOGDENSITY 0x3d4ccccd (0.05)", "RS FOGENABLE 0",
-+                                         "RS FOGENABLE 1"};
-+  CHECK(state_lines(log) == want);
-+}
-+
-+TEST_CASE("sage: DrawX two passes; plnt sets the context flag (alpha test only) and turns fog off afterwards (R14)") {
-+  view::AreaData a = synthetic_area();
-+  std::vector<std::string> log;
-+  Device8 d(&log);
-+  view::SageFrame f(d, view::SageCaps(), view::SageFrameOptions());
-+  f.push_render_mode(view::kModeArea);
-+  uint32_t quad = 0, plnt = 0;
-+  for (uint32_t i = 0; i < a.placements.size(); ++i) {
-+    const std::string& id = a.models[a.placements[i].model].id;
-+    if (id == "quad" && a.placements[i].route == sage::Route::Main) quad = i;
-+    if (id == "plnt") plnt = i;
-+  }
-+  log.clear();
-+  f.area_render(a, quad);
-+  std::vector<std::string> l = state_lines(log);
-+  // quad: red (opaque), nothere (opaque, NULL texture), then cut in pass 2 with blend + GREATER test.
-+  auto at = [&](const std::string& s) { return std::find(l.begin(), l.end(), s) - l.begin(); };
-+  REQUIRE(at("DRAW quad#0 attrib=0") < at("DRAW quad#0 attrib=2"));
-+  REQUIRE(at("DRAW quad#0 attrib=2") < at("RS ALPHATESTENABLE 1"));
-+  CHECK(at("RS ALPHABLENDENABLE 1") < at("DRAW quad#0 attrib=1"));
-+  CHECK(at("RS ALPHAFUNC 5") < at("DRAW quad#0 attrib=1"));
-+  CHECK(at("RS ZBIAS 16") > at("DRAW quad#0 attrib=1"));  // left at 16 after the alpha pass
-+  CHECK(l.back() == "TEXTURE 1 NULL");
-+  CHECK(d.get_rs(rs::FOGENABLE) == 1);
-+  log.clear();
-+  f.area_render(a, plnt);
-+  l = state_lines(log);
-+  // ALPHABLENDENABLE goes 1 then back to 0 before the alpha subset is drawn; fog is off after the model.
-+  const auto draw = at("DRAW plnt#6 attrib=0");
-+  REQUIRE(draw < static_cast<std::ptrdiff_t>(l.size()));
-+  std::string last_blend;
-+  for (std::ptrdiff_t k = 0; k < draw; ++k)
-+    if (l[k].rfind("RS ALPHABLENDENABLE", 0) == 0) last_blend = l[k];
-+  CHECK(last_blend == "RS ALPHABLENDENABLE 0");
-+  CHECK(l.back() == "RS FOGENABLE 0");
-+  CHECK(d.get_rs(rs::FOGENABLE) == 0);
-+  CHECK_FALSE(f.context_flag());
-+}
-+
-+TEST_CASE("sage: a model with mTransparency < 1 gets ZBIAS 16 and a TFACTOR alpha (DrawX prologue)") {
-+  view::AreaData a = synthetic_area();
-+  std::vector<std::string> log;
-+  Device8 d(&log);
-+  view::SageFrame f(d, view::SageCaps(), view::SageFrameOptions());
-+  f.draw_x(a, 0, 0.5f);
-+  const std::vector<std::string> l = state_lines(log);
-+  REQUIRE(l.size() > 6);
-+  CHECK(l[0].rfind("XFORM WORLD", 0) == 0);  // SOFTWAREVERTEXPROCESSING 0 is the default: ScDxStates filters it
-+  CHECK(l[1] == "RS ZBIAS 16");
-+  CHECK(l[2] == "RS ALPHABLENDENABLE 1");
-+  CHECK(l[3] == "TSS0 ALPHAOP 4");
-+  CHECK(l[4] == "TSS0 ALPHAARG1 3");
-+  CHECK(l[5] == "TSS0 ALPHAARG2 2");  // D3D8 default CURRENT -> TEXTURE
-+  CHECK(l[6] == "RS TEXTUREFACTOR 0x80000000");
-+}
-+
-+TEST_CASE("area: lights, fog and special textures come from LIGHT.slb, Base.osi and textures.slb") {
-+  view::AreaData a = synthetic_area();
-+  // LIGHT.slb: a point light and a directional one (+ the opposite "Shad" fill for the first directional).
-+  REQUIRE(a.lights.size() == 3);
-+  CHECK(a.lights_source == "light_slb");
-+  const Light8& pt = a.lights[0].light;
-+  CHECK(pt.type == kLightPoint);
-+  CHECK(pt.range == 20.0f);
-+  CHECK(pt.attenuation1 == doctest::Approx(1.0f / (0.15f * 20.0f)));
-+  // intensity 1.0 > 0.9 -> x 1.2; then SetCaveLighting(1) from the script: style 0 -> SetIntensity(0.25) on the base.
-+  CHECK(pt.diffuse.g == doctest::Approx(0.5f * 0.25f));
-+  CHECK(a.lights[1].name == "sun1");
-+  CHECK(a.lights[1].light.direction[1] == -1.0f);
-+  CHECK(a.lights[2].name == "Shad");
-+  CHECK(a.lights[2].light.direction[0] == -0.5f);
-+  CHECK(a.cave_lighting);
-+  CHECK(a.fog.source == "osi");
-+  CHECK(a.fog.color == 0xff808080u);
-+  CHECK(a.fog.start == 5.0f);  // GcAreaDirector::SetFog negates the script's -5 / -50
-+  CHECK(a.fog.end == 50.0f);
-+  CHECK(a.fog.density == doctest::Approx(0.1f));
-+  CHECK(a.script_class == "lego_area_statt");
-+  CHECK(a.special_textures == 3);
-+  CHECK(a.special_matches == 2);  // "tfx" (trans) and "cut" (scroll); "red" is (1, 0, 0) and skipped
-+  CHECK(a.level_type == uint8_t('t' - '0'));
-+}
-+
-+TEST_CASE("area: default lighting by level type (GrSetDefaultLighting)") {
-+  fs::MemoryFileSystem mfs;
-+  REQUIRE(view::mount_synthetic_install(mfs));
-+  std::vector<uint8_t> blk;
-+  REQUIRE(mfs.read("Root/Data/Levels/levt/levt.blk", blk) == fs::Error::None);
-+  for (const char* lev : {"lev1", "lev4"}) {
-+    fs::MemoryFileSystem m2;
-+    REQUIRE(m2.mount(std::string("Root/Data/Levels/") + lev + "/" + lev + ".blk", blk));
-+    std::vector<uint8_t> area;
-+    REQUIRE(mfs.read("Root/Data/Levels/levt/test.blk", area) == fs::Error::None);
-+    REQUIRE(m2.mount(std::string("Root/Data/Levels/") + lev + "/quad.blk", area));  // no quad_light.slb in it
-+    view::AreaData a;
-+    std::string err;
-+    REQUIRE_MESSAGE(view::load_area(m2, lev, "quad", view::AreaOptions(), a, &err), err);
-+    CHECK(a.lights_source == "default");
-+    if (std::string(lev) == "lev1") {
-+      REQUIRE(a.lights.size() == 1);  // "LmbA": ambient 120/255 grey
-+      CHECK(a.lights[0].name == "LmbA");
-+      CHECK(a.lights[0].light.ambient.r == doctest::Approx(0.47058824f));
-+      CHECK(a.lights[0].light.diffuse.r == 0.0f);
-+    } else {
-+      REQUIRE(a.lights.size() == 2);  // SunL white x 1.2, Shad blue-grey (level type 4)
-+      CHECK(a.lights[0].name == "SunL");
-+      CHECK(a.lights[0].light.diffuse.r == doctest::Approx(1.2f));
-+      CHECK(a.lights[0].light.direction[0] == doctest::Approx(0.85570401f));
-+      CHECK(a.lights[1].light.diffuse.b == doctest::Approx(0.54901963f * 1.2f));
-+    }
-+  }
-+}
-+
-+TEST_CASE("area: A10 - every drawn subset of a coloured model feeds its vertex DIFFUSE to the shader") {
-+  view::AreaData a = synthetic_area();
-+  std::vector<std::string> calls;
-+  auto dev = rhi::create_null_device(&calls);
-+  rhi::TextureId rt = dev->create_render_target_ex(rhi::RenderTargetDesc{16, 16, true, 1.0f});
-+  view::AreaRenderer r;
-+  std::string err;
-+  REQUIRE_MESSAGE(r.upload(*dev, a, view::RenderOptions(), &err), err);
-+  REQUIRE(r.render(*dev, rt, a, view::make_camera(a, view::synthetic_camera(), 1.0f)));
-+  // The vertex layout carries the colour at @location(3) (48-byte stride, offset 32).
-+  bool layout = false;
-+  for (const auto& l : calls)
-+    if (l.rfind("create_mesh_pipeline", 0) == 0) layout = l.find("3:f32x4@32") != std::string::npos;
-+  CHECK(layout);
-+  CHECK(std::string(view::area_wgsl()).find("@location(3) c: vec4f") != std::string::npos);
-+  CHECK(std::string(view::area_wgsl()).find("select(vec4f(1.0), c, u.a.y > 0.5)") != std::string::npos);
-+  CHECK(r.last_stats().rhi_draws == 19);
-+}
-+
 +TEST_CASE("d3d: hostile floats never reach an undefined float->int conversion (UBSan finding)") {
 +  CHECK(quantize_unorm8(std::nanf("")) == 0.0f);
 +  CHECK(quantize_unorm8(std::numeric_limits<float>::infinity()) == 1.0f);
@@ -4219,13 +4768,15 @@ diff -ruN base/engine/tests/test_gpu_area.cpp work/engine/tests/test_gpu_area.cp
  }
 diff -ruN base/engine/tests/test_gpu_ffp.cpp work/engine/tests/test_gpu_ffp.cpp
 --- base/engine/tests/test_gpu_ffp.cpp	1970-01-01 01:00:00
-+++ work/engine/tests/test_gpu_ffp.cpp	2026-10-07 11:20:45
-@@ -0,0 +1,175 @@
++++ work/engine/tests/test_gpu_ffp.cpp	2026-10-07 12:34:56
+@@ -0,0 +1,96 @@
 +// M1a-3 on Dawn: the fixed-function uber-shader (lomn/d3d/ffp.h) against its CPU reference of the D3D8 formulas.
 +// Each case builds a d3d::State, compiles it (pipeline_key / pipeline_desc / sampler_desc / pack_uniforms), draws one
 +// triangle covering the 8x8 target's centre with constant per-vertex inputs (the three vertices are equidistant from
 +// the point light, so the per-vertex lighting is the same at every vertex), and compares the centre pixel with
 +// reference_vertex_color + reference_fragment (+-2 per channel; blending against the clear colour computed here).
++// The cases live in tests/ffp_cases.h; tools/research/oracle/ffp_oracle.py checks the CPU reference itself on the same
++// cases plus seeded random samples (ctest ffp_oracle).
 +// Exits 77 (ctest SKIP) without an adapter.
 +#include <cmath>
 +#include <cstdio>
@@ -4235,6 +4786,7 @@ diff -ruN base/engine/tests/test_gpu_ffp.cpp work/engine/tests/test_gpu_ffp.cpp
 +#include "lomn/d3d/device8.h"
 +#include "lomn/d3d/ffp.h"
 +#include "lomn/rhi.h"
++#include "ffp_cases.h"
 +
 +using namespace lomn;
 +using namespace lomn::d3d;
@@ -4250,15 +4802,10 @@ diff -ruN base/engine/tests/test_gpu_ffp.cpp work/engine/tests/test_gpu_ffp.cpp
 +    std::printf("SKIPPED (no WebGPU adapter: %s)\n", err.c_str());
 +    return 77;
 +  }
-+  // Equilateral triangle (circumradius 3) around the origin in the z = 0.5 plane, normal (0,0,-1), vertex colour vc.
-+  const float vc[4] = {0.8f, 0.6f, 0.4f, 0.5f};
++  // Equilateral triangle (circumradius 3) around the origin in the z = 0.5 plane, normal (0,0,-1) (tests/ffp_cases.h).
++  const float* vc = test::kFfpVcol;
 +  float verts[3][12];
-+  for (int i = 0; i < 3; ++i) {
-+    const double a = 1.5707963 + i * 2.0943951;
-+    const float v[12] = {static_cast<float>(3 * std::cos(a)), static_cast<float>(3 * std::sin(a)), 0.5f, 0, 0, -1, 0.5f, 0.5f,
-+                         vc[0], vc[1], vc[2], vc[3]};
-+    for (int k = 0; k < 12; ++k) verts[i][k] = v[k];
-+  }
++  test::ffp_triangle(verts);
 +  const uint32_t idx[3] = {0, 1, 2};
 +  rhi::BufferId vb = dev->create_vertex_buffer(sizeof verts), ib = dev->create_index_buffer(sizeof idx);
 +  dev->write_buffer(vb, 0, verts, sizeof verts);
@@ -4315,84 +4862,7 @@ diff -ruN base/engine/tests/test_gpu_ffp.cpp work/engine/tests/test_gpu_ffp.cpp
 +    ok = ok && hit;
 +  };
 +
-+  State base = default_state();
-+  base.rs[rs::ZENABLE] = kZbTrue;
-+  base.rs[rs::CULLMODE] = kCullNone;
-+  base.rs[rs::SRCBLEND] = kBlendSrcAlpha;
-+  base.rs[rs::DESTBLEND] = kBlendInvSrcAlpha;
-+  base.tss[0][tss::COLORARG2] = kTaDiffuse;
-+  base.tss[0][tss::MAGFILTER] = base.tss[0][tss::MINFILTER] = kTexfLinear;
-+  base.tss[0][tss::MIPFILTER] = kTexfLinear;
-+
-+  State lit = base;  // LIGHTING on: emissive + ambient (global + lights) + diffuse (point light + directional)
-+  lit.rs[rs::LIGHTING] = 1;
-+  lit.rs[rs::AMBIENT] = 0xff1a1a26u;
-+  lit.material.ambient = {0.7f, 0.7f, 0.7f, 1};
-+  lit.material.emissive = {0.05f, 0.0f, 0.1f, 1};
-+  lit.material.diffuse = {0.2f, 0.9f, 0.3f, 1};
-+  Light8 pt;
-+  pt.type = kLightPoint;
-+  pt.position[2] = -1.5f;  // on the axis, |P - L| = sqrt(9 + 4) for every vertex
-+  pt.range = 10;
-+  pt.attenuation1 = 1.0f / (0.15f * 10.0f);
-+  pt.diffuse = {0.75f, 0.56f, 0.16f, 0};
-+  pt.ambient = {0.1f, 0.1f, 0.1f, 1};
-+  Light8 dl;
-+  dl.type = kLightDirectional;
-+  dl.direction[2] = 2;  // L = -dir = (0,0,-1) = the normal: N.L = 1
-+  dl.diffuse = {0.3f, 0.3f, 0.3f, 1};
-+  lit.lights[0] = pt;
-+  lit.lights[2] = dl;
-+  lit.light_on[0] = lit.light_on[2] = true;
-+  run("lit: vertex colour as COLOR1 diffuse, point (attenuated) + directional + ambients", lit, true);
-+  run("lit: no vertex colour -> material diffuse", lit, false);
-+  State lit_far = lit;
-+  lit_far.lights[0].range = 3.0f;  // every vertex is sqrt(13) > 3 away: the point light contributes nothing
-+  run("lit: point light out of range", lit_far, true);
-+  State back = lit_far;  // a directional light from behind the surface: N.L = -1 is clamped to 0
-+  back.lights[2].direction[2] = -2;
-+  run("lit: directional light behind the surface (N.L clamped to 0)", back, true);
-+  State unlit = base;
-+  unlit.rs[rs::LIGHTING] = 0;
-+  run("LIGHTING off: vertex colour", unlit, true);
-+  run("LIGHTING off, no vertex colour: opaque white", unlit, false);
-+  State fog = unlit;
-+  fog.rs[rs::FOGENABLE] = 1;
-+  fog.rs[rs::FOGTABLEMODE] = kFogLinear;
-+  fog.rs[rs::FOGSTART] = float_to_bits(0.0f);
-+  fog.rs[rs::FOGEND] = float_to_bits(4.0f);
-+  fog.rs[rs::FOGCOLOR] = 0xffff0000u;
-+  run("fog LINEAR at w 1 (start 0, end 4): f 0.75", fog, true);
-+  fog.rs[rs::FOGTABLEMODE] = kFogExp;
-+  fog.rs[rs::FOGDENSITY] = float_to_bits(0.7f);
-+  run("fog EXP density 0.7 at w 1", fog, true);
-+  fog.rs[rs::FOGTABLEMODE] = kFogExp2;
-+  run("fog EXP2 density 0.7 at w 1", fog, true);
-+  State test = unlit;  // alpha test only (GcArea::Render's plnt/tre1 context flag: DrawX turns blending off), TFACTOR alpha
-+  test.rs[rs::ALPHABLENDENABLE] = 0;
-+  test.rs[rs::ALPHATESTENABLE] = 1;
-+  test.rs[rs::ALPHAFUNC] = kCmpGreater;
-+  test.rs[rs::ALPHAREF] = 1;
-+  test.tss[0][tss::ALPHAOP] = kTopSelectArg2;
-+  test.tss[0][tss::ALPHAARG2] = kTaTFactor;
-+  test.rs[rs::TEXTUREFACTOR] = 0x01000000u;  // alpha 1: 1 > 1 fails -> discarded
-+  run("alpha test GREATER ref 1, alpha 1: discarded", test, true);
-+  test.rs[rs::TEXTUREFACTOR] = 0x02000000u;
-+  run("alpha test GREATER ref 1, alpha 2: kept (unblended)", test, true);
-+  test.rs[rs::ALPHAREF] = 0;
-+  test.rs[rs::TEXTUREFACTOR] = 0x01000000u;
-+  run("alpha test GREATER ref 0, alpha 1: kept (R13: ALPHAREF 0 keeps alpha 1/255)", test, true);
-+  test.rs[rs::ALPHABLENDENABLE] = 1;
-+  test.rs[rs::ALPHATESTENABLE] = 0;
-+  test.rs[rs::TEXTUREFACTOR] = 0xb2000000u;  // 178 = round(255 * 0.7): the vllg river's textures.slb trans
-+  run("TFACTOR alpha 178 blended", test, true);
-+  State mod = unlit;  // vertex alpha through ALPHAOP MODULATE(TFACTOR, TEXTURE) (DrawX's mTransparency < 1 path)
-+  mod.rs[rs::ALPHABLENDENABLE] = 1;
-+  mod.tss[0][tss::ALPHAOP] = kTopModulate;
-+  mod.tss[0][tss::ALPHAARG1] = kTaTFactor;
-+  mod.tss[0][tss::ALPHAARG2] = kTaTexture;
-+  mod.rs[rs::TEXTUREFACTOR] = 0x80000000u;
-+  run("ALPHAOP MODULATE(TFACTOR 128, TEXTURE 255)", mod, true);
++  for (const test::FfpCase& c : test::gpu_ffp_cases()) run(c.what, c.s, c.has_vcol);
 +  std::printf("adapter=%s\n", dev->adapter().c_str());
 +  return ok ? 0 : 1;
 +}
@@ -4522,29 +4992,189 @@ diff -ruN base/engine/tests/test_rhi_mesh.cpp work/engine/tests/test_rhi_mesh.cp
 +  CHECK(log[0] == "draw pipeline=1 vertices=3 uniforms=0+0 rejected: outside a frame");
 +  CHECK(log[1].find("rejected: outside a frame") != std::string::npos);
 +}
-diff -ruN base/engine/tests/test_sage_osi.cpp work/engine/tests/test_sage_osi.cpp
---- base/engine/tests/test_sage_osi.cpp	1970-01-01 01:00:00
-+++ work/engine/tests/test_sage_osi.cpp	2026-10-07 11:04:05
-@@ -0,0 +1,106 @@
-+// M1a-3: the bounded OSI reader (lomn/sage/osi.h) on the synthetic Base.osi (lomn/view/synthetic.cpp) and hostile
-+// variants of it: every truncation, bit flips, a bad version, an unknown opcode, an instruction-cap overflow.
+diff -ruN base/engine/tests/test_sage_frame.cpp work/engine/tests/test_sage_frame.cpp
+--- base/engine/tests/test_sage_frame.cpp	1970-01-01 01:00:00
++++ work/engine/tests/test_sage_frame.cpp	2026-10-07 12:40:43
+@@ -0,0 +1,156 @@
++// M1a-3: the SAGE frame replay (lomn/view/sage_frame.h) on the D3D8 state shim, and the A10 contract through AreaRenderer.
++// Expected values come from the decompiled functions named in each case.
++#include <algorithm>
++#include <cmath>
++#include <limits>
 +#include <string>
 +#include <vector>
 +
 +#include "doctest.h"
++#include "lomn/d3d/device8.h"
++#include "lomn/d3d/ffp.h"
 +#include "lomn/fs.h"
-+#include "lomn/sage/osi.h"
++#include "lomn/rhi.h"
++#include "lomn/view/area.h"
++#include "lomn/view/sage_frame.h"
 +#include "lomn/view/synthetic.h"
++
++using namespace lomn;
++using namespace lomn::d3d;
++
++namespace {
++
++std::vector<std::string> state_lines(const std::vector<std::string>& log) {
++  std::vector<std::string> o;
++  for (const auto& l : log)
++    if (l.rfind("# ", 0) != 0) o.push_back(l);
++  return o;
++}
++
++view::AreaData synthetic_area() {
++  fs::MemoryFileSystem mfs;
++  REQUIRE(view::mount_synthetic_install(mfs));
++  view::AreaData a;
++  std::string err;
++  REQUIRE_MESSAGE(view::load_area(mfs, view::kSyntheticLevel, view::kSyntheticStateArea, view::AreaOptions(), a, &err), err);
++  return a;
++}
++
++}  // namespace
++
++TEST_CASE("sage: SrPushRenderMode carries ALPHAREF across the HUD's 0x80000 mode (R13 history)") {
++  std::vector<std::string> log;
++  Device8 d(&log);
++  view::SageFrame f(d, view::SageCaps(), view::SageFrameOptions());
++  f.push_render_mode(view::kModeMainView);  // from gLastRenderMode 0: nothing about ALPHAREF
++  CHECK(d.get_rs(rs::ALPHAREF) == 0);
++  CHECK(d.get_rs(rs::LIGHTING) == 1);
++  CHECK(d.get_rs(rs::CULLMODE) == kCullCW);
++  f.push_render_mode(view::kModeHud);  // entering 0x80000: ALPHAREF 0, blend + test on, z write off
++  CHECK(d.get_rs(rs::ALPHAREF) == 0);
++  CHECK(d.get_rs(rs::ALPHABLENDENABLE) == 1);
++  CHECK(d.get_rs(rs::ZWRITEENABLE) == 0);
++  f.push_render_mode(view::kModeArea);  // leaving it: ALPHAREF 1
++  CHECK(d.get_rs(rs::ALPHAREF) == 1);
++  CHECK(d.get_rs(rs::ALPHABLENDENABLE) == 0);
++  CHECK(d.get_rs(rs::ZWRITEENABLE) == 1);
++  CHECK(d.get_rs(rs::LIGHTING) == 0);  // 0x14634 bit 0 clear: the area nodes are unlit
++  CHECK(d.get_rs(rs::ZENABLE) == kZbUseW);
++  CHECK(d.get_rs(rs::FILLMODE) == kFillSolid);
++  CHECK(d.get_rs(rs::FOGENABLE) == 1);  // 0x200
++  f.push_render_mode(view::kModeTrans);  // 0x10034: no 0x200 -> fog off, cull none
++  CHECK(d.get_rs(rs::FOGENABLE) == 0);
++  CHECK(d.get_rs(rs::CULLMODE) == kCullNone);
++}
++
++TEST_CASE("sage: SetFog writes the statics' bit patterns once, then only toggles FOGENABLE") {
++  std::vector<std::string> log;
++  Device8 d(&log);
++  view::SageFrame f(d, view::SageCaps(), view::SageFrameOptions());
++  f.set_fog_value(0xfff9dcf9u, 40.0f, 1200.0f, 0.05f);
++  f.set_fog(true);
++  f.set_fog(true);  // mFogOn already set: returns early
++  f.set_fog(false);
++  f.set_fog(true);
++  // FOGTABLEMODE: the D3D8 default is NONE; SetFog writes LINEAR (AppMain did too, on the real device).
++  const std::vector<std::string> want = {"RS FOGENABLE 1",       "RS FOGTABLEMODE 3", "RS FOGCOLOR 0xfff9dcf9",         "RS FOGSTART 0x42200000 (40)",
++                                         "RS FOGEND 0x44960000 (1200)", "RS FOGDENSITY 0x3d4ccccd (0.05)", "RS FOGENABLE 0",
++                                         "RS FOGENABLE 1"};
++  CHECK(state_lines(log) == want);
++}
++
++TEST_CASE("sage: DrawX two passes; plnt sets the context flag (alpha test only) and turns fog off afterwards (R14)") {
++  view::AreaData a = synthetic_area();
++  std::vector<std::string> log;
++  Device8 d(&log);
++  view::SageFrame f(d, view::SageCaps(), view::SageFrameOptions());
++  f.push_render_mode(view::kModeArea);
++  uint32_t quad = 0, plnt = 0;
++  for (uint32_t i = 0; i < a.placements.size(); ++i) {
++    const std::string& id = a.models[a.placements[i].model].id;
++    if (id == "quad" && a.placements[i].route == sage::Route::Main) quad = i;
++    if (id == "plnt") plnt = i;
++  }
++  log.clear();
++  f.area_render(a, quad);
++  std::vector<std::string> l = state_lines(log);
++  // quad: red (opaque), nothere (opaque, NULL texture), then cut in pass 2 with blend + GREATER test.
++  auto at = [&](const std::string& s) { return std::find(l.begin(), l.end(), s) - l.begin(); };
++  REQUIRE(at("DRAW quad#0 attrib=0") < at("DRAW quad#0 attrib=2"));
++  REQUIRE(at("DRAW quad#0 attrib=2") < at("RS ALPHATESTENABLE 1"));
++  CHECK(at("RS ALPHABLENDENABLE 1") < at("DRAW quad#0 attrib=1"));
++  CHECK(at("RS ALPHAFUNC 5") < at("DRAW quad#0 attrib=1"));
++  CHECK(at("RS ZBIAS 16") > at("DRAW quad#0 attrib=1"));  // left at 16 after the alpha pass
++  CHECK(l.back() == "TEXTURE 1 NULL");
++  CHECK(d.get_rs(rs::FOGENABLE) == 1);
++  log.clear();
++  f.area_render(a, plnt);
++  l = state_lines(log);
++  // ALPHABLENDENABLE goes 1 then back to 0 before the alpha subset is drawn; fog is off after the model.
++  const auto draw = at("DRAW plnt#6 attrib=0");
++  REQUIRE(draw < static_cast<std::ptrdiff_t>(l.size()));
++  std::string last_blend;
++  for (std::ptrdiff_t k = 0; k < draw; ++k)
++    if (l[k].rfind("RS ALPHABLENDENABLE", 0) == 0) last_blend = l[k];
++  CHECK(last_blend == "RS ALPHABLENDENABLE 0");
++  CHECK(l.back() == "RS FOGENABLE 0");
++  CHECK(d.get_rs(rs::FOGENABLE) == 0);
++  CHECK_FALSE(f.context_flag());
++}
++
++TEST_CASE("sage: a model with mTransparency < 1 gets ZBIAS 16 and a TFACTOR alpha (DrawX prologue)") {
++  view::AreaData a = synthetic_area();
++  std::vector<std::string> log;
++  Device8 d(&log);
++  view::SageFrame f(d, view::SageCaps(), view::SageFrameOptions());
++  f.draw_x(a, 0, 0.5f);
++  const std::vector<std::string> l = state_lines(log);
++  REQUIRE(l.size() > 6);
++  CHECK(l[0].rfind("XFORM WORLD", 0) == 0);  // SOFTWAREVERTEXPROCESSING 0 is the default: ScDxStates filters it
++  CHECK(l[1] == "RS ZBIAS 16");
++  CHECK(l[2] == "RS ALPHABLENDENABLE 1");
++  CHECK(l[3] == "TSS0 ALPHAOP 4");
++  CHECK(l[4] == "TSS0 ALPHAARG1 3");
++  CHECK(l[5] == "TSS0 ALPHAARG2 2");  // D3D8 default CURRENT -> TEXTURE
++  CHECK(l[6] == "RS TEXTUREFACTOR 0x80000000");
++}
++
++TEST_CASE("area: A10 - every drawn subset of a coloured model feeds its vertex DIFFUSE to the shader") {
++  view::AreaData a = synthetic_area();
++  std::vector<std::string> calls;
++  auto dev = rhi::create_null_device(&calls);
++  rhi::TextureId rt = dev->create_render_target_ex(rhi::RenderTargetDesc{16, 16, true, 1.0f});
++  view::AreaRenderer r;
++  std::string err;
++  REQUIRE_MESSAGE(r.upload(*dev, a, view::RenderOptions(), &err), err);
++  REQUIRE(r.render(*dev, rt, a, view::make_camera(a, view::synthetic_camera(), 1.0f)));
++  // The vertex layout carries the colour at @location(3) (48-byte stride, offset 32).
++  bool layout = false;
++  for (const auto& l : calls)
++    if (l.rfind("create_mesh_pipeline", 0) == 0) layout = l.find("3:f32x4@32") != std::string::npos;
++  CHECK(layout);
++  CHECK(std::string(view::area_wgsl()).find("@location(3) c: vec4f") != std::string::npos);
++  CHECK(std::string(view::area_wgsl()).find("select(vec4f(1.0), c, u.a.y > 0.5)") != std::string::npos);
++  CHECK(r.last_stats().rhi_draws == 19);
++}
++
+diff -ruN base/engine/tests/test_sage_osi.cpp work/engine/tests/test_sage_osi.cpp
+--- base/engine/tests/test_sage_osi.cpp	1970-01-01 01:00:00
++++ work/engine/tests/test_sage_osi.cpp	2026-10-07 12:17:22
+@@ -0,0 +1,200 @@
++// M1a-3: the bounded OSI reader (lomn/sage/osi.h) on the synthetic Base.osi program (tests/osi_builder.h; the A9 scene
++// carries the same bytes) and hostile variants of it: every truncation, bit flips, a bad version, an unknown opcode,
++// every per-file / per-method cap (REF3 revision 2: values measured on the real Base.osi, see osi.h).
++// The time/memory side of the caps is probed by probe_osi.cpp (ctest osi_probe, native and wasm32).
++#include <string>
++#include <vector>
++
++#include "doctest.h"
++#include "lomn/sage/osi.h"
++#include "osi_builder.h"
 +
 +using namespace lomn;
 +
 +namespace {
-+std::vector<uint8_t> synthetic_osi() {
-+  fs::MemoryFileSystem mfs;
-+  REQUIRE(view::mount_synthetic_install(mfs));
-+  std::vector<uint8_t> b;
-+  REQUIRE(mfs.read("Root/Data/Base.osi", b) == fs::Error::None);
-+  return b;
++std::vector<uint8_t> synthetic_osi() { return test::statt_osi(); }
++std::vector<uint8_t> with_code(const std::vector<uint8_t>& code) {
++  test::OsiSpec s;
++  s.code = code;
++  return test::build_osi(s);
 +}
 +}  // namespace
 +
@@ -4560,7 +5190,7 @@ diff -ruN base/engine/tests/test_sage_osi.cpp work/engine/tests/test_sage_osi.cp
 +  REQUIRE_MESSAGE(o.check_all(&n, &err), err);
 +  CHECK(n == 15);  // push i32, 0, f32, sub, 0, f32, sub, f32, call, pop, i8, call, pop, nothing, return
 +  std::vector<sage::OsiCall> calls;
-+  REQUIRE_MESSAGE(o.find_calls("lego_area_statt", "InitFull", calls, &err), err);
++  REQUIRE_MESSAGE(o.eval_calls("lego_area_statt", "InitFull", calls, &err), err);
 +  REQUIRE(calls.size() == 2);
 +  CHECK(calls[0].fn == "setfog");
 +  REQUIRE(calls[0].args.size() == 4);
@@ -4575,8 +5205,8 @@ diff -ruN base/engine/tests/test_sage_osi.cpp work/engine/tests/test_sage_osi.cp
 +  CHECK(calls[1].fn == "setcavelighting");
 +  REQUIRE(calls[1].args[0].number(v));
 +  CHECK(v == 1.0);
-+  CHECK_FALSE(o.find_calls("lego_area_none", "initfull", calls, &err));
-+  CHECK_FALSE(o.find_calls("lego_area_statt", "process", calls, &err));
++  CHECK_FALSE(o.eval_calls("lego_area_none", "initfull", calls, &err));
++  CHECK_FALSE(o.eval_calls("lego_area_statt", "process", calls, &err));
 +}
 +
 +TEST_CASE("osi: every truncation and 2000 bit flips fail cleanly or parse; bad version and opcodes are rejected") {
@@ -4587,7 +5217,7 @@ diff -ruN base/engine/tests/test_sage_osi.cpp work/engine/tests/test_sage_osi.cp
 +    const bool ok = o.parse(std::vector<uint8_t>(good.begin(), good.begin() + static_cast<std::ptrdiff_t>(len)), &err);
 +    if (ok) {  // a truncated bytecode tail can still parse its tables: the walk must then fail
 +      std::vector<sage::OsiCall> calls;
-+      CHECK_FALSE(o.find_calls("lego_area_statt", "initfull", calls, &err));
++      CHECK_FALSE(o.eval_calls("lego_area_statt", "initfull", calls, &err));
 +    }
 +  }
 +  uint32_t seed = 12345, parsed = 0;
@@ -4602,7 +5232,7 @@ diff -ruN base/engine/tests/test_sage_osi.cpp work/engine/tests/test_sage_osi.cp
 +      uint64_t n = 0;
 +      o.check_all(&n, &err);
 +      std::vector<sage::OsiCall> calls;
-+      o.find_calls("lego_area_statt", "initfull", calls, &err);
++      o.eval_calls("lego_area_statt", "initfull", calls, &err);
 +    }
 +  }
 +  CHECK(parsed > 0);
@@ -4616,7 +5246,7 @@ diff -ruN base/engine/tests/test_sage_osi.cpp work/engine/tests/test_sage_osi.cp
 +  bad[bad.size() - 1] = 0x01;  // the final Return becomes an undefined opcode
 +  REQUIRE(o.parse(bad, &err));
 +  std::vector<sage::OsiCall> calls;
-+  CHECK_FALSE(o.find_calls("lego_area_statt", "initfull", calls, &err));
++  CHECK_FALSE(o.eval_calls("lego_area_statt", "initfull", calls, &err));
 +  CHECK(err.find("unknown opcode") != std::string::npos);
 +}
 +
@@ -4629,8 +5259,166 @@ diff -ruN base/engine/tests/test_sage_osi.cpp work/engine/tests/test_sage_osi.cp
 +  std::string err;
 +  REQUIRE(o.parse(b, &err));
 +  std::vector<sage::OsiCall> calls;
-+  CHECK_FALSE(o.find_calls("lego_area_statt", "initfull", calls, &err));
++  CHECK_FALSE(o.eval_calls("lego_area_statt", "initfull", calls, &err));
 +  CHECK(err.find("kMaxOsiInstructions") != std::string::npos);
++}
++
++TEST_CASE("osi: per-method caps (calls, argc, args, string bytes, literal stack) are errors with no partial result") {
++  sage::OsiFile o;
++  std::string err;
++  std::vector<sage::OsiCall> calls;
++  auto run = [&](const std::vector<uint8_t>& code) {
++    REQUIRE_MESSAGE(o.parse(with_code(code), &err), err);
++    calls.assign(3, sage::OsiCall());  // stale content must be cleared on success and on failure
++    return o.eval_calls("lego_area_statt", "initfull", calls, &err);
++  };
++  auto rep = [](std::vector<uint8_t> unit, uint32_t n) {
++    std::vector<uint8_t> c;
++    for (uint32_t i = 0; i < n; ++i) c.insert(c.end(), unit.begin(), unit.end());
++    c.push_back(0x52);
++    return c;
++  };
++  const std::vector<uint8_t> call0 = {0x82, 0, 0, 1, 0, 0, 0x30};  // call, Pop its result (as compiled scripts do)
++  CHECK(run(rep(call0, sage::kMaxOsiCallsPerMethod)));  // exactly at the cap: accepted
++  CHECK(calls.size() == sage::kMaxOsiCallsPerMethod);
++  CHECK_FALSE(run(rep(call0, sage::kMaxOsiCallsPerMethod + 1)));
++  CHECK(err.find("kMaxOsiCallsPerMethod") != std::string::npos);
++  CHECK(calls.empty());
++  std::vector<uint8_t> argc127 = {0x82, 0, 0, 1, 0, 127, 0x30};
++  CHECK(run(rep(argc127, sage::kMaxOsiArgsPerMethod / 127)));                  // 32 x 127 = 4064 args
++  CHECK_FALSE(run(rep(argc127, sage::kMaxOsiArgsPerMethod / 127 + 1)));        // 4191 > 4096
++  CHECK(err.find("kMaxOsiArgsPerMethod") != std::string::npos);
++  CHECK(calls.empty());
++  CHECK_FALSE(run(rep({0x82, 0, 0, 1, 0, 0x80}, 1)));  // argc -128 (s8): rejected, never clamped
++  CHECK(err.find("argc") != std::string::npos);
++  // String bytes copied into arguments: 255-char string pushed and passed one by one.
++  test::OsiSpec s;
++  s.strings.push_back(std::string(255, 'x'));
++  std::vector<uint8_t> unit = {0x46, 4, 0, 0x82, 0, 0, 1, 0, 1, 0x30};
++  s.code = rep(unit, sage::kMaxOsiStringArgBytes / 255);
++  REQUIRE(o.parse(test::build_osi(s), &err));
++  CHECK(o.eval_calls("lego_area_statt", "initfull", calls, &err));
++  s.code = rep(unit, sage::kMaxOsiStringArgBytes / 255 + 1);
++  REQUIRE(o.parse(test::build_osi(s), &err));
++  CHECK_FALSE(o.eval_calls("lego_area_statt", "initfull", calls, &err));
++  CHECK(err.find("kMaxOsiStringArgBytes") != std::string::npos);
++  CHECK(calls.empty());
++  // Literal stack depth.
++  CHECK(run(rep({0x45}, sage::kMaxOsiStackDepth)));
++  CHECK_FALSE(run(rep({0x45}, sage::kMaxOsiStackDepth + 1)));
++  CHECK(err.find("kMaxOsiStackDepth") != std::string::npos);
++}
++
++TEST_CASE("osi: check_all walks shared bytecode once and caps total instructions and calls per file") {
++  sage::OsiFile o;
++  std::string err;
++  uint64_t n = 0, nc = 0;
++  test::OsiSpec s;
++  s.code = test::osi_statt_program();
++  s.functions = 1000;  // all share the method's bytecode: walked once
++  REQUIRE(o.parse(test::build_osi(s), &err));
++  REQUIRE_MESSAGE(o.check_all(&n, &err, &nc), err);
++  CHECK(n == 15);
++  CHECK(nc == 2);
++  // Functions starting inside one long Nop run at distinct offsets: each walk is legal, the total is capped.
++  s.code.assign(sage::kMaxOsiInstructions - 1, 0x00);
++  s.code.push_back(0x52);
++  s.functions = 200;
++  s.function_stride = 1;
++  REQUIRE(o.parse(test::build_osi(s), &err));
++  CHECK_FALSE(o.check_all(&n, &err));
++  CHECK(err.find("kMaxOsiTotalInstructions") != std::string::npos);
++  // Calls per file: methods may each stay under kMaxOsiCallsPerMethod while the file exceeds kMaxOsiTotalCalls.
++  s.code.clear();
++  for (uint32_t i = 0; i < 5000; ++i) s.code.insert(s.code.end(), {0x82, 0, 0, 1, 0, 0});
++  s.code.push_back(0x52);
++  s.functions = 30;
++  s.function_stride = 6;  // 30 walks of ~5000 calls each = 150,000 > 131,072
++  REQUIRE(o.parse(test::build_osi(s), &err));
++  CHECK_FALSE(o.check_all(&n, &err));
++  CHECK(err.find("kMaxOsiTotalCalls") != std::string::npos);
++}
++
++TEST_CASE("osi: a failed parse leaves no partial tables; oversized files are rejected before reading") {
++  std::vector<uint8_t> b = synthetic_osi();
++  sage::OsiFile o;
++  std::string err;
++  REQUIRE(o.parse(b, &err));
++  REQUIRE(o.classes().size() == 1);
++  // Cut inside the source table's count: the string, class and symbol tables were already read when parse fails.
++  std::vector<uint8_t> t(b.begin(), b.end() - static_cast<std::ptrdiff_t>(test::osi_statt_program().size()) - 1);
++  CHECK_FALSE(o.parse(t, &err));
++  CHECK(err.find("symbol/source") != std::string::npos);
++  CHECK(o.classes().empty());
++  CHECK(o.strings().empty());
++  CHECK(o.major() == 0);
++  std::vector<uint8_t> big(static_cast<size_t>(sage::kMaxOsiBytes) + 1, 0);
++  CHECK_FALSE(o.parse(std::move(big), &err));
++  CHECK(err.find("too large") != std::string::npos);
++}
+diff -ruN base/engine/tests/test_sage_slb.cpp work/engine/tests/test_sage_slb.cpp
+--- base/engine/tests/test_sage_slb.cpp	2026-10-07 10:09:37
++++ work/engine/tests/test_sage_slb.cpp	2026-10-07 12:42:33
+@@ -236,3 +236,60 @@
+   CHECK_FALSE(is_cinematic_obj("vllg_OBJ.slb"));
+   CHECK_FALSE(is_cinematic_obj("cin1_cam.slb"));
+ }
++
++// M1a-3: <lev>/textures.slb (GcSpecTextureLoader::LoadTextures 0x0046f270): {n, n, ptr} + 20-byte records whose name
++// pointer targets a length-prefixed string read from name + 1; then the fix-up slots, their count and 0x00C0FFEE.
++namespace {
++Bytes make_textures(const std::vector<std::pair<std::string, float>>& recs, size_t name_len_override = 0) {
++  Bytes b;
++  put32(b, static_cast<uint32_t>(recs.size()));
++  put32(b, static_cast<uint32_t>(recs.size()));
++  put32(b, 12);
++  uint32_t str = static_cast<uint32_t>(12 + 20 * recs.size());
++  std::vector<uint32_t> slots = {8};
++  for (const auto& r : recs) {
++    slots.push_back(static_cast<uint32_t>(b.size()));
++    put32(b, str);
++    putf(b, r.second);
++    putf(b, 0.25f);
++    putf(b, 0.0f);
++    put32(b, 3);
++    str += static_cast<uint32_t>(r.first.size()) + 2;
++  }
++  for (const auto& r : recs) {
++    put8(b, static_cast<uint8_t>(name_len_override ? name_len_override : r.first.size()));  // ignored by the game
++    putstr(b, r.first);
++    put8(b, 0);
++  }
++  while (b.size() % 4) put8(b, 0);
++  for (size_t i = slots.size(); i-- > 0;) put32(b, slots[i]);
++  put32(b, static_cast<uint32_t>(slots.size()));
++  put32(b, 0x00C0FFEEu);
++  return b;
++}
++}  // namespace
++
++TEST_CASE("slb: textures.slb records (name read at ptr + 1, trans, U/V speeds, frames); long names are rejected") {
++  std::vector<SpecTextureRecord> t;
++  std::string err;
++  Slb s = parse_ok(make_textures({{"tfx", 0.5f}, {"a_longer_name.dds", 1.0f}}, 200));
++  REQUIRE_MESSAGE(parse_spec_textures(s, t, &err), err);
++  REQUIRE(t.size() == 2);
++  CHECK(t[0].name == "tfx");  // the length byte (200 here) is ignored: the C string at ptr + 1
++  CHECK(t[0].trans == 0.5f);
++  CHECK(t[0].u == 0.25f);
++  CHECK(t[0].v == 0.0f);
++  CHECK(t[0].frames == 3);
++  CHECK(t[1].name == "a_longer_name.dds");
++  Slb big = parse_ok(make_textures({{std::string(kMaxSpecTextureName + 1, 'n'), 1.0f}}));
++  CHECK_FALSE(parse_spec_textures(big, t, &err));
++  CHECK(err.find("kMaxSpecTextureName") != std::string::npos);
++  Slb ok = parse_ok(make_textures({{std::string(kMaxSpecTextureName, 'n'), 1.0f}}));
++  CHECK(parse_spec_textures(ok, t, &err));
++  // Every truncation of a valid file fails cleanly (or parses as a different valid table).
++  const Bytes good = make_textures({{"tfx", 0.5f}, {"cut", 1.0f}});
++  for (size_t len = 0; len < good.size(); ++len) {
++    Slb p;
++    if (p.parse(Bytes(good.begin(), good.begin() + static_cast<std::ptrdiff_t>(len)), &err)) parse_spec_textures(p, t, &err);
++  }
 +}
 diff -ruN base/engine/tests/test_view_area.cpp work/engine/tests/test_view_area.cpp
 --- base/engine/tests/test_view_area.cpp	2026-10-07 10:09:37

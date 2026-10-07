@@ -1,0 +1,15 @@
+T3: lomn_sage: bounded OSI reader (caps measured on the real Base.osi) + textures.slb parser + Python osi.py / osi_maxima.py; crafted-input probes (osi_probe, native + wasm32)
+Apply after T2: copy T3/files/* over the tree (full file contents as of the end of T3).
+
+A engine/include/lomn/sage/osi.h  -- new (final)
+A engine/src/sage/osi.cpp  -- new (final)
+A engine/tests/osi_builder.h  -- new (final)
+A engine/tests/test_sage_osi.cpp  -- new (final)
+A engine/tests/probe_osi.cpp  -- new (final)
+A tools/research/osi.py  -- new (final)
+A tools/research/osi_maxima.py  -- new (final)
+M engine/src/sage/bytes.h  -- full (final)
+M engine/include/lomn/sage/slb.h  -- full (final)
+M engine/src/sage/slb.cpp  -- full (final)
+M engine/tests/test_sage_slb.cpp  -- full (final)
+M engine/CMakeLists.txt  -- partial: osi.cpp in lomn_sage, test_sage_osi.cpp in lomn_tests, lomn_osi_probe + osi_probe ctest

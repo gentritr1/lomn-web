@@ -1,11 +1,26 @@
-100% tests passed, 0 tests failed out of 22
-[doctest] test cases:    128 |    128 passed | 0 failed | 0 skipped
-[doctest] assertions: 172010 | 172010 passed | 0 failed |
+# ASan+UBSan build (build/asan: -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer)
+100% tests passed, 0 tests failed out of 24
+[doctest] test cases:    132 |    132 passed | 0 failed | 0 skipped
+[doctest] assertions: 172064 | 172064 passed | 0 failed |
 [doctest] Status: SUCCESS!
-vllg rc=0 stderr_bytes=0 vs Release: 0 of 921600 pixels differ, max channel difference 0
-ghut rc=0 stderr_bytes=0 vs Release: 0 of 921600 pixels differ, max channel difference 0
-crss rc=0 stderr_bytes=0 vs Release: 0 of 921600 pixels differ, max channel difference 0
-survey rc=0 stderr_bytes=0 survey: 123 areas, 0 failures 
-vllg ASan null backend 2 frames rc=0 stderr_bytes=0: state log vs Release identical (579 lines), null call log vs Release identical
-ghut ASan null backend 2 frames rc=0 stderr_bytes=0: state log vs Release identical (422 lines), null call log vs Release identical
-crss ASan null backend 2 frames rc=0 stderr_bytes=0: state log vs Release identical (660 lines), null call log vs Release identical
+ok   calls            600371 bytes  0.021 s  peak +7.3 MB (25.0 MB)  -> osi: subroutine exceeds kMaxOsiInstructions
+ok   calls-in-cap     192371 bytes  0.021 s  peak +6.6 MB (32.2 MB)  -> osi: method exceeds kMaxOsiArgsPerMethod
+ok   calls-argc0      112371 bytes  0.023 s  peak +6.6 MB (39.2 MB)  -> osi: method exceeds kMaxOsiCallsPerMethod
+ok   stack             96371 bytes  0.014 s  peak +6.5 MB (46.1 MB)  -> osi: literal stack exceeds kMaxOsiStackDepth
+ok   string-args       30371 bytes  0.006 s  peak +2.8 MB (49.1 MB)  -> osi: method exceeds kMaxOsiStringArgBytes
+ok   funcs-shared     557418 bytes  0.063 s  peak +10.8 MB (63.2 MB)  -> (accepted)
+ok   funcs-distinct   289138 bytes  1.051 s  peak +8.9 MB (73.6 MB)  -> osi: file exceeds kMaxOsiTotalInstructions
+ok   nops            8387955 bytes  0.057 s  peak +6.0 MB (97.8 MB)  -> osi: subroutine exceeds kMaxOsiInstructions
+ok   too-large       8388609 bytes  0.041 s  peak +0.0 MB (106.8 MB)  -> osi: file too large
+osi_probe: all probes bounded
+vllg ASan render rc=0 stderr_bytes=0 vs Release: 0 of 921600 pixels differ, max channel difference 0
+vllg ASan null 2 frames rc=0 stderr_bytes=0: state log vs Release identical, call log vs Release identical
+ghut ASan render rc=0 stderr_bytes=0 vs Release: 0 of 921600 pixels differ, max channel difference 0
+ghut ASan null 2 frames rc=0 stderr_bytes=0: state log vs Release identical, call log vs Release identical
+crss ASan render rc=0 stderr_bytes=0 vs Release: 0 of 921600 pixels differ, max channel difference 0
+crss ASan null 2 frames rc=0 stderr_bytes=0: state log vs Release identical, call log vs Release identical
+ASan survey rc=0 stderr_bytes=0 survey: 123 areas, 0 failures
+ASan lomn_view on crafted Base.osi 'calls': rc=0 stderr_bytes=0
+ASan lomn_view on crafted Base.osi 'stack': rc=0 stderr_bytes=0
+ASan lomn_view on crafted Base.osi 'funcs': rc=0 stderr_bytes=0
+ASan lomn_view on crafted Base.osi 'nops': rc=0 stderr_bytes=0

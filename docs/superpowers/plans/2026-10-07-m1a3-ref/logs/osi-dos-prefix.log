@@ -1,0 +1,5 @@
+PRE-FIX calls: Base.osi 600337 bytes rc=0 0.91s maxrss=485.8 MB warn: 
+PRE-FIX stack: Base.osi 600337 bytes rc=0 0.04s maxrss=78.8 MB warn: 
+PRE-FIX funcs: Base.osi 824617 bytes rc=0 0.02s maxrss=35.4 MB warn: 
+PRE-FIX nops: Base.osi 1048912 bytes rc=0 0.04s maxrss=90.5 MB warn: 
+ok levt/stat backend=null draws=19 textures=5 out=tmp/craft/o_base.txt         0.02 real         0.00 user         0.00 sys              9830400  maximum resident set size 

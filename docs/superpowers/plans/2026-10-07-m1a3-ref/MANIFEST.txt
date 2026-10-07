@@ -1,9 +1,9 @@
-M1a-3 faithful-states reference bundle. BASE f47cc91 (branch m1a2-first-pixels). Built 2026-10-07T09:41Z.
+M1a-3 faithful-states reference bundle. BASE f47cc91 (branch m1a2-first-pixels). Built 2026-10-07T11:04Z.
 files/ mirrors the repo paths; engine.diff / makefile.diff / tools.diff reproduce work from base.
 
-CHANGED (23):
-  f187fc6559923c2d  Makefile
-  e73c4a5614fc7366  engine/CMakeLists.txt
+CHANGED (24):
+  3520d25df13ea933  Makefile
+  0f51dbbbd9eb2d49  engine/CMakeLists.txt
   d53915a793c8caab  engine/include/lomn/fs.h
   302df8c9c5c29908  engine/include/lomn/rhi.h
   28f77365527bcf8b  engine/include/lomn/sage/slb.h
@@ -15,44 +15,143 @@ CHANGED (23):
   81940e73938e6880  engine/src/rhi/webgpu_device.cpp
   ca7b6ceeb7677c63  engine/src/sage/bytes.h
   645ae0b0f0acefc4  engine/src/sage/slb.cpp
-  e041b1736ec4779a  engine/src/view/area.cpp
+  07b913629fdd4ce1  engine/src/view/area.cpp
   0bba7b7b577aefc6  engine/src/view/synthetic.cpp
   e39cd16ad6686a47  engine/tests/data/a7_calls.txt
   9a2d38a85fa6b186  engine/tests/test_gpu_area.cpp
   a413685f4d86aada  engine/tests/test_gpu_mesh.cpp
   bd2fb7e4287c96ef  engine/tests/test_rhi_mesh.cpp
+  4ba7e7313aae5449  engine/tests/test_sage_slb.cpp
   bfac1665e4b200ab  engine/tests/test_view_area.cpp
   8084731d3ba18310  engine/tools/lomn_datacheck.cpp
   e5f00b711ce75df6  engine/tools/lomn_view.cpp
   495b34d82a6b9cc3  tools/research/oracle/check_datacheck.py
-ADDED (16):
+ADDED (25):
   a0633b1dba34ea49  engine/include/lomn/d3d/device8.h
   46751e91aff689ce  engine/include/lomn/d3d/ffp.h
-  0410047b2002430a  engine/include/lomn/sage/osi.h
+  7fb98c0e5b9202f5  engine/include/lomn/sage/osi.h
   a62071dda04c6036  engine/include/lomn/view/sage_frame.h
   71f3a7e7c6498751  engine/src/d3d/device8.cpp
   37d70294a71dbe0c  engine/src/d3d/ffp.cpp
-  dadf86ef6dcb9a36  engine/src/sage/osi.cpp
+  a88cd17497f9cfd4  engine/src/sage/osi.cpp
   42ac38f3d1d2e85e  engine/src/view/sage_frame.cpp
   338e73d70a8d2115  engine/tests/a9_state.cmake
-  9e59571a239af866  engine/tests/data/a7_calls.txt.json
   f2f09aaed3f93315  engine/tests/data/a9_state.txt
-  5a13b0538d17f6f7  engine/tests/test_d3d.cpp
-  2672b1fd990ac6cc  engine/tests/test_gpu_ffp.cpp
-  5bd740112fb9bd65  engine/tests/test_sage_osi.cpp
+  61268f5f5346b77e  engine/tests/ffp_cases.cpp
+  97c43e584f85f8b6  engine/tests/ffp_cases.h
+  639edae89baf515c  engine/tests/fuzz_osi.cpp
+  32594f79633a3ff4  engine/tests/osi_builder.h
+  767d258e9234054d  engine/tests/probe_osi.cpp
+  8c3cd2655e9c0f97  engine/tests/test_area_states.cpp
+  e155dac9ceb15a96  engine/tests/test_d3d.cpp
+  c32c31cac626de95  engine/tests/test_gpu_ffp.cpp
+  6735085b040e358d  engine/tests/test_sage_frame.cpp
+  c22c6c97171a056c  engine/tests/test_sage_osi.cpp
   af1b62056e084fe3  tools/research/oracle/a9_oracle.py
-  0512de73d95ab741  tools/research/osi.py
+  ab13aec38f94c890  tools/research/oracle/ffp_oracle.py
+  0e4130a628b8c699  tools/research/osi.py
+  b3532243dbf359b3  tools/research/osi_craft.py
+  ebde91538bae24e3  tools/research/osi_maxima.py
 
 logs/:
   81e37992aafa2240  logs/a7_calls_r2_to_r3.diff
-  49a50a552fbc9ba6  logs/asan-run.log
+  ea02cae3fa2d4ff8  logs/asan-run.log
+  dd269d1c78df0ce3  logs/chain/T1.log
+  144e6476e47b84d5  logs/chain/T2.log
+  213b7b4ea58cc682  logs/chain/T3.log
+  66f293c75998f65c  logs/chain/T4.log
+  aca93a6b25c8b69d  logs/chain/T5.log
+  af83a5f3965d5570  logs/chain/T6.log
+  2ca5d381bd37c8b5  logs/chain/T7.log
   e8d50e44ae80482e  logs/evidence3.log
-  8cf64233211c31ab  logs/make-check.log
+  bfd785b051bbdac6  logs/ffp-oracle.log
+  a8485dfbc6e8ae69  logs/fuzz-osi-canary.log
+  316ed133c25cc4a2  logs/fuzz-osi-native.log
+  d58bc60defff989b  logs/fuzz-osi-wasm.log
+  cb782a7847c600fb  logs/make-check.log
   42aa58e6390df1eb  logs/metrics.txt
-  26c90dd29dfef140  logs/mutations3.log
+  6d0ba893553ab8fe  logs/mutations3.log
+  bddfc555f61c5fb7  logs/oracle-r2.log
+  fe8a78a884250c22  logs/osi-dos-postfix.log
+  d2125a3724e293c6  logs/osi-dos-prefix.log
+  fa99c4f248be72ba  logs/osi-maxima.json
+  70340a54c753cac3  logs/osi-probe-prefix.log
+  f7640e36e618f7ba  logs/osi-probe.log
+  d52e6e17f2d3cddc  logs/renders-r2-vs-r1.log
+  acfa83d4dbed4aff  logs/task-chain.log
 scripts/:
-  6228631ecddfcf47  scripts/bundle3.sh
+  b57b68817a5e7cc6  scripts/apply_tasks.sh
+  6a1998840ba6640f  scripts/build_tasks.py
+  9b885f92beb9e095  scripts/bundle3.sh
+  21240a1f537c097f  scripts/changes.py
   2570d29e747ec0c6  scripts/evidence3.sh
-  d07acbe0d318f091  scripts/mutate3.py
+  f61ac4f44c5f0f71  scripts/mutate3.py
   3723bc752bee2f3d  scripts/peread.py
   9c95b27f3fcda12a  scripts/pngdiff.py
+tasks/:
+  72ed303742867a4e  tasks/T1.txt
+  302df8c9c5c29908  tasks/T1/files/engine/include/lomn/rhi.h
+  2bcb56a9238db6e7  tasks/T1/files/engine/src/rhi/null_device.cpp
+  22a9bd49262e3765  tasks/T1/files/engine/src/rhi/registry.h
+  81940e73938e6880  tasks/T1/files/engine/src/rhi/webgpu_device.cpp
+  a413685f4d86aada  tasks/T1/files/engine/tests/test_gpu_mesh.cpp
+  bd2fb7e4287c96ef  tasks/T1/files/engine/tests/test_rhi_mesh.cpp
+  1c758e01d57565f3  tasks/T2.txt
+  86c9ddf9fbb30eec  tasks/T2/files/engine/CMakeLists.txt
+  a0633b1dba34ea49  tasks/T2/files/engine/include/lomn/d3d/device8.h
+  46751e91aff689ce  tasks/T2/files/engine/include/lomn/d3d/ffp.h
+  71f3a7e7c6498751  tasks/T2/files/engine/src/d3d/device8.cpp
+  37d70294a71dbe0c  tasks/T2/files/engine/src/d3d/ffp.cpp
+  61268f5f5346b77e  tasks/T2/files/engine/tests/ffp_cases.cpp
+  97c43e584f85f8b6  tasks/T2/files/engine/tests/ffp_cases.h
+  e155dac9ceb15a96  tasks/T2/files/engine/tests/test_d3d.cpp
+  c32c31cac626de95  tasks/T2/files/engine/tests/test_gpu_ffp.cpp
+  ab13aec38f94c890  tasks/T2/files/tools/research/oracle/ffp_oracle.py
+  4341a2b829b2ea31  tasks/T3.txt
+  3acc65b0ee09652d  tasks/T3/files/engine/CMakeLists.txt
+  7fb98c0e5b9202f5  tasks/T3/files/engine/include/lomn/sage/osi.h
+  28f77365527bcf8b  tasks/T3/files/engine/include/lomn/sage/slb.h
+  ca7b6ceeb7677c63  tasks/T3/files/engine/src/sage/bytes.h
+  a88cd17497f9cfd4  tasks/T3/files/engine/src/sage/osi.cpp
+  645ae0b0f0acefc4  tasks/T3/files/engine/src/sage/slb.cpp
+  32594f79633a3ff4  tasks/T3/files/engine/tests/osi_builder.h
+  767d258e9234054d  tasks/T3/files/engine/tests/probe_osi.cpp
+  c22c6c97171a056c  tasks/T3/files/engine/tests/test_sage_osi.cpp
+  4ba7e7313aae5449  tasks/T3/files/engine/tests/test_sage_slb.cpp
+  0e4130a628b8c699  tasks/T3/files/tools/research/osi.py
+  ebde91538bae24e3  tasks/T3/files/tools/research/osi_maxima.py
+  7d5412b7da9efc68  tasks/T4.txt
+  8c2e7c661499cef6  tasks/T4/files/engine/CMakeLists.txt
+  82b635546b4f7f76  tasks/T4/files/engine/include/lomn/view/area.h
+  845ea3e9c913b073  tasks/T4/files/engine/include/lomn/view/synthetic.h
+  c3878d7e6efd296e  tasks/T4/files/engine/src/view/area.cpp
+  0bba7b7b577aefc6  tasks/T4/files/engine/src/view/synthetic.cpp
+  8c3cd2655e9c0f97  tasks/T4/files/engine/tests/test_area_states.cpp
+  00d8849e2e265ac9  tasks/T5.txt
+  f54618561a14313c  tasks/T5/files/Makefile
+  f1b6e9d17efb3a84  tasks/T5/files/engine/CMakeLists.txt
+  bb39d9f270a9f50c  tasks/T5/files/engine/include/lomn/view/area.h
+  a62071dda04c6036  tasks/T5/files/engine/include/lomn/view/sage_frame.h
+  07b913629fdd4ce1  tasks/T5/files/engine/src/view/area.cpp
+  42ac38f3d1d2e85e  tasks/T5/files/engine/src/view/sage_frame.cpp
+  338e73d70a8d2115  tasks/T5/files/engine/tests/a9_state.cmake
+  e39cd16ad6686a47  tasks/T5/files/engine/tests/data/a7_calls.txt
+  f2f09aaed3f93315  tasks/T5/files/engine/tests/data/a9_state.txt
+  9a2d38a85fa6b186  tasks/T5/files/engine/tests/test_gpu_area.cpp
+  6735085b040e358d  tasks/T5/files/engine/tests/test_sage_frame.cpp
+  bfac1665e4b200ab  tasks/T5/files/engine/tests/test_view_area.cpp
+  a250ad0ebb93c497  tasks/T5/files/engine/tools/lomn_view.cpp
+  af1b62056e084fe3  tasks/T5/files/tools/research/oracle/a9_oracle.py
+  52eaeaf9b88e3832  tasks/T6.txt
+  f187fc6559923c2d  tasks/T6/files/Makefile
+  0f51dbbbd9eb2d49  tasks/T6/files/engine/CMakeLists.txt
+  d53915a793c8caab  tasks/T6/files/engine/include/lomn/fs.h
+  d0ad1615bd0b353c  tasks/T6/files/engine/include/lomn/view/area.h
+  62b4d5aad796f8e2  tasks/T6/files/engine/src/fs/disk_fs.cpp
+  8084731d3ba18310  tasks/T6/files/engine/tools/lomn_datacheck.cpp
+  e5f00b711ce75df6  tasks/T6/files/engine/tools/lomn_view.cpp
+  495b34d82a6b9cc3  tasks/T6/files/tools/research/oracle/check_datacheck.py
+  3caf7e25c7cc7069  tasks/T7.txt
+  3520d25df13ea933  tasks/T7/files/Makefile
+  639edae89baf515c  tasks/T7/files/engine/tests/fuzz_osi.cpp
+  b3532243dbf359b3  tasks/T7/files/tools/research/osi_craft.py

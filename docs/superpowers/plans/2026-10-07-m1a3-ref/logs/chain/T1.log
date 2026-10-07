@@ -1,0 +1,161 @@
+timeout 600 cmake -S engine -B build/native -G Ninja -DCMAKE_BUILD_TYPE=Release && timeout 1800 cmake --build build/native
+-- The CXX compiler identification is AppleClang 21.0.0.21000101
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: /usr/bin/c++ - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD - Success
+-- Found Threads: TRUE
+-- Configuring done (0.8s)
+-- Generating done (0.0s)
+-- Build files have been written to: $W/chain/build/native
+[1/45] Building CXX object CMakeFiles/lomn_core.dir/third_party/stb_impl.cpp.o
+[2/45] Building CXX object CMakeFiles/lomn_sage.dir/src/sage/image.cpp.o
+[3/45] Building CXX object CMakeFiles/lomn_sage.dir/src/sage/blockchain.cpp.o
+[4/45] Building CXX object CMakeFiles/lomn_sage.dir/src/sage/slb.cpp.o
+[5/45] Building CXX object CMakeFiles/lomn_sage.dir/src/sage/blockfile.cpp.o
+[6/45] Building CXX object CMakeFiles/lomn_core.dir/src/fs/memory_fs.cpp.o
+[7/45] Building CXX object CMakeFiles/lomn_core.dir/src/rhi/null_device.cpp.o
+[8/45] Building CXX object CMakeFiles/lomn_core.dir/src/app/loop.cpp.o
+[9/45] Building CXX object CMakeFiles/lomn_area.dir/src/view/math.cpp.o
+[10/45] Building CXX object CMakeFiles/lomn_core.dir/src/fs/disk_fs.cpp.o
+[11/45] Linking CXX static library liblomn_core.a
+[12/45] Building CXX object CMakeFiles/lomn_area.dir/src/view/mips.cpp.o
+[13/45] Building CXX object CMakeFiles/lomn_sage.dir/src/sage/xfile.cpp.o
+[14/45] Linking CXX static library liblomn_sage.a
+[15/45] Building CXX object CMakeFiles/lomn_gpu_test.dir/tests/test_gpu.cpp.o
+[16/45] Building CXX object CMakeFiles/lomn_native.dir/src/app/main_native.cpp.o
+[17/45] Building CXX object CMakeFiles/lomn_gpu_area_test.dir/tests/test_gpu_area.cpp.o
+[18/45] Building CXX object CMakeFiles/lomn_area.dir/src/view/synthetic.cpp.o
+[19/45] Building CXX object CMakeFiles/lomn_gpu_mesh_test.dir/tests/test_gpu_mesh.cpp.o
+[20/45] Building CXX object CMakeFiles/lomn_webgpu.dir/src/rhi/webgpu_device.cpp.o
+[21/45] Building CXX object CMakeFiles/lomn_area.dir/src/view/area.cpp.o
+[22/45] Linking CXX static library liblomn_webgpu.a
+[23/45] Linking CXX static library liblomn_area.a
+[24/45] Building CXX object CMakeFiles/lomn_datacheck.dir/tools/lomn_datacheck.cpp.o
+[25/45] Building CXX object CMakeFiles/lomn_view.dir/tools/lomn_view.cpp.o
+[26/45] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_rhi_null.cpp.o
+[27/45] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_loop.cpp.o
+[28/45] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_fs.cpp.o
+[29/45] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_sage_blockchain.cpp.o
+[30/45] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_sage_blockfile.cpp.o
+[31/45] Linking CXX executable lomn_datacheck
+[32/45] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_main.cpp.o
+[33/45] Linking CXX executable lomn_native
+[34/45] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_sage_slb.cpp.o
+[35/45] Linking CXX executable lomn_view
+[36/45] Linking CXX executable lomn_gpu_test
+[37/45] Linking CXX executable lomn_gpu_area_test
+[38/45] Linking CXX executable lomn_gpu_mesh_test
+[39/45] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_sage_xfile.cpp.o
+[40/45] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_json_escape.cpp.o
+[41/45] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_view_mips.cpp.o
+[42/45] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_sage_image.cpp.o
+[43/45] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_rhi_mesh.cpp.o
+[44/45] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_view_area.cpp.o
+[45/45] Linking CXX executable lomn_tests
+ctest --test-dir build/native --output-on-failure --timeout 300
+Test project $W/chain/build/native
+      Start  1: determinism_null
+ 1/18 Test  #1: determinism_null .................   Passed    0.44 sec
+      Start  2: a7_null_calls
+ 2/18 Test  #2: a7_null_calls ....................   Passed    0.44 sec
+      Start  3: view_cli_dangling_flag
+ 3/18 Test  #3: view_cli_dangling_flag ...........   Passed    0.02 sec
+      Start  4: view_cli_missing_install
+ 4/18 Test  #4: view_cli_missing_install .........   Passed    0.02 sec
+      Start  5: view_cli_nonfinite
+ 5/18 Test  #5: view_cli_nonfinite ...............   Passed    0.32 sec
+      Start  6: view_cli_modes
+ 6/18 Test  #6: view_cli_modes ...................   Passed    0.09 sec
+      Start  7: view_cli_ints
+ 7/18 Test  #7: view_cli_ints ....................   Passed    0.12 sec
+      Start  8: view_cli_stale_outputs
+ 8/18 Test  #8: view_cli_stale_outputs ...........   Passed    0.09 sec
+      Start  9: view_cli_null_frames
+ 9/18 Test  #9: view_cli_null_frames .............   Passed    0.05 sec
+      Start 10: view_cli_survey_empty
+10/18 Test #10: view_cli_survey_empty ............   Passed    0.03 sec
+      Start 11: view_cli_camera_json
+11/18 Test #11: view_cli_camera_json .............   Passed    0.13 sec
+      Start 12: cli_dangling_flag
+12/18 Test #12: cli_dangling_flag ................   Passed    0.02 sec
+      Start 13: gpu_triangle
+13/18 Test #13: gpu_triangle .....................   Passed    0.37 sec
+      Start 14: gpu_no_adapter
+14/18 Test #14: gpu_no_adapter ...................   Passed    0.02 sec
+      Start 15: a7_gpu_pixels
+15/18 Test #15: a7_gpu_pixels ....................   Passed    0.43 sec
+      Start 16: gpu_mesh
+16/18 Test #16: gpu_mesh .........................   Passed    0.31 sec
+      Start 17: a7_gpu_no_adapter
+17/18 Test #17: a7_gpu_no_adapter ................   Passed    0.03 sec
+      Start 18: unit
+18/18 Test #18: unit .............................   Passed    0.61 sec
+
+100% tests passed, 0 tests failed out of 18
+
+Label Time Summary:
+gpu    =   1.16 sec*proc (5 tests)
+
+Total Test time (real) =   3.57 sec
+source .toolchain/emsdk/emsdk_env.sh >/dev/null 2>&1 && timeout 600 emcmake cmake -S engine -B build/wasm -G Ninja -DCMAKE_BUILD_TYPE=Release && timeout 1800 cmake --build build/wasm
+emcmake: cmake -S engine -B build/wasm -G Ninja -DCMAKE_BUILD_TYPE=Release '-DCMAKE_TOOLCHAIN_FILE=$R/.toolchain/emsdk/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake' '-DCMAKE_CROSSCOMPILING_EMULATOR=$R/.toolchain/emsdk/node/24.19.0_64bit/bin/node' in directory $W/chain
+-- Configuring done (1.0s)
+-- Generating done (0.0s)
+-- Build files have been written to: $W/chain/build/wasm
+[1/37] Building CXX object CMakeFiles/lomn_area.dir/src/view/math.cpp.o
+[2/37] Building CXX object CMakeFiles/lomn_sage.dir/src/sage/image.cpp.o
+[3/37] Building CXX object CMakeFiles/lomn_area.dir/src/view/mips.cpp.o
+[4/37] Building CXX object CMakeFiles/lomn_sage.dir/src/sage/blockchain.cpp.o
+[5/37] Building CXX object CMakeFiles/lomn_sage.dir/src/sage/slb.cpp.o
+[6/37] Building CXX object CMakeFiles/lomn_sage.dir/src/sage/blockfile.cpp.o
+[7/37] Building CXX object CMakeFiles/lomn_core.dir/src/fs/memory_fs.cpp.o
+[8/37] Building CXX object CMakeFiles/lomn_core.dir/src/rhi/null_device.cpp.o
+[9/37] Building CXX object CMakeFiles/lomn_core.dir/src/app/loop.cpp.o
+[10/37] Building CXX object CMakeFiles/lomn_sage.dir/src/sage/xfile.cpp.o
+[11/37] Linking CXX static library liblomn_core.a
+[12/37] Building CXX object CMakeFiles/lomn_area.dir/src/view/area.cpp.o
+[13/37] Linking CXX static library liblomn_sage.a
+[14/37] Building CXX object CMakeFiles/lomn_web.dir/src/app/main_web.cpp.o
+[15/37] Building CXX object CMakeFiles/lomn_native.dir/src/app/main_native.cpp.o
+[16/37] Building CXX object CMakeFiles/lomn_area.dir/src/view/synthetic.cpp.o
+[17/37] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_fs.cpp.o
+[18/37] Building CXX object CMakeFiles/lomn_view.dir/tools/lomn_view.cpp.o
+[19/37] Building CXX object CMakeFiles/lomn_webgpu.dir/src/rhi/webgpu_device.cpp.o
+[20/37] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_rhi_null.cpp.o
+[21/37] Linking CXX static library liblomn_area.a
+[22/37] Linking CXX static library liblomn_webgpu.a
+[23/37] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_main.cpp.o
+[24/37] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_loop.cpp.o
+[25/37] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_sage_blockchain.cpp.o
+[26/37] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_sage_blockfile.cpp.o
+[27/37] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_sage_slb.cpp.o
+[28/37] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_sage_image.cpp.o
+[29/37] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_sage_xfile.cpp.o
+[30/37] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_rhi_mesh.cpp.o
+[31/37] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_view_mips.cpp.o
+[32/37] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_json_escape.cpp.o
+[33/37] Linking CXX executable lomn_native.js
+[34/37] Linking CXX executable lomn_web.js
+[35/37] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_view_area.cpp.o
+[36/37] Linking CXX executable lomn_view.js
+[37/37] Linking CXX executable lomn_tests.js
+source .toolchain/emsdk/emsdk_env.sh >/dev/null 2>&1 && ctest --test-dir build/wasm --output-on-failure --timeout 300
+Test project $W/chain/build/wasm
+    Start 1: determinism_null
+1/3 Test #1: determinism_null .................   Passed    0.26 sec
+    Start 2: a7_null_calls
+2/3 Test #2: a7_null_calls ....................   Passed    0.15 sec
+    Start 3: unit
+3/3 Test #3: unit .............................   Passed    0.41 sec
+
+100% tests passed, 0 tests failed out of 3
+
+Total Test time (real) =   0.84 sec
+timeout 120 .venv/bin/python tools/harness/compare.py trace build/native/determinism/a/trace.jsonl build/wasm/determinism/a/trace.jsonl
+traces identical
+cmp build/native/determinism/a/calls.txt build/wasm/determinism/a/calls.txt
+cmp build/native/a7/a/calls.txt build/wasm/a7/a/calls.txt

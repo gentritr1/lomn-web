@@ -5,12 +5,22 @@ SAGESharp/OSI/OSIFile.cs + BCLInstruction.cs, MPL-2.0; read, not copied). Everyt
 the file as untrusted: every read is bounds-checked, table counts are capped by the remaining bytes, and bytecode is
 walked linearly per subroutine with an instruction cap.
 
-Usage: osi.py Base.osi --calls gcareadirector.setfog gcgraphicsoptions.setdrawdistance ...   (JSON to stdout)
+Two call finders, which answer DIFFERENT questions (do not cross-check one against the other):
+  eval_calls(d, o, cls, method)   the straight-line constant evaluator - the same algorithm as the C++
+                                  lomn::sage::OsiFile::eval_calls (osi.h) and the one a9_oracle.py uses: folds 0 - 40
+                                  to -40, so it reports the values the game passes.  CLI: --eval CLASS METHOD
+  find_plain_push_calls(d, o, wanted)  a whole-file SURVEY of where a function is called: decodes only the argc
+                                  instructions right before each call, and only when they are plain pushes; a computed
+                                  argument (vllg's SetFog start "0 - 40") reads as None and the slots shift (so its fog
+                                  colour prints as 0).  CLI: --plain-calls class.func ...
+
+Usage: osi.py Base.osi --eval lego_area_vllg initfull                                  (JSON to stdout)
+       osi.py Base.osi --plain-calls gcareadirector.setfog gcgraphicsoptions.setdrawdistance ...
        osi.py Base.osi --summary
 """
 import json, struct, sys
 
-MAX_INSNS_PER_SUB = 1 << 20
+MAX_INSNS_PER_SUB = 1 << 15  # = the C++ kMaxOsiInstructions (measured maximum 1,707)
 # opcode -> operand struct format (little-endian); 'T' = 3-byte signed int.
 OPS = {0x04: 'HH', 0x05: 'HH', 0x06: 'HH', 0x10: 'H', 0x11: 'H', 0x12: 'H', 0x13: 'H', 0x14: 'b', 0x15: 'H', 0x16: 'H',
        0x17: 'H', 0x21: 'H', 0x22: 'H', 0x23: 'b', 0x24: 'H', 0x25: 'H', 0x31: 'b', 0x33: 'b', 0x34: 'b', 0x40: 'i',
@@ -142,7 +152,7 @@ def subroutines(o):
             yield cname + '.' + mname, off
 
 
-def find_calls(d, o, wanted):
+def find_plain_push_calls(d, o, wanted):
     """Every CallGameFunction(class, func, argc) whose 'class.func' (lower case) is in `wanted`, with the argc preceding
     instructions decoded as literals where they are plain pushes (None otherwise)."""
     hits = []
@@ -228,9 +238,14 @@ def main():
                           'functions': len(o['functions']), 'classes': len(o['classes']), 'symbols': len(o['symbols']),
                           'sources': len(o['sources']), 'tables_end': o['tables_end'], 'instructions': n}))
         return
-    i = sys.argv.index('--calls')
+    if '--eval' in sys.argv:
+        i = sys.argv.index('--eval')
+        calls = eval_calls(d, o, sys.argv[i + 1], sys.argv[i + 2])
+        print(json.dumps(None if calls is None else [{'call': k, 'args': a} for k, a in calls], indent=1))
+        return
+    i = sys.argv.index('--plain-calls')
     wanted = set(w.lower() for w in sys.argv[i + 1:])
-    print(json.dumps(find_calls(d, o, wanted), indent=1))
+    print(json.dumps(find_plain_push_calls(d, o, wanted), indent=1))
 
 
 if __name__ == '__main__':

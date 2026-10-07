@@ -355,7 +355,7 @@ class Loader {
     if (!osi.find_class(cls)) return;
     out_.script_class = cls;
     std::vector<sage::OsiCall> calls;
-    if (!osi.find_calls(cls, "initfull", calls, &e)) {
+    if (!osi.eval_calls(cls, "initfull", calls, &e)) {
       warn(e);
       return;
     }

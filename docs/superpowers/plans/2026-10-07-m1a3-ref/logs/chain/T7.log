@@ -1,0 +1,90 @@
+timeout 600 cmake -S engine -B build/native -G Ninja -DCMAKE_BUILD_TYPE=Release && timeout 1800 cmake --build build/native
+-- Configuring done (0.1s)
+-- Generating done (0.0s)
+-- Build files have been written to: $W/chain/build/native
+ninja: no work to do.
+ctest --test-dir build/native --output-on-failure --timeout 300
+Test project $W/chain/build/native
+      Start  1: determinism_null
+ 1/24 Test  #1: determinism_null .................   Passed    0.08 sec
+      Start  2: ffp_oracle
+ 2/24 Test  #2: ffp_oracle .......................   Passed    0.33 sec
+      Start  3: a7_null_calls
+ 3/24 Test  #3: a7_null_calls ....................   Passed    0.07 sec
+      Start  4: a9_state_log
+ 4/24 Test  #4: a9_state_log .....................   Passed    0.07 sec
+      Start  5: a9_oracle_synthetic
+ 5/24 Test  #5: a9_oracle_synthetic ..............   Passed    0.14 sec
+      Start  6: a9_oracle_real
+ 6/24 Test  #6: a9_oracle_real ...................   Passed    0.85 sec
+      Start  7: view_cli_dangling_flag
+ 7/24 Test  #7: view_cli_dangling_flag ...........   Passed    0.02 sec
+      Start  8: view_cli_missing_install
+ 8/24 Test  #8: view_cli_missing_install .........   Passed    0.02 sec
+      Start  9: view_cli_nonfinite
+ 9/24 Test  #9: view_cli_nonfinite ...............   Passed    0.34 sec
+      Start 10: view_cli_modes
+10/24 Test #10: view_cli_modes ...................   Passed    0.10 sec
+      Start 11: view_cli_ints
+11/24 Test #11: view_cli_ints ....................   Passed    0.13 sec
+      Start 12: view_cli_stale_outputs
+12/24 Test #12: view_cli_stale_outputs ...........   Passed    0.08 sec
+      Start 13: view_cli_null_frames
+13/24 Test #13: view_cli_null_frames .............   Passed    0.05 sec
+      Start 14: view_cli_survey_empty
+14/24 Test #14: view_cli_survey_empty ............   Passed    0.03 sec
+      Start 15: view_cli_camera_json
+15/24 Test #15: view_cli_camera_json .............   Passed    0.13 sec
+      Start 16: cli_dangling_flag
+16/24 Test #16: cli_dangling_flag ................   Passed    0.02 sec
+      Start 17: gpu_triangle
+17/24 Test #17: gpu_triangle .....................   Passed    0.06 sec
+      Start 18: gpu_no_adapter
+18/24 Test #18: gpu_no_adapter ...................   Passed    0.03 sec
+      Start 19: a7_gpu_pixels
+19/24 Test #19: a7_gpu_pixels ....................   Passed    0.06 sec
+      Start 20: gpu_mesh
+20/24 Test #20: gpu_mesh .........................   Passed    0.07 sec
+      Start 21: gpu_ffp
+21/24 Test #21: gpu_ffp ..........................   Passed    0.07 sec
+      Start 22: a7_gpu_no_adapter
+22/24 Test #22: a7_gpu_no_adapter ................   Passed    0.03 sec
+      Start 23: unit
+23/24 Test #23: unit .............................   Passed    0.46 sec
+      Start 24: osi_probe
+24/24 Test #24: osi_probe ........................   Passed    0.08 sec
+
+100% tests passed, 0 tests failed out of 24
+
+Label Time Summary:
+gpu    =   0.31 sec*proc (6 tests)
+
+Total Test time (real) =   3.33 sec
+source .toolchain/emsdk/emsdk_env.sh >/dev/null 2>&1 && timeout 600 emcmake cmake -S engine -B build/wasm -G Ninja -DCMAKE_BUILD_TYPE=Release && timeout 1800 cmake --build build/wasm
+emcmake: cmake -S engine -B build/wasm -G Ninja -DCMAKE_BUILD_TYPE=Release '-DCMAKE_TOOLCHAIN_FILE=$R/.toolchain/emsdk/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake' '-DCMAKE_CROSSCOMPILING_EMULATOR=$R/.toolchain/emsdk/node/24.19.0_64bit/bin/node' in directory $W/chain
+-- Configuring done (0.6s)
+-- Generating done (0.0s)
+-- Build files have been written to: $W/chain/build/wasm
+ninja: no work to do.
+source .toolchain/emsdk/emsdk_env.sh >/dev/null 2>&1 && ctest --test-dir build/wasm --output-on-failure --timeout 300
+Test project $W/chain/build/wasm
+    Start 1: determinism_null
+1/5 Test #1: determinism_null .................   Passed    0.16 sec
+    Start 2: a7_null_calls
+2/5 Test #2: a7_null_calls ....................   Passed    0.16 sec
+    Start 3: a9_state_log
+3/5 Test #3: a9_state_log .....................   Passed    0.46 sec
+    Start 4: unit
+4/5 Test #4: unit .............................   Passed    0.70 sec
+    Start 5: osi_probe
+5/5 Test #5: osi_probe ........................   Passed    0.16 sec
+
+100% tests passed, 0 tests failed out of 5
+
+Total Test time (real) =   1.64 sec
+timeout 120 .venv/bin/python tools/harness/compare.py trace build/native/determinism/a/trace.jsonl build/wasm/determinism/a/trace.jsonl
+traces identical
+cmp build/native/determinism/a/calls.txt build/wasm/determinism/a/calls.txt
+cmp build/native/a7/a/calls.txt build/wasm/a7/a/calls.txt
+cmp build/native/a9/a/state.txt build/wasm/a9/a/state.txt
+cmp build/native/a9/a/calls.txt build/wasm/a9/a/calls.txt

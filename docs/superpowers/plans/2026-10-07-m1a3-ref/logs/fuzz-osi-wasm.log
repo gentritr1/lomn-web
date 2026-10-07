@@ -1,0 +1,12 @@
+# wasm32 (emcc) ASan+UBSan (-fno-sanitize-recover=all) under Node, synthetic seeds
+fuzz_osi: 300000 inputs, 43370 accepted, 43080 method evaluations, 47951 calls, 0 invariant failures
+real 172.91
+user 165.09
+sys 3.34
+rc=0
+# wasm32, synthetic + real Base.osi seed
+fuzz_osi: 3000 inputs, 730 accepted, 7170 method evaluations, 4993 calls, 0 invariant failures
+real 358.96
+user 350.92
+sys 4.90
+rc=0

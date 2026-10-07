@@ -1,0 +1,25 @@
+{
+ "file_bytes": 486274,
+ "strings": 2749,
+ "longest_string": 145,
+ "string_table_bytes": 38191,
+ "functions": 23,
+ "classes": 395,
+ "methods_total": 8406,
+ "unique_subroutines": 3606,
+ "function_offsets_unique": 23,
+ "insns_per_sub_max": 1707,
+ "insns_total": 151522,
+ "branch_targets_per_sub_max": 48,
+ "calls_per_sub_max": 78,
+ "calls_total": 4402,
+ "argc_max": 9,
+ "args_per_sub_max": 128,
+ "string_arg_bytes_per_call_max": 145,
+ "string_arg_bytes_per_sub_max": 570,
+ "eval_stack_depth_max": 16,
+ "where": {
+  "ins": "setupshoefitterscreen",
+  "calls": "onakoro_puzzle.initfull"
+ }
+}

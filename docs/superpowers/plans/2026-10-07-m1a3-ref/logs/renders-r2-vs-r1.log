@@ -1,0 +1,8 @@
+vllg webgpu render r2 vs r1 evidence: PNG files byte-identical; pixels: 0 of 921600 pixels differ, max channel difference 0
+vllg null call log (2 frames) r2 vs r1: identical; D3D8 state log: identical (579 lines)
+ghut webgpu render r2 vs r1 evidence: PNG files byte-identical; pixels: 0 of 921600 pixels differ, max channel difference 0
+ghut null call log (2 frames) r2 vs r1: identical; D3D8 state log: identical (422 lines)
+crss webgpu render r2 vs r1 evidence: PNG files byte-identical; pixels: 0 of 921600 pixels differ, max channel difference 0
+crss null call log (2 frames) r2 vs r1: identical; D3D8 state log: identical (660 lines)
+crss yaw 67.5 r2 vs r1: 0 of 921600 pixels differ, max channel difference 0
+survey r2 vs r1: 123 vs 123 areas; 0 areas differ outside timing fields; maxima equal: True; frames section equal: True

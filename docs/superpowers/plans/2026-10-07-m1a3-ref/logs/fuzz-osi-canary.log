@@ -1,0 +1,4 @@
+# Canary: osi.cpp with the PushString bounds check widened by 8 (string index up to strings_.size()+7), same fuzzer.
+native ASan+UBSan: rc=134 - abort "std::length_error: basic_string" (a garbage std::string read past the vector's end)
+wasm32 ASan+UBSan: rc=1  - "AddressSanitizer: container-overflow" on the read past strings_.size()
+Both targets stop on the injected defect, so a 0-finding run of the real reader is meaningful.

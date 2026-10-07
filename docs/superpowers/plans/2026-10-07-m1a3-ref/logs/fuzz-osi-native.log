@@ -1,0 +1,12 @@
+# native ASan+UBSan (-fno-sanitize-recover=all), synthetic seeds
+fuzz_osi: 2000000 inputs, 290448 accepted, 288712 method evaluations, 329772 calls, 0 invariant failures
+real 22.30
+user 20.44
+sys 0.82
+rc=0
+# native, synthetic + real Base.osi seed
+fuzz_osi: 40000 inputs, 9926 accepted, 101544 method evaluations, 74748 calls, 0 invariant failures
+real 102.47
+user 94.52
+sys 4.19
+rc=0

@@ -1,0 +1,14 @@
+# pre-fix OSI reader (REF3 r1 osi.cpp), same probes; killed after 60 s
+FAIL calls            600371 bytes  0.337 s  peak +540.7 MB  -> (accepted)
+FAIL calls-in-cap     192371 bytes  0.044 s  peak +0.0 MB  -> (accepted)
+FAIL calls-argc0      112371 bytes  0.001 s  peak +0.0 MB  -> (accepted)
+FAIL stack             96371 bytes  0.006 s  peak +0.0 MB  -> (accepted)
+FAIL string-args       30371 bytes  0.001 s  peak +0.0 MB  -> (accepted)
+rc=124
+# pre-fix OSI reader (REF3 r1 osi.cpp) as wasm32 under Node, same probes; killed after 60 s
+FAIL calls            600371 bytes  0.221 s  peak +413.0 MB (429.0 MB)  -> (accepted)
+FAIL calls-in-cap     192371 bytes  0.022 s  peak +0.0 MB (429.0 MB)  -> (accepted)
+FAIL calls-argc0      112371 bytes  0.002 s  peak +0.0 MB (429.0 MB)  -> (accepted)
+FAIL stack             96371 bytes  0.002 s  peak +0.0 MB (429.0 MB)  -> (accepted)
+FAIL string-args       30371 bytes  0.001 s  peak +0.0 MB (429.0 MB)  -> (accepted)
+rc=124
