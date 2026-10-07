@@ -250,6 +250,14 @@ async function startWith(src, how) {
   L.engine = engine;
   engine.validation = { build: v.build, data: v.data, warning: v.warning ?? null, source_warnings: (src.warnings ?? []).length };
   if (debug) {
+    // Final review m-1: a page in a debug mode says so (a pasted URL must not silently render unfaithfully, HUD or not).
+    const on = [];
+    if (params.get('fog') === 'off') on.push('fog off');
+    if (Number(params.get('debug_spin') || 0) > 0) on.push(`spin ${Number(params.get('debug_spin'))} ms`);
+    if (params.get('fetch_concurrency')) on.push(`fetch concurrency ${Math.max(1, Math.min(16, Number(params.get('fetch_concurrency'))))}`);
+    if (params.get('nocache') === '1') on.push('prefetch cache off');
+    $('debug-badge').textContent = on.length ? `debug: ${on.join(', ')}` : 'debug';
+    $('debug-badge').hidden = false;
     // ?debug=1&fog=off: the pixel gate's positive control. ?debug_spin=MS: busy-wait per frame (I2). ?fetch_concurrency=N,
     // ?nocache=1: prefetch measurement switches (M1).
     if (params.get('fog') === 'off') engine.M._lomn_set_fog(0);

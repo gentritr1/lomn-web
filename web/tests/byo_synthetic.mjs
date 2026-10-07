@@ -496,7 +496,26 @@ try {
     await waitState(p.page, ['area-ready'], 60000);
     const m = await p.page.evaluate(() => window.__lomn.metrics);
     check(m.render.fog === true, 'M13: ?fog=off without ?debug=1 is ignored', `fog ${m.render.fog}`);
+    const badge = await p.page.locator('#debug-badge').isVisible().catch(() => false);
+    check(!badge, 'final m-1: no debug badge when no debug switch is active (?fog=off without ?debug=1)', `badge visible ${badge}`);
     await p.page.close();
+  });
+  // final m-1: an unfaithful render must not be silent: with ?debug=1&fog=off and NO ?hud=1 the page still says it is in a debug mode.
+  await section('m-1 debug badge', async () => {
+    const p = await open(base + '?size=1280x720&area=levt/stat&debug=1&fog=off', undefined, { drop: false });
+    await waitState(p.page, ['area-ready'], 60000);
+    const m = await p.page.evaluate(() => window.__lomn.metrics);
+    const hud = await p.page.locator('#hud').isVisible();
+    const badge = await p.page.locator('#debug-badge').isVisible().catch(() => false);
+    const text = badge ? await p.page.locator('#debug-badge').innerText() : '';
+    check(m.render.fog === false && !hud && badge && /debug/i.test(text) && /fog off/i.test(text),
+          'final m-1: ?debug=1&fog=off without ?hud=1 shows a visible "debug" badge naming the switch', `fog ${m.render.fog}; hud visible ${hud}; badge ${badge} "${text}"`);
+    await p.page.close();
+    const q = await open(base + '?size=1280x720&area=levt/stat&debug=1&debug_spin=3', undefined, { drop: false });
+    await waitState(q.page, ['area-ready'], 60000);
+    const t2 = await q.page.locator('#debug-badge').isVisible().catch(() => false) ? await q.page.locator('#debug-badge').innerText() : '';
+    check(/debug/i.test(t2) && /spin 3 ms/.test(t2), 'final m-1: the badge also names ?debug_spin', `"${t2}"`);
+    await q.page.close();
   });
   // final I-3: a browser without WebGPU is told so BEFORE a gigabyte is copied into OPFS (pre-fix: it copies, then fails with a Reload button).
   await section('I-3 no WebGPU', async () => {

@@ -26,6 +26,7 @@ GPU; the default headless shell falls back to SwiftShader, whose canvases screen
 | Control-character file names (final I-2) | a synthetic install with `a<TAB>b.blk` and `c<LF>d.blk` beside the real blockfiles, through the input | both skipped with a warning naming the character, nothing copied, the area list and a switch intact | — |
 | No WebGPU (final I-3) | `navigator.gpu` hidden by an init script, `?pick=1` | the named final message before a folder is chosen; a folder chosen anyway copies nothing (no copy worker, OPFS listing unchanged) | a real Safari/Firefox without WebGPU (none installed here) |
 | Folder not remembered (final m-3) | the picker stubbed to an OPFS handle, `IDBObjectStore.put` throwing for the handle key | the page stays `area-ready` with a warning, no `error` | a real IndexedDB quota failure |
+| Debug badge (final m-1) | `?debug=1&fog=off` and `&debug_spin=3` without `?hud=1`; `?fog=off` without `?debug=1` | the badge names the active switches; absent without `?debug=1` | — |
 | Real screen input | — | — | **owner check, UNVERIFIED**: the real `showDirectoryPicker` gesture and dialog, the real permission re-prompt, and mouse look on a real screen (the tests drag with Playwright's synthetic mouse in headless Chromium; pointer lock is not exercised) |
 
 ## Gates and their controls (every zero needs a detector that is shown to fire)
@@ -50,4 +51,4 @@ pages) and native-vs-browser there, (2) set `LOMN_PIXEL_TOLERANCE` to the larger
 positive control (fog off) still exceeds it by a wide margin. A failing pixel check prints the adapter for this reason.
 
 **Debug switches** need `?debug=1` (M13): `fog=off`, `debug_spin=MS`, `fetch_concurrency=N`, `nocache=1`. Without it a
-pasted URL always renders faithfully.
+pasted URL always renders faithfully. With it, a `debug` badge in the page header names the active switches (HUD or not).
