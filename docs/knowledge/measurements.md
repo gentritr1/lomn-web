@@ -281,7 +281,12 @@ only difference beyond the (zero) null spread: -O3 kept, spec §4.6 amended.
 on this loaded host; not adopted (the switch stays a debug option, `?debug=1&fetch_concurrency=8`).
 
 **Mutations r2** (`mutate4.py`, 34 entries incl. 11 new for C1, C2, I1, I2, I3, I4, I6, M3; scratch copy, 18:08–18:23):
-33 CAUGHT, the no-op control MISSED. A browser-checked mutation counts only when a check it targets failed (`EXPECT` in
+33 CAUGHT, the no-op control MISSED, **as recorded on 2026-10-07 18:08-18:23 on a host whose display measured 30 Hz; entry 29
+(I2 "expectation from the snapped p50 again") is host-rate dependent and was MISSED when rerun alone on a 60 Hz display
+(2026-10-07 21:47, spin 1.5 periods = 25 ms snapping to 48 Hz: the old circular rule still read DROPPING). T8 P11 made the spin
+2.0 display periods; entry 29 alone is CAUGHT again, twice (2026-10-07 21:58 and 23:07, both on a 60 Hz display, spin 33 ms).
+The tally after P11 is therefore 33 CAUGHT only if the other 32 still bite: the full 34-entry rerun on a 60 Hz host is PENDING
+(T8 P14: not run here; entry 29 is the only one re-verified).** A browser-checked mutation counts only when a check it targets failed (`EXPECT` in
 the script); every engine mutation is rebuilt out again before the next one. The first r2 run reported 33 CAUGHT too,
 but it had two harness defects, found by reading its logs: the wasm build was not rebuilt after restoring an engine
 mutation (later web-only mutations ran on the I2-mutated module) and the node check omitted `unit_r2_test.mjs`. Lesson:

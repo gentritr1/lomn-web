@@ -19,6 +19,7 @@ import { fileURLToPath } from 'node:url';
 import { blkTablesFingerprint, sha256hex } from '../app/fingerprint.js';
 import { serve } from './serve.mjs';
 import { decodePng, diffRgb, launch, networkCheck, waitFrames, waitState, watch } from './lib.mjs';
+import { dropSamplesVerdict } from './a13_checks.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const [wasmDir, workArg, lomnView] = process.argv.slice(2);
@@ -171,8 +172,23 @@ const open = async (url, init, { drop = true } = {}) => {
     page.close = async (...args) => {
       try {
         await waitFrames(page, 40, 15000);  // >= 30 dt samples in the window
-        const m = await page.evaluate(() => (window.__lomn?.state === 'area-ready' ? window.__lomn.metrics?.fps ?? null : null));
-        if (m && m.display_hz > 0 && m.dt_samples >= 30) dropSamples.push({ url: url.replace(srv.url, ''), dropping: m.dropping, fps: m.fps, hz: m.display_hz, snapped: m.display_snapped });
+        const read = () => page.evaluate(() => (window.__lomn?.state === 'area-ready' ? window.__lomn.metrics?.fps ?? null : null));
+        const pick = (m) => ({ dropping: m.dropping, fps: m.fps, hz: m.display_hz, snapped: m.display_snapped, loadavg: loadavg() });
+        const m = await read();
+        if (m && m.display_hz > 0 && m.dt_samples >= 30) {
+          const sample = { url: url.replace(srv.url, ''), ...pick(m) };
+          // T8 P16: a page that reads DROPPING (host load) is re-measured ONCE on a fresh window (its area shown again) and
+          // fails only if it drops again; both readings and the load average are reported. Spun pages never get here.
+          if (m.dropping || m.fps < 0.95 * m.display_hz) {
+            try {
+              await page.evaluate(() => window.__lomn.showArea(window.__lomn.load.area));
+              await waitFrames(page, 60, 20000);
+              const m2 = await read();
+              if (m2 && m2.display_hz > 0 && m2.dt_samples >= 30) sample.remeasure = pick(m2);
+            } catch { /* no second reading: the first one stands and fails the check */ }
+          }
+          dropSamples.push(sample);
+        }
       } catch { /* page already gone or not showing an area: nothing to sample */ }
       return close(...args);
     };
@@ -409,6 +425,15 @@ try {
       const img = await probe(async () => { await new Promise((res) => { const i = new Image(); i.onload = i.onerror = res; i.src = '/builds.json?img=' + 'B'.repeat(120); }); });
       check(!img.ok && (img.queries ?? []).length >= 1, 'query-string positive control: an <img> request with a query string to a manifest path fails the network check',
             JSON.stringify(img.queries ?? 'no query record').slice(0, 300));
+      // T8 P10: a window.open popup with a query string is a top-level navigation by Sec-Fetch-*, which the check used to treat
+      // as the page's own. Only navigations the TEST made (page.goto / reload, recorded by watch()) are the page's own now;
+      // the popup is flagged as a `navigations` finding. Control: the test's own navigations are clean (every netOk above and
+      // below, and tests/network_check_test.mjs).
+      const popupPage = ctx.waitForEvent('page', { timeout: 15000 });  // the popup is its own Page: close it as soon as it exists
+      const popup = await probe(() => { window.open('/index.html?d=' + 'A'.repeat(100)); });
+      check(!popup.ok && popup.foreignPaths.length === 0 && (popup.navigations ?? []).some((x) => /^\/index\.html\?d=A{100}$/.test(x.url)),
+            'navigation positive control: window.open("/index.html?d=" + 100 bytes) fails the network check', JSON.stringify(popup.navigations ?? 'no navigation record').slice(0, 300));
+      await (await popupPage).close();
       const beacon = await probe((kind) => navigator.sendBeacon('/builds.json', new Blob([new Uint8Array(512)])), 'beacon');
       check(!beacon.ok && (beacon.uploads ?? []).some((u) => u.method === 'POST' && u.bytes === 512),
             'upload positive control: navigator.sendBeacon to a manifest path fails the network check', JSON.stringify(beacon.uploads ?? 'no upload record'));
@@ -862,12 +887,13 @@ try {
   // Review fix 2: every unspun page that showed an area (sampled as it closed) was NOT DROPPING against the display rate
   // measured on that same page, and the engine's flag agrees with fps < 0.95 x that rate.
   {
-    const wrong = dropSamples.filter((x) => x.dropping || x.fps < 0.95 * x.hz);
-    const incoherent = dropSamples.filter((x) => x.dropping !== (x.fps < 0.95 * x.hz));
+    const dv = dropSamplesVerdict(dropSamples);
     summary.drop_samples = dropSamples;
-    check(dropSamples.length >= 8 && wrong.length === 0 && incoherent.length === 0,
-          `I2: every unspun page (${dropSamples.length} sampled) is NOT DROPPING against the display rate measured on that same page`,
-          wrong.length ? 'DROPPING: ' + JSON.stringify(wrong) : dropSamples.map((x) => `${x.fps.toFixed(1)}/${x.hz}Hz${x.snapped === false ? '?' : ''}`).join(' '));
+    const fmt = (x) => `${x.fps.toFixed(1)}/${x.hz}Hz${x.snapped === false ? '?' : ''}`;
+    check(dv.ok,
+          `I2: every unspun page (${dropSamples.length} sampled) is NOT DROPPING against the display rate measured on that same page (a flagged page is re-measured once)`,
+          (dv.wrong.length || dv.incoherent.length ? 'DROPPING/incoherent: ' + JSON.stringify([...dv.wrong, ...dv.incoherent]) :
+            dropSamples.map((x) => (x.remeasure ? `${fmt(x)} [flagged at load ${x.loadavg}; re-measured ${fmt(x.remeasure)} at load ${x.remeasure.loadavg}]` : fmt(x))).join(' ')));
   }
   summary.loadavg = { start: loadavgStart, end: loadavg() };
   for (const w of pageWatchers.filter((x) => !x.expectGpuLoss)) {

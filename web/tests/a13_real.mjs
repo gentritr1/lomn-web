@@ -3,6 +3,9 @@
 // The sweep over all 122 areas runs by default (rounds, bytes and over-fetch per area; draws == expected; heap growth);
 // A13_SWEEP=0 skips it.
 //      A13_FPS_FRAMES (default 600) frames per area for the fps measurement; LOMN_PIXEL_TOLERANCE (default 0).
+//      A13_SPIN_PROBE=1 adds, after everything else, the fps check's bite control: one page spun on purpose
+//      (?debug=1&debug_spin = 2 display periods) on which the SAME fps verdict must FAIL. Off by default: a default run has no
+//      spun page. (T8 P12.)
 // Steps: (1) the real folder through <input webkitdirectory> (setInputFiles with the install directory) -> exe +
 // blockfile-table validation -> quota -> OPFS copy in the worker; (2) lev1/vllg, lev2/ghut, lev4/crss at the default
 // camera vs native renders of the same build; (3) discovery == `lomn_view --manifest` for the three areas; (4) area
@@ -16,6 +19,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { serve } from './serve.mjs';
 import { decodePng, diffRgb, launch, networkCheck, waitFrames, waitState, watch } from './lib.mjs';
+import { fpsVerdict, gpuLiveVerdict, overFetchVerdict, positiveControlVerdict } from './a13_checks.mjs';
 
 const [siteArg, workArg, lomnView, wasmDir] = process.argv.slice(2);
 if (!siteArg || !workArg || !lomnView || !wasmDir) {
@@ -190,6 +194,9 @@ try {
       // the engine's hard limit of 16 so a loader change that deepens the chain fails here first.
       check(rows.every((r) => !r.cached) && maxRow.rounds <= ROUNDS_CAP, `sweep: every area discovers its set in <= ${ROUNDS_CAP} rounds (max ${maxRow.rounds} at ${maxRow.area})`,
             JSON.stringify(summary.sweep.rounds_histogram));
+      // T8 P14: 0 B over-fetch per sweep row (bytes fetched that the engine never read), asserted, not only recorded.
+      const of = overFetchVerdict(rows);
+      check(of.ok && rows.length === all.length, `sweep: 0 B over-fetch on every one of ${all.length} areas`, of.offenders.slice(0, 5).join('; ') || `${rows.length} rows`);
       check(bad.length === 0, `sweep: all ${all.length} areas load and draw their expected draws with 0 rejected`, bad.slice(0, 5).join('; '));
       check(grew.length === 0, 'sweep: no wasm memory growth over every area', grew.slice(0, 5).join('; '));
     }
@@ -233,9 +240,11 @@ try {
       if (a === 'lev1/vllg') seen.push(await p.page.evaluate(() => ({ ...window.__gpuLive })));
     }
     summary.i1_gpu_live_vllg = seen;
-    check(seen.every((x) => x.textures === seen[0].textures && x.buffers === seen[0].buffers),
-          'I1: live GPUTexture/GPUBuffer counts flat over 30 vllg<->frnt switches',
-          `at vllg: first ${JSON.stringify(seen[0])}, last ${JSON.stringify(seen[seen.length - 1])}`);
+    // T8 P13: flat is only a result when the probe saw objects: textures > 0 AND buffers > 0 at every sample (a hook that
+    // never ran reads 0/0 forever, which is flat too).
+    const live = gpuLiveVerdict(seen);
+    check(live.ok, 'I1: live GPUTexture/GPUBuffer counts non-zero and flat over 30 vllg<->frnt switches',
+          `at vllg: first ${JSON.stringify(seen[0])}, last ${JSON.stringify(seen[seen.length - 1])}` + (live.ok ? '' : '; ' + live.reasons.join('; ')));
     netOk(p, 'revisit');
     await p.page.close();
   }
@@ -264,27 +273,71 @@ try {
     await waitFrames(p.page, 3);
     const d = diffRgb(await shot(p.page, 'positive_fog_off_lev1_vllg.png'), refs['lev1/vllg']);
     gate.positive = { what: 'lev1/vllg fog off vs native', differing: d.differing, max: d.max, over_tolerance: d.over(tolerance) };
-    check(d.sameSize && d.over(tolerance) > 10000, 'pixel gate positive control: vllg with fog off exceeds the tolerance', `${d.over(tolerance)} pixels over ${tolerance}, max delta ${d.max}`);
+    // T8 P14: the global constraint is >= 100,000 pixels over the tolerance (measured 155,532 on vllg), not the former > 10,000.
+    check(positiveControlVerdict(d.sameSize ? d.over(tolerance) : NaN, { sameSize: d.sameSize }).ok,
+          'pixel gate positive control: vllg with fog off exceeds the tolerance by >= 100,000 pixels', `${d.over(tolerance)} pixels over ${tolerance}, max delta ${d.max}`);
     await p.page.close();
   }
   summary.pixel_gate = gate;
-  // (7) fps with reconciliation per area (?hud=1; the HUD overlays the canvas, so no pixel compare here).
+  // (7) fps per area (?hud=1; the HUD overlays the canvas, so no pixel compare here). T8 P12: the old check, dt samples ==
+  // frames - 1, is true by construction (the engine counts frames as samples + 1). The assertions are now (a) the engine's
+  // DROPPING flag is false and (b) the counted intervals / the intervals expected at the display rate MEASURED on this page
+  // (before its first area) is >= 0.95 (the HUD rule; fpsVerdict in a13_checks.mjs, pinned by a13_checks_test.mjs), with the
+  // expectation recomputed from window x rate. The spread of those ratios over the three unspun areas is the null and is
+  // reported. Host load must not turn into a false failure: a non-spun area that fails is re-measured ONCE on a fresh window
+  // (show again) and fails only if it fails again; both readings and the load average are in the detail and results.json.
+  // The bite control (a spun page must fail the same verdict) is A13_SPIN_PROBE=1, below.
+  const nullRatios = [], nullHz = [];
   {
     const p = await open(base + '?size=1280x720&hud=1&area=lev1/vllg');
     await waitState(p.page, ['area-ready'], 120000);
+    const reading = async () => { await waitFrames(p.page, fpsFrames + 1, fpsFrames * 50 + 30000); return metrics(p.page); };
+    const fmt = (f, v) => `${f.dt_samples} counted vs ${Number(f.expected_intervals).toFixed(1)} expected intervals (ratio ${Number(v.ratio).toFixed(3)}) in ${f.window_ms} ms at the measured ${f.display_hz} Hz${f.display_snapped === false ? ' (unsnapped)' : ''}; ` +
+                       `dropping ${f.dropping}; p50 ${f.p50_ms} p95 ${f.p95_ms}`;
     for (const a of AREAS) {
       if (a !== 'lev1/vllg') await show(p.page, a);
       const la = loadavg();
-      await waitFrames(p.page, fpsFrames + 1, fpsFrames * 50 + 30000);
-      const m = await metrics(p.page);
+      let m = await reading();
+      let v = fpsVerdict(m.fps);
+      let remeasure = null;
+      if (!v.ok) {
+        remeasure = { first: { fps: m.fps, ratio: v.ratio, reasons: v.reasons, loadavg: loadavg() } };
+        await show(p.page, a);  // a fresh window: showArea resets the frame counters
+        m = await reading();
+        v = fpsVerdict(m.fps);
+      }
       const f = m.fps;
-      check(f.dt_samples === f.frames_in_window - 1, `${a} fps reconciliation: dt samples == frames - 1`,
-            `${f.frames_in_window} frames in ${f.window_ms} ms; expected ${f.expected_intervals.toFixed(1)} intervals at ${f.nominal_hz} Hz; p50 ${f.p50_ms} p95 ${f.p95_ms}`);
-      summary.areas[a].fps = { ...f, breakdown: m.breakdown_ms, loadavg_before: la, loadavg_after: loadavg() };
+      nullRatios.push(v.ratio);
+      nullHz.push(f.display_hz);
+      check(v.ok, `${a} fps: DROPPING false and counted/expected intervals >= 0.95 at the measured display rate`,
+            (remeasure ? `RE-MEASURED after ${remeasure.first.reasons.join('; ')} (load ${remeasure.first.loadavg}); first reading ${Number(remeasure.first.ratio).toFixed(3)}; second: ` : '') +
+            fmt(f, v) + (v.ok ? '' : '; ' + v.reasons.join('; ')) + `; loadavg ${la} -> ${loadavg()}`);
+      summary.areas[a].fps = { ...f, ratio: v.ratio, breakdown: m.breakdown_ms, loadavg_before: la, loadavg_after: loadavg(), remeasure };
       await p.page.screenshot({ path: path.join(work, 'shots', `hud_${a.replace('/', '_')}.png`) });
     }
+    summary.fps_null = { ratios: nullRatios, min: Math.min(...nullRatios), max: Math.max(...nullRatios), spread: Math.max(...nullRatios) - Math.min(...nullRatios), display_hz: nullHz, threshold: 0.95 };
+    console.log(`     fps null (3 unspun areas): ratios ${nullRatios.map((x) => x.toFixed(3)).join(' ')}, spread ${summary.fps_null.spread.toFixed(3)}, display ${nullHz.join('/')} Hz`);
     netOk(p, 'HUD');
     await p.page.close();
+  }
+  if (process.env.A13_SPIN_PROBE === '1') {
+    // T8 P12 bite control (never part of a default run): 2 display periods of main-thread spin per frame on lev1/vllg. The spun
+    // page measures its own display rate before the spin starts; the verdict that passed the three unspun areas must FAIL here
+    // (counted ~1/3 of the intervals expected at the display rate, DROPPING true). Not re-measured: this is the check that
+    // proves the assertion bites.
+    const hz = [...nullHz].sort((x, y) => x - y)[Math.floor(nullHz.length / 2)];
+    const spin = Math.round(2000 / hz);
+    const q = await open(base + `?size=1280x720&hud=1&area=lev1/vllg&debug=1&debug_spin=${spin}`);
+    await waitState(q.page, ['area-ready'], 120000);
+    await waitFrames(q.page, 120, 120000);
+    const mq = await metrics(q.page);
+    const vq = fpsVerdict(mq.fps);
+    summary.fps_spin_probe = { spin_ms: spin, fps: mq.fps, ratio: vq.ratio, reasons: vq.reasons, loadavg: loadavg() };
+    check(!vq.ok && mq.fps.spin_ms === spin && vq.ratio < Math.min(...nullRatios) - 0.3,
+          `fps check bites: a ${spin} ms spin per frame (2 display periods) on lev1/vllg fails the same verdict`,
+          `${vq.ok ? 'PASSED (check does not bite)' : 'failed as required'}: ${mq.fps.dt_samples} counted vs ${Number(mq.fps.expected_intervals).toFixed(1)} expected (ratio ${Number(vq.ratio).toFixed(3)} vs null min ${Math.min(...nullRatios).toFixed(3)}), dropping ${mq.fps.dropping}; ${vq.reasons.join('; ')}`);
+    netOk(q, 'spun HUD probe');
+    await q.page.close();
   }
   for (const w of watchers) {
     const gpu = w.console.filter((t) => t.includes('[webgpu]') || t.includes('[area]'));
