@@ -10,7 +10,14 @@ Conventions this oracle shares with the shim on purpose (they are declared devia
 not D3D8 facts): an unbound texture samples opaque white (deviation V3); with blending off the written alpha is 1.
 Cases outside the formulas modelled here are SKIPPED and counted, never silently passed:
   FOGENABLE with both FOGTABLEMODE and FOGVERTEXMODE = NONE (D3D8 then takes the fog factor from the vertex specular
-  alpha; the area path never does this: AppMain sets FOGTABLEMODE LINEAR).
+  alpha; the area path never does this: AppMain sets FOGTABLEMODE LINEAR);
+  (Task 8B B1) LINEAR fog with FOGSTART == FOGEND (the documented formula divides by end - start = 0; the shim's choice
+  is a declared deviation, lomn/d3d/ffp.h) and a point light within range with all-zero attenuation (1 / 0);
+  TIES: a value within 1e-6 (relative, at least absolute 1e-6) of a discontinuity of the formulas - the 8-bit alpha
+  rounding point a * 255 + 0.5 = integer, or a vertex at |distance - Range| of a point light - where float32 (shim) and
+  float64 (here) may legitimately land on different sides.
+Fog factor (Task 8B B2): every mode's factor is clamped to [0, 1], as the GPU shader does (an EXP fog with a negative
+density would otherwise give f > 1); the C++ reference applies the same clamp.
 Texture coordinates (Task 8A B1): D3DTSS_TEXTURETRANSFORMFLAGS = D3DTTFF_COUNT2 transforms the stage's coordinates by
 D3DTS_TEXTURE0 and passes the first two results to the rasterizer. A 2-D coordinate (u, v) enters the 4x4 multiply as
 (u, v, 1, 0): the documentation's "texture coordinate translation" for 2-D coordinates is the matrix's third row
@@ -27,7 +34,7 @@ D3DLIGHT_POINT, D3DLIGHT_DIRECTIONAL = 1, 3
 D3DMCS_COLOR1 = 1
 D3DFOG_NONE, D3DFOG_EXP, D3DFOG_EXP2, D3DFOG_LINEAR = 0, 1, 2, 3
 D3DTTFF_COUNT2 = 2
-TEX2X2 = [[(1.0, 0.0, 0.0, 1.0), (0.0, 1.0, 0.0, 1.0)], [(0.0, 0.0, 1.0, 1.0), (1.0, 1.0, 1.0, 1.0)]]  # [row v][column u]
+TEX2X2 = [[(1.0, 0.0, 0.0, 1.0), (0.0, 1.0, 0.0, 1.0)], [(0.0, 0.0, 1.0, 1.0), (128 / 255.0, 64 / 255.0, 192 / 255.0, 1.0)]]  # [row v][column u]
 
 
 def texcoord(c):
@@ -38,6 +45,17 @@ def texcoord(c):
     M = c['tex0']  # row-major _11.._44
     vec = (u, v, 1.0, 0.0)
     return [sum(vec[i] * M[i * 4 + j] for i in range(4)) for j in range(2)]
+
+
+class Skip(Exception):
+    """A case (or its fragment part) outside the modelled formulas; the message is the counted reason."""
+
+
+TIE = 1e-6
+
+
+def near_tie(x, at):
+    return abs(x - at) <= TIE * max(1.0, abs(at))
 
 
 def argb(v):
@@ -88,11 +106,16 @@ def lit_vertex(c):
         elif L['type'] == D3DLIGHT_POINT:
             V = [L['position'][k] - P[k] for k in range(3)]
             dist = math.sqrt(sum(x * x for x in V))
+            if near_tie(dist, L['range']):
+                raise Skip('tie')
             if dist > L['range']:  # beyond Range the light has no effect
                 continue
             Ldir = [x / dist for x in V] if dist > 0 else [0.0, 0.0, 0.0]
             a0, a1, a2 = L['att']
-            atten = 1.0 / (a0 + a1 * dist + a2 * dist * dist)
+            den = a0 + a1 * dist + a2 * dist * dist
+            if den == 0.0:
+                raise Skip('zero attenuation')
+            atten = 1.0 / den
         else:
             raise SystemExit('light type %d not modelled' % L['type'])
         ndotl = max(0.0, sum(N[k] * Ldir[k] for k in range(3)))
@@ -125,7 +148,10 @@ def fragment(c):
     col = [op(ts['COLOROP'], arg(ts['COLORARG1']), arg(ts['COLORARG2']), ch) for ch in range(3)]
     alpha = op(ts['ALPHAOP'], arg(ts['ALPHAARG1']), arg(ts['ALPHAARG2']), 3)
     if rs['ALPHATESTENABLE']:
-        a8 = math.floor(min(1.0, max(0.0, alpha)) * 255.0 + 0.5)  # the 8-bit alpha the test compares
+        x = min(1.0, max(0.0, alpha)) * 255.0 + 0.5
+        if near_tie(x, round(x)) and 0.5 < x < 255.5:
+            raise Skip('tie')  # on the rounding point: float32 and float64 may round to different bytes
+        a8 = math.floor(x)  # the 8-bit alpha the test compares
         ref = rs['ALPHAREF'] & 0xff
         f = rs['ALPHAFUNC']
         ok = {1: False, 2: a8 < ref, 3: a8 == ref, 4: a8 <= ref, 5: a8 > ref, 6: a8 != ref, 7: a8 >= ref, 8: True}.get(f, True)
@@ -137,13 +163,16 @@ def fragment(c):
         z = c['w']
         st, en, de = bits_float(rs['FOGSTART']), bits_float(rs['FOGEND']), bits_float(rs['FOGDENSITY'])
         if mode == D3DFOG_LINEAR:
-            fo = min(1.0, max(0.0, (en - z) / (en - st)))
+            if en == st:
+                raise Skip('fog start == end')
+            fo = (en - z) / (en - st)
         elif mode == D3DFOG_EXP:
             fo = math.exp(-(z * de))  # 1 / e^(z * density)
         elif mode == D3DFOG_EXP2:
             fo = math.exp(-((z * de) ** 2))  # 1 / e^((z * density)^2)
         else:
-            raise ValueError('skip')
+            raise Skip('fog with no fog mode')
+        fo = min(1.0, max(0.0, fo))  # the factor is clamped in every mode (see the module docstring)
         fc = argb(rs['FOGCOLOR'])
         out = [fo * out[k] + (1.0 - fo) * fc[k] for k in range(3)] + [out[3]]
     return True, out
@@ -151,6 +180,7 @@ def fragment(c):
 
 def main():
     n = skipped = bad = 0
+    reasons = {}
     worst_v = worst_f = 0.0
     kept_cases = discards = texcases = 0
     worst_uv = 0.0
@@ -172,13 +202,19 @@ def main():
                 if bad <= 10:
                     print('MISMATCH texel %s: oracle %s probe expectation %s' % (c['what'], want, c['texel']))
             texcases += 1
-        v = lit_vertex(c)
+        try:
+            v = lit_vertex(c)
+        except Skip as e:  # the whole case: its fragment input is the vertex colour
+            skipped += 1
+            reasons[str(e)] = reasons.get(str(e), 0) + 1
+            continue
         dv = max(abs(v[k] - c['out_vertex'][k]) for k in range(4))
         worst_v = max(worst_v, dv)
         try:
             kept, f = fragment(c)
-        except ValueError:
+        except Skip as e:
             skipped += 1
+            reasons[str(e)] = reasons.get(str(e), 0) + 1
             if dv > TOL:
                 bad += 1
                 print('MISMATCH vertex %s: oracle %s shim %s' % (c['what'], v, c['out_vertex']))
@@ -200,9 +236,11 @@ def main():
             bad += 1
             if bad <= 10:
                 print('MISMATCH case %d (%s): %s' % (n, c['what'], msg))
-    print('ffp_oracle: %d cases (%d fragments kept, %d discarded by the alpha test, %d fragment checks skipped: fog with '
-          'no fog mode), max |vertex diff| %.2e, max |fragment diff| %.2e, max |texcoord diff| %.2e, %d texel probes, '
-          '%d mismatches (tolerance %g)' % (n, kept_cases, discards, skipped, worst_v, worst_f, worst_uv, texcases, bad, TOL))
+    why = ', '.join('%d %s' % (reasons.get(k, 0), k if k != 'tie' else 'ties')
+                    for k in ('fog with no fog mode', 'fog start == end', 'zero attenuation', 'tie'))
+    print('ffp_oracle: %d cases (%d fragments kept, %d discarded by the alpha test, %d checks skipped: %s), '
+          'max |vertex diff| %.2e, max |fragment diff| %.2e, max |texcoord diff| %.2e, %d texel probes, '
+          '%d mismatches (tolerance %g)' % (n, kept_cases, discards, skipped, why, worst_v, worst_f, worst_uv, texcases, bad, TOL))
     sys.exit(1 if bad or n == 0 else 0)
 
 

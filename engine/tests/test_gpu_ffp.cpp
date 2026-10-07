@@ -70,7 +70,7 @@ int main() {
       ok = false;
       return;
     }
-    // Reference: lit colour at a vertex (all equal), then stage 0 / test / fog at the centre (w = 1), then blend.
+    // Reference: lit colour at a vertex (all equal), then stage 0 / test / fog at the centre (the case's eye w), then blend.
     const float pos[3] = {verts[0][0], verts[0][1], verts[0][2]}, nrm[3] = {0, 0, -1};
     const Color4 d = reference_vertex_color(s, has_vcol, Color4{vc[0], vc[1], vc[2], vc[3]}, pos, nrm);
     // Texel: the white 1x1, or kFfpTex2x2 point-sampled at the transformed uv (every vertex has uv (0.5, 0.5)).
@@ -80,7 +80,7 @@ int main() {
     const Color4 texel = tex2x2 ? test::ffp_tex2x2_texel(tuv) : Color4{1, 1, 1, 1};
     Color4 f;
     float want[3] = {clear[0], clear[1], clear[2]};
-    if (reference_fragment(s, d, texel, true, 1.0f, f)) {
+    if (reference_fragment(s, d, texel, true, test::ffp_eye_w(s, pos), f)) {  // Task 8B B4: the case's own eye w
       const float a = s.rs[rs::ALPHABLENDENABLE] ? f.a : 1.0f;
       want[0] = f.r * a + clear[0] * (1 - a);
       want[1] = f.g * a + clear[1] * (1 - a);

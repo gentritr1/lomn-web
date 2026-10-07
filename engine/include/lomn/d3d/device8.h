@@ -13,7 +13,8 @@
 //
 // Log lines (stable text; native == wasm32): "RS <NAME> <value>", "TSS<stage> <NAME> <value>", "XFORM <NAME> sum=<hex>",
 // "MATERIAL ...", "LIGHT <i> ...", "LIGHTENABLE <i> <0|1>", "TEXTURE <stage> <name|NULL>", "CLEAR ...", "BEGINSCENE",
-// "ENDSCENE", "DRAW ..." and "# ..." structure notes. Floats print with %.6g; float-valued render states (FOGSTART/END/
+// "ENDSCENE", "DRAW ..." and "# ..." structure notes (Task 8B B3: also "# dropped <call> ..." for a call outside the
+// tracked slots, and "# LightEnable <i>: never set, ..." when LightEnable gives an index the D3D8 default light). Floats print with %.6g; float-valued render states (FOGSTART/END/
 // DENSITY) print the bit pattern and the value.
 #pragma once
 #include <cstdint>
@@ -149,6 +150,7 @@ class Device8 {
   const std::vector<std::string>* names_;
   DrawSink* sink_ = nullptr;
   uint32_t state_calls_ = 0, draws_ = 0;
+  bool light_set_[kMaxLights] = {};  // SetLight assigned the index (else LightEnable uses the D3D8 default light; Task 8B B3)
   uint32_t clear_argb_ = 0xff000000u;
   float clear_z_ = 1.0f;
 };

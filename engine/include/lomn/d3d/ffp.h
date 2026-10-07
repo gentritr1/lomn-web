@@ -20,8 +20,9 @@
 //    SELECTARG2, MODULATE on args DIFFUSE / CURRENT / TEXTURE / TFACTOR, separately for colour and alpha.
 //  Alpha test: the stage alpha in 8 bits, round(a * 255), compared with ALPHAREF by ALPHAFUNC; failed pixels discard.
 //  Fog (table or vertex mode, evaluated per pixel on the eye depth w = clip w, i.e. W-fog):
-//    LINEAR f = clamp((end - w) / (end - start), 0, 1); EXP f = exp(-density w); EXP2 f = exp(-(density w)^2);
-//    rgb = f * rgb + (1 - f) * FOGCOLOR; alpha untouched.
+//    LINEAR f = (end - w) / (end - start); EXP f = exp(-density w); EXP2 f = exp(-(density w)^2); f is clamped to [0, 1]
+//    in every mode (Task 8B B2: one rule in the shader, reference_fragment and ffp_oracle.py - an EXP fog with a negative
+//    density draws unfogged); rgb = f * rgb + (1 - f) * FOGCOLOR; alpha untouched.
 //  Texture transform: TEXTURETRANSFORMFLAGS COUNT2 on 2-D coordinates -> uv' = ((u, v, 1, 0) * TEXTURE0).xy: D3D8 pads a
 //    2-D coordinate with 1 then 0, so the translation sits in _31/_32 and row 4 (_41/_42) is ignored (Wine's
 //    compute_texture_matrix encodes the same; Task 8A B1 - this padded (u, v, 1, 1) before, adding _41/_42).
@@ -38,7 +39,7 @@ constexpr uint32_t kFfpUniformBytes = 1024;  // 256 floats; layout in ffp.cpp (p
 constexpr uint32_t kFfpVertexStride = 48;    // position @0, normal @12, uv @24, colour rgba @32 (view/area.h)
 
 struct PipelineKey {
-  bool blend = false;  // ALPHABLENDENABLE with SRCALPHA / INVSRCALPHA
+  bool blend = false;  // ALPHABLENDENABLE, except ONE/ZERO (= opaque, Task 8B B3); SRCALPHA/INVSRCALPHA else flagged
   bool depth_write = true;
   rhi::CompareFunc depth_compare = rhi::CompareFunc::LessEqual;
   rhi::CullMode cull = rhi::CullMode::None;
@@ -58,6 +59,11 @@ enum Unsupported : uint32_t {
                                  // DIFFUSE/CURRENT/TEXTURE/TFACTOR
   kUnsupMipNone = 1u << 6,       // MIPFILTER NONE (rhi samplers always mipmap)
   kUnsupMaterialSource = 1u << 7,  // a *MATERIALSOURCE other than the D3D8 defaults
+  // Task 8B B3: state the compiler reads past instead of reproducing.
+  kUnsupFlatShade = 1u << 8,     // SHADEMODE FLAT (the shader always interpolates: Gouraud)
+  kUnsupNormalize = 1u << 9,     // NORMALIZENORMALS with LIGHTING (normals are used as transformed, never renormalised)
+  kUnsupAddress = 1u << 10,      // stage-0 ADDRESSU/ADDRESSV other than WRAP (rhi samplers built here always wrap)
+  kUnsupLightType = 1u << 11,    // an enabled light whose type is not POINT / SPOT / DIRECTIONAL (drawn as a point light)
 };
 
 PipelineKey pipeline_key(const State& s, uint32_t* unsupported);

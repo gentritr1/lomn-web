@@ -74,8 +74,8 @@ void emit(const char* what, const State& s, bool has_vcol, const Color4& vcol, c
 int main(int argc, char** argv) {
   const uint32_t n = argc > 1 ? static_cast<uint32_t>(std::strtoul(argv[1], nullptr, 10)) : 4000;
   g_rng = argc > 2 ? std::strtoull(argv[2], nullptr, 10) : 1;
-  // 1. gpu_ffp's cases with gpu_ffp's inputs: vertex 0 of the triangle, normal (0,0,-1), white texel, w = 1, the fragment
-  //    fed with the case's own lit vertex colour (as the GPU test does).
+  // 1. gpu_ffp's cases with gpu_ffp's inputs: vertex 0 of the triangle, normal (0,0,-1), the case's texel and eye w
+  //    (ffp_eye_w), the fragment fed with the case's own lit vertex colour (as the GPU test does).
   float verts[3][12];
   test::ffp_triangle(verts);
   const float nrm[3] = {0, 0, -1};
@@ -86,7 +86,7 @@ int main(int argc, char** argv) {
     float tuv[2];
     reference_texcoord(c.s, uv, tuv);  // the texel gpu_ffp expects: kFfpTex2x2 point-sampled at the transformed uv
     emit(c.what, c.s, c.has_vcol, vc, verts[0], nrm, d, c.tex2x2 ? test::ffp_tex2x2_texel(tuv) : Color4{1, 1, 1, 1}, true,
-         1.0f, uv, c.tex2x2);
+         test::ffp_eye_w(c.s, verts[0]), uv, c.tex2x2);
   }
   // 2. Seeded random samples over every state the reference reads. World matrices are rigid (rotation about a random
   //    axis + translation): the area path only builds RotX * translation.

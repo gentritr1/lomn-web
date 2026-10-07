@@ -187,6 +187,9 @@ PipelineKey pipeline_key(const State& s, uint32_t* unsup) {
   PipelineKey k;
   const uint32_t* r = s.rs;
   k.blend = r[rs::ALPHABLENDENABLE] != 0;
+  // Task 8B B3: ONE/ZERO (the D3D8 default factors) blends src * 1 + dst * 0 = src: exactly an opaque draw (the written
+  // alpha is the stage alpha either way, pack_uniforms), so it is drawn opaque instead of being flagged.
+  if (k.blend && r[rs::SRCBLEND] == kBlendOne && r[rs::DESTBLEND] == kBlendZero) k.blend = false;
   if (k.blend && !(r[rs::SRCBLEND] == kBlendSrcAlpha && r[rs::DESTBLEND] == kBlendInvSrcAlpha)) u |= kUnsupBlendFactors;
   if (r[rs::ZENABLE] == kZbFalse) {
     k.depth_write = false;
@@ -202,6 +205,7 @@ PipelineKey pipeline_key(const State& s, uint32_t* unsup) {
   // draw with ZBIAS != 0, see REPORT).
   k.depth_bias = -static_cast<int32_t>(std::min<uint32_t>(r[rs::ZBIAS], 16));
   if (r[rs::FILLMODE] != kFillSolid) u |= kUnsupFill;
+  if (r[rs::SHADEMODE] == 1) u |= kUnsupFlatShade;  // D3DSHADE_FLAT
   if (r[rs::SPECULARENABLE]) u |= kUnsupSpecular;
   if (s.tss[1][tss::COLOROP] != kTopDisable || s.tss[1][tss::ALPHAOP] != kTopDisable) u |= kUnsupStage1;
   const uint32_t* t = s.tss[0];
@@ -209,8 +213,13 @@ PipelineKey pipeline_key(const State& s, uint32_t* unsup) {
       !supported_arg(t[tss::COLORARG2]) || !supported_arg(t[tss::ALPHAARG1]) || !supported_arg(t[tss::ALPHAARG2]))
     u |= kUnsupTexOp;
   if (r[rs::LIGHTING]) {
-    for (uint32_t i = 0; i < kMaxLights; ++i)
-      if (s.light_on[i] && s.lights[i].type == kLightSpot) u |= kUnsupSpot;
+    for (uint32_t i = 0; i < kMaxLights; ++i) {
+      if (!s.light_on[i]) continue;
+      const uint32_t ty = s.lights[i].type;
+      if (ty == kLightSpot) u |= kUnsupSpot;
+      else if (ty != kLightPoint && ty != kLightDirectional) u |= kUnsupLightType;
+    }
+    if (r[rs::NORMALIZENORMALS]) u |= kUnsupNormalize;
     if (r[rs::DIFFUSEMATERIALSOURCE] != kMcsColor1 || r[rs::AMBIENTMATERIALSOURCE] != kMcsMaterial ||
         r[rs::EMISSIVEMATERIALSOURCE] != kMcsMaterial)
       u |= kUnsupMaterialSource;
@@ -248,6 +257,7 @@ rhi::SamplerDesc sampler_desc(const State& s, uint32_t* unsup) {
   d.mag = f(t[tss::MAGFILTER]);
   d.min = f(t[tss::MINFILTER]);
   if (t[tss::MIPFILTER] == kTexfNone && unsup) *unsup |= kUnsupMipNone;
+  if ((t[tss::ADDRESSU] != 1 || t[tss::ADDRESSV] != 1) && unsup) *unsup |= kUnsupAddress;  // D3DTADDRESS_WRAP = 1
   d.mip = t[tss::MIPFILTER] == kTexfLinear ? rhi::FilterMode::Linear : rhi::FilterMode::Nearest;
   uint32_t an = t[tss::MAXANISOTROPY];
   an = std::max<uint32_t>(1, std::min<uint32_t>(16, an));
@@ -420,6 +430,9 @@ bool reference_fragment(const State& s, const Color4& d, const Color4& texel, bo
     if (mode == kFogLinear) f = std::min(1.0f, std::max(0.0f, (en - w) / (en - st)));
     else if (mode == kFogExp) f = std::exp(-de * w);
     else if (mode == kFogExp2) f = std::exp(-(de * w) * (de * w));
+    // Task 8B B2: one rule with the GPU shader (and ffp_oracle.py): the factor is clamped to [0, 1] in every mode, so an
+    // EXP fog with a negative density (f > 1) draws unfogged instead of overshooting.
+    f = std::min(1.0f, std::max(0.0f, f));
     const Color4 fc = argb_to_color(s.rs[rs::FOGCOLOR]);
     out.r = f * out.r + (1 - f) * fc.r;
     out.g = f * out.g + (1 - f) * fc.g;

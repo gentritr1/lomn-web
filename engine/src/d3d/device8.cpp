@@ -184,15 +184,17 @@ void Device8::rec(const std::string& line, bool is_state) {
   if (log_) log_->push_back(line);
 }
 
+// Task 8B B3: a call outside the tracked slots (render state >= 256, stage >= kStages, stage state >= 32, light index
+// >= kMaxLights) changes nothing here; it is logged as a "# dropped ..." note (not a state call) so it is never silent.
 void Device8::set_rs(uint32_t r, uint32_t v) {
-  if (r >= 256) return;
+  if (r >= 256) return rec(fmt("# dropped SetRenderState state=%u value=%u", r, v), false);
   s_.rs[r] = v;
   if (is_float_rs(r)) rec(fmt("RS %s 0x%08x (", rs_name(r).c_str(), v) + g6(bits_to_float(v)) + ")", true);
   else if (r == rs::FOGCOLOR || r == rs::TEXTUREFACTOR || r == rs::AMBIENT) rec(fmt("RS %s 0x%08x", rs_name(r).c_str(), v), true);
   else rec(fmt("RS %s %u", rs_name(r).c_str(), v), true);
 }
 void Device8::set_tss(uint32_t st, uint32_t t, uint32_t v) {
-  if (st >= kStages || t >= 32) return;
+  if (st >= kStages || t >= 32) return rec(fmt("# dropped SetTextureStageState stage=%u type=%u value=%u", st, t, v), false);
   s_.tss[st][t] = v;
   rec(fmt("TSS%u %s %u", st, tss_name(t).c_str(), v), true);
 }
@@ -209,8 +211,9 @@ void Device8::set_material(const Material8& m) {
   rec("MATERIAL d=" + c4(m.diffuse) + " a=" + c4(m.ambient) + " s=" + c4(m.specular) + " e=" + c4(m.emissive) + " p=" + g6(m.power), true);
 }
 void Device8::set_light(uint32_t i, const Light8& l) {
-  if (i >= kMaxLights) return;
+  if (i >= kMaxLights) return rec(fmt("# dropped SetLight index=%u", i), false);
   s_.lights[i] = l;
+  light_set_[i] = true;
   rec(fmt("LIGHT %u type=%u", i, l.type) + " d=" + c4(l.diffuse) + " s=" + c4(l.specular) + " a=" + c4(l.ambient) +
           " pos=(" + g6(l.position[0]) + "," + g6(l.position[1]) + "," + g6(l.position[2]) + ") dir=(" + g6(l.direction[0]) +
           "," + g6(l.direction[1]) + "," + g6(l.direction[2]) + ") range=" + g6(l.range) + " att=(" + g6(l.attenuation0) +
@@ -218,12 +221,24 @@ void Device8::set_light(uint32_t i, const Light8& l) {
       true);
 }
 void Device8::light_enable(uint32_t i, bool on) {
-  if (i >= kMaxLights) return;
+  if (i >= kMaxLights) return rec(fmt("# dropped LightEnable index=%u on=%d", i, on ? 1 : 0), false);
+  // Task 8B B3 (DirectX 8.1 SDK, IDirect3DDevice8::LightEnable): an index SetLight never assigned gets the default light,
+  // D3DLIGHT_DIRECTIONAL with Diffuse (1,1,1,0), Direction (0,0,1) and every other member 0. The note is logged only when
+  // such a light is ENABLED (it then shines): every real area disables never-set indices at init (LightEnable(i, FALSE)
+  // on 90 of 123 areas), which has no effect and stays out of the log.
+  if (!light_set_[i]) {
+    Light8 d;
+    d.type = kLightDirectional;
+    d.diffuse = Color4{1, 1, 1, 0};
+    d.direction[2] = 1.0f;
+    s_.lights[i] = d;
+    if (on) rec(fmt("# LightEnable %u: never set, D3D8 default light (white directional +Z)", i), false);
+  }
   s_.light_on[i] = on;
   rec(fmt("LIGHTENABLE %u %d", i, on ? 1 : 0), true);
 }
 void Device8::set_texture(uint32_t st, uint32_t h) {
-  if (st >= kStages) return;
+  if (st >= kStages) return rec(fmt("# dropped SetTexture stage=%u", st), false);
   s_.texture[st] = h;
   std::string n = "NULL";
   if (h) n = names_ && h <= names_->size() ? (*names_)[h - 1] : "#" + std::to_string(h);

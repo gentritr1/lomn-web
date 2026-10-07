@@ -64,9 +64,14 @@ TEST_CASE("d3d: pipeline keys map D3D cull/z/blend/zbias; samplers map ANISOTROP
   s.rs[rs::ZBIAS] = 16;
   CHECK(pipeline_key(s, &u).depth_bias == -16);
   CHECK(u == 0);
-  s.rs[rs::ALPHABLENDENABLE] = 1;  // with the D3D8 default ONE/ZERO factors: not reproducible
+  s.rs[rs::ALPHABLENDENABLE] = 1;  // Task 8B B3: with the D3D8 default ONE/ZERO factors blending is a no-op = opaque (exact)
+  CHECK_FALSE(pipeline_key(s, &u).blend);
+  CHECK(u == 0);
+  s.rs[rs::DESTBLEND] = kBlendOne;  // ONE/ONE (additive) is not reproducible: flagged
   pipeline_key(s, &u);
   CHECK((u & kUnsupBlendFactors) != 0);
+  u = 0;
+  s.rs[rs::DESTBLEND] = kBlendZero;
   s.tss[0][tss::MAGFILTER] = s.tss[0][tss::MINFILTER] = kTexfAnisotropic;
   s.tss[0][tss::MIPFILTER] = kTexfLinear;
   rhi::SamplerDesc sd = sampler_desc(s, &u);
@@ -218,4 +223,116 @@ TEST_CASE("d3d: the state log prints NaN and infinities identically natively and
                    "RS FOGSTART 0xffc00000 (nan)", "RS FOGEND 0xff800000 (-inf)",
                    "LIGHT 0 type=1 d=(0,0,0,0) s=(0,0,0,0) a=(0,0,0,0) pos=(nan,0,0) dir=(0,-inf,0) range=inf att=(0,nan,0)",
                    "CLEAR full flags=1 color=0x00000000 z=nan"});
+}
+
+TEST_CASE("d3d: EXP fog with a negative density is clamped to an unfogged factor (Task 8B B2: one rule, CPU == GPU)") {
+  // The GPU shader clamps every fog factor to [0, 1]; exp(-density * w) with density < 0 is > 1, so the reference (and
+  // tools/research/oracle/ffp_oracle.py) clamp too: the colour stays unfogged instead of overshooting.
+  State s = default_state();
+  s.rs[rs::FOGENABLE] = 1;
+  s.rs[rs::FOGTABLEMODE] = kFogExp;
+  s.rs[rs::FOGDENSITY] = float_to_bits(-0.5f);
+  s.rs[rs::FOGCOLOR] = 0xff00ff00u;
+  Color4 out;
+  REQUIRE(reference_fragment(s, Color4{1, 1, 1, 1}, Color4{0.5f, 0.25f, 0.75f, 1}, true, 2.0f, out));
+  CHECK(out.r == doctest::Approx(0.5f));
+  CHECK(out.g == doctest::Approx(0.25f));
+  CHECK(out.b == doctest::Approx(0.75f));
+  s.rs[rs::FOGTABLEMODE] = kFogExp2;  // exp(-(d w)^2) <= 1 for any finite d: unchanged rule
+  REQUIRE(reference_fragment(s, Color4{1, 1, 1, 1}, Color4{0.5f, 0.25f, 0.75f, 1}, true, 2.0f, out));
+  CHECK(out.g == doctest::Approx(0.25f * std::exp(-1.0f) + (1 - std::exp(-1.0f))));
+}
+
+TEST_CASE("d3d: calls outside the shim's slots are logged as dropped, not silently ignored (Task 8B B3)") {
+  std::vector<std::string> log;
+  Device8 d(&log);
+  const uint32_t calls0 = d.state_calls();
+  d.set_tss(2, tss::COLOROP, kTopModulate);
+  d.set_tss(0, 32, 1);
+  d.set_rs(256, 1);
+  d.set_light(8, Light8());
+  d.light_enable(9, true);
+  d.set_texture(2, 5);
+  CHECK(d.state_calls() == calls0);  // nothing reached the tracked state
+  CHECK(log == std::vector<std::string>{"# dropped SetTextureStageState stage=2 type=1 value=4",
+                                        "# dropped SetTextureStageState stage=0 type=32 value=1",
+                                        "# dropped SetRenderState state=256 value=1", "# dropped SetLight index=8",
+                                        "# dropped LightEnable index=9 on=1", "# dropped SetTexture stage=2"});
+}
+
+TEST_CASE("d3d: LightEnable on a light never set uses the D3D8 default light (Task 8B B3)") {
+  // DirectX 8.1 SDK, IDirect3DDevice8::LightEnable: an index without SetLight properties gets the default light -
+  // D3DLIGHT_DIRECTIONAL, Diffuse (1,1,1,0), Specular and Ambient 0, Position 0, Direction (0,0,1), Range and
+  // Attenuation 0 - and is enabled.
+  std::vector<std::string> log;
+  Device8 d(&log);
+  d.light_enable(3, true);
+  const Light8& l = d.state().lights[3];
+  CHECK(d.state().light_on[3]);
+  CHECK(l.type == kLightDirectional);
+  CHECK(l.diffuse.r == 1.0f);
+  CHECK(l.diffuse.g == 1.0f);
+  CHECK(l.diffuse.b == 1.0f);
+  CHECK(l.diffuse.a == 0.0f);
+  CHECK(l.direction[2] == 1.0f);
+  CHECK(l.direction[0] == 0.0f);
+  CHECK(l.specular.r == 0.0f);
+  CHECK(l.ambient.r == 0.0f);
+  REQUIRE(log.size() == 2);
+  CHECK(log[0] == "# LightEnable 3: never set, D3D8 default light (white directional +Z)");
+  CHECK(log[1] == "LIGHTENABLE 3 1");
+  // A light that was set keeps its own values; re-enabling does not reset it.
+  Light8 p;
+  p.type = kLightPoint;
+  p.diffuse = {0.25f, 0.5f, 0.75f, 1};
+  d.set_light(4, p);
+  log.clear();
+  d.light_enable(4, true);
+  d.light_enable(3, false);
+  d.light_enable(3, true);
+  CHECK(d.state().lights[4].type == kLightPoint);
+  CHECK(d.state().lights[4].diffuse.g == 0.5f);
+  CHECK(log == std::vector<std::string>{"LIGHTENABLE 4 1", "LIGHTENABLE 3 0",
+                                        "# LightEnable 3: never set, D3D8 default light (white directional +Z)", "LIGHTENABLE 3 1"});
+  // Disabling a never-set light (what every real area does at init) gets the default values but no note.
+  log.clear();
+  d.light_enable(6, false);
+  CHECK(log == std::vector<std::string>{"LIGHTENABLE 6 0"});
+  CHECK(d.state().lights[6].diffuse.r == 1.0f);
+  CHECK_FALSE(d.state().light_on[6]);
+}
+
+TEST_CASE("d3d: state the compiler ignores sets unsupported bits (Task 8B B3)") {
+  State s = default_state();
+  uint32_t u = 0;
+  pipeline_key(s, &u);
+  sampler_desc(s, &u);
+  CHECK((u & ~uint32_t(kUnsupMipNone)) == 0);  // the D3D8 defaults (MIPFILTER NONE aside) are all supported
+  u = 0;
+  s.rs[rs::SHADEMODE] = 1;  // D3DSHADE_FLAT
+  pipeline_key(s, &u);
+  CHECK((u & kUnsupFlatShade) != 0);
+  s = default_state();
+  u = 0;
+  s.rs[rs::NORMALIZENORMALS] = 1;  // the shader never renormalises (rigid world matrices)
+  pipeline_key(s, &u);
+  CHECK((u & kUnsupNormalize) != 0);
+  s = default_state();
+  u = 0;
+  s.light_on[1] = true;
+  s.lights[1].type = 4;  // not POINT / SPOT / DIRECTIONAL
+  pipeline_key(s, &u);
+  CHECK((u & kUnsupLightType) != 0);
+  s.rs[rs::LIGHTING] = 0;  // lights are ignored when LIGHTING is off: nothing to flag
+  u = 0;
+  pipeline_key(s, &u);
+  CHECK(u == 0);
+  for (uint32_t t : {tss::ADDRESSU, tss::ADDRESSV}) {
+    s = default_state();
+    s.tss[0][tss::MIPFILTER] = kTexfLinear;
+    u = 0;
+    s.tss[0][t] = 3;  // D3DTADDRESS_CLAMP: the rhi sampler always wraps
+    sampler_desc(s, &u);
+    CHECK(u == kUnsupAddress);
+  }
 }
