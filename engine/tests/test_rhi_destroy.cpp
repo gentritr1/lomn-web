@@ -34,10 +34,13 @@ Device::LiveObjects counts(uint32_t t, uint32_t b, uint32_t p, uint32_t s, uint3
   return o;
 }
 
-// Forwards to a null device but rejects the n-th create_index_buffer: makes AreaRenderer::upload fail half-way.
+// Forwards to a null device but rejects the n-th create_index_buffer, or (T8 P1) the n-th write_texture of mip level 1
+// (n-th texture with a mip chain: earlier textures are complete): makes AreaRenderer::upload fail half-way. 0 = never.
 class FailingDevice final : public Device {
  public:
-  FailingDevice(std::unique_ptr<Device> d, int fail_index_buffer_at) : d_(std::move(d)), fail_at_(fail_index_buffer_at) {}
+  FailingDevice(std::unique_ptr<Device> d, int fail_index_buffer_at, int fail_mip1_write_at = 0)
+      : d_(std::move(d)), fail_at_(fail_index_buffer_at), fail_mip1_at_(fail_mip1_write_at) {}
+  int rejected_mip_writes() const { return rejected_mip_writes_; }
   std::string backend() const override { return d_->backend(); }
   std::string adapter() const override { return d_->adapter(); }
   TextureId create_render_target(uint32_t w, uint32_t h) override { return d_->create_render_target(w, h); }
@@ -53,7 +56,10 @@ class FailingDevice final : public Device {
   BufferId create_vertex_buffer(uint32_t n) override { return d_->create_vertex_buffer(n); }
   BufferId create_index_buffer(uint32_t n) override { return ++ib_ == fail_at_ ? 0 : d_->create_index_buffer(n); }
   TextureId create_texture(uint32_t w, uint32_t h, uint32_t m) override { return d_->create_texture(w, h, m); }
-  bool write_texture(TextureId t, uint32_t m, const void* p, std::size_t n) override { return d_->write_texture(t, m, p, n); }
+  bool write_texture(TextureId t, uint32_t m, const void* p, std::size_t n) override {
+    if (m == 1 && ++mip1_ == fail_mip1_at_) return ++rejected_mip_writes_, false;
+    return d_->write_texture(t, m, p, n);
+  }
   SamplerId create_sampler(const SamplerDesc& x) override { return d_->create_sampler(x); }
   PipelineId create_mesh_pipeline(const MeshPipelineDesc& x) override { return d_->create_mesh_pipeline(x); }
   BindGroupId create_bind_group(const BindGroupDesc& x) override { return d_->create_bind_group(x); }
@@ -68,6 +74,7 @@ class FailingDevice final : public Device {
  private:
   std::unique_ptr<Device> d_;
   int fail_at_, ib_ = 0;
+  int fail_mip1_at_, mip1_ = 0, rejected_mip_writes_ = 0;
 };
 
 }  // namespace
@@ -226,6 +233,23 @@ TEST_CASE("AreaRenderer::release: upload twice needs a release in between; a fai
     uint32_t failures = 9;
     r.release(d, &failures);
     CHECK(failures == 0);
+    CHECK(d.live_objects() == counts(0, 0, 0, 0, 0));
+  }
+  {
+    // T8 P1: a rejected texture MIP write mid-upload (the first area texture is complete, the second one's mip 1 write
+    // fails). The texture whose write failed was created, so it is owned and freed too (pins "a texture is registered
+    // when it is created, not after its mips are uploaded").
+    FailingDevice d(create_null_device(nullptr), 0, 2);
+    view::AreaRenderer r;
+    CHECK_FALSE(r.upload(d, a, view::RenderOptions(), &err));
+    CHECK(err.find("mip upload rejected") != std::string::npos);
+    REQUIRE(d.rejected_mip_writes() == 1);
+    const Device::LiveObjects live = d.live_objects();
+    CHECK(live == counts(3, 1, 0, 0, 0));  // white + 2 area textures (one complete, one partial) + the uniform buffer
+    uint32_t failures = 9;
+    const uint32_t n = r.release(d, &failures);
+    CHECK(failures == 0);
+    CHECK(n == 4);
     CHECK(d.live_objects() == counts(0, 0, 0, 0, 0));
   }
 }
