@@ -46,6 +46,7 @@
 #include <string>
 #include <vector>
 
+#include "fuzz_fragments.h"
 #include "lomn/sage/blockfile.h"
 #include "lomn/sage/image.h"
 #include "lomn/sage/osi.h"
@@ -296,7 +297,7 @@ Result run_blk(const Bytes& in, Rng& rng) {
   if (!bf.open_bytes(Bytes(in.begin(), in.end()), &err)) {
     REQUIRE_INV(!bf.is_open() && bf.entries().empty() && bf.file_size() == 0, "blk: rejected open left state");
     REQUIRE_INV(!err.empty(), "blk: rejected open without an error");
-    r.deep = has(err, "name run");  // the entry loop's own error
+    r.deep = has(err, fuzz_frag::kBlkNameRun);  // the entry loop's own error
     return r;
   }
   r.accepted = true;
@@ -354,7 +355,7 @@ Result run_lzss(const Bytes& in, Rng&) {
   std::string err;
   if (!decode_lzss(s.p.get(), s.n, out_size, out, &err)) {
     REQUIRE_INV(!err.empty(), "lzss: rejected without an error");
-    r.deep = s.n > 0 && !has(err, "ratio");  // past the ratio check, into the decode loop
+    r.deep = s.n > 0 && !has(err, fuzz_frag::kLzssRatio);  // past the ratio check, into the decode loop
     REQUIRE_INV(out.empty(), "lzss: rejected stream left partial output");
     return r;
   }
@@ -431,7 +432,7 @@ Result run_slb(const Bytes& in, SlbKind kind) {
       deep[3] = n > 0;
     } else {
       REQUIRE_INV(!terr.empty() && t.empty(), "slb.tex: rejected view left records or no error");
-      deep[3] = has(terr, "name is not a fix-up slot") || has(terr, "name longer");  // errors of the record loop
+      deep[3] = has(terr, fuzz_frag::kSlbTexFixup) || has(terr, fuzz_frag::kSlbTexNameLong);  // errors of the record loop
     }
   }
   if (bad) return r;
@@ -453,11 +454,8 @@ bool x_default(const XFile& f) {
 // " at byte N" and parse_x's header errors are "file too large" / "not a (binary) .x file" / "unsupported float size".
 // Pinned against a counter at decode_mesh's entry in fix round 1 (0 mismatches; tools/research/fuzz_formats.md).
 bool decode_mesh_error(const std::string& err) {
-  static const char* const kPrefixes[] = {"x: Mesh ",          "x: MeshNormals ",   "x: MeshTextureCoords ", "x: MeshVertexColors ",
-                                          "x: MeshMaterialList ", "x: Material floats", "x: face ",           "x: material ",
-                                          "x: normal index",   "x: texture name",   "x: too many materials", "x: vertex colour"};
-  for (const char* p : kPrefixes)
-    if (err.compare(0, std::strlen(p), p) == 0) return true;
+  for (const char* p : fuzz_frag::kXDecodeMeshPrefixes)
+    if (fuzz_frag::matches(err, p, fuzz_frag::Match::Prefix)) return true;
   return false;
 }
 
@@ -471,7 +469,7 @@ Result run_x(const Bytes& in, Rng&) {
     REQUIRE_INV(x_default(xf), "x: rejected parse left a partial XFile");
     // aux: past parse_x's header checks (into the token stream). deep: decode_mesh was entered, i.e. the error is one of
     // decode_mesh's own (fix round 1, review I-1: "past the header" read 90-95 %, so its 5 % floor could not fail).
-    r.aux = !(has(err, "file too large") || has(err, "not a .x file") || has(err, "not a binary .x file") || has(err, "unsupported float size"));
+    r.aux = !(has(err, fuzz_frag::kXTooLarge) || has(err, fuzz_frag::kXNotX) || has(err, fuzz_frag::kXNotBinary) || has(err, fuzz_frag::kXFloatSize));
     r.deep = decode_mesh_error(err);
     return r;
   }
@@ -554,7 +552,7 @@ Result run_tga(const Bytes& in, Rng&) {
     REQUIRE_INV(!err.empty(), "tga: rejected without an error");
     REQUIRE_INV(image_default(img), "tga: rejected decode left an image");
     REQUIRE_INV(ti.width == 0 && ti.height == 0 && ti.image_type == 0 && ti.bits == 0, "tga: rejected decode wrote TgaInfo");
-    r.deep = has(err, "RLE data truncated") || has(err, "RLE packet runs past");  // the RLE packet loop (accepted: below)
+    r.deep = has(err, fuzz_frag::kTgaRleTruncated) || has(err, fuzz_frag::kTgaRleRunsPast);  // the RLE packet loop (accepted: below)
     return r;
   }
   r.accepted = r.deep = true;  // NOTE: includes accepted raw (type 2) TGAs, which never enter the RLE packet loop
