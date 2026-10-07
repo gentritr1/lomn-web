@@ -80,6 +80,11 @@ else()
              "out=$(\"$0\" --backend webgpu --frames 1 --out \"$1\" 2>&1); rc=$?; printf '%s\\n' \"$out\"; echo \"rc=$rc\"; [ \"$rc\" -eq 3 ] && printf '%s' \"$out\" | grep -q \"webgpu unavailable: no WebGPU adapter\""
              $<TARGET_FILE:lomn_native> ${CMAKE_CURRENT_BINARY_DIR}/noadapter)
     set_tests_properties(gpu_no_adapter PROPERTIES ENVIRONMENT "LOMN_WEBGPU_BACKEND=d3d12" LABELS gpu)
+    # rhi mesh surface on Dawn without lomn_area: blend, M0 pipelines in depth targets, rejected M0 draws.
+    add_executable(lomn_gpu_mesh_test tests/test_gpu_mesh.cpp)
+    target_link_libraries(lomn_gpu_mesh_test PRIVATE lomn_webgpu)
+    add_test(NAME gpu_mesh COMMAND lomn_gpu_mesh_test)
+    set_tests_properties(gpu_mesh PROPERTIES SKIP_RETURN_CODE 77 LABELS gpu)
   endif()
 endif()
 
