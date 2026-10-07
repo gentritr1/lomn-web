@@ -295,13 +295,23 @@ CANNED = {  # pid: (ppid, comm, args) -- what `ps -Ao pid=,ppid=,comm=` and `ps 
     704: (1, "/usr/bin/python3", "python3 tools/research/mutate4.py --seed 1"),
     705: (1, "/y/build/native/lomn_native", "build/native/lomn_native --backend webgpu --frames 600 --out build/perf"),
     706: (1, "/opt/homebrew/bin/node", "node tests/a13_real.mjs ../build/site"),
+    # CPU-only null-backend runs (a9-sweep, datacheck, another session's make check): not GPU users (M1a-4 final F2)
+    710: (1, "/y/build/native/lomn_view", "build/native/lomn_view --install /d --level lev1 --area vllg --backend null --out /o"),
+    711: (1, "/y/build/native/lomn_view", "build/native/lomn_view --backend=null --synthetic 1 --out /o"),
+    712: (1, "/y/build/native/lomn_native", "build/native/lomn_native --frames 60 --backend null"),
+    # not null: the default backend, an explicit webgpu one, and a path/value that merely contains "null"
+    713: (1, "/y/build/native/lomn_view", "build/native/lomn_view --install /d --level lev1 --area vllg --out /o"),
+    714: (1, "/y/build/native/lomn_view", "build/native/lomn_view --backend=webgpu --level lev1"),
+    715: (1, "/y/build/native/lomn_view", "build/native/lomn_view --out /tmp/backend-null.png --backend webgpu"),
 }
 
 
 def test_gpu_process_match_is_by_argv_not_substring():
     import perf_history
     got = {int(l.split()[0]) for l in perf_history.gpu_process_matches(CANNED, me=500)}
-    assert got == {700, 701, 702, 703, 704, 705, 706}
+    assert got == {700, 701, 702, 703, 704, 705, 706, 713, 714, 715}
+    # not matched: lomn_view/lomn_native with `--backend null` or `--backend=null` (CPU-only; M1a-4 final F2)
+    assert not got & {710, 711, 712}
     # not matched: cmake/ninja/clang++/vim/grep/bash -c/timeout wrapper, a flag value, the Claude app and the user's Chrome
     for pid in (600, 601, 602, 603, 604, 605, 606, 607, 608, 609):
         assert pid not in got
@@ -327,7 +337,7 @@ def test_other_gpu_processes_reads_both_ps_listings(monkeypatch):
     monkeypatch.setattr(perf_history.subprocess, "run", fake_run)
     monkeypatch.setattr(perf_history.os, "getpid", lambda: 500)
     got = {int(l.split()[0]) for l in perf_history.other_gpu_processes()}
-    assert got == {700, 701, 702, 703, 704, 705, 706}
+    assert got == {700, 701, 702, 703, 704, 705, 706, 713, 714, 715}
 
 
 def test_append_of_area_metrics_always_writes_provisional(tmp_path, monkeypatch):

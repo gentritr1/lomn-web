@@ -141,12 +141,20 @@ GPU_INTERPRETERS = re.compile(r"^(node|python[0-9.]*)$")
 TEST_CHROMIUM = re.compile(r"ms-playwright|chrome-headless-shell|/Chromium\.app/|pw-profile|playwright", re.I)
 
 
+def uses_null_backend(args: str) -> bool:
+    """True when argv selects the CPU-only null backend: `--backend null` or `--backend=null` as whole tokens (a value
+    that merely contains "null", e.g. an output path, does not count)."""
+    toks = args.split()
+    return "--backend=null" in toks or any(a == "--backend" and b == "null" for a, b in zip(toks, toks[1:]))
+
+
 def is_gpu_process(comm: str, args: str) -> bool:
     """argv-based, not a substring grep: a compiler, a build tool, an editor or a shell whose command line merely names
-    lomn_view is not a GPU user."""
+    lomn_view is not a GPU user. A lomn_view/lomn_native run with `--backend null` (a9-sweep, datacheck, another
+    session's make check) is CPU-only and is not one either."""
     base = os.path.basename(comm)
     if base in GPU_EXECUTABLES:
-        return True
+        return not uses_null_backend(args)
     if GPU_INTERPRETERS.match(base):
         return any(os.path.basename(t) in GPU_SCRIPTS for t in args.split())
     if "--type=gpu-process" in args.split():
