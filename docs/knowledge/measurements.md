@@ -176,3 +176,118 @@ REF3's own run quoted 290,448 / 43,370 accepted for the same seeds and sources (
 **ASan + UBSan** (`build/asan`: Debug, `-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer`, `-DLOMN_WEBGPU=ON`; Dawn itself is not instrumented): `ctest` 24/24 pass (including the GPU tests); `lomn_tests` 132 cases / 172,064 assertions, rc 0; the vllg, ghut, crss and crss_yaw67 renders rc 0 with 0 bytes of stderr; the survey rc 0 with 0 bytes of stderr and maxima identical to Release. The only stderr text is from `lomn_tests` negative tests (the unwritable-output-path line and three `[area] render skipped` lines), identical to the Release `lomn_tests` stderr.
 
 **Tests**: `make test-native` 24/24 and `make test-wasm` 5/5 (native ctest + wasm32 under Node, including the native == wasm32 call-log and state-log comparisons) on the committed tree.
+
+## Browser viewer (M1b reference REF4, 2026-10-07, Chromium (Playwright 1.63 `channel: 'chromium'`) + Apple Metal, 1280x720)
+
+Shared host: loadavg 7.4 -> 9.8 (run 1, `A13_SWEEP=1`, INITIAL_MEMORY 16 MiB: the memory measurement) and 14.6 -> 14.3
+(run 2, inside `make check`, INITIAL_MEMORY 96 MiB). Times are order-of-magnitude. Commands: `make manifest`,
+`make a13-real` (`web/tests/a13_real.mjs`), `make test-web` (`web/tests/byo_synthetic.mjs`). Nothing derived from the
+game data is committed: renders, screenshots and the real manifest stay under `build/`.
+
+**Prefetch manifest** (`lomn_view --manifest 1`, native Release, 4.15 s wall, 74 MB peak RSS): 123 areas (the survey's
+count; `lev4/lev4c.blk` truncates to the level blockfile under the game's `%.4s` area id, so the browser lists 122),
+0 failures. Boot set = the ranges common to every area = Art.blk header (12 B) + table (146,048 B) + Base.osi
+(486,274 B) = **632,334 bytes** in 3 reads, against the census boot set of 167,412,690 bytes (whole Main.blk, Base.osi,
+lang_eng.blk, Art.blk; the viewer reads neither Main.blk nor lang_eng.blk). Per area beyond the boot set: mean
+2,980,916 B, max 12,434,082 B (lev0/frnt; 13,066,416 B incl. boot), max 98 reads (lev2/vllg). Union over all areas:
+2,712 ranges, 201,356,965 B in 133 files.
+
+**BYO**: validation (exe SHA-256 + 189 `.blk` tables, 643,748 B) 323 ms (run 1) / 597 ms (run 2); OPFS copy of the
+copy set (505 files, 1,099,991,943 B) 7.26 s / 8.63 s; first visit from `setInputFiles` to lev1/vllg on screen 8.6 s /
+10.5 s. Boot prefetch 3 rounds, 632,334 B, 6.5 ms; revisit 1 round (cached set).
+
+| Area | first visit: rounds, load total ms | revisit (cached set, 1 round) ms | bytes beyond boot | engine probe / decode / upload ms (run 1) | draws / pipelines | textures / bytes with mips | fps window (run 1): frames, ms, expected intervals at 60 Hz | dt p50 / p95 ms (run 1; run 2) | replay / submit / frame CPU p50 ms |
+|---|---|---|---|---|---|---|---|---|---|
+| lev1/vllg | 8, 168 / 233 | 106 / 168 | 2,027,888 | 31.7 / 16.7 / 6.7 | 31 / 3 | 28 / 6,995,936 | 601, 9,976.9, 598.6 | 16.7 / 16.8; 16.7 / 17.5 | 0.5 / 0.2 / 0.7 |
+| lev2/ghut | 8, 84 / 109 | 88 / 57 | 2,469,250 | 19.9 / 13.2 / 6.1 | 30 / 2 | 31 / 10,052,916 | 601, 9,985.5, 599.1 | 16.7 / 18.2; 16.7 / 17.5 | 0.3 / 0.2 / 0.5 |
+| lev4/crss | 8, 217 / 188 | 122 / 257 | 5,763,178 | 43.0 / 34.1 / 23.8 | 42 / 4 | 38 / 26,678,568 | 601, 9,980.5, 598.8 | 16.7 / 18.3; 16.7 / 17.5 | 0.4 / 0.2 / 0.6 |
+| lev0/frnt | 8, 234 / 311 | — | 12,434,082 | — | 47 / — | 56,994,416 B | — | — | — |
+
+Reconciliation: dt samples = frames in window - 1 (600 / 601) on every area; frames counted vs window x 60 Hz:
+601 counted vs 599.6–600.1 expected (the window holds 0.2 % more intervals than 60.000 Hz predicts: the display runs
+at about 60.1 Hz; no dropped frames). All 122 browser areas loaded in a sweep
+(13.8 s, first visit), each drawing exactly its expected draws with 0 rejected calls.
+
+**Memory budget** (run 1, start 16 MiB): wasm memory after lev1/vllg 16 MiB (no growth), lev2/ghut 19.25 MiB, lev4/crss
+40.0 MiB, lev0/frnt **83.06 MiB** (87,097,344 B), then no growth over 9 switches and the 122-area sweep. malloc in use:
+boot 0.73 MiB (run 2, at "ready"), vllg 2.88 MB, ghut 3.31 MB, crss 6.64 MB, frnt 13.32 MB, after switches back to crss
+6.64 MB; prefetched file bytes resident = the area's set incl. boot; peak 18.8 MB (crss -> frnt: both sets resident
+until the switch completes). INITIAL_MEMORY = **96 MiB**; run 2 confirmed 100,663,296 B from "ready" through frnt and
+9 switches (0 growths).
+
+**Pixels**: browser canvas vs native `lomn_view` render of the same build: **0 differing pixels of 921,600** (max delta 0)
+for lev1/vllg, lev2/ghut, lev4/crss (first visit via OPFS, revisit, handle path), lev0/frnt, and the synthetic levt/test
+and levt/stat; tolerance therefore 0 (`LOMN_PIXEL_TOLERANCE` overrides it for another GPU). The native renders are
+byte-identical to the M1a-3 evidence PNGs.
+
+**Pixel gate with controls** (REF4 addendum; run 3 = `make check` 16:30–16:34, loadavg 17.7 -> 11.5): tolerance 0 (max
+per-channel delta). Null (same build, same area, two fresh pages): levt/test, lev1/vllg, lev2/ghut, lev4/crss all 0
+differing pixels. Native vs browser: 0 on all 9 real comparisons and 4 synthetic ones, and 0 on levt/stat after resizes to
+328x185, 968x545 and 1280x720. Positive control (fog off, `?fog=off`): levt/stat 424,494 pixels over the tolerance (max
+delta 28), lev1/vllg 155,532 (max 29; the M1a-3 native "faithful vs fog off" figure was also 155,532 px, max 29).
+Network and leak detectors fire on their controls (one foreign path + one foreign origin flagged; one leaked texture
+counted). Measured configuration on every run: Release, `-O3 -DNDEBUG`, Emscripten 6.0.11, wasm 326,077 B (SHA-256
+`d6c5687f…`, equal to the build directory's file), canvas 1280x720 at DPR 1, adapter `apple/metal-3`. Responsive sweep
+(40 widths, 360..1920 px): no horizontal scroll or overlap, minimum clearance 8 px on the BYO page and the viewer; every
+resize drew all draws with 0 rejected calls and no `[webgpu]` message. Run 3 fps windows: 601 frames counted vs
+599.0 / 599.2 / 598.5 expected at 60 Hz, dt p50 16.7 / p95 17.4–17.5 ms. Under the same load the M0 triangle smoke
+counted 177 frames vs 241 expected in its 4.0 s window (startup frames dropped while the host was at loadavg ≈ 18).
+
+**Discovery == native log**: the browser's last-round reads equal the `lomn_view --manifest` ranges line for line for
+lev1/vllg (45 ranges), lev2/ghut (39), lev4/crss (59), levt/test and levt/stat.
+
+**Mutation bite check** (`tools/research/oracle/mutate4.py`, scratch copy, 23 entries: prefetch fs, rhi destroy rules,
+release order and ownership, fly camera, area list, JS validation, the chunk writer, the quota check, surface depth,
+release on switch): first run 20 CAUGHT, 3 MISSED: the no-op control (intended), "DLLs under data/ are copied" (no test
+had a DLL inside data/) and "never release on switch" (the flat-count check passed: see the playbook §3.1). Both tests
+were strengthened; the rerun of those two plus the control: 2 CAUGHT, control MISSED. Builds and lomn_tests restored rc 0.
+
+**Sanitizers** (`build/asan`, Debug, ASan+UBSan, `-fno-sanitize-recover=all`, Dawn not instrumented): ctest 29/29
+(incl. `gpu_destroy` and the new unit cases), the 123-area manifest identical to Release (wall time excluded), the
+vllg/ghut/crss renders byte-identical to the M1a-3 evidence, 0 bytes of stderr.
+
+## Browser viewer revision 2 (REF4 r2 after the Fable review, 2026-10-07; host loadavg 10–48)
+
+Every behaviour fix was first run on the unfixed code (logs `r2-red-*`), then fixed and re-run (`r2-green-*`, `make check`).
+
+| Item | Before the fix (red run) | After the fix |
+|---|---|---|
+| C1 device loss | `Browser.crashGpuProcess` (CDP) on an `area-ready` page: still `area-ready`, 877 frames later, no message | state `error` "GPU device lost (reason 1): A valid external Instance reference no longer exists.", Reload shown, loop stopped; native gpu_destroy probe 6: a WGSL that does not compile reaches the handler once |
+| C2 accepted exe + unknown tables | rejected | shown, warning "Game data differs from the known build — rendering may differ (…fingerprint…)", `metrics.validation.data = "unknown"`; rejected-list exe, unknown exe, no-`.blk` folder and empty folder still rejected |
+| I1 GPU memory at switch time | init-script hook (createTexture − destroy): 30 real vllg<->frnt switches 174 -> 1,238 live textures, est. 111 MB -> 1,007 MB of texture bytes waiting for GC; synthetic 14 -> 154, 0 destroyed | real: 29 textures / 10.7 MB at every vllg; synthetic 4 live, 150 of 154 destroyed |
+| I2 reconciliation | no display rate; a 20 ms spin at 60 Hz ran 48 fps and the snapped-p50 rule said "48 Hz: expected 90.1 vs counted 90" (clean) | display rate measured before the first area (p10 of 90 empty-frame intervals): 60 Hz -> DROPPING. Under loadavg 28–45 headless Chromium ran the page at 30 Hz (p10 32.7 ms) and the display measured 30 Hz; a 1.5-period spin (50 ms) gave 19.7 fps -> DROPPING; `?debug=1&debug_spin=50` the same |
+| I3 moved remembered folder | `error`: "A requested file or directory could not be found…" (dead end) | `need-files`: "The remembered folder … could not be read (moved or deleted)", picker shown, handle forgotten |
+| I4 CSP | none | `default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; …`; the foreign fetch is blocked (securitypolicyviolation) and still flagged; `-sDYNAMIC_EXECUTION=0` links |
+| I6 copy missing a file | loaded (`area-ready`, default fog without Base.osi) | cleared, `need-files`: "…was incomplete (missing data/Base.osi) and was removed" |
+| I7 interrupted copy | the manifest-less directory stayed | removed at start, message "An incomplete copy … was removed" |
+| M2 stale cache keys / cap | a key of another wasm build stayed | pruned at boot; cached sets over 64 MiB ignored (unit test) |
+| M3 key scope | W with the page body focused moved the camera | only with canvas focus or pointer lock |
+| M4 double pick | 2 wasm fetches, 2 engines on one canvas (uncaptured "TextureView … cannot be used with [Device]") | 1 engine; the second call returns false |
+| M6 addressable areas | ctest: a 5-character stem listed as an area | manifest: 122 rows + `not_addressable: ["lev4/lev4c"]`; survey: 123 total, 122 addressable |
+| M11/M12/I6 helpers | unit tests failed (missing / old behaviour) | UTF-8 byte cap, case duplicates skipped with a warning, worker path check, copy-manifest shape + comparison |
+| M13 debug switches | `?fog=off` honoured on any URL | needs `?debug=1` |
+
+**I5 sweep (all 122 areas, fresh discovery, default in `make a13-real`):** rounds histogram {2: 1, 3: 4, 5: 1, 6: 107,
+7: 1, 8: 8}; maximum 8 (lev0/frnt, lev1/atrm and others) -> asserted cap 12 (1.5x), engine hard limit 16. Over-fetch (bytes
+moved but not read by the final round) 0 in every area. 20.9 s at loadavg ≈ 28. Memory: 0 growth from "ready"
+(100,663,296 B) through frnt, 9 switches and the sweep.
+
+**M10 / D14 (-O3 vs -O2 + wasm-opt)** (`web/tests/measure_arms.mjs`, 4 reps per arm, ABBA-interleaved, loadavg 13–20):
+wasm 332,641 B (-O3) vs 344,390 B (-O2); total load of vllg+ghut+crss+frnt (no cache) median 613 ms (spread 236) vs
+605 ms (spread 525); frame CPU p50 0.7 vs 0.7 ms (spread 0.1). Load and CPU are indistinguishable; the wasm size is the
+only difference beyond the (zero) null spread: -O3 kept, spec §4.6 amended.
+
+**M1 (measure only)**: 8 fetches in flight vs 1, same build: median 532 vs 613 ms (spreads 329 / 236): within the noise
+on this loaded host; not adopted (the switch stays a debug option, `?debug=1&fetch_concurrency=8`).
+
+**Mutations r2** (`mutate4.py`, 34 entries incl. 11 new for C1, C2, I1, I2, I3, I4, I6, M3; scratch copy, 18:08–18:23):
+33 CAUGHT, the no-op control MISSED. A browser-checked mutation counts only when a check it targets failed (`EXPECT` in
+the script); every engine mutation is rebuilt out again before the next one. The first r2 run reported 33 CAUGHT too,
+but it had two harness defects, found by reading its logs: the wasm build was not rebuilt after restoring an engine
+mutation (later web-only mutations ran on the I2-mutated module) and the node check omitted `unit_r2_test.mjs`. Lesson:
+a mutation harness must attribute each bite to the targeted check and restore builds, or a flaky or leftover failure
+reads as a bite.
+
+**ASan + UBSan r2** (final engine sources): ctest 30/30, the 122-area manifest identical to Release (`not_addressable`
+lev4/lev4c), vllg/ghut/crss renders byte-identical to the M1a-3 evidence, survey 123 total / 122 addressable / 0
+failures, 0 bytes of stderr.

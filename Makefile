@@ -5,7 +5,7 @@ export LOMN_DATA LOMN_CACHE
 VENV := .venv
 PY := $(VENV)/bin/python
 EMSDK_ENV := source .toolchain/emsdk/emsdk_env.sh >/dev/null 2>&1
-.PHONY: setup check-data decomp worklist native wasm site test-tools test-native test-wasm test-web check perf datacheck datacheck-wasm fuzz-osi a9-sweep manifest
+.PHONY: setup check-data decomp worklist native wasm site test-tools test-native test-wasm test-web check perf datacheck datacheck-wasm fuzz-osi a9-sweep a13-real manifest
 
 setup: $(VENV)/.ok
 	timeout 3600 tools/toolchain.sh
@@ -59,6 +59,12 @@ test-web: site native
 	cd web && timeout 180 node tests/smoke.mjs ../build/site ../build/pw-profile
 	cd web && timeout 600 node tests/byo_synthetic.mjs ../build/wasm ../build/byo-syn ../build/native/lomn_view
 
+# M1b A13 on the real install (LOMN_DATA; skipped otherwise): OPFS copy of the install into a throwaway Playwright
+# profile (removed afterwards), lev1/vllg, lev2/ghut, lev4/crss vs native renders, switches, revisit, handle path, fps.
+a13-real: site native
+	@if [ -z "$(LOMN_DATA)" ]; then echo "a13-real SKIPPED (no LOMN_DATA)"; exit 0; fi
+	cd web && timeout 1800 node tests/a13_real.mjs ../build/site ../build/a13-real ../build/native/lomn_view ../build/wasm
+
 # M1b: the per-area prefetch manifest of the install (build/m1b/manifest.json; derived data: never committed).
 manifest: native
 	@if [ -z "$(LOMN_DATA)" ]; then echo "manifest: LOMN_DATA is not set"; exit 2; fi
@@ -103,6 +109,6 @@ fuzz-osi:
 	$(EMSDK_ENV) && timeout 1800 node build/fuzz/fuzz_osi.js $(FUZZ_OSI_N_WASM) 3
 
 check: test-tools test-native test-wasm test-web
-	@if [ -n "$(LOMN_DATA)" ]; then $(MAKE) datacheck datacheck-wasm; else echo "datacheck SKIPPED (no LOMN_DATA)"; fi
+	@if [ -n "$(LOMN_DATA)" ]; then $(MAKE) datacheck datacheck-wasm a13-real; else echo "datacheck, a13-real SKIPPED (no LOMN_DATA)"; fi
 	@if [ -d gen/decomp ]; then $(MAKE) worklist; else echo "worklist SKIPPED (run make decomp first)"; fi
 	@echo "make check: all layers green"

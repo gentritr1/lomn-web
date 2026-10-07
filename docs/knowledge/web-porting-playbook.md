@@ -35,6 +35,84 @@ Probe each route cheaply first: a one-day emulation fps test, a one-week decompi
 - **Keep the engine's synchronous file API** over an in-memory VFS that is prefetched per area behind the game's own loading transition. The manifest is generated from native access logs.
 - **Paths:** normalise Windows-style (`\` → `/`, lower-case, fold `..` so nothing escapes a mount). `unmount_prefix` must have directory semantics, or `lev1/` also matches `lev10/`.
 
+### 3.1 What M1b built and measured (2026-10-07, REF4; Chromium + Apple Metal)
+
+- **Read-driven prefetch instead of a shipped manifest.** The engine's synchronous `fs` runs over a `PrefetchFileSystem`
+  (`engine/include/lomn/prefetch_fs.h`): an index of every file (path, size; no bytes) plus resident byte ranges. A load
+  runs in rounds; each read whose bytes are not resident fails as a recorded *miss* (the loaders skip and continue), JS
+  fetches the misses straight into heap buffers (8 MiB chunks: `reserve` -> `HEAPU8.set` -> `commit`), and the load runs
+  again until a round has no miss. 8 rounds for a real area (header -> table -> area header -> table -> SLBs/OSI ->
+  `.x` -> textures -> clean), ~20–43 ms of probing; a revisit replays the cached set in 1 round. The last round's reads
+  equal the native access log exactly (vllg/ghut/crss + both synthetic areas, compared line by line).
+  - Why not ship the manifest: it depends on the data, and the accepted-build list identifies builds by exe hash; the
+    data behind the canonical exe could not be checked, so "identical for every accepted build" is unprovable. The
+    engine derives the same sets from the player's own files instead, and nothing derived from game data is shipped.
+- **Boot set = the reads common to all areas**: the Art.blk header + table and Base.osi, 632,334 bytes, against the
+  census's whole-file 167.4 MB (Art.blk is 166.8 MB but only its 146 KB table is read). Main.blk and lang_eng.blk are
+  not read by the viewer.
+- **Validation = SHA-256 of the exe + a fingerprint of every `.blk` entry table** (`web/app/fingerprint.js`, oracle
+  `tools/byo_fingerprint.py`): 189 tables, 643,748 bytes, 323 ms in the page. The exe hash alone cannot tell modified data.
+- **OPFS copy measured**: 505 files, 1.10 GB in 7.3 s (151 MB/s) through `createSyncAccessHandle` in a worker; the
+  quota check (`persist()` + `estimate()`) runs before the first byte is written.
+- **Pixels**: browser (canvas `bgra8unorm`, Depth32Float surface depth) vs native offscreen (`rgba8unorm`) = 0 differing
+  pixels at 1280x720 on every compared area. Screenshot on whole CSS pixels: a canvas at a fractional y gave a 721-row
+  capture (layout with integer line heights fixed it). A CSS `display:` rule on an element beats the `hidden`
+  attribute: a "hidden" loading overlay dimmed the canvas to 55 % until `[hidden]{display:none!important}`.
+- **Memory**: the wasm heap's high-water mark is the largest texture set (lev0/frnt: 83.06 MiB); INITIAL_MEMORY 96 MiB
+  makes growth (a heap copy without pthreads) not happen in normal use.
+- **A "flat counts across switches" leak check can pass while nothing is released**: alternating two areas keeps the
+  union of both read sets resident, which is also flat. The mutation "never release on switch" survived it; the check
+  that bites is *resident bytes == this area's own read set* after every switch. Same for any cache: compare with the
+  exact expected content, not with the previous visit.
+
+- **Content-hashed names need the module glue to stop fetching by name.** `build_site.mjs` publishes every JS/wasm file
+  as `<name>.<10 hex>.<ext>` and rewrites the quoted specifiers (leaves first). Emscripten 6.0.11's glue ignores a
+  `wasmBinary` module option (`var wasmBinary;` is never assigned: the request 404'd on the hashed site); passing
+  `instantiateWasm` with bytes the page fetched itself works, costs no second download, and gives the page the SHA-256
+  of exactly the wasm it runs (`metrics.build`, which the tests compare with the build directory's file).
+- **Every zero needs a control in the same build**: the pixel gate reports a null (same build, two fresh pages: 0) and a
+  positive control (fog off: 424,494 pixels over the tolerance on levt/stat); network and leak checks are shown to fire
+  on one foreign request and one leaked texture.
+- **Responsive canvas**: CSS `aspect-ratio: 16/9` gives x.5 px heights; set the canvas height to a whole pixel from its
+  width, or screenshots resample. Flex bars that wrap need integer control heights for the same reason.
+
+### 3.1b Revision 2 (Fable review, 2026-10-07): what a public URL needs that the tests did not show
+
+Each fix below was shown failing on the old code first (a red run), then fixed.
+- **`Release` is not `Destroy` in the browser.** emdawnwebgpu's `wgpuTextureRelease` drops the JS wrapper; the GPU
+  memory waits for garbage collection. An init-script hook counting `GPUDevice.createTexture` minus
+  `GPUTexture.destroy` measured 174 -> 1,238 live textures (≈ 1.0 GB of texture bytes) over 30 real area switches
+  before the fix, flat after it. Call `wgpuTextureDestroy`/`wgpuBufferDestroy` before Release, and defer them to after
+  the submit when a frame is open (a destroyed object in a pending command buffer fails validation).
+- **Device loss must reach the page.** Logging the lost/uncaptured-error callbacks leaves a frozen canvas with a ticking
+  HUD. Forward the first one to the page (state `error` + Reload) and cancel the main loop. Test it with CDP
+  `Browser.crashGpuProcess` (the old page stayed `area-ready`); natively a WGSL that does not compile fires the
+  uncaptured-error path.
+- **A reconciliation's expectation must not come from the samples it checks.** Snapping 1000/p50 to a refresh rate turns
+  a steady 48 fps on a 60 Hz display into "48 Hz, no drops". Measure the display rate once, before any load (the empty
+  frames), and compare against it; a 20 ms spin per frame must flag DROPPING (it did; the old rule called it clean).
+- **CSP for a WebAssembly page** needs `script-src 'self' 'wasm-unsafe-eval'` (not `unsafe-eval`; link with
+  `-sDYNAMIC_EXECUTION=0`) and `style-src 'unsafe-inline'` for an inline `<style>`. A CSP-blocked fetch may never reach
+  Playwright's request events: record `securitypolicyviolation` so the network check still flags the attempt.
+- **A mutation bite must be attributed.** With ~70 browser checks per run, "the run failed" is not "the mutation was
+  caught": a loaded host's timing check or a build left mutated by the previous entry fails it too (both happened in the
+  first r2 run). Name the check each mutation must break, and rebuild after restoring every engine mutation.
+- **Revisits fail in ways first visits cannot**: a remembered folder moved, a copy missing a file, a copy interrupted
+  before its completion manifest. Each must lead back to the folder choice with a reason, never to a dead `error`.
+
+### 3.2 Prefetch manifest format (`lomn_view --manifest 1`, native; `make manifest`)
+
+One JSON object, `format: "lomn-prefetch-manifest"`, `version: 1`:
+- `files`: `[{path, size}]`, every file any range reads (normalised path `root/data/...`, size in bytes);
+- `boot`: `{ranges, reads, bytes}`, what `view::boot_reads` reads (the Art.blk header + table, Base.osi);
+- `areas`: `[{area: "lev1/vllg", ok, reads, bytes, bytes_beyond_boot, files, ranges}]`, one per `<lev>/<area>.blk`;
+- `ranges` entries are `[file_index, offset, length]`, distinct and sorted; a whole-file read is `[f, 0, size]`;
+- `summary`: area count, failures, the largest area (bytes, reads), the union of all ranges, the ranges common to every
+  area and whether they equal the boot set, and the census boot set (whole files) for comparison.
+The manifest holds names, offsets and sizes of the player's files: it is written under `build/` and never committed or
+shipped. In the browser the same per-area sets come from the engine's own reads (`lomn_fs_touched`) and are cached in
+IndexedDB under (data fingerprint, wasm SHA-256, area); every cached range is re-checked against the file index.
+
 ## 4. Determinism and the 64-bit vs wasm32 problem
 
 - **Ship wasm32**, where the original 32-bit struct layouts hold. Generated headers carry `static_assert`s on size and offset for wasm32 only (473 headers, 1,770 asserts pass).
@@ -56,6 +134,9 @@ Probe each route cheaply first: a one-day emulation fps test, a one-week decompi
 
 - **Always assert pixels and network**, never only a state flag.
 - **Reconcile frame counts:** dt samples must equal frames − 1. Measured p50 dt was 16.70 ms (vsync 60 Hz).
+- **What Playwright cannot drive (M1b):** `showDirectoryPicker` (a native dialog) and a real permission prompt. Drive the
+  code after them instead: hand the page an OPFS `FileSystemDirectoryHandle` (the type the picker returns) and stub
+  `FileSystemHandle.prototype.queryPermission` for the re-grant branch; say in the report which part stays UNVERIFIED.
 - **`setInputFiles(dir)` on a `webkitdirectory` input passes paths, not bytes:** the 529-file, 1.10 GB install loads in 1.2 s, or 0.2 s with a persistent profile. (529 includes 2 macOS .DS_Store files; the game install itself is 527 files)
 - **Every runner needs a negative test.** The smoke test fails in 1.5 s against an empty site.
 
