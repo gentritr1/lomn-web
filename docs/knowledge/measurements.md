@@ -230,6 +230,7 @@ TGA deep reach counts accepted images, raw type 2 included, plus failures inside
 
 **wasm32 under Node (2 GB cap):** identical per-format totals to native. The make target's `cmp` of the two logs passed
 ("fuzz-formats: native == wasm32 per-format totals"), and make exited 0.
+- **Provenance (final review M-6):** this 200,000-input wasm32 leg is the implementer's run on the `088d599`-era driver (the first A11 commit). The later driver edits (the cleanup S3 `Fragment` refactor, the `.x` deep-reach counter) were not re-run at 200,000 on wasm32. At `343af0d` the 20,000-input smoke totals are identical natively and on wasm32 (the final review compared the per-format total lines with `cmp`), and the native totals did not change across those edits (the final review's `c62e6b7` vs `343af0d` comparison).
 - The wasm32 leg took 5,154 s (whole target 5,397 s, 17:59-19:29, loadavg about 7-12).
 - Worst per-input CPU time 436 ms (`osi`; worst wall time 1.55 s); `x` 125 ms CPU / 706 ms wall.
 - 0 inputs re-timed.

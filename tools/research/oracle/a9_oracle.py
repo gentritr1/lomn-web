@@ -18,6 +18,19 @@ whole "LIGHT <i> type=<t> d=.. s=.. a=.. pos=.. dir=.. range=.. att=.." line (th
 LIGHT.slb, GrSetDefaultLighting and SetCaveLighting). Only "#" notes other than "# node" / "# SrPushRenderMode" are
 dropped.
 Rules and addresses: see lomn/view/sage_frame.h; every function below names its source.
+
+Where this oracle is NOT independent of the shim (LIGHT lines). Both sides model the same choice, and the real install
+never exercises it (EXECUTED scan of all 123 areas, M1a-4 final review), so a green sweep says nothing about it. A new
+install with such data must be read against the decompilation (GcLightLoader::LoadLights 0x00470010), not against this
+oracle:
+  * a point light (flag 0x40) with no style flag gets style 0 here and in the shim; the exe keeps the previous record's
+    style (uninitialised stack for the first record). 0 of 1,555 real LIGHT.slb records (M1a-4 T4 re-review N-2; the
+    synthetic lmp1 and the test light pt0a pin the choice);
+  * duplicate light ids within one area: both sides treat every record as its own light, and SetCaveLighting's intensity
+    is applied to each; the exe resolves a light by id (Get(id)), so a duplicate id would apply SetIntensity twice to one
+    object. 0 of 123 areas;
+  * a record whose id is "Shad" would collide with the opposite fill light named "Shad" (added once, for the first 0x80
+    record); ids are not modelled on either side. 0 of 123 areas.
 """
 import argparse, math, os, struct, sys
 

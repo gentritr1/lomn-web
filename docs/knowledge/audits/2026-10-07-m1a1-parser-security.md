@@ -67,8 +67,10 @@ Each cap is set from a value measured on the real install, with headroom. A cap 
 
 ## Open items
 
-- `parse_x` has no input-size cap of its own. Entries read from blockfiles are capped at 64 MiB, but a loose `.x` reached through the disk fallback is not, and at about 9× amplification a loose file of roughly 220 MB or more would hit the wasm32 2 GB limit. Fix: apply the same 64 MiB limit to loose-file reads, or check the size at the top of `parse_x`. This is tracked for the M1 fuzz task (spec A11).
-- The wasm32 fuzz runs are thin for `.x` (≈ 30 k inputs per run): Node runs ASan-instrumented wasm about 100× slower than native. A longer wasm32 run belongs in the A11 fuzz task.
+Both items listed here at the time of the audit are closed (status checked 2026-10-08, M1a-4 final F3):
+
+- **`parse_x` input size: closed.** `parse_x_impl` rejects any input above `kMaxEntrySize` (64 MiB) with `x: file too large` (`engine/src/sage/xfile.cpp`, first statement of `parse_x_impl`, added in `f307347`). A loose `.x` reached through the disk fallback therefore gets the same limit as a blockfile entry, which keeps the ≈ 9× amplification under the wasm32 2 GB limit. The fuzz driver knows the message (`kXTooLarge` in `engine/tests/fuzz_fragments.h`).
+- **Thin wasm32 `.x` fuzzing: closed.** The A11 corpus (`make fuzz-formats`, M1a-4) runs 200,000 inputs per format as wasm32 under Node, `.x` included, with per-format totals identical to native; numbers and provenance are in `docs/knowledge/measurements.md` (A11 section). The `.x` nesting limit (64 / 65) is a unit case that runs natively and as wasm32 (`x: nesting depth is capped at 64` in `engine/tests/test_sage_xfile.cpp`). What M1a-4 found and changed is in `2026-10-08-m1a4-hardening.md`.
 
 ## Lessons
 
