@@ -175,6 +175,23 @@ std::string ts_name(uint32_t t) {
   }
 }
 bool is_float_rs(uint32_t r) { return r == rs::FOGSTART || r == rs::FOGEND || r == rs::FOGDENSITY; }
+// Task 8B E4: strings that come from the install (texture names, model ids in DRAW and "#" notes) are logged with every
+// byte outside printable ASCII as \xHH (the area loader's warning rule), so a file byte can never start a new log line
+// or differ between platforms. Printable names (all real data) are unchanged.
+std::string esc(const std::string& s) {
+  std::string o;
+  o.reserve(s.size());
+  for (unsigned char c : s) {
+    if (c >= 0x20 && c < 0x7f) {
+      o.push_back(static_cast<char>(c));
+    } else {
+      char b[5];
+      std::snprintf(b, sizeof b, "\\x%02x", c);
+      o += b;
+    }
+  }
+  return o;
+}
 }  // namespace
 
 Device8::Device8(std::vector<std::string>* log, const std::vector<std::string>* names) : s_(default_state()), log_(log), names_(names) {}
@@ -241,7 +258,7 @@ void Device8::set_texture(uint32_t st, uint32_t h) {
   if (st >= kStages) return rec(fmt("# dropped SetTexture stage=%u", st), false);
   s_.texture[st] = h;
   std::string n = "NULL";
-  if (h) n = names_ && h <= names_->size() ? (*names_)[h - 1] : "#" + std::to_string(h);
+  if (h) n = names_ && h <= names_->size() ? esc((*names_)[h - 1]) : "#" + std::to_string(h);
   rec(fmt("TEXTURE %u ", st) + n, true);
 }
 void Device8::clear(uint32_t flags, uint32_t argb, float z, bool rect) {
@@ -253,9 +270,9 @@ void Device8::begin_scene() { rec("BEGINSCENE", false); }
 void Device8::end_scene() { rec("ENDSCENE", false); }
 void Device8::draw_subset(const std::string& what, const DrawRef& d) {
   ++draws_;
-  rec(fmt("DRAW %s attrib=%u", what.c_str(), d.attrib), false);
+  rec("DRAW " + esc(what) + fmt(" attrib=%u", d.attrib), false);
   if (sink_) sink_->draw(s_, d);
 }
-void Device8::note(const std::string& text) { rec("# " + text, false); }
+void Device8::note(const std::string& text) { rec("# " + esc(text), false); }
 
 }  // namespace lomn::d3d

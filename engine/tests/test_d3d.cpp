@@ -336,3 +336,57 @@ TEST_CASE("d3d: state the compiler ignores sets unsupported bits (Task 8B B3)") 
     CHECK(u == kUnsupAddress);
   }
 }
+
+TEST_CASE("d3d: file-derived strings in the state log are escaped as \\xHH (Task 8B E4)") {
+  // Texture names and model ids come from the install: a newline in one must not forge a log line.
+  const std::vector<std::string> names = {std::string("a\nb\x01.dds"), "ok.dds"};
+  std::vector<std::string> log;
+  Device8 d(&log, &names);
+  d.set_texture(0, 1);
+  d.set_texture(0, 2);
+  d.draw_subset("mo\ndl#3", DrawRef{});
+  d.note(std::string("moveable q\x7f" "ad"));
+  CHECK(log == std::vector<std::string>{"TEXTURE 0 a\\x0ab\\x01.dds", "TEXTURE 0 ok.dds", "DRAW mo\\x0adl#3 attrib=0",
+                                        "# moveable q\\x7fad"});
+}
+
+TEST_CASE("d3d: LINEAR fog with FOGSTART == FOGEND and non-finite fog values never divide by zero (Task 8B E4)") {
+  // FOGSTART == FOGEND: the documented formula divides by end - start = 0. Rule (Wine's get_fog_start_end, INFERRED
+  // for D3D8): everything is fogged. pack_uniforms hands the shader finite substitutes that give f = w / 1e30 (= 0 at
+  // any real depth), and the CPU reference applies the same values. Non-finite start/end/density: the draw is unfogged.
+  State s = default_state();
+  s.rs[rs::FOGENABLE] = 1;
+  s.rs[rs::FOGTABLEMODE] = kFogLinear;
+  s.rs[rs::FOGSTART] = s.rs[rs::FOGEND] = float_to_bits(10.0f);
+  s.rs[rs::FOGCOLOR] = 0xff0000ffu;
+  float u[kFfpUniformBytes / 4];
+  pack_uniforms(s, DrawInputs{}, u);
+  for (float x : u) REQUIRE(std::isfinite(x));
+  CHECK(u[kFfpFogEnableFloat] == 1.0f);
+  Color4 out;
+  for (float w : {0.5f, 10.0f, 15.0f, 4000.0f}) {
+    CAPTURE(w);
+    REQUIRE(reference_fragment(s, Color4{1, 1, 1, 1}, Color4{1, 0, 0, 1}, true, w, out));
+    CHECK(out.r == doctest::Approx(0.0f));
+    CHECK(out.b == doctest::Approx(1.0f));
+  }
+  for (uint32_t bad : {0x7fc00000u, 0x7f800000u, 0xff800000u}) {
+    for (uint32_t r : {rs::FOGSTART, rs::FOGEND}) {
+      State n = s;
+      n.rs[rs::FOGSTART] = float_to_bits(0.0f);
+      n.rs[r] = bad;
+      pack_uniforms(n, DrawInputs{}, u);
+      for (float x : u) REQUIRE(std::isfinite(x));
+      REQUIRE(reference_fragment(n, Color4{1, 1, 1, 1}, Color4{1, 0, 0, 1}, true, 5.0f, out));
+      CHECK(out.r == 1.0f);  // unfogged
+      CHECK(out.b == 0.0f);
+    }
+  }
+  State e = s;
+  e.rs[rs::FOGTABLEMODE] = kFogExp;
+  e.rs[rs::FOGDENSITY] = 0x7fc00000u;
+  pack_uniforms(e, DrawInputs{}, u);
+  for (float x : u) REQUIRE(std::isfinite(x));
+  REQUIRE(reference_fragment(e, Color4{1, 1, 1, 1}, Color4{1, 0, 0, 1}, true, 5.0f, out));
+  CHECK(out.r == 1.0f);
+}

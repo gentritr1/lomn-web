@@ -202,6 +202,14 @@ inline std::vector<FfpCase> gpu_ffp_cases() {
   md.tss[0][tss::COLORARG1] = kTaTexture;
   md.tss[0][tss::COLORARG2] = kTaDiffuse;
   out.push_back({"MODULATE(TEXTURE mixed texel, DIFFUSE vertex colour) -> (0.40, 0.15, 0.30)", md, true, true});
+  // Task 8B E4: LINEAR fog with FOGSTART == FOGEND (end - start = 0): fully fogged, from the finite uniforms pack_uniforms
+  // substitutes (ffp_oracle.py counts this case as a skip: the D3D8 documentation leaves it undefined).
+  State feq = unlit;
+  feq.rs[rs::FOGENABLE] = 1;
+  feq.rs[rs::FOGTABLEMODE] = kFogLinear;
+  feq.rs[rs::FOGSTART] = feq.rs[rs::FOGEND] = float_to_bits(2.0f);
+  feq.rs[rs::FOGCOLOR] = 0xffff0000u;
+  out.push_back({"fog LINEAR start == end (2, 2): fully fogged -> fog colour", feq, true});
   return out;
 }
 

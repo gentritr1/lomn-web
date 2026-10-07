@@ -197,3 +197,30 @@ TEST_CASE("sage: GcTransDirector::SortIt - sky1 first, watr and ids ending in 'w
     if (m.id == "sky1") m.id = "skyx";
   CHECK(trans_order(b) == std::vector<std::string>{"pdlx#8", "quad#3", "blue#4", "skyx#11"});
 }
+
+// Task 8B E3: AreaRenderer owns its Impl (D3D8 device + caches) through a unique_ptr. A copy would share it (double
+// delete) and is deleted; a move hands it over, including the texture names the device's state log reads (they live in
+// the Impl, so they cannot dangle when the moved-from renderer is destroyed).
+static_assert(!std::is_copy_constructible<view::AreaRenderer>::value, "AreaRenderer must not be copyable");
+static_assert(!std::is_copy_assignable<view::AreaRenderer>::value, "AreaRenderer must not be copy-assignable");
+static_assert(std::is_nothrow_move_constructible<view::AreaRenderer>::value, "AreaRenderer must be movable");
+TEST_CASE("area: a moved AreaRenderer renders with the moved state; the moved-from one refuses (Task 8B E3)") {
+  view::AreaData a = synthetic_area();
+  auto dev = rhi::create_null_device(nullptr);
+  rhi::TextureId rt = dev->create_render_target_ex(rhi::RenderTargetDesc{16, 16, true, 1.0f});
+  std::vector<std::string> state;
+  view::RenderOptions ro;
+  ro.state_log = &state;
+  std::string err;
+  auto first = std::make_unique<view::AreaRenderer>();
+  REQUIRE_MESSAGE(first->upload(*dev, a, ro, &err), err);
+  view::AreaRenderer moved(std::move(*first));
+  CHECK_FALSE(first->render(*dev, rt, a, view::make_camera(a, view::synthetic_camera(), 1.0f)));  // no Impl any more
+  first.reset();  // the texture-name table must not die with it
+  REQUIRE(moved.render(*dev, rt, a, view::make_camera(a, view::synthetic_camera(), 1.0f)));
+  CHECK(moved.last_stats().rhi_draws == 21);
+  CHECK(std::find(state.begin(), state.end(), "TEXTURE 0 on_eye.dds") != state.end());
+  view::AreaRenderer assigned;
+  assigned = std::move(moved);
+  REQUIRE(assigned.render(*dev, rt, a, view::make_camera(a, view::synthetic_camera(), 1.0f)));
+}

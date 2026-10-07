@@ -17,6 +17,7 @@ namespace lomn::d3d {
 namespace {
 constexpr int kWvp = 0, kWorld = 16, kTex0 = 32, kMatD = 48, kMatA = 52, kMatE = 56, kGAmb = 60, kTf = 64, kFogC = 68,
               kFog = 72, kA = 76, kB = 80, kC = 84, kD = 88, kE = 92, kLights = 96;
+static_assert(kD + 1 == int(kFfpFogEnableFloat), "ffp.h kFfpFogEnableFloat must be the fog-enable flag (d.y)");
 
 const char* kWgsl = R"(// lomn M1a-3 D3D8 fixed-function uber-shader (lomn/d3d/ffp.h). One uniform block per draw.
 struct U {
@@ -169,6 +170,36 @@ void put4(float* o, const Color4& c) {
   o[3] = c.a;
 }
 float fogf(uint32_t bits) { return bits_to_float(bits); }
+
+// Task 8B E4: the fog inputs exactly as the shader receives them, shared by pack_uniforms and reference_fragment so
+// the GPU and the CPU reference apply one rule:
+//  - mode = FOGTABLEMODE, else FOGVERTEXMODE (as before);
+//  - LINEAR with FOGSTART == FOGEND: the documented f = (end - w) / (end - start) divides by 0. D3D fogs everything
+//    there (Wine's get_fog_start_end substitutes start -inf, end 0 - INFERRED for D3D8, not verified on hardware). The
+//    finite equivalent used here: start 1e30, end 0, so f = w / 1e30 (0 to 1e-24 at any depth below 1e6);
+//  - a non-finite parameter the mode uses (start, end or end - start for LINEAR; density for EXP/EXP2): the draw is
+//    unfogged (mode 0, parameters 0), so no NaN/inf reaches the uniforms or the arithmetic.
+// The factor itself is clamped to [0, 1] in every mode (Task 8B B2).
+struct Fog {
+  float start, end, density;
+  uint32_t mode;
+};
+Fog fog_inputs(const State& s) {
+  Fog f{fogf(s.rs[rs::FOGSTART]), fogf(s.rs[rs::FOGEND]), fogf(s.rs[rs::FOGDENSITY]),
+        s.rs[rs::FOGTABLEMODE] != kFogNone ? s.rs[rs::FOGTABLEMODE] : s.rs[rs::FOGVERTEXMODE]};
+  bool ok = true;
+  if (f.mode == kFogLinear) ok = std::isfinite(f.start) && std::isfinite(f.end) && std::isfinite(f.end - f.start);
+  else if (f.mode == kFogExp || f.mode == kFogExp2) ok = std::isfinite(f.density);
+  if (!ok) return Fog{0, 0, 0, kFogNone};
+  if (f.mode == kFogLinear && f.start == f.end) {
+    f.start = 1e30f;
+    f.end = 0.0f;
+  }
+  if (!std::isfinite(f.start)) f.start = 0;  // unused by the mode: keep every uniform finite
+  if (!std::isfinite(f.end)) f.end = 0;
+  if (!std::isfinite(f.density)) f.density = 0;
+  return f;
+}
 }  // namespace
 
 bool PipelineKey::operator<(const PipelineKey& o) const {
@@ -292,10 +323,11 @@ void pack_uniforms(const State& s, const DrawInputs& in, float* o) {
   put4(o + kGAmb, argb_to_color(s.rs[rs::AMBIENT]));
   put4(o + kTf, argb_to_color(s.rs[rs::TEXTUREFACTOR]));
   put4(o + kFogC, argb_to_color(s.rs[rs::FOGCOLOR]));
-  o[kFog + 0] = fogf(s.rs[rs::FOGSTART]);
-  o[kFog + 1] = fogf(s.rs[rs::FOGEND]);
-  o[kFog + 2] = fogf(s.rs[rs::FOGDENSITY]);
-  o[kFog + 3] = float(s.rs[rs::FOGTABLEMODE] != kFogNone ? s.rs[rs::FOGTABLEMODE] : s.rs[rs::FOGVERTEXMODE]);
+  const Fog fog = fog_inputs(s);
+  o[kFog + 0] = fog.start;
+  o[kFog + 1] = fog.end;
+  o[kFog + 2] = fog.density;
+  o[kFog + 3] = float(fog.mode);
   const bool lighting = s.rs[rs::LIGHTING] != 0;
   o[kA + 0] = lighting ? 1.0f : 0.0f;
   o[kA + 1] = in.vertex_has_diffuse ? 1.0f : 0.0f;
@@ -424,8 +456,9 @@ bool reference_fragment(const State& s, const Color4& d, const Color4& texel, bo
   out = col;
   out.a = s.rs[rs::ALPHABLENDENABLE] ? alp.a : 1.0f;
   if (s.rs[rs::FOGENABLE]) {
-    const uint32_t mode = s.rs[rs::FOGTABLEMODE] != kFogNone ? s.rs[rs::FOGTABLEMODE] : s.rs[rs::FOGVERTEXMODE];
-    const float st = fogf(s.rs[rs::FOGSTART]), en = fogf(s.rs[rs::FOGEND]), de = fogf(s.rs[rs::FOGDENSITY]);
+    const Fog fog = fog_inputs(s);  // the shader's inputs (Task 8B E4)
+    const uint32_t mode = fog.mode;
+    const float st = fog.start, en = fog.end, de = fog.density;
     float f = 1.0f;
     if (mode == kFogLinear) f = std::min(1.0f, std::max(0.0f, (en - w) / (en - st)));
     else if (mode == kFogExp) f = std::exp(-de * w);

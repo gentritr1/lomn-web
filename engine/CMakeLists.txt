@@ -85,7 +85,12 @@ if(EMSCRIPTEN)
            -DEXPECTED=${CMAKE_CURRENT_SOURCE_DIR}/tests/data/a7_calls.txt -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/a7_calls.cmake)
   # M1a-3 A9 under Node: the synthetic state scene's D3D8 state log equals the same checked-in expected log.
   add_test(NAME a9_state_log COMMAND ${CMAKE_COMMAND} -DRUNNER=node -DEXE=$<TARGET_FILE:lomn_view> -DOUT=${CMAKE_CURRENT_BINARY_DIR}/a9
-           -DEXPECTED=${CMAKE_CURRENT_SOURCE_DIR}/tests/data/a9_state.txt -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/a9_state.cmake)
+           -DEXPECTED=${CMAKE_CURRENT_SOURCE_DIR}/tests/data/a9_state.txt -DEXPECTED_F2=${CMAKE_CURRENT_SOURCE_DIR}/tests/data/a9_state_f2.txt
+           -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/a9_state.cmake)
+  # Task 8B E2: --write-install is native-only: under Node it is a usage error (exit 2) that writes nothing.
+  add_test(NAME view_cli_write_install_wasm COMMAND sh -c
+           "rm -rf \"$1\"; node \"$0\" --synthetic 2 --backend null --out \"$1.txt\" --write-install \"$1\" >/dev/null 2>&1; rc=$?; [ $rc -eq 2 ] || { echo \"rc=$rc (want 2)\"; exit 1; }; [ ! -e \"$1\" ] || { echo 'install written'; exit 1; }"
+           $<TARGET_FILE:lomn_view> ${CMAKE_CURRENT_BINARY_DIR}/view_write_install_wasm)
 else()
   add_executable(lomn_native src/app/main_native.cpp)
   target_link_libraries(lomn_native PRIVATE $<IF:$<BOOL:${LOMN_WEBGPU}>,lomn_webgpu,lomn_core>)
@@ -112,7 +117,8 @@ else()
            -DEXPECTED=${CMAKE_CURRENT_SOURCE_DIR}/tests/data/a7_calls.txt -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/a7_calls.cmake)
   # M1a-3 A9 (no game data): the synthetic state scene's D3D8 state log equals the checked-in expected log, twice.
   add_test(NAME a9_state_log COMMAND ${CMAKE_COMMAND} -DEXE=$<TARGET_FILE:lomn_view> -DOUT=${CMAKE_CURRENT_BINARY_DIR}/a9
-           -DEXPECTED=${CMAKE_CURRENT_SOURCE_DIR}/tests/data/a9_state.txt -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/a9_state.cmake)
+           -DEXPECTED=${CMAKE_CURRENT_SOURCE_DIR}/tests/data/a9_state.txt -DEXPECTED_F2=${CMAKE_CURRENT_SOURCE_DIR}/tests/data/a9_state_f2.txt
+           -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/a9_state.cmake)
   # A9 against the independent Python oracle (tools/research/oracle/a9_oracle.py, written from the decompiled code):
   # the synthetic state scene (written out as an install) always; vllg/ghut/crss when LOMN_DATA is set (else 77 = skip),
   # plus lev2/vllg and lev3/blr2 (Task 8A E1: Trans nodes with "sky1" and "watr"), lev1/bech (E2a: a TFACTOR alpha that
@@ -164,6 +170,11 @@ else()
   add_test(NAME view_cli_null_frames COMMAND sh -c
            "\"$0\" --synthetic 1 --backend null --out \"$1.1\" >/dev/null 2>&1 && \"$0\" --synthetic 1 --backend null --frames 3 --out \"$1.3\" >/dev/null 2>&1 && cmp \"$1.1\" \"$1.3\" && grep -q '\"frames\":3,\"frames_rendered\":3' \"$1.3.json\""
            $<TARGET_FILE:lomn_view> ${CMAKE_CURRENT_BINARY_DIR}/view_frames.txt)
+  # Task 8B E2: --state-log must not name --out or --out.json, compared CANONICALLY (./x, a/../x and x are one file);
+  # --write-install needs --synthetic and a non-empty directory (exit 2, nothing written); a valid one still works.
+  add_test(NAME view_cli_paths COMMAND sh -c
+           "rm -rf \"$1\"; mkdir -p \"$1/sub\" && cd \"$1\" || exit 1; for a in '--state-log o.txt' '--state-log ./o.txt' '--state-log o.txt.json' '--state-log sub/../o.txt.json' '--write-install \"\"' '--state-log s.txt --write-install \"\"'; do eval \"\\\"$0\\\" --synthetic 2 --backend null --out o.txt $a\" >/dev/null 2>&1; rc=$?; if [ $rc -ne 2 ]; then echo \"$a: rc=$rc (want 2)\"; exit 1; fi; done; [ ! -e data ] || { echo 'empty --write-install wrote into the cwd'; exit 1; }; \"$0\" --install /nonexistent/lomn --level lev1 --area vllg --backend null --out o.txt --write-install w >/dev/null 2>&1; rc=$?; [ $rc -eq 2 ] || { echo \"--write-install without --synthetic: rc=$rc (want 2)\"; exit 1; }; [ ! -e w ] || { echo 'install written without --synthetic'; exit 1; }; \"$0\" --synthetic 2 --backend null --out o.txt --state-log sub/../s.txt --write-install w >/dev/null 2>&1 || { echo 'valid paths rejected'; exit 1; }; [ -s s.txt ] && [ -s w/data/levels/levt/stat.blk ] || { echo 'valid outputs missing'; exit 1; }"
+           $<TARGET_FILE:lomn_view> ${CMAKE_CURRENT_BINARY_DIR}/view_paths)
   # C8: a survey that finds no area is an environment error (exit 3), not an empty success.
   add_test(NAME view_cli_survey_empty COMMAND sh -c
            "rm -rf \"$1\"; mkdir -p \"$1/Data/Levels/lev1\" || exit 1; \"$0\" --install \"$1\" --survey 1 --out \"$1/s.json\" >/dev/null 2>&1; rc=$?; [ $rc -eq 3 ] || { echo \"rc=$rc (want 3)\"; exit 1; }"

@@ -36,6 +36,9 @@
 namespace lomn::d3d {
 
 constexpr uint32_t kFfpUniformBytes = 1024;  // 256 floats; layout in ffp.cpp (pack_uniforms)
+// Task 8B E3: index (in floats) of the fog-enable flag in the block (d.y; 1 = FOGENABLE), for callers that switch fog
+// off after pack_uniforms (lomn_view --fog off). ffp.cpp static_asserts it against the layout.
+constexpr uint32_t kFfpFogEnableFloat = 89;
 constexpr uint32_t kFfpVertexStride = 48;    // position @0, normal @12, uv @24, colour rgba @32 (view/area.h)
 
 struct PipelineKey {

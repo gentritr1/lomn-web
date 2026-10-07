@@ -7,10 +7,11 @@
 //   --width 1280 --height 720 --frames 1
 //   --fov 72 --near 0.01 --far 4700 (the exe's camera; "exe" source) --eye x,y,z --yaw deg --pitch deg --eye-height 3
 //   --vertex-colors on|off  --routes main,trans,back,moveable,nolight
-//   --state-log FILE        write the D3D8 state log (A9): device init + frame 1 (+ frame 2 when --frames >= 2)
+//   --state-log FILE        write the D3D8 state log (A9): device init + frame 1 (+ frame 2 when --frames >= 2); must
+//                           not be --out or --out.json (compared canonically)
 //   --lighting faithful|forced   forced = GcRenderNodeGroup::SetLighting(true) on MainArea/MainTrans (half of the night-vision state: the special emissive colour is not modelled)
 //   --fog on|off            off drops fog from every draw (debug; the state log is unchanged)
-//   --write-install DIR     (--synthetic only, native) also write the synthetic install to DIR/data/... (for oracles)
+//   --write-install DIR     (--synthetic only, native; else exit 2) also write the synthetic install to DIR/data/...
 //   --keep-cpu on|off       keep the CPU vertex/index/mip copies after upload (default off: released)
 // Always writes <out>.json metrics (except --survey, whose output IS the JSON).
 // Exit codes (as lomn_native): 0 ok, 2 bad args, 3 no WebGPU adapter / install or area unreadable / survey found no
@@ -244,12 +245,23 @@ std::string warnings_json(const std::vector<std::string>& w) {
 }
 
 #if !defined(__EMSCRIPTEN__) || defined(LOMN_NODE_DISK_FS)
-// The disk file system's user directory (native, or wasm32 under Node with NODERAWFS).
+// The disk file system's user directory (native, or wasm32 under Node with NODERAWFS). Task 8B F2: the one definition
+// (survey() used a duplicate, user_dir()).
 std::string disk_user_dir() {
   std::error_code ec;
   const std::filesystem::path t = std::filesystem::temp_directory_path(ec);
   return ((ec ? std::filesystem::path("/tmp") : t) / "lomn_view_user").string();
 }
+// Task 8B E2: two output paths name the same file when their canonical forms (absolute, "." / ".." and symlinked
+// directories resolved; the file itself need not exist) are equal. Never throws; on an error the spellings compare.
+bool same_file(const std::string& a, const std::string& b) {
+  namespace sfs = std::filesystem;
+  std::error_code ea, eb;
+  const sfs::path ca = sfs::weakly_canonical(sfs::absolute(a, ea), ea), cb = sfs::weakly_canonical(sfs::absolute(b, eb), eb);
+  return (ea || eb) ? a == b : ca == cb;
+}
+#else
+bool same_file(const std::string& a, const std::string& b) { return a == b; }
 #endif
 
 #if !defined(__EMSCRIPTEN__)
@@ -270,15 +282,9 @@ bool is_dir(const std::filesystem::directory_entry& d) {
   std::error_code ec;
   return d.is_directory(ec);
 }
-std::string user_dir() {
-  std::error_code ec;
-  const std::filesystem::path t = std::filesystem::temp_directory_path(ec);
-  return ((ec ? std::filesystem::path("/tmp") : t) / "lomn_view_user").string();
-}
-
 int survey(const std::string& install, const std::string& out_path) {
   namespace sfs = std::filesystem;
-  auto fsp = fs::open_disk(install, user_dir());
+  auto fsp = fs::open_disk(install, disk_user_dir());
   if (!fsp) return std::fprintf(stderr, "cannot open install %s\n", install.c_str()), 3;
   sfs::path levels;
   for (const auto& d : list_dir(install))
@@ -477,7 +483,19 @@ int main(int argc, char** argv) {
     ro.fog = a["--fog"] == "on";
   }
   const std::string state_log_path = has("--state-log") ? a["--state-log"] : "";
-  if (has("--state-log") && (state_log_path.empty() || state_log_path == out)) return usage("bad --state-log (a file other than --out)");
+  // Task 8B E2: compared canonically with BOTH outputs (--out and --out.json), so "./x" or "d/../x.json" is caught too.
+  if (has("--state-log") && (state_log_path.empty() || same_file(state_log_path, out) || same_file(state_log_path, out + ".json")))
+    return usage("bad --state-log (a file other than --out and --out.json)");
+  // Task 8B E2: --write-install writes the synthetic install only (native); empty is rejected (it would write into the
+  // working directory), and under Node it is a usage error instead of being silently ignored.
+  if (has("--write-install")) {
+#if defined(__EMSCRIPTEN__)
+    return usage("--write-install needs the native build");
+#else
+    if (!synthetic) return usage("--write-install needs --synthetic");
+    if (a["--write-install"].empty()) return usage("bad --write-install (a directory)");
+#endif
+  }
   bool keep_cpu = false;
   if (has("--keep-cpu")) {
     if (a["--keep-cpu"] != "on" && a["--keep-cpu"] != "off") return usage("bad --keep-cpu (on|off)");

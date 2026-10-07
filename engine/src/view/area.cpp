@@ -794,16 +794,21 @@ constexpr uint32_t kSlot = static_cast<uint32_t>(rhi::uniform_stride(d3d::kFfpUn
 
 // Everything that lives across frames: the D3D8 device (its state is history-dependent: the HUD view's mode carries
 // ALPHAREF 1 into the next frame), the game-side replay and the rhi object caches.
+// Task 8B E3: the texture names (device texture handle k -> names[k-1], printed by the state log) live HERE, declared
+// before dev8, which keeps a pointer to them: the Impl is heap-allocated and owned by a unique_ptr, so moving the
+// AreaRenderer moves the pointer and the names stay where dev8 looks (they used to be an AreaRenderer member).
 struct AreaRenderer::Impl {
-  std::vector<std::string> local_log;
+  std::vector<std::string> names;
   d3d::Device8 dev8;
   SageFrame sage;
   std::map<d3d::PipelineKey, rhi::PipelineId> pipelines;
   std::map<std::tuple<int, int, int, int>, rhi::SamplerId> samplers;
   std::map<std::pair<rhi::TextureId, rhi::SamplerId>, rhi::BindGroupId> groups;
   bool initialised = false;
-  Impl(std::vector<std::string>* log, const std::vector<std::string>* names, const SageFrameOptions& so)
-      : dev8(log, names), sage(dev8, SageCaps(), so) {}
+  Impl(std::vector<std::string>* log, std::vector<std::string> texture_names, const SageFrameOptions& so)
+      : names(std::move(texture_names)), dev8(log, &names), sage(dev8, SageCaps(), so) {}
+  Impl(const Impl&) = delete;
+  Impl& operator=(const Impl&) = delete;
 };
 
 // DrawSink: one DrawSubset with faces -> one queued rhi draw (pipeline + bind group created on first use, before the
@@ -878,7 +883,7 @@ class AreaRenderer::Sink final : public d3d::DrawSink {
     in.texture_bound = handle != 0;
     float* u = reinterpret_cast<float*>(&r_.uniform_data_[draws.size() * size_t(kSlot)]);
     d3d::pack_uniforms(s, in, u);
-    if (!r_.opt_.fog) u[89] = 0.0f;  // debug: fog flag (d.y) off
+    if (!r_.opt_.fog) u[d3d::kFfpFogEnableFloat] = 0.0f;  // debug: the fog-enable flag off
     RenderStats& st = r_.stats_;
     if (s.rs[d3d::rs::LIGHTING]) ++st.lit_draws;
     if (s.rs[d3d::rs::FOGENABLE] && r_.opt_.fog) ++st.fogged_draws;
@@ -904,7 +909,10 @@ class AreaRenderer::Sink final : public d3d::DrawSink {
   const AreaData& a_;
 };
 
-AreaRenderer::~AreaRenderer() { delete impl_; }
+AreaRenderer::AreaRenderer() = default;
+AreaRenderer::AreaRenderer(AreaRenderer&&) noexcept = default;
+AreaRenderer& AreaRenderer::operator=(AreaRenderer&&) noexcept = default;
+AreaRenderer::~AreaRenderer() = default;
 
 bool AreaRenderer::upload(rhi::Device& dev, const AreaData& a, const RenderOptions& opt, std::string* err) {
   if (a.cpu_released) return fail(err, "render: area CPU copies were already released");
@@ -922,7 +930,7 @@ bool AreaRenderer::upload(rhi::Device& dev, const AreaData& a, const RenderOptio
   textures_created_ = 1;
   uploaded_texture_bytes_ = 4;
   gpu_textures_.clear();
-  texture_names_.clear();
+  std::vector<std::string> texture_names;
   for (const Texture& t : a.textures) {
     const MipLevel& top = t.mips.front();
     rhi::TextureId id = dev.create_texture(top.width, top.height, static_cast<uint32_t>(t.mips.size()));
@@ -934,7 +942,7 @@ bool AreaRenderer::upload(rhi::Device& dev, const AreaData& a, const RenderOptio
     ++textures_created_;
     gpu_textures_.push_back(id);
     const size_t slash = t.request.find_last_of('/');
-    texture_names_.push_back(slash == std::string::npos ? t.request : t.request.substr(slash + 1));
+    texture_names.push_back(slash == std::string::npos ? t.request : t.request.substr(slash + 1));
   }
   models_.clear();
   for (const Model& m : a.models) {
@@ -950,8 +958,7 @@ bool AreaRenderer::upload(rhi::Device& dev, const AreaData& a, const RenderOptio
   uniform_data_.assign(size_t(uniform_slots_) * kSlot, 0);
   SageFrameOptions so;
   so.force_area_lighting = opt.force_area_lighting;
-  delete impl_;
-  impl_ = new Impl(opt.state_log, &texture_names_, so);
+  impl_ = std::make_unique<Impl>(opt.state_log, std::move(texture_names), so);
   uploaded_ = &a;
   return true;
 }

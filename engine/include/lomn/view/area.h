@@ -17,6 +17,7 @@
 // (texture, sampler), one 1024-byte uniform slot per draw. See the M1a-2 and M1a-3 reference REPORTs.
 #pragma once
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -44,7 +45,7 @@ constexpr uint32_t kPosStartFlag = 0x1000;
 // mip chains exist until release_cpu_copies() after upload) rather than by a multiple; a rejection is a named error,
 // never a partial area.
 constexpr uint32_t kMaxPlacements = 1024;                // drawn OBJ records per area
-constexpr uint32_t kMaxDraws = 4096;                     // placements x subsets per frame (uniform buffer <= 1 MiB)
+constexpr uint32_t kMaxDraws = 4096;                     // placements x subsets per frame (uniform buffer <= 4 MiB)
 constexpr uint32_t kMaxAreaTextures = 1024;              // distinct resolved textures per area
 constexpr uint64_t kMaxAreaTextureBytes = 256ull << 20;  // RGBA8 incl. mips, per area
 constexpr uint64_t kMaxAreaGeometryBytes = 64ull << 20;  // vertex + index bytes, per area
@@ -269,6 +270,13 @@ class AreaRenderer {
   uint64_t uploaded_texture_bytes() const { return uploaded_texture_bytes_; }
   uint32_t textures_created() const { return textures_created_; }
   const RenderStats& last_stats() const { return stats_; }
+  // Task 8B E3: the renderer owns its Impl (unique_ptr). Copying would share it, so it is deleted; moving hands it over
+  // (the moved-from renderer then refuses to render). The texture names the state log prints live inside the Impl.
+  AreaRenderer();
+  AreaRenderer(const AreaRenderer&) = delete;
+  AreaRenderer& operator=(const AreaRenderer&) = delete;
+  AreaRenderer(AreaRenderer&&) noexcept;
+  AreaRenderer& operator=(AreaRenderer&&) noexcept;
   ~AreaRenderer();
 
  private:
@@ -285,12 +293,12 @@ class AreaRenderer {
   uint32_t pipelines_created_ = 0, textures_created_ = 0, frames_ = 0;
   uint64_t uploaded_texture_bytes_ = 0;
   std::vector<uint8_t> uniform_data_;
-  std::vector<std::string> texture_names_;  // device texture handle k -> texture_names_[k-1] (state log)
   const AreaData* uploaded_ = nullptr;  // set only by a successful upload
   bool upload_attempted_ = false, render_refused_logged_ = false;
   RenderStats stats_;
   struct Impl;
-  Impl* impl_ = nullptr;  // d3d::Device8 + SageFrame + pipeline / sampler / bind-group caches (lives across frames)
+  // d3d::Device8 + SageFrame + texture names + pipeline / sampler / bind-group caches (lives across frames).
+  std::unique_ptr<Impl> impl_;
 };
 
 // The fixed-function uber-shader (lomn/d3d/ffp.h), exposed for tests and the call-log checksum.

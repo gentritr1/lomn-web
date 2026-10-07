@@ -86,7 +86,10 @@ class Device:
             self.set_tss(st, t, v)
 
     def raw(self, line):
-        self.out.append(line)
+        # Task 8B E4: file-derived text (texture names, model ids) is logged with every byte outside printable ASCII
+        # as \\xHH, as the C++ device does; every constant part of a line is printable, so escaping the whole line is
+        # the same rule.
+        self.out.append(''.join(c if 0x20 <= ord(c) < 0x7f else '\\x%02x' % ord(c) for c in line))
 
 
 # ---- data ----
