@@ -87,7 +87,7 @@ Behaviour is defined by the decompiled functions named here (addresses in the re
 - **DrawX two passes** (0x5528c0):
   1. **Opaque subsets:** ZBIAS 0. When `mTransparency < 1`, ZBIAS 16 plus a TFACTOR alpha.
   2. **Alpha subsets** (`IsAlphaOn`: DXT3/A8R8G8B8):
-     - ALPHABLEND on, ALPHATEST on, `ALPHAFUNC GREATEREQUAL`;
+     - ALPHABLEND on, ALPHATEST on, `ALPHAFUNC GREATER` (corrected 2026-10-07: DrawX 0x5528c0 sets render state 0x19 = D3DRS_ALPHAFUNC to 5 = D3DCMP_GREATER; GREATEREQUAL would be 7);
      - ALPHAREF 0 or 1 per the code;
      - ALPHAOP SELECTARG2(TEXTURE).
 - **Draw order:** MovingLight, Area, NoLight, StaticLight, Shadow, Main, **Back (after Area)**, Trans. Trans is sorted by camera distance (`GcTransDirector::SortIt`). Child iteration order is INFERRED; the plan reads it before implementing.
