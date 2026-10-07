@@ -670,6 +670,7 @@ int main(int argc, char** argv) {
     << ",\"pitch_deg\":" << num(cam.pitch_deg) << ",\"pitch_source\":" << js(pitch_src)
     << ",\"fov_deg\":" << num(cam.fov_deg) << ",\"fov_source\":" << js(fov_src) << ",\"near\":" << num(cam.near_z) << ",\"far\":"
     << num(cam.far_z) << ",\"clip_source\":" << js(clip_src) << ",\"aspect\":" << num(cam.aspect)
+    << (cam.warning.empty() ? std::string() : ",\"warning\":" + js(cam.warning))  // M1a-4 I-2: only when it fell back
     << "},\n\"render\":{\"vertex_colors\":" << (ro.vertex_colors ? "true" : "false")
     << ",\"lighting\":" << js(ro.force_area_lighting ? "forced" : "faithful") << ",\"fog\":" << (ro.fog ? "true" : "false") << "}"
     << ",\n\"states\":{\"state_calls_last_frame\":" << rstats.state_calls << ",\"draw_subsets_last_frame\":" << rstats.draw_subsets

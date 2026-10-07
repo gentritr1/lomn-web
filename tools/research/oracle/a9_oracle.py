@@ -49,8 +49,12 @@ def b2f(b):
 
 
 def f32(x):
-    """Round a Python float to float32 (one IEEE round to nearest even)."""
-    return struct.unpack('<f', struct.pack('<f', x))[0]
+    """Round a Python float to float32 (one IEEE round to nearest even; a value that rounds past FLT_MAX is +-inf, as
+    in IEEE arithmetic - struct refuses to pack it)."""
+    try:
+        return struct.unpack('<f', struct.pack('<f', x))[0]
+    except OverflowError:
+        return math.copysign(math.inf, x)
 
 
 def tfactor_alpha(t):
@@ -320,6 +324,13 @@ def load_area(ins):
         # World matrix (GcArea::GcArea 0x00504220): RotX(kWorldRotX = -1.5707982, the float the exe passes to
         # D3DUtil_SetRotateXMatrix) then the record position in _41.._43, i.e. RotX * Translation(pos).
         world = mat_mul(mat_rotation_x(f32(-1.5707982)), mat_translation(*pos))
+        # The viewer's untrusted-input rule (M1a-4 I-2): a placement whose model-space AABB corners overflow float in
+        # world space (finite values, e.g. a vertex at 3e38 placed at 3e38) is skipped, like a non-finite one.
+        bmin, bmax = m['bmin'], m['bmax']
+        corners = [transform_point(world, ((bmax[0] if k & 1 else bmin[0]), (bmax[1] if k & 2 else bmin[1]),
+                                           (bmax[2] if k & 4 else bmin[2])))[:3] for k in range(8)]
+        if not all(math.isfinite(c) for w in corners for c in w):
+            continue
         places.append({'rec': i, 'id': mid, 'pos': pos, 'route': rt, 'm': m, 'world': world})
     return places, start
 
@@ -349,22 +360,34 @@ def camera(places, start, cam):
         eye = [ctr[0], f32(ctr[1] + eh), ctr[2]]
     else:
         eye = [0.0, 0.0, 0.0]  # make_camera "origin": no eye height
+    cli_yaw = None
     if cam['yaw'] is not None:
         y = math.fmod(f32(cam['yaw']), 360.0)  # lomn_view normalises --yaw to (-180, 180]
         y = y - 360.0 if y > 180.0 else y + 360.0 if y <= -180.0 else y
-        yaw = f32(y)
+        yaw = cli_yaw = f32(y)
     else:
         dx, dz = f32(ctr[0] - eye[0]), f32(ctr[2] - eye[2])
         if lo is not None and f32(f32(dx * dx) + f32(dz * dz)) > f32(1e-6):
             yaw = f32(math.atan2(dx, -dz) / KDEG)
         else:
             yaw = 0.0
-    yr, pr = yaw * KDEG, f32(cam['pitch']) * KDEG
-    fwd = [f32(math.sin(yr) * math.cos(pr)), f32(math.sin(pr)), f32(-math.cos(yr) * math.cos(pr))]
-    at = [f32(eye[k] + fwd[k]) for k in range(3)]
-    view = look_at_rh(eye, at, [0.0, 1.0, 0.0])
-    aspect = f32(f32(cam['width']) / f32(cam['height']))
-    proj = perspective_fov_rh(f32(f32(cam['fov']) * KDEG), aspect, f32(cam['near']), f32(cam['far']))
+
+    def build(eye, yaw):
+        yr, pr = yaw * KDEG, f32(cam['pitch']) * KDEG
+        fwd = [f32(math.sin(yr) * math.cos(pr)), f32(math.sin(pr)), f32(-math.cos(yr) * math.cos(pr))]
+        at = [f32(eye[k] + fwd[k]) for k in range(3)]
+        view = look_at_rh(eye, at, [0.0, 1.0, 0.0])
+        aspect = f32(f32(cam['width']) / f32(cam['height']))
+        proj = perspective_fov_rh(f32(f32(cam['fov']) * KDEG), aspect, f32(cam['near']), f32(cam['far']))
+        return at, view, proj
+    at, view, proj = build(eye, yaw)
+    # The viewer's overflow rule (M1a-4 I-2): a non-finite eye, target, view or projection, or a zero LookAtRH axis (a
+    # huge eye absorbs the unit forward step in x/z: eye - at is vertical), falls back to the origin with yaw 0 (or the
+    # --yaw given).
+    zero_axis = any(view[k] == 0.0 and view[4 + k] == 0.0 and view[8 + k] == 0.0 for k in range(3))
+    if zero_axis or not all(math.isfinite(v) for v in eye + at + view + proj):
+        eye = [0.0, 0.0, 0.0]
+        at, view, proj = build(eye, cli_yaw if cli_yaw is not None else 0.0)
     return tuple(eye), view, proj
 
 

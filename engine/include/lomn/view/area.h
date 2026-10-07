@@ -230,6 +230,7 @@ struct Camera {
   float fov_deg = 0, near_z = 0, far_z = 0, yaw_deg = 0, pitch_deg = 0, aspect = 1;
   std::string eye_source;  // "pos_start" | "cli" | "bounds_centre" | "origin"
   std::string yaw_source;  // "cli" | "towards_bounds_centre" | "default"
+  std::string warning;     // M1a-4 I-2: set when a non-finite eye/view/projection made the camera fall back to the origin
   Mat4 view, proj;
 };
 Camera make_camera(const AreaData& area, const CameraSettings& s, float aspect);

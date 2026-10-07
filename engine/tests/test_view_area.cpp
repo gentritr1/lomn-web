@@ -1019,3 +1019,56 @@ TEST_CASE("area: a model with any non-finite vertex position is rejected at load
   for (const Model& m : a.models)
     for (float v : m.vertices) CHECK(std::isfinite(v));
 }
+
+// ---- M1a-4 fix round 1 (I-2): finite inputs whose float products overflow ----
+TEST_CASE("area: a placement whose world bounds overflow float is skipped; a camera that overflows falls back to the origin (M1a-4 I-2)") {
+  fs::MemoryFileSystem mfs;
+  REQUIRE(mount_synthetic_install(mfs));
+  const sage_test::Bytes blue = synthetic_entry("blue.x");
+  const sage_test::Bytes huge = x_with_subsets(1, false, {3e38f, 0, 0, 1, 0, 0, 0, 0, 1});  // a vertex at x = 3e38
+  // 1. The reviewer's case: that vertex placed at OBJ x = 3e38 (world x = 6e38 = inf), no POS table.
+  REQUIRE(mfs.mount("Root/Data/Levels/levt/ovf1.blk",
+                    sage_test::make_blk({entry("blue.x", blue), entry("huge.x", huge),
+                                         entry("ovf1_obj.slb", obj_table({{"huge", {3e38f, 0, 0}, {0, 0, 0}, 0x10},
+                                                                          {"blue", {0, 0, -10}, {0, 0, 0}, 0x10}}))})));
+  AreaData a;
+  std::string err;
+  REQUIRE_MESSAGE(load_area(mfs, "levt", "ovf1", AreaOptions(), a, &err), err);
+  CHECK(a.stats.placements == 1);  // only blue
+  CHECK(a.stats.nonfinite_records == 1);
+  CHECK(has_warning(a, "obj record 0: world bounds not finite (skipped)"));
+  for (int k = 0; k < 3; ++k) CHECK((std::isfinite(a.bounds_min[k]) && std::isfinite(a.bounds_max[k])));
+  Camera c = make_camera(a, CameraSettings(), 16.0f / 9.0f);
+  CHECK(c.eye_source == "bounds_centre");
+  CHECK(c.warning.empty());
+  // 2. Finite corners whose bounds centre overflows: two blue quads at x = 3e38 (min + max = inf): the eye would be inf
+  //    and the view NaN. The camera falls back to the origin (no eye height), yaw default, with a warning.
+  REQUIRE(mfs.mount("Root/Data/Levels/levt/ovf2.blk",
+                    sage_test::make_blk({entry("blue.x", blue), entry("ovf2_obj.slb", obj_table({{"blue", {3e38f, 0, 0}, {0, 0, 0}, 0x10},
+                                                                                                  {"blue", {3e38f, 0, -9}, {0, 0, 0}, 0x10}}))})));
+  REQUIRE_MESSAGE(load_area(mfs, "levt", "ovf2", AreaOptions(), a, &err), err);
+  CHECK(a.stats.placements == 2);
+  c = make_camera(a, CameraSettings(), 16.0f / 9.0f);
+  CHECK(c.eye_source == "origin");
+  CHECK(c.yaw_source == "default");
+  CHECK(c.warning == "camera: non-finite or degenerate eye/matrices (fell back to the origin)");
+  for (float v : c.eye) CHECK(v == 0.0f);
+  for (float v : c.view.m) CHECK(std::isfinite(v));
+  for (float v : c.proj.m) CHECK(std::isfinite(v));
+  // 3. A finite POS start so large that eye + the unit forward step rounds back to eye in x and z: eye - at is vertical,
+  //    so LookAtRH's x and y axes are zero (finite but degenerate). The same fallback, keeping the --yaw.
+  REQUIRE(mfs.mount("Root/Data/Levels/levt/ovf3.blk",
+                    sage_test::make_blk({entry("blue.x", blue), entry("ovf3_obj.slb", obj_table({{"blue", {0, 0, -10}, {0, 0, 0}, 0x10}})),
+                                         entry("ovf3_pos.slb", pos_table({{"strt", {3e38f, 0, 3e38f}, 0x1000}}))})));
+  REQUIRE_MESSAGE(load_area(mfs, "levt", "ovf3", AreaOptions(), a, &err), err);
+  REQUIRE(a.has_start);
+  CameraSettings yawed;
+  yawed.yaw_set = true;
+  yawed.yaw_deg = 45.0f;
+  c = make_camera(a, yawed, 1.0f);
+  CHECK(c.eye_source == "origin");
+  CHECK(c.yaw_source == "cli");  // a --yaw is kept
+  CHECK(c.yaw_deg == 45.0f);
+  CHECK_FALSE(c.warning.empty());
+  for (float v : c.view.m) CHECK(std::isfinite(v));
+}

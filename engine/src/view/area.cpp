@@ -168,6 +168,15 @@ class Loader {
         ++st.missing_models;
         continue;
       }
+      // M1a-4 fix round 1 (I-2): finite values can still overflow float - a vertex at 3e38 placed at 3e38 has a world
+      // corner at inf, which would poison the bounds, the camera fallback and the GPU positions. Such a record is skipped
+      // with a warning, like a non-finite one.
+      const Mat4 world = mat_mul(rot, mat_translation(r.pos[0], r.pos[1], r.pos[2]));
+      if (!world_bounds_finite(out_.models[model], world)) {
+        ++st.nonfinite_records;
+        warn("obj record " + std::to_string(i) + ": world bounds not finite (skipped)");
+        continue;
+      }
       Placement p;
       p.record = i;
       p.model = model;
@@ -176,7 +185,7 @@ class Loader {
       std::memcpy(p.pos, r.pos, sizeof p.pos);
       std::memcpy(p.orient, r.orient, sizeof p.orient);
       if (r.orient[0] != 0.0f || r.orient[1] != 0.0f || r.orient[2] != 0.0f) ++st.placements_with_orientation;
-      p.world = mat_mul(rot, mat_translation(r.pos[0], r.pos[1], r.pos[2]));
+      p.world = world;
       st.routes[static_cast<int>(rt)]++;
       const uint64_t draws = uint64_t(st.draws) + out_.models[model].subsets.size();
       if (draws > max_draws_) return fail(err, "area: more than kMaxDraws draws");
@@ -701,6 +710,16 @@ class Loader {
     return LoadError::Data;
   }
 
+  static bool world_bounds_finite(const Model& m, const Mat4& world) {
+    for (int c = 0; c < 8; ++c) {
+      const float p[3] = {(c & 1) ? m.bounds_max[0] : m.bounds_min[0], (c & 2) ? m.bounds_max[1] : m.bounds_min[1],
+                          (c & 4) ? m.bounds_max[2] : m.bounds_min[2]};
+      float w[4];
+      transform_point(world, p, w);
+      if (!finite3(w)) return false;
+    }
+    return true;
+  }
   void grow_bounds(const Model& m, const Mat4& world) {
     for (int c = 0; c < 8; ++c) {
       const float p[3] = {(c & 1) ? m.bounds_max[0] : m.bounds_min[0], (c & 2) ? m.bounds_max[1] : m.bounds_min[1],
@@ -788,16 +807,38 @@ Camera make_camera(const AreaData& a, const CameraSettings& s, float aspect) {
       c.yaw_source = "default";
     }
   }
-  c.yaw_deg = yaw;
   // Clamped to +-89.9 degrees: at +-90 the view direction is parallel to the up vector and LookAtRH's x axis is zero.
   c.pitch_deg = std::max(-kMaxPitchDeg, std::min(kMaxPitchDeg, s.pitch_deg));
-  const double y = yaw * kDeg, p = c.pitch_deg * kDeg;
-  const float fwd[3] = {static_cast<float>(std::sin(y) * std::cos(p)), static_cast<float>(std::sin(p)),
-                        static_cast<float>(-std::cos(y) * std::cos(p))};
-  for (int k = 0; k < 3; ++k) c.at[k] = c.eye[k] + fwd[k];
-  const float up[3] = {0, 1, 0};
-  c.view = look_at_rh(c.eye, c.at, up);
-  c.proj = perspective_fov_rh(static_cast<float>(s.fov_deg * kDeg), aspect, s.near_z, s.far_z);
+  auto build = [&](float yaw_deg) {
+    c.yaw_deg = yaw_deg;
+    const double y = yaw_deg * kDeg, p = c.pitch_deg * kDeg;
+    const float fwd[3] = {static_cast<float>(std::sin(y) * std::cos(p)), static_cast<float>(std::sin(p)),
+                          static_cast<float>(-std::cos(y) * std::cos(p))};
+    for (int k = 0; k < 3; ++k) c.at[k] = c.eye[k] + fwd[k];
+    const float up[3] = {0, 1, 0};
+    c.view = look_at_rh(c.eye, c.at, up);
+    c.proj = perspective_fov_rh(static_cast<float>(s.fov_deg * kDeg), aspect, s.near_z, s.far_z);
+  };
+  build(yaw);
+  // M1a-4 fix round 1 (I-2): finite inputs can still overflow float here (a bounds centre (min + max) * 0.5 with both
+  // near 3e38), and a huge finite eye (a hostile POS start beyond ~1.6e7) absorbs the unit forward step in x/z, so
+  // eye - at is vertical (or zero) and a LookAtRH axis is the zero vector (finite but degenerate). A non-finite eye,
+  // target, view or projection, or a zero view axis, falls back to the origin (no eye height) with the yaw default 0
+  // unless --yaw was given, and says so in `warning`.
+  auto finite_all = [](const float* v, int n) {
+    for (int i = 0; i < n; ++i)
+      if (!std::isfinite(v[i])) return false;
+    return true;
+  };
+  bool zero_axis = false;  // view column k (k = 0, 1, 2) holds axis k (x, y, z) of LookAtRH
+  for (int k = 0; k < 3; ++k) zero_axis = zero_axis || (c.view.m[k] == 0.0f && c.view.m[4 + k] == 0.0f && c.view.m[8 + k] == 0.0f);
+  if (zero_axis || !finite_all(c.eye, 3) || !finite_all(c.at, 3) || !finite_all(c.view.m, 16) || !finite_all(c.proj.m, 16)) {
+    c.eye[0] = c.eye[1] = c.eye[2] = 0.0f;
+    c.eye_source = "origin";
+    if (!s.yaw_set) c.yaw_source = "default";
+    c.warning = "camera: non-finite or degenerate eye/matrices (fell back to the origin)";
+    build(s.yaw_set ? s.yaw_deg : 0.0f);
+  }
   return c;
 }
 
