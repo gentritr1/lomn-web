@@ -60,6 +60,10 @@ else()
   target_compile_definitions(lomn_native PRIVATE $<$<BOOL:${LOMN_WEBGPU}>:LOMN_HAS_WEBGPU=1>)
   add_test(NAME determinism_null COMMAND ${CMAKE_COMMAND} -DEXE=$<TARGET_FILE:lomn_native>
            -DOUT=${CMAKE_CURRENT_BINARY_DIR}/determinism -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/determinism.cmake)
+  # Native-only data survey over a real install (LOMN_DATA); validated by tools/research/oracle/check_datacheck.py.
+  add_executable(lomn_datacheck tools/lomn_datacheck.cpp)
+  target_link_libraries(lomn_datacheck PRIVATE lomn_sage)
+  target_compile_options(lomn_datacheck PRIVATE -Wall -Wextra)
   # A trailing flag with no value must be rejected with exit 2 (usage), not silently ignored.
   add_test(NAME cli_dangling_flag COMMAND sh -c
            "\"$0\" --backend null --frames 10 --out \"$1\" --shot >/dev/null 2>&1; [ $? -eq 2 ]"
