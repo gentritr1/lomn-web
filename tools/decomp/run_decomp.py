@@ -23,6 +23,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -63,43 +64,60 @@ def check_cache_path(proj: Path) -> None:
                          "set LOMN_CACHE to a dot-free directory")
 
 
+# Scripts that shape the cached analysis project; ExportCorpus.java is export-only and deliberately excluded.
+ANALYSIS_SCRIPTS = ("ApplyCVTypes2.java", "ApplyCVSymbols.java", "ApplyCVLocals.java", "ApplyD3D8Types.java",
+                    "CVTypeSpec.java")
+
+
 def analysis_key(exe_sha: str, dec: Path, scripts_dir: Path) -> str:
     """Identity of everything the cached analysis depends on; a changed script or input forces re-analysis."""
     h = hashlib.sha256(exe_sha.encode())
     files = [dec / "types.txt", dec / "symbols.txt", HERE / "data" / "d3d8_vtables.txt",
-             *sorted(scripts_dir.glob("*.java"), key=lambda p: p.name)]
+             *(scripts_dir / n for n in sorted(ANALYSIS_SCRIPTS))]
     for f in files:
         h.update(b"\0" + f.name.encode() + b"\0")
         h.update(f.read_bytes())
     return h.hexdigest()
 
 
+def _kill_group(proc: subprocess.Popen, grace_s: float = 30.0) -> None:
+    """SIGTERM the process group, wait up to grace_s for it to vanish (reaping the leader), then SIGKILL."""
+    pgid = proc.pid  # start_new_session=True made the child its own group leader
+    try:
+        os.killpg(pgid, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError):
+        return
+    deadline = time.monotonic() + grace_s
+    while time.monotonic() < deadline:
+        proc.poll()  # reap the leader: a zombie keeps the group alive for killpg(pgid, 0)
+        try:
+            os.killpg(pgid, 0)
+        except (ProcessLookupError, PermissionError):
+            return
+        time.sleep(0.2)
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+    proc.poll()
+
+
 def ghidra(proj: Path, args: list[str], env_extra: dict, log: Path) -> None:
     timeout_s = int(os.environ.get("LOMN_GHIDRA_TIMEOUT_S") or STEP_TIMEOUT_S)
     cmd = [str(GHIDRA_HOME / "support" / "analyzeHeadless"), str(proj), "LOMN", *args, "-scriptPath", str(SCRIPTS)]
     env = {**os.environ, "JAVA_HOME": JAVA_HOME, **env_extra}
-    # analyzeHeadless runs java as a child, so own a process group and kill the whole group on timeout:
-    # a surviving JVM would keep the project lock.
+    # analyzeHeadless runs java as a child and we start a new session (so the terminal's SIGINT no longer reaches it):
+    # on ANY exit from the wait (timeout, Ctrl-C, other exception) kill the whole process group, or a surviving JVM
+    # keeps the project lock.
     with open(log, "w") as f:
         proc = subprocess.Popen(cmd, env=env, stdout=f, stderr=subprocess.STDOUT, start_new_session=True)
         try:
             proc.wait(timeout=timeout_s)
-        except subprocess.TimeoutExpired:
-            for sig, grace in ((signal.SIGTERM, 30), (signal.SIGKILL, 10)):
-                try:
-                    os.killpg(proc.pid, sig)
-                except ProcessLookupError:
-                    break
-                try:
-                    proc.wait(timeout=grace)
-                    break
-                except subprocess.TimeoutExpired:
-                    pass
-            try:
-                os.killpg(proc.pid, signal.SIGKILL)  # reap stragglers that outlived the wrapper
-            except ProcessLookupError:
-                pass
-            raise SystemExit(f"Ghidra step timed out after {timeout_s}s; see {log}")
+        except BaseException as e:
+            _kill_group(proc)
+            if isinstance(e, subprocess.TimeoutExpired):
+                raise SystemExit(f"Ghidra step timed out after {timeout_s}s; see {log}")
+            raise
     text = log.read_text(errors="replace")
     if proc.returncode != 0 or "REPORT SCRIPT ERROR" in text or "Script compile failed" in text:
         raise SystemExit(f"Ghidra step failed (exit {proc.returncode}); see {log}")
@@ -119,7 +137,7 @@ def run(exe: Path, gen: Path, cache_root: Path, reanalyze: bool) -> dict:
     check_cache_path(proj)
     key = analysis_key(sha, dec, SCRIPTS)
     marker = cache / "analysis.ok"  # holds analysis_key(); written only after analysis + stats check succeed
-    fresh = marker.exists() and marker.read_text().strip() == key
+    fresh = marker.exists() and marker.read_text().strip() == key and (proj / "LOMN.gpr").exists()
     if (reanalyze or not fresh) and proj.exists():
         shutil.rmtree(proj)
     if reanalyze or not fresh:

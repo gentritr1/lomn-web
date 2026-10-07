@@ -3,8 +3,9 @@
 //   functions.jsonl      {"addr","name","size","ok","lines"}
 //   calls.jsonl          {"from","to":[addrs]}   (direct calls only)
 //   vtable_uses.jsonl    {"addr","iface","method"} for every Xxx->lpVtbl->Method field access (typed COM vtables)
-// Uses Ghidra's ParallelDecompiler (one decompiler process per core); results are sorted by entry address before
-// writing. Measured 2026-10-07 on 8 cores: 325 s vs ~20 min sequential, output byte-identical to the sequential export.
+// Decompiles in fixed, size-balanced contiguous chunks (one DecompInterface per core); results are sorted by entry address before
+// writing. Measured 2026-10-07 on 8 cores: ~210 s vs ~20 min sequential; three runs pairwise byte-identical. A work-stealing
+// pool (ParallelDecompiler) was NOT run-to-run deterministic: local-variable numbering depends on a worker's prior functions.
 // Decompiler payload limit raised to 1024 MB: GcLegoCamera::Process (37 KB) exceeds the 50 MB default.
 // DECOMP_TIMEOUT_S (default 300) per function; failures are retried once sequentially at 4x.
 // Optional EXPORT_NAME_FILTER=substr exports only matching functions (debug runs).
@@ -43,16 +44,35 @@ public class ExportCorpus extends GhidraScript {
     String filter = System.getenv("EXPORT_NAME_FILTER");
     for (Function f : currentProgram.getFunctionManager().getFunctions(true))
       if (filter == null || f.getName(true).contains(filter)) funcs.add(f);
-    DecompilerCallback<R> cb = new DecompilerCallback<>(currentProgram, d -> { d.setOptions(opts()); d.toggleCCode(true); d.toggleSyntaxTree(true); }) {
-      @Override public R process(DecompileResults r, TaskMonitor m) { return toResult(r.getFunction(), r); }
-    };
-    cb.setTimeout(timeout);
+    // Deterministic parallelism: fixed contiguous chunks (by entry address, balanced by body size), each decompiled
+    // in order by its own DecompInterface. A decompiler's output can depend on the functions it handled before
+    // (local-variable numbering), so a work-stealing pool is NOT run-to-run deterministic; fixed chunks are.
+    int workers = System.getenv("DECOMP_WORKERS") == null ? Runtime.getRuntime().availableProcessors() : Integer.parseInt(System.getenv("DECOMP_WORKERS"));
+    long total = 0; for (Function f : funcs) total += f.getBody().getNumAddresses();
+    List<List<Function>> chunks = new ArrayList<>(); List<Function> cur = new ArrayList<>(); long acc = 0, per = total / workers + 1;
+    for (Function f : funcs) { cur.add(f); acc += f.getBody().getNumAddresses(); if (acc >= per && chunks.size() < workers - 1) { chunks.add(cur); cur = new ArrayList<>(); acc = 0; } }
+    chunks.add(cur);
     long t0 = System.currentTimeMillis();
-    List<R> res;
-    try { res = new ArrayList<>(ParallelDecompiler.decompileFunctions(cb, funcs, monitor)); }
-    finally { cb.dispose(); }
-    if (res.size() != funcs.size()) throw new IllegalStateException("ParallelDecompiler returned " + res.size() + " of " + funcs.size());
+    R[][] chunkResults = new R[chunks.size()][];
+    List<Thread> threads = new ArrayList<>(); List<Throwable> errors = Collections.synchronizedList(new ArrayList<>());
+    for (int c = 0; c < chunks.size(); c++) {
+      final int ci = c; final List<Function> chunk = chunks.get(c);
+      Thread t = new Thread(() -> {
+        DecompInterface d = new DecompInterface();
+        try {
+          d.setOptions(opts()); d.toggleCCode(true); d.toggleSyntaxTree(true); d.openProgram(currentProgram);
+          R[] r = new R[chunk.size()];
+          for (int i = 0; i < chunk.size(); i++) r[i] = toResult(chunk.get(i), d.decompileFunction(chunk.get(i), timeout, TaskMonitor.DUMMY));
+          chunkResults[ci] = r;
+        } catch (Throwable e) { errors.add(e); } finally { d.dispose(); }
+      }, "decomp-" + c);
+      threads.add(t); t.start();
+    }
+    for (Thread t : threads) t.join();
+    if (!errors.isEmpty()) throw new RuntimeException("decompile worker failed", errors.get(0));
     long t1 = System.currentTimeMillis();
+    List<R> res = new ArrayList<>(); for (R[] r : chunkResults) res.addAll(Arrays.asList(r));
+    if (res.size() != funcs.size()) throw new IllegalStateException("decompiled " + res.size() + " of " + funcs.size());
     res.sort(Comparator.comparing(r -> r.f().getEntryPoint()));
     DecompInterface di = new DecompInterface(); di.setOptions(opts()); di.openProgram(currentProgram);
     int retried = 0;
