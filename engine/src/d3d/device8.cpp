@@ -1,5 +1,6 @@
 #include "lomn/d3d/device8.h"
 
+#include <cmath>
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
@@ -147,7 +148,15 @@ std::string fmt(const char* f, ...) {
   va_end(ap);
   return std::string(buf, n < 0 ? 0 : (static_cast<size_t>(n) < sizeof buf ? static_cast<size_t>(n) : sizeof buf - 1));
 }
-std::string c4(const Color4& c) { return fmt("(%.6g,%.6g,%.6g,%.6g)", c.r, c.g, c.b, c.a); }
+// Every float in the state log (Task 8A B2): %.6g for finite values; non-finite values are spelled here, not by the C
+// library (macOS prints the x87 default NaN 0xffc00000 as "nan", emscripten/musl as "-nan", which broke the native ==
+// wasm32 log contract). Rule: any NaN (sign and payload ignored) -> "nan"; +infinity -> "inf"; -infinity -> "-inf".
+std::string g6(double x) {
+  if (std::isnan(x)) return "nan";
+  if (std::isinf(x)) return x > 0 ? "inf" : "-inf";
+  return fmt("%.6g", x);
+}
+std::string c4(const Color4& c) { return "(" + g6(c.r) + "," + g6(c.g) + "," + g6(c.b) + "," + g6(c.a) + ")"; }
 // The M0 checksum (sum = sum * 31 + byte) over a matrix's 64 bytes.
 uint32_t mat_sum(const view::Mat4& m) {
   uint32_t sum = 0;
@@ -178,7 +187,7 @@ void Device8::rec(const std::string& line, bool is_state) {
 void Device8::set_rs(uint32_t r, uint32_t v) {
   if (r >= 256) return;
   s_.rs[r] = v;
-  if (is_float_rs(r)) rec(fmt("RS %s 0x%08x (%.6g)", rs_name(r).c_str(), v, bits_to_float(v)), true);
+  if (is_float_rs(r)) rec(fmt("RS %s 0x%08x (", rs_name(r).c_str(), v) + g6(bits_to_float(v)) + ")", true);
   else if (r == rs::FOGCOLOR || r == rs::TEXTUREFACTOR || r == rs::AMBIENT) rec(fmt("RS %s 0x%08x", rs_name(r).c_str(), v), true);
   else rec(fmt("RS %s %u", rs_name(r).c_str(), v), true);
 }
@@ -197,15 +206,15 @@ void Device8::set_transform(uint32_t t, const view::Mat4& m) {
 }
 void Device8::set_material(const Material8& m) {
   s_.material = m;
-  rec("MATERIAL d=" + c4(m.diffuse) + " a=" + c4(m.ambient) + " s=" + c4(m.specular) + " e=" + c4(m.emissive) + fmt(" p=%.6g", m.power), true);
+  rec("MATERIAL d=" + c4(m.diffuse) + " a=" + c4(m.ambient) + " s=" + c4(m.specular) + " e=" + c4(m.emissive) + " p=" + g6(m.power), true);
 }
 void Device8::set_light(uint32_t i, const Light8& l) {
   if (i >= kMaxLights) return;
   s_.lights[i] = l;
   rec(fmt("LIGHT %u type=%u", i, l.type) + " d=" + c4(l.diffuse) + " s=" + c4(l.specular) + " a=" + c4(l.ambient) +
-          fmt(" pos=(%.6g,%.6g,%.6g) dir=(%.6g,%.6g,%.6g) range=%.6g att=(%.6g,%.6g,%.6g)", l.position[0], l.position[1],
-              l.position[2], l.direction[0], l.direction[1], l.direction[2], l.range, l.attenuation0, l.attenuation1,
-              l.attenuation2),
+          " pos=(" + g6(l.position[0]) + "," + g6(l.position[1]) + "," + g6(l.position[2]) + ") dir=(" + g6(l.direction[0]) +
+          "," + g6(l.direction[1]) + "," + g6(l.direction[2]) + ") range=" + g6(l.range) + " att=(" + g6(l.attenuation0) +
+          "," + g6(l.attenuation1) + "," + g6(l.attenuation2) + ")",
       true);
 }
 void Device8::light_enable(uint32_t i, bool on) {
@@ -223,7 +232,7 @@ void Device8::set_texture(uint32_t st, uint32_t h) {
 void Device8::clear(uint32_t flags, uint32_t argb, float z, bool rect) {
   clear_argb_ = argb;
   clear_z_ = z;
-  rec(fmt("CLEAR %s flags=%u color=0x%08x z=%.6g", rect ? "viewport" : "full", flags, argb, z), false);
+  rec(fmt("CLEAR %s flags=%u color=0x%08x z=", rect ? "viewport" : "full", flags, argb) + g6(z), false);
 }
 void Device8::begin_scene() { rec("BEGINSCENE", false); }
 void Device8::end_scene() { rec("ENDSCENE", false); }

@@ -188,3 +188,34 @@ TEST_CASE("d3d: hostile floats never reach an undefined float->int conversion (U
   CHECK(quantize_unorm8(-std::numeric_limits<float>::infinity()) == 0.0f);
   CHECK(quantize_unorm8(0.5f) == 128.0f / 255.0f);
 }
+
+TEST_CASE("d3d: the state log prints NaN and infinities identically natively and as wasm32 (Task 8A B2)") {
+  // %.6g leaves NaN text to the C library: macOS prints "nan" for 0xffc00000 (the x87 default NaN), emscripten/musl
+  // "-nan", which broke the native == wasm32 log contract on hostile floats. Rule: every NaN (any sign, any payload)
+  // prints "nan"; +-infinity print "inf" / "-inf"; finite values keep %.6g (so valid logs are byte-identical).
+  const float qnan_neg = bits_to_float(0xffc00000u), qnan_pos = bits_to_float(0x7fc00001u);
+  const float inf = bits_to_float(0x7f800000u), ninf = bits_to_float(0xff800000u);
+  std::vector<std::string> log;
+  Device8 d(&log);
+  Material8 m;
+  m.diffuse = {qnan_neg, qnan_pos, inf, ninf};
+  m.ambient = {0.7f, 0.7f, 0.7f, 1};
+  m.specular = {-0.0f, 1e-7f, 123456789.0f, 0.5f};
+  m.power = qnan_neg;
+  d.set_material(m);
+  d.set_rs(rs::FOGSTART, 0xffc00000u);
+  d.set_rs(rs::FOGEND, 0xff800000u);
+  Light8 l;
+  l.type = kLightPoint;
+  l.position[0] = qnan_neg;
+  l.direction[1] = ninf;
+  l.range = inf;
+  l.attenuation1 = qnan_pos;
+  d.set_light(0, l);
+  d.clear(kClearTarget, 0, qnan_neg, false);
+  CHECK(log == std::vector<std::string>{
+                   "MATERIAL d=(nan,nan,inf,-inf) a=(0.7,0.7,0.7,1) s=(-0,1e-07,1.23457e+08,0.5) e=(0,0,0,0) p=nan",
+                   "RS FOGSTART 0xffc00000 (nan)", "RS FOGEND 0xff800000 (-inf)",
+                   "LIGHT 0 type=1 d=(0,0,0,0) s=(0,0,0,0) a=(0,0,0,0) pos=(nan,0,0) dir=(0,-inf,0) range=inf att=(0,nan,0)",
+                   "CLEAR full flags=1 color=0x00000000 z=nan"});
+}
