@@ -305,7 +305,8 @@ struct Result {
     }                          \
   } while (0)
 
-bool has(const std::string& s, const char* sub) { return s.find(sub) != std::string::npos; }
+// Takes only a fuzz_frag::Fragment (fuzz_fragments.h): a raw string literal here does not compile (cleanup S3).
+bool has(const std::string& s, const fuzz_frag::Fragment& f) { return fuzz_frag::matches(s, f); }
 
 // ------------------------------------------------------------------------------------------------------------- BLK
 Result run_blk(const Bytes& in, Rng& rng) {
@@ -473,8 +474,8 @@ bool x_default(const XFile& f) {
 // " at byte N" and parse_x's header errors are "file too large" / "not a (binary) .x file" / "unsupported float size".
 // Pinned against a counter at decode_mesh's entry in fix round 1 (0 mismatches; tools/research/fuzz_formats.md).
 bool decode_mesh_error(const std::string& err) {
-  for (const char* p : fuzz_frag::kXDecodeMeshPrefixes)
-    if (fuzz_frag::matches(err, p, fuzz_frag::Match::Prefix)) return true;
+  for (const fuzz_frag::Fragment& p : fuzz_frag::kXDecodeMeshPrefixes)
+    if (fuzz_frag::matches(err, p)) return true;
   return false;
 }
 

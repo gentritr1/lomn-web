@@ -1,15 +1,19 @@
-// M1a-4 cleanup C3 (review M-6): the fuzz driver (fuzz_formats.cpp) decides "deep reach" by looking for fragments in the
-// parsers' error strings. If a parser message is renamed the driver would silently report 0 % deep reach for that
+// M1a-4 cleanup C3 (review M-6) + S2/S3: the fuzz driver (fuzz_formats.cpp) decides "deep reach" by looking for fragments in
+// the parsers' error strings. If a parser message is renamed the driver would silently report 0 % deep reach for that
 // format. fuzz_fragments.h is the single table of those fragments (the driver matches only through it); this test
 // produces every entry with a crafted input and checks the real parser's error contains / starts with it.
 //   - Add a fragment to the table without a producer here: "no crafted producer" fails.
-//   - Rename a parser message: that fragment's producer no longer matches and fails.
-//   - Put a raw string literal back at a match site in fuzz_formats.cpp: the source scan fails (native only).
+//   - Rename a parser message that is a fragment's producer: that producer no longer matches and fails.
+//   - Rename or add ANY decode_mesh message (producer or not): the decode_mesh scan fails unless the message still starts
+//     with a kXDecodeMeshPrefixes entry (S2; this scan runs on native and wasm32, the source path is baked in).
+//   - Put a raw string literal at a match site in fuzz_formats.cpp: it does not compile (S3; has() takes only a Fragment,
+//     which has no converting constructor; the static_asserts below pin that property of the type).
 #include <fstream>
 #include <functional>
 #include <map>
 #include <regex>
 #include <sstream>
+#include <type_traits>
 
 #include "doctest.h"
 #include "fuzz_fragments.h"
@@ -22,7 +26,13 @@
 using namespace lomn::sage;
 using namespace sage_test;
 using fuzz_frag::Fragment;
-using fuzz_frag::Match;
+
+// S3: a raw string literal (or an ad-hoc triple) cannot become a Fragment, so the driver's has(std::string, Fragment) cannot
+// be called with one. If this fails to compile, the "no literal at a match site" guarantee is gone.
+static_assert(!std::is_convertible<const char*, Fragment>::value, "a raw literal must not convert to a Fragment");
+static_assert(!std::is_constructible<Fragment, const char*>::value, "a Fragment must not be built from one literal");
+static_assert(!std::is_constructible<Fragment, const char*, const char*, fuzz_frag::Match>::value, "a Fragment is built only by fuzz_fragments.h");
+static_assert(!std::is_aggregate<Fragment>::value, "a Fragment must not be brace-initialisable at a match site");
 
 namespace {
 
@@ -128,8 +138,9 @@ std::map<std::string, Producer> producers() {
   namespace f = fuzz_frag;
   std::map<std::string, Producer> p;
   auto add = [&](const char* fmt, const char* text, Producer fn) { p[std::string(fmt) + ":" + text] = std::move(fn); };
+  auto addf = [&](const Fragment& fr, Producer fn) { p[std::string(fr.fmt) + ":" + fr.text] = std::move(fn); };
 
-  add("blk", f::kBlkNameRun, [] {  // 12 entries of all-'A' bytes: entry 0's unterminated name runs through 632 more
+  addf(f::kBlkNameRun, [] {  // 12 entries of all-'A' bytes: entry 0's unterminated name runs through 632 more
     Bytes b;
     putstr(b, "BLKF");
     put32(b, 1);
@@ -137,18 +148,18 @@ std::map<std::string, Producer> producers() {
     b.insert(b.end(), 12 * 56, 'A');
     return blk_err(b);
   });
-  add("lzss", f::kLzssRatio, [] {
+  addf(f::kLzssRatio, [] {
     std::vector<uint8_t> out, in = {0};
     std::string err;
     CHECK_FALSE(decode_lzss(in.data(), in.size(), 0xffffffffu, out, &err));
     return err;
   });
-  add("slb.tex", f::kSlbTexFixup, [] { return slb_tex_err(false, 3); });
-  add("slb.tex", f::kSlbTexNameLong, [] { return slb_tex_err(true, kMaxSpecTextureName + 1); });
-  add("tga", f::kTgaRleTruncated, [] { return tga_err(128, 1, {0x7f, 1, 2, 3}); });  // raw run of 128 px, 3 bytes of data
-  add("tga", f::kTgaRleRunsPast, [] { return tga_err(2, 1, {0x7f, 1, 2, 3}); });     // run of 128 px in a 2-px image
+  addf(f::kSlbTexFixup, [] { return slb_tex_err(false, 3); });
+  addf(f::kSlbTexNameLong, [] { return slb_tex_err(true, kMaxSpecTextureName + 1); });
+  addf(f::kTgaRleTruncated, [] { return tga_err(128, 1, {0x7f, 1, 2, 3}); });  // raw run of 128 px, 3 bytes of data
+  addf(f::kTgaRleRunsPast, [] { return tga_err(2, 1, {0x7f, 1, 2, 3}); });     // run of 128 px in a 2-px image
 
-  add("x", f::kXTooLarge, [] {
+  addf(f::kXTooLarge, [] {
 #ifdef __EMSCRIPTEN__
     return std::string("x: file too large");  // 64 MiB is not worth allocating under wasm32; the native run produces it for real
 #else
@@ -156,13 +167,13 @@ std::map<std::string, Producer> producers() {
     return x_err(big);
 #endif
   });
-  add("x", f::kXNotX, [] { return x_err(Bytes(16, 'z')); });
-  add("x", f::kXNotBinary, [] {
+  addf(f::kXNotX, [] { return x_err(Bytes(16, 'z')); });
+  addf(f::kXNotBinary, [] {
     Bytes b(16, ' ');
     std::copy_n("xof 0303txt 0032", 16, b.begin());
     return x_err(b);
   });
-  add("x", f::kXFloatSize, [] {
+  addf(f::kXFloatSize, [] {
     Bytes b(16, ' ');
     std::copy_n("xof 0303bin 0080", 16, b.begin());
     return x_err(b);
@@ -211,7 +222,7 @@ TEST_CASE("fuzz fragments: every error fragment the fuzz driver matches is produ
     used[key] = true;
     const std::string err = it->second();
     CAPTURE(err);
-    CHECK_MESSAGE(fuzz_frag::matches(err, fr.text, fr.how), "parser error " << err << " no longer matches the fuzz driver fragment '" << std::string(fr.text) << "'");
+    CHECK_MESSAGE(fuzz_frag::matches(err, fr), "parser error " << err << " no longer matches the fuzz driver fragment '" << std::string(fr.text) << "'");
   }
   for (const auto& kv : prod) CHECK_MESSAGE(used.count(kv.first), "producer " << kv.first << " has no fragment in fuzz_fragments.h (stale)");
 }
@@ -223,7 +234,7 @@ TEST_CASE("fuzz fragments: every k* constant in fuzz_fragments.h is listed in al
   std::stringstream ss;
   ss << in.rdbuf();
   const std::string text = ss.str();
-  const std::regex decl("inline constexpr const char\\* (k[A-Za-z0-9]+)(\\[\\])? =");
+  const std::regex decl("inline constexpr Fragment (k[A-Za-z0-9]+)(\\[\\])? =");
   int n = 0;
   for (std::sregex_iterator it(text.begin(), text.end(), decl), end; it != end; ++it, ++n) {
     const std::string name = (*it)[1];
@@ -231,19 +242,35 @@ TEST_CASE("fuzz fragments: every k* constant in fuzz_fragments.h is listed in al
     for (size_t at = text.find(name); at != std::string::npos; at = text.find(name, at + name.size())) ++uses;
     CHECK_MESSAGE(uses >= 2, name << " is declared in fuzz_fragments.h but never listed in all_fragments()");
   }
-  CHECK(n >= 11);  // 10 string constants + the prefix array: the scan actually found the declarations
+  CHECK(n >= 11);  // 10 Fragment constants + the prefix array: the scan actually found the declarations
 }
 
-TEST_CASE("fuzz fragments: the driver has no raw string literal at an error-match site (cleanup C3)") {
-  std::ifstream in(std::string(LOMN_TESTS_DIR) + "/fuzz_formats.cpp");
+TEST_CASE("fuzz fragments: every error message of decode_mesh starts with a kXDecodeMeshPrefixes entry (cleanup S2)") {
+  // The producers above give each PREFIX one crafted input, not each message: renaming a message that is not its prefix's
+  // producer (batch-1 review M-1: "x: MeshNormals floats short" -> "x: normals floats short") stayed green while the
+  // driver stopped counting that error as deep reach. So the source is scanned instead: every fail(err, "...") of
+  // decode_mesh (from its definition to the closing brace at column 0) must be a literal that starts with a prefix.
+  std::ifstream in(std::string(LOMN_TESTS_DIR) + "/../src/sage/xfile.cpp");
   REQUIRE(in.good());
-  std::string line;
-  int n = 0;
-  while (std::getline(in, line)) {
-    ++n;
-    const bool match_site = line.find("has(err, \"") != std::string::npos || line.find("has(terr, \"") != std::string::npos ||
-                            line.find("err.compare(0") != std::string::npos || line.find("err.find(\"") != std::string::npos;
-    CHECK_MESSAGE(!match_site, "fuzz_formats.cpp:" << n << " matches an error string with a raw literal; add it to fuzz_fragments.h: " << line);
+  std::stringstream ss;
+  ss << in.rdbuf();
+  const std::string text = ss.str();
+  const size_t beg = text.find("\nbool decode_mesh(");
+  REQUIRE(beg != std::string::npos);
+  const size_t end = text.find("\n}\n", beg);
+  REQUIRE(end != std::string::npos);
+  const std::string body = text.substr(beg, end - beg);
+  size_t calls = 0, literals = 0;
+  for (size_t at = body.find("fail(err,"); at != std::string::npos; at = body.find("fail(err,", at + 1)) ++calls;
+  const std::regex lit("fail\\(err, \"(x: [^\"]*)\"");
+  for (std::sregex_iterator it(body.begin(), body.end(), lit), stop; it != stop; ++it, ++literals) {
+    const std::string msg = (*it)[1];
+    bool covered = false;
+    for (const Fragment& pre : fuzz_frag::kXDecodeMeshPrefixes) covered = covered || fuzz_frag::matches(msg, pre);
+    CHECK_MESSAGE(covered, "decode_mesh error '" << msg << "' starts with no kXDecodeMeshPrefixes entry: the fuzz driver would not count it as deep reach");
   }
+  // Every fail(err, ...) call must have been seen as an "x: ..." literal (a message built elsewhere would escape the scan).
+  CHECK_MESSAGE(calls == literals, calls << " fail(err, ...) calls in decode_mesh but " << literals << " literal messages starting with \"x: \"");
+  CHECK(calls >= 25);  // the scan found decode_mesh's body (27 messages at the time of writing)
 }
 #endif
