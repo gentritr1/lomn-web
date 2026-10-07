@@ -20,6 +20,8 @@ if(EMSCRIPTEN)
 else()
   target_sources(lomn_core PRIVATE src/fs/disk_fs.cpp third_party/stb_impl.cpp)
 endif()
+# stb_image_write.h is third-party code with ~9 -Wmissing-field-initializers warnings; silence only that TU.
+set_source_files_properties(third_party/stb_impl.cpp PROPERTIES COMPILE_OPTIONS -w)
 
 if(LOMN_WEBGPU)
   add_library(lomn_webgpu STATIC src/rhi/webgpu_device.cpp)
@@ -53,6 +55,10 @@ else()
   target_compile_definitions(lomn_native PRIVATE $<$<BOOL:${LOMN_WEBGPU}>:LOMN_HAS_WEBGPU=1>)
   add_test(NAME determinism_null COMMAND ${CMAKE_COMMAND} -DEXE=$<TARGET_FILE:lomn_native>
            -DOUT=${CMAKE_CURRENT_BINARY_DIR}/determinism -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/determinism.cmake)
+  # A trailing flag with no value must be rejected with exit 2 (usage), not silently ignored.
+  add_test(NAME cli_dangling_flag COMMAND sh -c
+           "\"$0\" --backend null --frames 10 --out \"$1\" --shot >/dev/null 2>&1; [ $? -eq 2 ]"
+           $<TARGET_FILE:lomn_native> ${CMAKE_CURRENT_BINARY_DIR}/dangling)
   if(LOMN_WEBGPU)
     add_executable(lomn_gpu_test tests/test_gpu.cpp)
     target_link_libraries(lomn_gpu_test PRIVATE lomn_webgpu)
@@ -76,3 +82,7 @@ if(EMSCRIPTEN)
   target_link_options(lomn_tests PRIVATE -sNODERAWFS=1 -sALLOW_MEMORY_GROWTH=1)
 endif()
 add_test(NAME unit COMMAND lomn_tests)
+
+# Internal JSON string escaper used by metrics.json (header lives in src/app, not in the public include dir).
+target_sources(lomn_tests PRIVATE tests/test_json_escape.cpp)
+target_include_directories(lomn_tests PRIVATE src/app)

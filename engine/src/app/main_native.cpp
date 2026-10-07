@@ -12,6 +12,11 @@
 int main(int argc, char** argv) {
   std::string backend = "null";
   lomn::LoopOptions opts;
+  if ((argc - 1) % 2 != 0) {  // every option takes a value; a dangling trailing flag is a usage error
+    std::fprintf(stderr, "option %s needs a value\n", argv[argc - 1]);
+    std::fprintf(stderr, "usage: lomn_native --backend null|webgpu --frames N [--shot a,b] --out DIR\n");
+    return 2;
+  }
   for (int i = 1; i + 1 < argc; i += 2) {
     std::string k = argv[i], v = argv[i + 1];
     if (k == "--backend") backend = v;
