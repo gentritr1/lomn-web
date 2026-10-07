@@ -16,6 +16,13 @@ const ctx = await chromium.launchPersistentContext(path.resolve(profileDir), {
   channel: 'chromium', args: ['--enable-unsafe-webgpu'], timeout: 30000 });
 try {
   const page = ctx.pages()[0] ?? (await ctx.newPage());
+  const consoleMsgs = []; const pageErrors = [];
+  page.on('console', (msg) => {
+    if (!['error', 'warning'].includes(msg.type())) return;
+    if (msg.location().url.endsWith('/favicon.ico')) return; // the test server answers 404 for the favicon
+    consoleMsgs.push(`${msg.type()}: ${msg.text()}`);
+  });
+  page.on('pageerror', (err) => pageErrors.push(err.message));
   await page.goto(srv.url + 'index.html', { timeout: 30000 });
   await page.waitForFunction(() => ['running', 'error'].includes(window.__lomn?.state), null, { timeout: 20000 });
   const st = await page.evaluate(() => window.__lomn);
@@ -41,6 +48,10 @@ try {
   const near = (a, b) => a.slice(0, 3).every((v, i) => Math.abs(v - b[i]) <= 2);
   if (!near(px.centre, [255, 128, 0])) fail('centre pixel not the orange triangle');
   if (!near(px.corner, [0, 0, 64])) fail('corner pixel not the clear colour');
+  console.log('console_errors', JSON.stringify(consoleMsgs), 'page_errors', JSON.stringify(pageErrors));
+  const webgpuMsgs = consoleMsgs.filter((t) => t.includes('[webgpu]'));
+  if (webgpuMsgs.length) fail('WebGPU console errors: ' + webgpuMsgs.join(' | '));
+  if (pageErrors.length) fail('page exceptions: ' + pageErrors.join(' | '));
   const foreign = srv.requests.filter((r) => !allowed.has(r));
   console.log('requests', JSON.stringify(srv.requests));
   if (foreign.length) fail('requests outside the built site: ' + foreign.join(', '));
