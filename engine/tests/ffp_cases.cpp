@@ -2,11 +2,14 @@
 // (lomn/d3d/ffp.h reference_vertex_color / reference_fragment) reads, and its results, for gpu_ffp's cases
 // (tests/ffp_cases.h) followed by N seeded random samples. tools/research/oracle/ffp_oracle.py recomputes every result
 // from the D3D8 documentation's formulas and compares (ctest ffp_oracle). Usage: lomn_ffp_cases [N] [SEED]
+// M1a-4 (c): the first line is {"wgsl": the uber-shader}; every case also carries its view / projection matrices and
+// the uniform block pack_uniforms writes for it, which the oracle checks against the shader's struct U layout.
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
 
+#include "../src/app/json_escape.h"
 #include "ffp_cases.h"
 #include "lomn/d3d/ffp.h"
 
@@ -51,6 +54,10 @@ void emit(const char* what, const State& s, bool has_vcol, const Color4& vcol, c
   j += "],\"uv\":[" + f(uv[0]) + "," + f(uv[1]) + "],\"out_uv\":[" + f(tuv[0]) + "," + f(tuv[1]) + "],\"tex2x2\":" +
        (tex2x2 ? "true" : "false") + ",\"world\":[";
   for (int i = 0; i < 16; ++i) j += (i ? "," : "") + f(s.world.m[i]);
+  j += "],\"view\":[";
+  for (int i = 0; i < 16; ++i) j += (i ? "," : "") + f(s.view.m[i]);
+  j += "],\"proj\":[";
+  for (int i = 0; i < 16; ++i) j += (i ? "," : "") + f(s.proj.m[i]);
   j += "],\"material\":{\"diffuse\":" + c4(s.material.diffuse) + ",\"ambient\":" + c4(s.material.ambient) +
        ",\"emissive\":" + c4(s.material.emissive) + "},\"lights\":[";
   bool first = true;
@@ -66,7 +73,16 @@ void emit(const char* what, const State& s, bool has_vcol, const Color4& vcol, c
   j += "],\"has_vcol\":" + std::string(has_vcol ? "true" : "false") + ",\"vcol\":" + c4(vcol) + ",\"p\":[" + f(p[0]) + "," +
        f(p[1]) + "," + f(p[2]) + "],\"n\":[" + f(n[0]) + "," + f(n[1]) + "," + f(n[2]) + "],\"d\":" + c4(d) +
        ",\"texel\":" + c4(texel) + ",\"bound\":" + (bound ? "true" : "false") + ",\"w\":" + f(w) +
-       ",\"out_vertex\":" + c4(v) + ",\"out_kept\":" + (kept ? "true" : "false") + ",\"out_fragment\":" + (kept ? c4(o) : "null") + "}";
+       ",\"out_vertex\":" + c4(v) + ",\"out_kept\":" + (kept ? "true" : "false") + ",\"out_fragment\":" + (kept ? c4(o) : "null");
+  // The per-draw uniform block, packed as AreaRenderer packs it (DrawInputs from the case).
+  DrawInputs in;
+  in.vertex_has_diffuse = has_vcol;
+  in.texture_bound = bound;
+  float u[kFfpUniformBytes / 4];
+  pack_uniforms(s, in, u);
+  j += ",\"uniforms\":[";
+  for (uint32_t i = 0; i < kFfpUniformBytes / 4; ++i) j += (i ? "," : "") + f(u[i]);
+  j += "]}";
   std::puts(j.c_str());
 }
 }  // namespace
@@ -74,6 +90,7 @@ void emit(const char* what, const State& s, bool has_vcol, const Color4& vcol, c
 int main(int argc, char** argv) {
   const uint32_t n = argc > 1 ? static_cast<uint32_t>(std::strtoul(argv[1], nullptr, 10)) : 4000;
   g_rng = argc > 2 ? std::strtoull(argv[2], nullptr, 10) : 1;
+  std::printf("{\"wgsl\":\"%s\"}\n", json_escape(ffp_wgsl()).c_str());
   // 1. gpu_ffp's cases with gpu_ffp's inputs: vertex 0 of the triangle, normal (0,0,-1), the case's texel and eye w
   //    (ffp_eye_w), the fragment fed with the case's own lit vertex colour (as the GPU test does).
   float verts[3][12];
@@ -169,6 +186,10 @@ int main(int argc, char** argv) {
     const bool has_vcol = rnd(2) != 0;  // argument evaluation order is unspecified: draw the random values in sequence
     const bool bound = rnd(4) != 0;
     const float w = uni(0, 3000);
+    // M1a-4 (c): view and projection only reach the packed wvp (the references light in world space and take w as
+    // given): any matrices check the product. Drawn last, so every earlier value of the sample is unchanged.
+    for (float& m : s.view.m) m = uni(-2, 2);
+    for (float& m : s.proj.m) m = uni(-2, 2);
     emit("random", s, has_vcol, vcol, p, nn, d, texel, bound, w, uv, false);
   }
   return 0;

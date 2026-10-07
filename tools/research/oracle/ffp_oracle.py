@@ -23,6 +23,17 @@ D3DTS_TEXTURE0 and passes the first two results to the rasterizer. A 2-D coordin
 (u, v, 1, 0): the documentation's "texture coordinate translation" for 2-D coordinates is the matrix's third row
 (_31, _32), and the fourth row never applies (Wine's compute_texture_matrix moves the same rows). Cases flagged tex2x2
 also check the texel the GPU probe expects: the 2x2 texture below point-sampled (wrap) at that coordinate.
+Uniform block (M1a-4 c): every case also carries the per-draw block pack_uniforms wrote for it ("uniforms", 256
+floats) and the first line carries the uber-shader's WGSL ({"wgsl": ...}). The field offsets come from the shader's
+own `struct U` declaration (parsed below: mat4x4f = 16 floats, vec4f = 4, array<vec4f, N> = 4 N, in declaration
+order), never from ffp.cpp's constants, so a block that pack_uniforms fills differently from what the shader reads
+fails here. Checked per case: wvp = world * view * proj (float64 here; |diff| <= 1e-5 * sum |w_ik v_kl p_lj|, a
+float32 bound), world and tex0 bit-exact copies of D3DTS_WORLD / D3DTS_TEXTURE0; tfactor = D3DRS_TEXTUREFACTOR as
+(r, g, b, a) = byte / 255 (float32); fog = (start, end, density, mode): mode = FOGTABLEMODE, else FOGVERTEXMODE
+(D3D8: the table mode wins), start/end/density the FOGSTART/FOGEND/FOGDENSITY bits, with the shim's declared
+deviations (lomn/d3d/ffp.cpp fog_inputs, Task 8B E4): LINEAR with start == end -> (1e30, 0); a non-finite parameter
+the mode uses -> (0, 0, 0, NONE); any other non-finite one -> 0; d.x = ALPHAREF & 0xff (D3DRS_ALPHAREF: "a value
+ranging from 0x00 to 0xFF"), d.y = FOGENABLE.
 Usage: ffp_oracle.py CASES.jsonl   (exit 0 when every non-skipped case agrees within TOL; prints a summary)
 """
 import json, math, sys
@@ -178,15 +189,98 @@ def fragment(c):
     return True, out
 
 
+def f32(x):
+    import struct
+    return struct.unpack('<f', struct.pack('<f', x))[0]
+
+
+def wgsl_layout(wgsl):
+    """{field: (offset in floats, size in floats)} of the uniform `struct U` of the uber-shader."""
+    import re
+    body = re.search(r'struct U \{([^}]*)\}', wgsl)
+    if not body:
+        raise SystemExit('ffp_oracle: no `struct U` in the WGSL')
+    out, at = {}, 0
+    for name, ty in re.findall(r'(\w+)\s*:\s*(array<[^>]*>|\w+)\s*,', body.group(1) + ','):
+        m = re.fullmatch(r'array<vec4f,\s*(\d+)>', ty)
+        size = 16 if ty == 'mat4x4f' else 4 if ty == 'vec4f' else 4 * int(m.group(1)) if m else None
+        if size is None:
+            raise SystemExit('ffp_oracle: uniform field %s has an unmodelled type %s' % (name, ty))
+        out[name] = (at, size)
+        at += size
+    return out
+
+
+def fog_block(rs):
+    """(start, end, density, mode) as the uniform block must carry them (see the module docstring)."""
+    st, en, de = bits_float(rs['FOGSTART']), bits_float(rs['FOGEND']), bits_float(rs['FOGDENSITY'])
+    mode = rs['FOGTABLEMODE'] if rs['FOGTABLEMODE'] != D3DFOG_NONE else rs['FOGVERTEXMODE']
+    fin = math.isfinite
+    if mode == D3DFOG_LINEAR and not (fin(st) and fin(en) and fin(f32(en - st))):
+        return [0.0, 0.0, 0.0, 0.0]
+    if mode in (D3DFOG_EXP, D3DFOG_EXP2) and not fin(de):
+        return [0.0, 0.0, 0.0, 0.0]
+    if mode == D3DFOG_LINEAR and st == en:
+        st, en = f32(1e30), 0.0
+    return [st if fin(st) else 0.0, en if fin(en) else 0.0, de if fin(de) else 0.0, float(mode)]
+
+
+def uniform_mismatches(c, lay):
+    """Every way the case's packed uniform block differs from its state (list of messages)."""
+    u = c.get('uniforms')
+    if u is None or len(u) != 256:
+        return ['no 256-float uniform block in the case']
+    # The JSON prints float32 values with %.9g (round-trips): f32() recovers each value exactly.
+    u = [f32(x) for x in u]
+    field = lambda name: u[lay[name][0]:lay[name][0] + lay[name][1]]
+    bad = []
+    W, V, P = ([f32(x) for x in c[k]] for k in ('world', 'view', 'proj'))
+    wvp = field('wvp')
+    for i in range(4):
+        for j in range(4):
+            exact = sum(W[i * 4 + k] * V[k * 4 + l] * P[l * 4 + j] for k in range(4) for l in range(4))
+            bound = sum(abs(W[i * 4 + k] * V[k * 4 + l] * P[l * 4 + j]) for k in range(4) for l in range(4))
+            if abs(wvp[i * 4 + j] - exact) > 1e-5 * bound + 1e-30:
+                bad.append('wvp[%d][%d] %r, world*view*proj %r' % (i, j, wvp[i * 4 + j], exact))
+    if field('world') != W:
+        bad.append('world %s != D3DTS_WORLD %s' % (field('world'), W))
+    if field('tex0') != [f32(x) for x in c['tex0']]:
+        bad.append('tex0 %s != D3DTS_TEXTURE0 %s' % (field('tex0'), c['tex0']))
+    tf = [f32(x) for x in argb(c['rs']['TEXTUREFACTOR'])]
+    if field('tfactor') != tf:
+        bad.append('tfactor %s != TEXTUREFACTOR 0x%08x -> %s' % (field('tfactor'), c['rs']['TEXTUREFACTOR'], tf))
+    fog = fog_block(c['rs'])
+    if field('fog') != fog:
+        bad.append('fog %s != expected %s' % (field('fog'), fog))
+    d = field('d')
+    if d[0] != float(c['rs']['ALPHAREF'] & 0xff):
+        bad.append('d.x (alpharef) %r != ALPHAREF %d & 0xff' % (d[0], c['rs']['ALPHAREF']))
+    if d[1] != (1.0 if c['rs']['FOGENABLE'] else 0.0):
+        bad.append('d.y (fog enable) %r != FOGENABLE %d' % (d[1], c['rs']['FOGENABLE']))
+    return bad
+
+
 def main():
     n = skipped = bad = 0
+    lay = None
+    blocks = 0
     reasons = {}
     worst_v = worst_f = 0.0
     kept_cases = discards = texcases = 0
     worst_uv = 0.0
     for line in open(sys.argv[1]):
         c = json.loads(line)
+        if 'wgsl' in c:  # header line: the shader whose uniform layout every block must follow
+            lay = wgsl_layout(c['wgsl'])
+            continue
         n += 1
+        um = uniform_mismatches(c, lay) if lay else ['no WGSL header line before the cases']
+        if um:
+            bad += 1
+            if bad <= 10:
+                print('MISMATCH uniforms %s: %s' % (c['what'], '; '.join(um[:3])))
+        else:
+            blocks += 1
         tuv = texcoord(c)
         duv = max(abs(tuv[k] - c['out_uv'][k]) for k in range(2))
         worst_uv = max(worst_uv, duv)
@@ -240,7 +334,8 @@ def main():
                     for k in ('fog with no fog mode', 'fog start == end', 'zero attenuation', 'tie'))
     print('ffp_oracle: %d cases (%d fragments kept, %d discarded by the alpha test, %d checks skipped: %s), '
           'max |vertex diff| %.2e, max |fragment diff| %.2e, max |texcoord diff| %.2e, %d texel probes, '
-          '%d mismatches (tolerance %g)' % (n, kept_cases, discards, skipped, why, worst_v, worst_f, worst_uv, texcases, bad, TOL))
+          '%d uniform blocks laid out as the WGSL reads them, %d mismatches (tolerance %g)' %
+          (n, kept_cases, discards, skipped, why, worst_v, worst_f, worst_uv, texcases, blocks, bad, TOL))
     sys.exit(1 if bad or n == 0 else 0)
 
 
