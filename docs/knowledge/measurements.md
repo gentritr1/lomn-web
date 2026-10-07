@@ -110,3 +110,69 @@ The 3 ASan+UBSan renders are also 0 pixels different from the Release renders.
 **ASan + UBSan** (`build/asan`: Debug, `-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer`, `-DLOMN_WEBGPU=ON`; Dawn itself is not instrumented): `ctest` 11/11 pass (including the 5 GPU tests); `lomn_tests` 97 cases / 53,335 assertions, rc 0; survey rc 0 with identical maxima to Release; vllg, ghut and crss renders rc 0 and stderr 0 bytes. The only stderr text is one line from `lomn_tests` (`cannot create .../lomn_loop_badout_*/plain_file/sub: Not a directory`), printed by the negative test that checks an unwritable output path; the Release `lomn_tests` prints the same line.
 
 **`make check`**: `39/39 checks passed (19.2 s)`, `worklist check: 5618 functions, 0 errors`, final line `make check: all layers green`.
+
+## Faithful states, OSI caps and fuzz (M1a-3 Task 7, 2026-10-07, `lomn_view` on the real install, Release, Apple M1 Pro / Metal via Dawn, 1280x720, `--frames 60`)
+
+Commands (`source tools/env.sh` first; each with `timeout 120`): `build/native/lomn_view --install "$LOMN_DATA/install" --level lev1 --area vllg --frames 60 --out build/m1a3/vllg_r1.png` (likewise `lev2 ghut`, `lev4 crss`; `--level lev4 --area crss --yaw 67.5` for `crss_yaw67`, 1 frame). Nothing derived from the game data is committed; renders and JSON stay under `build/m1a3/`.
+
+**Per-area faithful-state metrics** (3 runs per area, identical across runs; read from the `states` and `scene` blocks of `<out>.png.json`; `frames_rendered` 60 / 60 for all three):
+
+| Area | draws | models | pipelines | shader variants | state calls / frame | lit / fogged / blended / alpha-tested draws | lights (source) | fog (source) |
+|---|---|---|---|---|---|---|---|---|
+| lev1/vllg | 31 | 10 | 3 | 5 | 212 | 0 / 23 / 2 / 4 | 23 (`light_slb`) | 40..1200, colour 0xFFF9DCF9 (OSI script fog) |
+| lev2/ghut | 30 | 1 | 2 | 4 | 137 | 0 / 30 / 3 / 2 | 5 (`light_slb`+default) | 4701..4702, white (default) |
+| lev4/crss | 42 | 14 | 4 | 8 | 234 | 0 / 38 / 8 / 10 | 2 (`light_slb`) | 4701..4702, white (default) |
+| lev4/crss `--yaw 67.5` (1 frame) | 42 | 14 | 4 | 9 | 239 | 0 / 38 / 8 / 10 | 2 (`light_slb`) | default |
+
+`rejected_last_frame` is 0 everywhere; `unsupported_bits` 0. Lit draws are 0 because the area render modes clear LIGHTING (spec R18). `crss_yaw67` renders 1 frame (not 60), and its state-call and shader-variant counts differ from the 60-frame `crss` run by 5 and 1 (cause not investigated).
+
+**Timings** (3 runs per area; ranges are min-max. Host loadavg at the start of the three render batches 4.72 / 6.70 / 6.95 and at the end 4.53 / 6.60 / 6.91; the machine was not idle and the GPU was shared, so read these as order-of-magnitude. Run 1 follows other work and is partly page-cache cold):
+
+| Area | load ms | decode ms | upload ms | first-frame submit ms | p50 frame submit ms (60 frames) | readback ms | peak RSS (MiB) |
+|---|---|---|---|---|---|---|---|
+| vllg | 10.3-16.6 | 8.3-8.4 | 4.8-5.1 | 9.5-9.9 | 0.32-0.34 | 7.0-11.3 | 57.3-59.6 |
+| ghut | 7.5-30.5 | 11.8-14.4 | 4.9-8.0 | 7.7-7.9 | 0.31-0.34 | 11.3-17.2 | 64.0-66.6 |
+| crss | 13.2-35.5 | 29.9 | 8.3-9.1 | 11.3-11.7 | 0.40-0.42 | 16.4-25.1 | 81.7-85.4 |
+| crss_yaw67 (1 frame) | 13.8-22.2 | 29.8-31.2 | 9.6-13.0 | 11.2-15.8 | n/a (1 frame) | 3.8-5.3 | 81.7-82.8 |
+
+Heap in use after upload -> after release of the CPU copies (MiB): vllg 9.0 -> 2.0, ghut 11.9 -> 2.0, crss 28.1 -> 2.2. Texture bytes uploaded 6,995,936 / 10,052,916 / 26,678,568 and geometry bytes 336,420 / 324,408 / 366,324, unchanged from the M1a-2 section above.
+
+**Pixel check against the controller's REF3 renders** (`docs/superpowers/plans/2026-10-07-m1a3-ref/scripts/pngdiff.py A B 16 8`; counts pixels where any of R, G, B differs, plus the max per-channel delta; allowance is <= 16 pixels at <= 8 levels): vllg, ghut, crss and crss_yaw67 are **0 of 921,600 differing pixels, max delta 0, in all 3 runs each**. The ASan+UBSan renders are also 0 / 0 against both REF3 and the Release renders.
+
+**Survey** (`build/native/lomn_view --install "$LOMN_DATA/install" --survey 1 --out build/m1a3/survey.json`, host loadavg 4.73 -> 4.51, 4.9 s wall): 123 areas, 0 failures, 0 rejected draws, 0 unsupported bits. `total_load_ms` 3,126 (sum of per-area load 1,732 + decode 1,392; the M1a-2 survey measured 2,665 ms without the OSI and state work, on a different load). Over all areas:
+- lit draws 0 (of 3,958 draws); fogged 3,375, blended 364, alpha-tested 434;
+- pipelines per area: max 4 (`fren/frnt`), distribution 0:6, 1:10, 2:33, 3:44, 4:30 areas;
+- fog source: OSI script fog in 53 areas, default (4701..4702) in 70; lights source: `light_slb` 51, `light_slb`+default 48, default 24;
+- maxima: state calls 830 (`lev6/ta03`), lights 209 (`lev6/ta08`), shader variants 11 (`lev1/clf2`); the M1a-2 maxima (draws 165 `lev6/ta11`, textures 76 `lev2/vllg`, texture bytes with mips 56,994,412 `lev0/frnt`, geometry 1,649,376 `lev6/ta14`, placements 55 `lev6/ta03`) are unchanged.
+
+**OSI maxima on the real `install/data/Base.osi` and the caps** (`tools/research/osi_maxima.py`, independent Python reader; byte-identical output to REF3's `logs/osi-maxima.json`; caps in `engine/include/lomn/sage/osi.h`):
+
+| Quantity | Real maximum | Cap | Headroom |
+|---|---|---|---|
+| file bytes | 486,274 | 8 MiB | 17x |
+| instructions per subroutine | 1,707 (`setupshoefitterscreen`) | 32,768 | 19x |
+| instructions total (unique subroutines) | 151,522 | 4,194,304 | 27x |
+| `CallGameFunction` calls total | 4,402 | 131,072 | 29x |
+| calls per method | 78 (`onakoro_puzzle.initfull`) | 2,048 | 26x |
+| argc per call | 9 | 127 | 14x |
+| args per method | 128 | 4,096 | 32x |
+| string-arg bytes per method | 570 (longest single 145) | 16,384 | 28x |
+| literal stack depth | 16 | 256 | 16x |
+
+Other file facts: 2,749 strings (38,191 bytes), 23 functions (23 unique offsets), 395 classes, 8,406 methods, 3,606 unique subroutines, branch targets per subroutine max 48.
+
+**OSI fuzz** (`make fuzz-osi FUZZ_OSI_N=2000000 FUZZ_OSI_N_WASM=300000`, ASan+UBSan with `-fno-sanitize-recover=all`, 4 min 10 s wall for the whole target including both compiles, loadavg 7.61 -> 4.95; the Makefile defaults are 200,000 native / 20,000 wasm32):
+
+| Target | Seeds | Inputs | Accepted | Method evaluations | Findings |
+|---|---|---|---|---|---|
+| native | synthetic (seed 1) | 2,000,000 | 290,456 | 288,788 | 0 |
+| native | synthetic + real `Base.osi` (seed 2) | 2,000 | 482 | 5,008 | 0 |
+| wasm32 under Node | synthetic (seed 3) | 300,000 | 43,261 | 42,942 | 0 |
+
+REF3's own run quoted 290,448 / 43,370 accepted for the same seeds and sources (`osi.cpp`, `osi_builder.h`, `osi.h` are byte-identical to REF3's); the 8 and 109 input differences were not chased (the native run is deterministic here: two runs of 200,000 gave identical counts). `tools/research/osi_craft.py` crafted `Base.osi` files (kinds `calls`, `stack`, `funcs`, `nops`: 600,337 / 600,337 / 824,617 / 1,048,912 bytes) installed into a written synthetic install and run through `lomn_view --backend null` (ASan+UBSan and Release): rc 0, empty stderr, peak RSS 39.4-44.8 MB (ASan) and 13.1-16.2 MB (Release), 0.13-0.18 s (ASan) and 0.02-0.03 s (Release).
+
+**Mutation bite check** (scratch copy of `git archive HEAD` at `eb4a6d7`, Release, REF3 `mutate3.py` run only there; ctest subset `unit|a7_|a9_|gpu_mesh|gpu_ffp|osi_probe|ffp_oracle`; loadavg 5.84 -> 7.75, about 4 min): 42 entries, **40 CAUGHT**; the two MISSED are the no-op control (intended) and the NaN vertex-colour mutation (intended: the float-to-int conversion of NaN is undefined behaviour that no value test can see). That NaN mutation was then applied in the scratch copy under the ASan+UBSan build: `unit` aborts with `ffp.cpp:270:38: runtime error: nan is outside the range of representable values of type 'unsigned int'` (ctest 23/24, only `unit` failing), so it is caught under UBSan. The restored build rc 0 and the restored full ctest rc 0.
+
+**ASan + UBSan** (`build/asan`: Debug, `-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer`, `-DLOMN_WEBGPU=ON`; Dawn itself is not instrumented): `ctest` 24/24 pass (including the GPU tests); `lomn_tests` 132 cases / 172,064 assertions, rc 0; the vllg, ghut, crss and crss_yaw67 renders rc 0 with 0 bytes of stderr; the survey rc 0 with 0 bytes of stderr and maxima identical to Release. The only stderr text is from `lomn_tests` negative tests (the unwritable-output-path line and three `[area] render skipped` lines), identical to the Release `lomn_tests` stderr.
+
+**Tests**: `make test-native` 24/24 and `make test-wasm` 5/5 (native ctest + wasm32 under Node, including the native == wasm32 call-log and state-log comparisons) on the committed tree.
