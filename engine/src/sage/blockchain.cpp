@@ -130,4 +130,25 @@ bool BlockChain::load(std::string_view request, std::vector<uint8_t>& out, Sourc
   return fail(err, last_err);
 }
 
+bool resolve_texture(const BlockChain& chain, std::string_view lev, std::string_view name, std::string& chosen) {
+  chosen.clear();
+  std::string full = "Root/Data/Levels/" + std::string(lev) + "/textures/" + std::string(name);
+  size_t dot = full.rfind('.');
+  if (dot != std::string::npos) {
+    std::string ext = full.substr(dot);
+    for (char& ch : ext)
+      if (ch >= 'A' && ch <= 'Z') ch = static_cast<char>(ch + 32);
+    if ((ext == ".dds" || ext == ".tga") && chain.exists(full)) {
+      chosen = full;
+      return true;
+    }
+  }
+  for (const char* ext : {".dds", ".tga"})
+    if (chain.exists(full + ext)) {
+      chosen = full + ext;
+      return true;
+    }
+  return false;
+}
+
 }  // namespace lomn::sage

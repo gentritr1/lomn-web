@@ -139,3 +139,38 @@ TEST_CASE("blockchain: a failed enter_area leaves no area entered") {
   CHECK(c.blockfile(Source::Current) == nullptr);
   CHECK(c.blockfile(Source::Second) == nullptr);
 }
+
+TEST_CASE("blockchain: resolve_texture follows ScDrawableTexture::Load (gTextureTypes .dds/.tga)") {
+  fs::MemoryFileSystem m;
+  // The entry table is searched by binary search: keep the names sorted.
+  m.mount("Root/data/Art/Art.blk", make_blk({stored("bare.dds", "c"), stored("bare.tga", "d"), stored("fall.dds.dds", "f"), stored("kept.dds", "a"),
+                                             stored("only.tga", "e"), stored("tgaext.tga", "g"), stored("upper.dds", "b")}));
+  BlockChain c(m);
+  std::string err;
+  REQUIRE(c.open_art("Root/Data/Art/Art.blk", &err));
+  std::string chosen = "stale";
+  const std::string pre = "Root/Data/Levels/lev1/textures/";
+  // An extension from gTextureTypes is kept when that file exists.
+  CHECK(resolve_texture(c, "lev1", "kept.dds", chosen));
+  CHECK(chosen == pre + "kept.dds");
+  CHECK(resolve_texture(c, "lev1", "tgaext.tga", chosen));
+  CHECK(chosen == pre + "tgaext.tga");
+  // The extension compare is case-insensitive: ".DDS" counts as an extension and is kept as written.
+  CHECK(resolve_texture(c, "lev1", "UPPER.DDS", chosen));
+  CHECK(chosen == pre + "UPPER.DDS");
+  // Extension present but that file is missing: fall back to appending (full + ".dds").
+  CHECK(resolve_texture(c, "lev1", "fall.dds", chosen));
+  CHECK(chosen == pre + "fall.dds.dds");
+  // No extension: ".dds" is preferred over ".tga" when both exist; ".tga" when it is the only one.
+  CHECK(resolve_texture(c, "lev1", "bare", chosen));
+  CHECK(chosen == pre + "bare.dds");
+  CHECK(resolve_texture(c, "lev1", "only", chosen));
+  CHECK(chosen == pre + "only.tga");
+  // Neither: false, and `chosen` is cleared.
+  chosen = "stale";
+  CHECK_FALSE(resolve_texture(c, "lev1", "nothing", chosen));
+  CHECK(chosen.empty());
+  chosen = "stale";
+  CHECK_FALSE(resolve_texture(c, "lev1", "nothing.dds", chosen));  // kept-extension probe fails, both appends fail
+  CHECK(chosen.empty());
+}

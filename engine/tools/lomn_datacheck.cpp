@@ -401,20 +401,8 @@ int main(int argc, char** argv) {
     uint64_t drawn_bytes = 0, drawn_resolved = 0;
     std::string list;
     for (const std::string& t : names) {
-      // ScDrawableTexture::Load: "<lev>/textures/<name>"; an extension from gTextureTypes (.dds/.tga) is kept if
-      // that file exists, otherwise ".dds" then ".tga" are appended, each probed with SrBlockFileExists.
-      std::string full = "Root/Data/Levels/" + lev + "/textures/" + t, chosen;
-      size_t dot = full.rfind('.');
-      if (dot != std::string::npos) {
-        std::string ext = lower(full.substr(dot));
-        if ((ext == ".dds" || ext == ".tga") && chain.exists(full)) chosen = full;
-      }
-      if (chosen.empty())
-        for (const char* ext : {".dds", ".tga"})
-          if (chain.exists(full + ext)) {
-            chosen = full + ext;
-            break;
-          }
+      std::string chosen;
+      resolve_texture(chain, lev, t, chosen);  // ScDrawableTexture::Load's rule (lomn_sage)
       Lookup ld, ex;
       if (!chosen.empty()) {
         ld = chain.find_load(chosen);

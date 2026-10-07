@@ -56,4 +56,11 @@ class BlockChain {
   std::string current_path_, second_path_, art_path_, none_;
 };
 
+// Texture path resolution of ScDrawableTexture::Load (0x005561c0): the request is
+// "Root/Data/Levels/<lev>/textures/<name>". If its extension (compared case-insensitively) is one of
+// gTextureTypes {".dds", ".tga"} and the file exists (SrBlockFileExists order, chain.exists()), it is kept as
+// written; otherwise ".dds" then ".tga" are appended to the whole request and the first that exists wins.
+// Returns false and clears `chosen` when nothing exists.
+bool resolve_texture(const BlockChain& chain, std::string_view lev, std::string_view name, std::string& chosen);
+
 }  // namespace lomn::sage
