@@ -39,6 +39,20 @@ def b2f(b):
     return struct.unpack('<f', struct.pack('<I', b))[0]
 
 
+def f32(x):
+    """Round a Python float to float32 (one IEEE round to nearest even)."""
+    return struct.unpack('<f', struct.pack('<f', x))[0]
+
+
+def tfactor_alpha(t):
+    """(int)ROUND(255.0f * t) as the exe computes it (DrawX 0x005528c0 @_DAT_00737ca8, SetTexture 0x0054f260
+    @_DAT_00736598): both operands are float32 and the product is rounded to float32 BEFORE the round to nearest even,
+    because the device is created without D3DCREATE_FPU_PRESERVE (CreateDirectXWindow 0x0052e570), so Direct3D 8 leaves
+    the x87 in single precision (Task 8A E2a; spec M1 section 7.1 R23, INFERRED). In float64 255 * f32(0.9) is
+    229.49999... -> 229; in float32 it is 229.5 -> 230 (26 real areas)."""
+    return round(f32(255.0 * f32(t))) & 255
+
+
 class Device:
     """Device state with the D3D8 defaults (DirectX 8.1 SDK) for the slots the area path touches."""
 
@@ -165,7 +179,6 @@ def load_area(ins, eye_height):
             if struct.unpack_from('<I', posb, r + 16)[0] & 0x1000:
                 start = struct.unpack_from('<3f', posb, r + 4)
                 break
-    eye = (start[0], start[1] + eye_height, start[2]) if start else (0.0, 0.0, 0.0)
     spec = []
     tb = ins.entry('textures.slb')
     if tb:
@@ -188,7 +201,37 @@ def load_area(ins, eye_height):
         if m is None or not all(math.isfinite(c) for c in pos):
             continue
         places.append({'rec': i, 'id': mid, 'pos': pos, 'route': rt, 'm': m})
-    return places, eye
+    return places, eye_position(places, start, eye_height)
+
+
+def eye_position(places, start, eye_height):
+    """The viewer's eye (lomn_view's make_camera; not the game's camera, which M1 does not replay): the POS start + eye
+    height; without a POS start the centre of the world bounds of every placed model except Back placements, + eye height
+    (Task 8A E2b: fren/frnt has no POS table); without any bounds the origin. World point = RotX(kWorldRotX) then the
+    record position (GcArea::GcArea 0x00504220): (x + px, y*c - z*s + py, y*s + z*c + pz), evaluated in float32 in the
+    same operation order as the C++ transform_point over the 8 corners of each model's model-space AABB."""
+    if start:
+        return (start[0], f32(start[1] + eye_height), start[2])
+    rx = f32(-1.5707982)
+    c, s = f32(math.cos(rx)), f32(math.sin(rx))
+    lo = hi = None
+    for p in places:
+        if p['route'] == 'back':
+            continue
+        bmin, bmax = p['m']['bmin'], p['m']['bmax']
+        px, py, pz = p['pos']
+        for k in range(8):
+            x, y, z = (bmax[0] if k & 1 else bmin[0]), (bmax[1] if k & 2 else bmin[1]), (bmax[2] if k & 4 else bmin[2])
+            # out[j] = ((p0*m[j] + p1*m[4+j]) + p2*m[8+j]) + m[12+j], rows (1,0,0,0) (0,c,s,0) (0,-s,c,0) (px,py,pz,1)
+            w = (f32(f32(f32(f32(x * 1.0) + f32(y * 0.0)) + f32(z * 0.0)) + px),
+                 f32(f32(f32(f32(x * 0.0) + f32(y * c)) + f32(z * -s)) + py),
+                 f32(f32(f32(f32(x * 0.0) + f32(y * s)) + f32(z * c)) + pz))
+            lo = list(w) if lo is None else [min(a, b) for a, b in zip(lo, w)]
+            hi = list(w) if hi is None else [max(a, b) for a, b in zip(hi, w)]
+    if lo is None:
+        return (0.0, 0.0, 0.0)  # make_camera "origin": no eye height
+    ctr = [f32(f32(a + b) * 0.5) for a, b in zip(lo, hi)]
+    return (ctr[0], f32(ctr[1] + eye_height), ctr[2])
 
 
 def load_model(ins, xb, spec):
@@ -230,7 +273,9 @@ def load_model(ins, xb, spec):
     for p in m.positions:
         if gy[1] <= p[1]:
             gy = p
-    return {'subs': subs, 'gy': gy}
+    bmin = [min(p[k] for p in m.positions) for k in range(3)]  # model-space AABB (make_camera's bounds fallback)
+    bmax = [max(p[k] for p in m.positions) for k in range(3)]
+    return {'subs': subs, 'gy': gy, 'bmin': bmin, 'bmax': bmax}
 
 
 def material_line(mat, path):
@@ -313,7 +358,7 @@ class Frame:
             return
         if transparency == 1.0 and sub['trans'] < 1.0:
             d.dx_rs(27, 1); d.dx_tss(0, 4, 3); d.dx_tss(0, 6, 3)
-            d.dx_rs(60, (round(255 * struct.unpack('<f', struct.pack('<f', sub['trans']))[0]) & 255) << 24)
+            d.dx_rs(60, tfactor_alpha(sub['trans']) << 24)
         d.raw('TEXTURE 0 %s' % (sub['tex'] or 'NULL'))
         d.raw(material_line(sub['mat'], 'Root/Data/Levels/%s/textures/%s' % (self.level, sub['mat'][4])))
 
@@ -323,7 +368,7 @@ class Frame:
         d.dx_rs(153, 0)
         if transparency < 1.0:
             d.dx_rs(47, 16); d.dx_rs(27, 1); d.dx_tss(0, 4, 4); d.dx_tss(0, 5, 3); d.dx_tss(0, 6, 2)
-            d.dx_rs(60, (round(255 * transparency) & 255) << 24)
+            d.dx_rs(60, tfactor_alpha(transparency) << 24)
         else:
             d.dx_rs(47, 0)
         tag = '%s#%d' % (pl['id'], pl['rec'])

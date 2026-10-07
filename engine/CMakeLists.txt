@@ -115,12 +115,15 @@ else()
            -DEXPECTED=${CMAKE_CURRENT_SOURCE_DIR}/tests/data/a9_state.txt -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/a9_state.cmake)
   # A9 against the independent Python oracle (tools/research/oracle/a9_oracle.py, written from the decompiled code):
   # the synthetic state scene (written out as an install) always; vllg/ghut/crss when LOMN_DATA is set (else 77 = skip),
-  # plus lev2/vllg and lev3/blr2 (Task 8A E1: Trans nodes with "sky1" and "watr").
+  # plus lev2/vllg and lev3/blr2 (Task 8A E1: Trans nodes with "sky1" and "watr"), lev1/bech (E2a: a TFACTOR alpha that
+  # rounds differently in float32 and float64) and fren/frnt (E2b: no POS table). The full 123-area sweep is make a9-sweep.
+  # Task 8A E2b: then the same area without its POS table (blk_without.py): make_camera's bounds-centre eye fallback.
   add_test(NAME a9_oracle_synthetic COMMAND sh -c
-           "rm -rf \"$1\" && \"$0\" --synthetic 2 --backend null --out \"$1/c.txt\" --state-log \"$1/s.txt\" --write-install \"$1/inst\" >/dev/null && timeout 120 python3 \"$2\" --install \"$1/inst\" --level levt --area stat --eye-height 0 --compare \"$1/s.txt\""
-           $<TARGET_FILE:lomn_view> ${CMAKE_CURRENT_BINARY_DIR}/a9_oracle_syn ${CMAKE_CURRENT_SOURCE_DIR}/../tools/research/oracle/a9_oracle.py)
+           "rm -rf \"$1\" && \"$0\" --synthetic 2 --backend null --out \"$1/c.txt\" --state-log \"$1/s.txt\" --write-install \"$1/inst\" >/dev/null && timeout 120 python3 \"$2\" --install \"$1/inst\" --level levt --area stat --eye-height 0 --compare \"$1/s.txt\" || exit 1; b=\"$1/inst/data/levels/levt/stat.blk\"; timeout 60 python3 \"$3\" \"$b\" \"$b.nopos\" stat_pos.slb && mv \"$b.nopos\" \"$b\" && \"$0\" --install \"$1/inst\" --level levt --area stat --eye-height 0 --backend null --out \"$1/c2.txt\" --state-log \"$1/s2.txt\" >/dev/null && grep -q '\"eye_source\":\"bounds_centre\"' \"$1/c2.txt.json\" && timeout 120 python3 \"$2\" --install \"$1/inst\" --level levt --area stat --eye-height 0 --compare \"$1/s2.txt\""
+           $<TARGET_FILE:lomn_view> ${CMAKE_CURRENT_BINARY_DIR}/a9_oracle_syn ${CMAKE_CURRENT_SOURCE_DIR}/../tools/research/oracle/a9_oracle.py
+           ${CMAKE_CURRENT_SOURCE_DIR}/../tools/research/oracle/blk_without.py)
   add_test(NAME a9_oracle_real COMMAND sh -c
-           "if [ -z \"$LOMN_DATA\" ]; then echo 'SKIPPED (no LOMN_DATA)'; exit 77; fi; mkdir -p \"$1\"; for la in lev1:vllg lev2:ghut lev4:crss lev2:vllg lev3:blr2; do l=\${la%%:*}; a=\${la##*:}; \"$0\" --install \"$LOMN_DATA/install\" --level $l --area $a --backend null --out \"$1/$l.$a.txt\" --state-log \"$1/$l.$a.state.txt\" >/dev/null || exit 1; timeout 120 python3 \"$2\" --install \"$LOMN_DATA/install\" --level $l --area $a --compare \"$1/$l.$a.state.txt\" || exit 1; done"
+           "if [ -z \"$LOMN_DATA\" ]; then echo 'SKIPPED (no LOMN_DATA)'; exit 77; fi; mkdir -p \"$1\"; for la in lev1:vllg lev2:ghut lev4:crss lev2:vllg lev3:blr2 lev1:bech fren:frnt; do l=\${la%%:*}; a=\${la##*:}; \"$0\" --install \"$LOMN_DATA/install\" --level $l --area $a --backend null --out \"$1/$l.$a.txt\" --state-log \"$1/$l.$a.state.txt\" >/dev/null || exit 1; timeout 120 python3 \"$2\" --install \"$LOMN_DATA/install\" --level $l --area $a --compare \"$1/$l.$a.state.txt\" || exit 1; done"
            $<TARGET_FILE:lomn_view> ${CMAKE_CURRENT_BINARY_DIR}/a9_oracle_real ${CMAKE_CURRENT_SOURCE_DIR}/../tools/research/oracle/a9_oracle.py)
   set_tests_properties(a9_oracle_real PROPERTIES SKIP_RETURN_CODE 77)
   # M1a-3 Task 8A C1: C++ OsiFile::eval_calls vs the independent Python evaluator (tools/research/osi.py) over EVERY

@@ -5,7 +5,7 @@ export LOMN_DATA LOMN_CACHE
 VENV := .venv
 PY := $(VENV)/bin/python
 EMSDK_ENV := source .toolchain/emsdk/emsdk_env.sh >/dev/null 2>&1
-.PHONY: setup check-data decomp worklist native wasm site test-tools test-native test-wasm test-web check perf datacheck datacheck-wasm fuzz-osi
+.PHONY: setup check-data decomp worklist native wasm site test-tools test-native test-wasm test-web check perf datacheck datacheck-wasm fuzz-osi a9-sweep
 
 setup: $(VENV)/.ok
 	timeout 3600 tools/toolchain.sh
@@ -70,6 +70,12 @@ datacheck-wasm: wasm native $(VENV)/.ok
 	  timeout 300 build/native/lomn_view --install "$(LOMN_DATA)/install" --level $$l --area $$a --backend null --out build/native/$$a.calls.txt --state-log build/native/$$a.state.txt >/dev/null && \
 	  timeout 300 node build/wasm/lomn_view.js --install "$(LOMN_DATA)/install" --level $$l --area $$a --backend null --out build/wasm/$$a.calls.txt --state-log build/wasm/$$a.state.txt >/dev/null && \
 	  cmp build/native/$$a.calls.txt build/wasm/$$a.calls.txt && cmp build/native/$$a.state.txt build/wasm/$$a.state.txt || exit 1; done; echo "native == wasm32: real-area null logs"
+
+# M1a-3 Task 8A E2c: the A9 shim state log vs the independent Python oracle on EVERY area of the install (123 on Beta
+# 1.5.0); must print "123/123 areas equal". Opt-in (needs LOMN_DATA; not part of make check). Logs stay in build/a9-sweep.
+a9-sweep: native $(VENV)/.ok
+	@if [ -z "$(LOMN_DATA)" ]; then echo "a9-sweep: LOMN_DATA is not set"; exit 2; fi
+	timeout 1800 $(PY) tools/research/oracle/a9_sweep.py --view build/native/lomn_view --install "$(LOMN_DATA)/install" --out build/a9-sweep
 
 # M1a-3 REF3 r2: ASan+UBSan mutation fuzz of the OSI reader (engine/tests/fuzz_osi.cpp), natively and as wasm32 under
 # Node; seeds from tests/osi_builder.h plus, natively and when LOMN_DATA is set, the real Base.osi. On demand only.
