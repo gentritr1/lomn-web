@@ -53,6 +53,13 @@ bool fail(std::string* err, const std::string& msg) {
   return false;
 }
 bool finite3(const float v[3]) { return std::isfinite(v[0]) && std::isfinite(v[1]) && std::isfinite(v[2]); }
+// Task 8B D6: a double -> float conversion of a finite value outside the float range is undefined behaviour; false for
+// such values (and for NaN/inf), else the converted value.
+bool to_float(double v, float& out) {
+  if (!std::isfinite(v) || std::fabs(v) > double(std::numeric_limits<float>::max())) return false;
+  out = static_cast<float>(v);
+  return true;
+}
 
 bool route_enabled(sage::Route r, const AreaOptions& o) {
   switch (r) {
@@ -78,6 +85,7 @@ class Loader {
     max_textures_ = std::min(opt.max_textures, kMaxAreaTextures);
     max_texture_bytes_ = std::min(opt.max_texture_bytes, kMaxAreaTextureBytes);
     max_geometry_bytes_ = std::min(opt.max_geometry_bytes, kMaxAreaGeometryBytes);
+    max_lights_ = std::min(opt.max_lights, kMaxAreaLights);
     out_.level = std::string(level.substr(0, 4));
     out_.area = std::string(area.substr(0, 4));
     std::string e;
@@ -210,9 +218,21 @@ class Loader {
       return;
     }
     sage::Slb slb;
-    if (!slb.parse(std::move(bytes_), &e) || !sage::parse_spec_textures(slb, spec_, &e)) {
+    std::vector<sage::SpecTextureRecord> recs;
+    if (!slb.parse(std::move(bytes_), &e) || !sage::parse_spec_textures(slb, recs, &e)) {
       warn("textures.slb rejected: " + e);
-      spec_.clear();
+      recs.clear();
+    }
+    // Task 8B D3: a record with a non-finite transparency or scroll speed is skipped with a warning (it would reach the
+    // TFACTOR rounding and the texture matrix). Finite values are kept as the file has them.
+    spec_.clear();
+    for (size_t i = 0; i < recs.size(); ++i) {
+      const sage::SpecTextureRecord& r = recs[i];
+      if (!std::isfinite(r.trans) || !std::isfinite(r.u) || !std::isfinite(r.v)) {
+        warn("textures.slb record " + std::to_string(i) + ": non-finite value (skipped)");
+        continue;
+      }
+      spec_.push_back(r);
     }
     out_.special_textures = static_cast<uint32_t>(spec_.size());
   }
@@ -220,13 +240,19 @@ class Loader {
   // materials of used attributes whose texture path equals "<lev>/textures/<name>" (strcmp: case-sensitive), unless it
   // is (1, 0, 0) (GcArea::SetSpecialTexture 0x00505710). trans < 1 -> SetTransparency; (u, v) != 0 -> SetUVOffset
   // (ScDrawableModel::SetSpecialTexture 0x00553da0). Animated textures (frames != 0) are out of scope.
+  // Task 8B D1: the records are indexed by name once (record indices in table order per name), so applying them costs
+  // O(subsets x log records) instead of comparing every subset with every record; duplicates still apply in table order.
   void apply_spec_textures() {
+    std::map<std::string, std::vector<uint32_t>> by_name;
+    for (uint32_t i = 0; i < spec_.size(); ++i) by_name[spec_[i].name].push_back(i);  // bounded by kMaxSpecTextures
     for (Model& m : out_.models)
       for (SubsetDraw& sd : m.subsets) {
         if (!sd.textured) continue;
-        for (const sage::SpecTextureRecord& r : spec_) {
+        const auto it = by_name.find(sd.texture_name);
+        if (it == by_name.end()) continue;
+        for (uint32_t ri : it->second) {
+          const sage::SpecTextureRecord& r = spec_[ri];
           if (r.trans == 1.0f && r.u == 0.0f && r.v == 0.0f) continue;
-          if (r.name != sd.texture_name) continue;
           if (r.trans < 1.0f) sd.trans = r.trans;
           if (r.u != 0.0f || r.v != 0.0f) {
             sd.uv_offset[0] = r.u;
@@ -254,6 +280,15 @@ class Loader {
     s.light.direction[1] = y;
     s.light.direction[2] = z;
     intensity(s, c, v);
+    add_light(s);
+  }
+  // Task 8B D4: every light the area adds (LIGHT records, their Shad fill, the defaults) goes through here, so the cap
+  // counts them all; the ones over it are counted and reported in one warning.
+  void add_light(const SceneLight& s) {
+    if (out_.lights.size() >= max_lights_) {
+      ++lights_dropped_;
+      return;
+    }
     out_.lights.push_back(s);
   }
   void default_lighting(uint8_t type) {
@@ -264,7 +299,7 @@ class Loader {
       s.light.ambient = s.base = col(0.47058824f, 0.47058824f, 0.47058824f, 1.0f);
       s.light.attenuation0 = 1.0f;  // @0x0073e938
       s.light.range = 10000.0f;     // kMaxLightRange @0x0073e8f4
-      out_.lights.push_back(s);
+      add_light(s);
       return;
     }
     d3d::Color4 sun = col(1, 1, 1, 1);
@@ -288,11 +323,20 @@ class Loader {
     if (!table) {
       default_lighting(out_.level_type);
       out_.lights_source = "default";
+      warn_dropped_lights();
       return;
     }
     bool directional = false, shad = false;
-    for (const sage::LightRecord& r : recs) {  // bounded by parse_light (n * 44 <= table bytes)
-      if (out_.lights.size() >= kMaxAreaLights) break;
+    for (size_t ri = 0; ri < recs.size(); ++ri) {  // bounded by parse_light (n * 44 <= table bytes)
+      const sage::LightRecord& r = recs[ri];
+      // Task 8B D3: a NaN/inf position, intensity, range or colour would reach the lighting uniforms: the record is
+      // skipped with a warning (like a non-finite OBJ placement). It then counts neither as a directional nor for Shad.
+      bool finite = finite3(r.pos) && std::isfinite(r.range) && std::isfinite(r.param);
+      for (float c : r.color) finite = finite && std::isfinite(c);
+      if (!finite) {
+        warn("light record " + std::to_string(ri) + ": non-finite value (skipped)");
+        continue;
+      }
       uint8_t style = 0;
       if (r.flags & 2) style = 1;
       else if (r.flags & 4) style = 3;
@@ -309,7 +353,12 @@ class Loader {
         for (int k = 0; k < 3; ++k) l.position[k] = r.pos[k];
         if (r.param > 0.0f) {  // SetPointLight: range > 0 (@0x0073e908)
           l.attenuation0 = 0.0f;
-          l.attenuation1 = 1.0f / (0.15f * r.param);  // 1.0 / (kFarIntensity 0.15 * range)
+          // 1.0 / (kFarIntensity 0.15 * range). Task 8B D3: for a tiny (denormal) range the float product underflows to 0
+          // and 1/0 is a float divide by zero (UBSan). The game's x87 code keeps the product in an 80-bit register (no
+          // underflow) and stores 1/x as +inf; we store FLT_MAX instead (finite: it reaches the uniforms). Ranges whose
+          // product is a normal float keep the float formula bit for bit.
+          const float prod = 0.15f * r.param;
+          l.attenuation1 = prod >= std::numeric_limits<float>::min() ? 1.0f / prod : std::numeric_limits<float>::max();
           l.range = r.param;
         } else {
           l.attenuation0 = 1.0f;
@@ -317,7 +366,7 @@ class Loader {
           l.range = 10000.0f;
         }
         intensity(s, c, r.range);
-        out_.lights.push_back(s);
+        add_light(s);
       } else if (r.flags & 0x80) {
         directional = true;
         add_directional(sage::fourcc(r.id), out_.level_type == 4 ? col(1, 1, 1, 1) : c, r.range, r.pos[0], r.pos[1], r.pos[2]);
@@ -333,6 +382,10 @@ class Loader {
       default_lighting(out_.level_type);
       out_.lights_source = "light_slb+default";
     }
+    warn_dropped_lights();
+  }
+  void warn_dropped_lights() {
+    if (lights_dropped_) warn("lights: " + std::to_string(lights_dropped_) + " over kMaxAreaLights dropped");
   }
   // The area script's literals (lomn/sage/osi.h): class "lego_area_<area>" (level 1) or "lego_area_<area><level[3]>",
   // method InitFull: GcAreaDirector::SetFog(color, start, end, density) stores (color, -start, -end, density)
@@ -359,21 +412,28 @@ class Loader {
       warn(e);
       return;
     }
-    bool fog = false;
     for (const sage::OsiCall& c : calls) {
       const std::string key = lower(c.cls) + "." + lower(c.fn);
       double v[4];
       // Literal colours come from an untrusted file: only integers in the 32-bit range (signed or unsigned) are kept,
-      // so the conversion below is always defined; floats must be finite.
+      // so the conversion below is always defined.
       auto colour_ok = [](const sage::OsiValue& x) { return x.kind == sage::OsiValue::Int && x.i >= INT32_MIN && x.i <= int64_t(UINT32_MAX); };
-      if (key == "gcareadirector.setfog" && !fog && c.args.size() == 4 && colour_ok(c.args[0]) && c.args[0].number(v[0]) &&
-          c.args[1].number(v[1]) && c.args[2].number(v[2]) && c.args[3].number(v[3]) && std::isfinite(v[1]) && std::isfinite(v[2]) &&
-          std::isfinite(v[3])) {
-        fog = true;
+      // Task 8B D5: every SetFog whose four values are known literals is applied in call order, so the LAST one wins,
+      // as in the game (GcAreaDirector::SetFog 0x0048a7a0 only overwrites the GcGraphicsOptions statics). The first one
+      // used to win.
+      if (key == "gcareadirector.setfog" && c.args.size() == 4 && colour_ok(c.args[0]) && c.args[0].number(v[0]) &&
+          c.args[1].number(v[1]) && c.args[2].number(v[2]) && c.args[3].number(v[3])) {
+        float st = 0, en = 0, de = 0;
+        // Task 8B D3/D6: a NaN/inf value, or a finite double outside the float range (an undefined conversion), is
+        // ignored with a warning instead of reaching the fog uniforms.
+        if (!to_float(v[1], st) || !to_float(v[2], en) || !to_float(v[3], de)) {
+          warn("osi: SetFog with a non-finite or out-of-range value (ignored)");
+          continue;
+        }
         out_.fog.color = static_cast<uint32_t>(c.args[0].i);
-        out_.fog.start = -static_cast<float>(v[1]);
-        out_.fog.end = -static_cast<float>(v[2]);
-        out_.fog.density = static_cast<float>(v[3]);
+        out_.fog.start = -st;
+        out_.fog.end = -en;
+        out_.fog.density = de;
         out_.fog.source = "osi";
       } else if (key == "gclightdirector.setcavelighting" && c.args.size() == 1 && c.args[0].number(v[0])) {
         out_.cave_lighting = v[0] != 0.0;
@@ -640,6 +700,7 @@ class Loader {
   std::vector<sage::SpecTextureRecord> spec_;  // the level's textures.slb
   uint32_t max_placements_ = kMaxPlacements, max_draws_ = kMaxDraws, max_textures_ = kMaxAreaTextures;
   uint64_t max_texture_bytes_ = kMaxAreaTextureBytes, max_geometry_bytes_ = kMaxAreaGeometryBytes;
+  uint32_t max_lights_ = kMaxAreaLights, lights_dropped_ = 0;
 };
 
 }  // namespace

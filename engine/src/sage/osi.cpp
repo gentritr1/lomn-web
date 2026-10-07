@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <set>
 
 #include "bytes.h"
@@ -294,7 +295,10 @@ bool OsiFile::eval_impl(const std::string& cls, const std::string& method, std::
           double z = in.op == 0x70 ? x + y : in.op == 0x71 ? x - y : in.op == 0x72 ? x * y : (y != 0 ? x / y : 0);
           if (fl) {
             r.kind = OsiValue::Float;
-            r.f = static_cast<float>(z);
+            // Task 8B D6: a finite double outside the float range (3e38 * 10) has no defined float conversion: store
+            // the float32 overflow result (+-inf) explicitly, as float arithmetic would give.
+            const double fmax = double(std::numeric_limits<float>::max());
+            r.f = z > fmax ? std::numeric_limits<float>::infinity() : z < -fmax ? -std::numeric_limits<float>::infinity() : static_cast<float>(z);
           } else if (std::isfinite(z) && z >= -9.0e18 && z <= 9.0e18) {  // int64 range: the conversion stays defined
             r.kind = OsiValue::Int;
             r.i = static_cast<int64_t>(z);

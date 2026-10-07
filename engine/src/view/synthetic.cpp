@@ -409,6 +409,7 @@ bool mount_synthetic_install(fs::MemoryFileSystem& fs) {
                           {"half.dds", solid_argb(0x8000ff00u)},  // green, alpha 128
                           {"x_glass.dds", solid_dxt1(0xFFE0)},     // yellow; "_glass" -> mTrans 0
                           {"tfx.dds", solid_dxt1(0x001F)},         // blue; textures.slb trans 0.5
+                          {"on_eye.dds", solid_dxt1(0x07E0)},      // green; "eye" + "on_" -> emissive (0,1,0) (Task 8B D2)
                           {"textures.slb", textures_slb({{"tfx", 0.5f, 0, 0}, {"red", 1, 0, 0}, {"cut", 1, 0.25f, 0}})}});
   Bytes area = make_blk({
       {"quad.x", quad_x()},
@@ -429,7 +430,8 @@ bool mount_synthetic_install(fs::MemoryFileSystem& fs) {
   // so a distance sort would draw it first) - a LIGHT table and the script. The 'w'-suffix rule (also "only when last")
   // cannot share a Trans node with "watr": with two such ids left the original loop has no pick (see sage_frame.cpp),
   // so it is covered by test_sage_frame.cpp on a copy of this area with "watr" renamed. Both new models sit behind
-  // the 'blue' quad @-2 (hidden: no pixel probe changes).
+  // the 'blue' quad @-2 (hidden: no pixel probe changes). Task 8B D2 adds "eyes" (an "on_eye" texture: LoadIndexed's
+  // eye emissive), also behind the blue quad, as the last record.
   Bytes state = make_blk({
       {"quad.x", quad_x()},
       {"blue.x", blue_x()},
@@ -437,6 +439,7 @@ bool mount_synthetic_install(fs::MemoryFileSystem& fs) {
       {"mixm.x", quads_x({{-4, 0, -10, -5, "half"}, {1, 4, -10, -5, "x_glass"}, {5, 9, -10, -5, "tfx"}})},
       {"sky1.x", blue_x()},
       {"watr.x", blue_x()},
+      {"eyes.x", quads_x({{-1, 1, 0, 2, "on_eye"}})},
       {"stat_obj.slb", obj_slb({{"quad", 0, 0, 0, 0x10},
                                 {"blue", 0, 0, -2, 0x10},
                                 {"blue", 0, 0, -50, 0x08},
@@ -448,7 +451,8 @@ bool mount_synthetic_install(fs::MemoryFileSystem& fs) {
                                 {"watr", 0, 0, -90, 0x110},
                                 {"blue", 0, 0, -40, 0x30},    // moveables (hidden behind the blue quad): drawn
                                 {"quad", 0, 0, -20, 0x30},     // nearest first -> quad @-20 before blue @-40
-                                {"sky1", 0, 0, -30, 0x110}})},  // last record: earlier records keep their indices
+                                {"sky1", 0, 0, -30, 0x110},     // last record: earlier records keep their indices
+                                {"eyes", 0, 0, -10, 0x10}})},   // Task 8B D2: an eye texture (hidden behind 'blue' @-2)
       {"stat_pos.slb", pos_slb({{"strt", 0, 0, 10, 0x1000}})},
       {"stat_light.slb", light_slb({{"lmp1", 1, 2, 3, 1.0f, 20.0f, 1, 0.5f, 0.25f, 1, 0x40},
                                     {"sun1", 0.5f, -1, 0, 0.8f, 0, 0.9f, 0.9f, 0.8f, 1, 0x80}})},

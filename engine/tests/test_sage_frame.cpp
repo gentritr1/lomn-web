@@ -151,7 +151,7 @@ TEST_CASE("area: A10 - every drawn subset of a coloured model feeds its vertex D
   CHECK(layout);
   CHECK(std::string(view::area_wgsl()).find("@location(3) c: vec4f") != std::string::npos);
   CHECK(std::string(view::area_wgsl()).find("select(vec4f(1.0), c, u.a.y > 0.5)") != std::string::npos);
-  CHECK(r.last_stats().rhi_draws == 20);  // Task 8A E1: + the "sky1" Trans placement
+  CHECK(r.last_stats().rhi_draws == 21);  // Task 8A E1: + the "sky1" Trans placement; Task 8B D2: + "eyes"
 }
 
 

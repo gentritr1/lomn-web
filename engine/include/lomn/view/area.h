@@ -56,7 +56,11 @@ constexpr uint64_t kMaxAreaGeometryBytes = 64ull << 20;  // vertex + index bytes
 //   model lookups. Real maximum: 55 records (lev6/ta03). Ignored/disabled records cost nothing and stay bounded only by
 //   parse_obj (n * 60 <= table bytes).
 constexpr uint32_t kMaxStoredWarnings = 1024;
-constexpr uint32_t kMaxAreaLights = 1024;  // lights kept per area (LIGHT records beyond it are ignored with no effect)
+// kMaxAreaLights: lights kept per area, counting LIGHT records, their "Shad" fill and the GrSetDefaultLighting lights
+// (Task 8B D4: injectable via AreaOptions::max_lights, lower only; the lights over it are dropped with ONE warning,
+// "lights: N over kMaxAreaLights dropped"). Measured maximum 209 lights (lev6/ta08, lomn_view --survey 1, 2026-10-07)
+// -> 4,096 (19.6x; was 1,024 = 4.9x).
+constexpr uint32_t kMaxAreaLights = 4096;
 constexpr uint32_t kMaxDrawableRecords = kMaxPlacements * 64;
 constexpr float kMaxPitchDeg = 89.9f;  // make_camera clamps the pitch to +-kMaxPitchDeg (LookAtRH degenerates at +-90)
 
@@ -64,10 +68,11 @@ constexpr uint32_t kNoTexture = 0xffffffffu;  // subset drawn with the 1x1 white
 
 struct AreaOptions {
   bool draw_main = true, draw_trans = true, draw_back = true, draw_moveable = true, draw_nolight = true;
-  // The R16 caps, injectable so tests can cross them with tiny inputs. They can only be LOWERED: larger values are
-  // clamped to the defaults (the renderer sizes its uniform buffer from draws <= kMaxDraws).
+  // The R16 caps (+ kMaxAreaLights, Task 8B D4), injectable so tests can cross them with tiny inputs. They can only be
+  // LOWERED: larger values are clamped to the defaults (the renderer sizes its uniform buffer from draws <= kMaxDraws).
   uint32_t max_placements = kMaxPlacements, max_draws = kMaxDraws, max_textures = kMaxAreaTextures;
   uint64_t max_texture_bytes = kMaxAreaTextureBytes, max_geometry_bytes = kMaxAreaGeometryBytes;
+  uint32_t max_lights = kMaxAreaLights;
 };
 
 struct SubsetDraw {
@@ -77,7 +82,10 @@ struct SubsetDraw {
   float diffuse[4] = {1, 1, 1, 1};            // material faceColor (white without a material)
   // ---- M1a-3 ----
   uint32_t attrib = 0;           // D3DX attribute id (the DrawSubset argument; subsets are sorted by it)
-  bool has_material = false;     // the subset's attribute indexes a Material (else the game has no ScDrawableMaterial)
+  // has_material: the subset's attribute indexes an .x Material, so `material` / `diffuse` hold its values. The game's
+  // ScDrawableMaterial exists only when the material is ALSO `textured` (LoadX 0x00553800 creates one only for a
+  // TextureFilename): the replay tests `textured`, never this (Task 8B D6).
+  bool has_material = false;
   bool textured = false;         // the material names a texture (ScDrawableMaterial::SetTexture is a no-op otherwise)
   std::string texture_name;      // TextureFilename as in the .x (textures.slb matches it with strcmp)
   d3d::Material8 material;       // LoadIndexed: .x diffuse/specular/power/emissive, ambient forced 0.7, name overrides
@@ -179,6 +187,14 @@ struct AreaData {
 // False only when the area cannot be entered (no level/area blockfile) or a cap is exceeded; missing models or
 // textures are warnings (counted in stats) like the game's skip-and-continue loaders. Records with a NaN/Inf position
 // or orientation are skipped with a warning (stats.nonfinite_records). On false, `out` is a default AreaData.
+// Non-finite values contract (Task 8B D3; untrusted input): no NaN/inf from a file reaches the renderer. Skipped with a
+// warning: an OBJ record with a non-finite position/orientation, a LIGHT record with a non-finite position/direction,
+// intensity, range or colour ("light record N: non-finite value (skipped)"; it then counts neither as a directional
+// light nor for "Shad"), a textures.slb record with a non-finite transparency or U/V speed ("textures.slb record N:
+// ..."), and a SetFog whose start/end/density is non-finite or outside the float range ("osi: SetFog with a non-finite
+// or out-of-range value (ignored)"; the previous SetFog, or the default fog, stays). A point light's attenuation1 is
+// finite for every finite range > 0 (FLT_MAX where 0.15 * range underflows; the game's x87 code would store +inf).
+// Material values from .x files are not filtered here (d3d::quantize_unorm8 and the shader clamp them).
 // `kind` (optional) classifies the failure: Environment = the level or area blockfile does not exist / cannot be opened
 // (lomn_view exit 3); Data = everything else: a corrupt blockfile or an exceeded cap (exit 4). None on success.
 enum class LoadError { None, Environment, Data };

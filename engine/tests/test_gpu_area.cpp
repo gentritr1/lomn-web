@@ -84,7 +84,7 @@ int main() {
        {25, 55, 0, 128, 0, "mixm 'half' after plnt: fog now off, alpha 128 blended over black"},
        {39, 55, 0, 0, 0, "mixm 'x_glass': mTrans 0 -> TFACTOR alpha 0, blended: invisible"},
        {54, 55, 0, 0, 128, "mixm 'tfx': textures.slb trans 0.5 -> TFACTOR alpha 128 blended over black"}},
-      20);  // Task 8A E1: + "sky1" (Trans, hidden behind the 'blue' quad @-2; "watr" replaced "watw")
+      21);  // Task 8A E1: + "sky1" (Trans, hidden behind the 'blue' quad @-2; "watr" replaced "watw"); Task 8B D2: + "eyes" (hidden too)
   std::printf("adapter=%s\n", dev->adapter().c_str());
   return ok ? 0 : 1;
 }
