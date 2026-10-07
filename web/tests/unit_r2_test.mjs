@@ -113,3 +113,69 @@ test('review fix 7 walkHandle: more than MAX_FILES entries is its own named erro
   assert.match(b, /"lomn" could not be read \(moved or deleted\)/);
   assert.doesNotMatch(a, /moved or deleted/);
 });
+
+// T8 P3: Engine.rounds() against a fake wasm module and a fake file source (no engine, no browser). Two error paths no
+// other test drives: rounds exhausted ("did not converge") and a round that moved nothing ("made no progress"). The fake
+// probe throws past PROBE_BOUND calls and each test has a deadline, so a removed guard fails the test instead of hanging.
+const PROBE_BOUND = 64;
+function fakeEngine(Engine, fileBytes) {
+  const strings = new Map();  // fake heap strings: pointer -> JS string
+  let nextPtr = 1;
+  const resident = new Set(), reserved = new Map();
+  const key = (p, o, l) => `${p}\t${o}\t${l}`;
+  const M = {
+    HEAPU8: new Uint8Array(1 << 16),
+    stringToNewUTF8: (s) => (strings.set(nextPtr, s), nextPtr++),
+    UTF8ToString: (p) => strings.get(p) ?? '',
+    _free: (p) => strings.delete(p),
+    _lomn_last_error: () => M.stringToNewUTF8('fake: no error'),
+    _lomn_fs_is_resident: (p, o, l) => (resident.has(key(strings.get(p), o, l)) ? 1 : 0),
+    _lomn_fs_reserve: (p, o, l) => (reserved.set(4096, key(strings.get(p), o, l)), 4096),
+    _lomn_fs_commit: (ptr) => resident.add(reserved.get(ptr)),
+    _lomn_fs_abort: (ptr) => reserved.delete(ptr),
+    misses: '',
+    _lomn_fs_misses: () => M.stringToNewUTF8(M.misses),
+  };
+  const entry = { path: 'data/fake.blk', size: fileBytes };
+  const e = new Engine(M, { entries: [entry], file: async () => new Blob([new Uint8Array(fileBytes)]) }, () => {});
+  e.byNorm.set('root/data/fake.blk', entry);
+  return { e, M, resident };
+}
+async function roundsError(e, probe) {
+  try {
+    await e.rounds(probe, 'levt/fake');
+  } catch (err) {
+    return err.message;
+  }
+  return 'resolved without an error';
+}
+
+test('T8 P3 rounds: a source that misses a NEW range every round stops at MAX_ROUNDS with "did not converge"', { timeout: 10000 }, async () => {
+  const { Engine, MAX_ROUNDS } = await import('../app/engine.js');
+  const { e, M, resident } = fakeEngine(Engine, 4 * PROBE_BOUND);
+  let calls = 0;
+  const probe = () => {
+    if (++calls > PROBE_BOUND) throw new Error(`fake probe called ${calls} times (the round cap did not stop the load)`);
+    M.misses = `root/data/fake.blk\t${4 * (calls - 1)}\t4\n`;  // a range never fetched before
+    return 1;
+  };
+  const msg = await roundsError(e, probe);
+  assert.equal(msg, `levt/fake: prefetch did not converge in ${MAX_ROUNDS} rounds`);
+  assert.equal(calls, MAX_ROUNDS);
+  assert.equal(resident.size, MAX_ROUNDS);  // every round made progress: the cap, not the progress guard, stopped it
+});
+
+test('T8 P3 rounds: a source that keeps missing the SAME range fails with "made no progress" in round 2', { timeout: 10000 }, async () => {
+  const { Engine } = await import('../app/engine.js');
+  const { e, M, resident } = fakeEngine(Engine, 64);
+  let calls = 0;
+  const probe = () => {
+    if (++calls > PROBE_BOUND) throw new Error(`fake probe called ${calls} times (the progress guard did not stop the load)`);
+    M.misses = 'root/data/fake.blk\t8\t16\n';  // fetched in round 1, still reported missing in round 2
+    return 1;
+  };
+  const msg = await roundsError(e, probe);
+  assert.equal(msg, 'levt/fake: prefetch made no progress (root/data/fake.blk)');
+  assert.equal(calls, 2);
+  assert.equal(resident.size, 1);
+});
