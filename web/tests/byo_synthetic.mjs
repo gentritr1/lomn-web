@@ -586,7 +586,12 @@ try {
   // Review fix 2: the measurement itself must not wander (median of >= 120 empty frames, snapped only within +-3 %).
   await section('I2 dropping', async () => {
     // The display rate the page gets depends on the host (a loaded machine runs headless Chromium's compositor at 30 Hz),
-    // so the spin is sized from the rate measured first: 1.5 display periods per frame always halves the frame rate.
+    // so the spin is sized from the rate measured first: 2.0 display periods per frame at least halves the frame rate.
+    // T8 P11: it also puts the frame time on a standard rate (33 ms at 60 Hz -> p50 snaps to 30 Hz), which the old circular
+    // rule (DROPPING = fps < 0.95 x the snapped p50) reconciles as clean, so the DROPPING checks bite on that rule (mutation
+    // 29 of tools/research/oracle/mutate4.py). The former 1.5 periods (25 ms -> 40 fps) snapped to 48 Hz and still read as
+    // DROPPING under the old rule: mutation 29 was MISSED. (Measured at 30 Hz, either spin lands below 24 Hz, the lowest
+    // snap rate, and the old rule also reports DROPPING: this check bites only where the display measures >= ~48 Hz.)
     const r = await open(base + '?hud=1&area=levt/test', undefined, { drop: false });
     await waitState(r.page, ['area-ready'], 60000);
     await waitFrames(r.page, 90, 20000);
@@ -628,7 +633,7 @@ try {
           'I2: 10 repeated measurements on one page give the same snapped rate (and the boot measurement agrees)',
           `boot ${h.display_hz}; runs ${runs.map((x) => `${x.hz}${x.snapped === true ? '' : '?'}(${Number(x.ms).toFixed(2)}ms)`).join(' ')}`);
     await r.page.close();
-    const spin = Math.round((1.5 * 1000) / h.display_hz);
+    const spin = Math.round((2.0 * 1000) / h.display_hz);
     summary.i2_spin_ms = spin;
     const p = await open(base + '?hud=1&area=levt/test', `
       // ${spin} ms of main-thread work on every animation frame (independent of the page's code).
