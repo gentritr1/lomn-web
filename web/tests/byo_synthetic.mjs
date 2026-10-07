@@ -49,6 +49,18 @@ const opfsHas = async (p, dir, file) => p.evaluate(async ([d, f]) => {
     return true;
   } catch { return false; }
 }, [dir, file]);
+// A flat listing of the origin-private file system ("dir/", "dir/file:size:mtime"): two listings are equal only if nothing was written.
+const opfsList = async (p) => p.evaluate(async () => {
+  const out = [];
+  const walk = async (d, prefix) => {
+    for await (const [n, h] of d.entries()) {
+      if (h.kind === 'directory') { out.push(prefix + n + '/'); await walk(h, prefix + n + '/'); }
+      else { const f = await h.getFile(); out.push(`${prefix}${n}:${f.size}:${f.lastModified}`); }
+    }
+  };
+  await walk(await navigator.storage.getDirectory(), '');
+  return out.sort();
+});
 const idbDeleteHandle = (p) => p.evaluate(() => new Promise((res) => {
   const r = indexedDB.open('lomn-web', 1);
   r.onupgradeneeded = () => r.result.createObjectStore('kv');
@@ -484,6 +496,28 @@ try {
     await waitState(p.page, ['area-ready'], 60000);
     const m = await p.page.evaluate(() => window.__lomn.metrics);
     check(m.render.fog === true, 'M13: ?fog=off without ?debug=1 is ignored', `fog ${m.render.fog}`);
+    await p.page.close();
+  });
+  // final I-3: a browser without WebGPU is told so BEFORE a gigabyte is copied into OPFS (pre-fix: it copies, then fails with a Reload button).
+  await section('I-3 no WebGPU', async () => {
+    const p = await open(base + '?pick=1', `
+      Object.defineProperty(Navigator.prototype, 'gpu', { configurable: true, get() { return undefined; } });
+      window.__workers = 0; const W = window.Worker; window.Worker = class extends W { constructor(...a) { super(...a); window.__workers++; } };`, { drop: false });
+    const before = await opfsList(p.page);
+    const st = await waitState(p.page, ['need-files'], 15000);
+    check(st.state === 'error' && /^This browser has no WebGPU/.test(st.message) && /Chrome|Edge/.test(st.message),
+          'final I-3: no navigator.gpu -> a named, final message before any file is chosen', `${st.state}: ${st.message}`);
+    const noWork = await p.page.evaluate(() => window.__lomn.validation === undefined && !window.__lomn.engine);
+    check(noWork, 'final I-3: no validation or engine work ran');
+    await p.page.setInputFiles('#byo-input', inst);
+    const moved = await p.page.waitForFunction(() => window.__lomn.state !== 'error' && window.__lomn.state !== 'need-files', null, { timeout: 4000 }).then(() => true, () => false);
+    const after = await opfsList(p.page);
+    const workers = await p.page.evaluate(() => window.__workers);
+    const final = await p.page.evaluate(() => ({ state: window.__lomn.state, copy: window.__lomn.copy ?? null, byoHidden: document.getElementById('byo').hidden }));
+    check(!moved && final.state === 'error' && !final.copy && workers === 0 && JSON.stringify(before) === JSON.stringify(after),
+          'final I-3: choosing a folder anyway copies nothing (no copy worker, OPFS listing unchanged) and the page stays in the final error',
+          `state ${final.state}; left error ${moved}; workers ${workers}; OPFS entries ${before.length} -> ${after.length}; copy ${JSON.stringify(final.copy)}`);
+    check(final.byoHidden, 'final I-3: the folder choice is hidden', `#byo hidden ${final.byoHidden}`);
     await p.page.close();
   });
   // F. Permission re-request (queryPermission STUBBED to 'prompt'; the real browser prompt stays UNVERIFIED).

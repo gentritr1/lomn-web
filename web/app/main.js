@@ -61,6 +61,12 @@ function canvasSize() {
 
 async function start() {
   try {
+    // Final review I-3: before ANY validation or copy work. A browser without WebGPU would otherwise copy ~1.1 GB into browser
+    // storage and only then fail at the first GPU call. The message is final (a reload cannot change it), so no Reload button.
+    if (!navigator.gpu) {
+      L.noWebGpu = true;
+      return fail('This browser has no WebGPU, so the viewer cannot run here. Use Chrome or Edge 113 or newer (Safari and Firefox support is planned).', { reload: false });
+    }
     if (params.get('scene') === 'triangle') return startTriangle();
     setState('boot');
     const res = await fetch('builds.json');
