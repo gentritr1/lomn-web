@@ -20,9 +20,15 @@ add_library(lomn_sage STATIC src/sage/blockfile.cpp src/sage/blockchain.cpp src/
 target_link_libraries(lomn_sage PUBLIC lomn_core)
 target_compile_options(lomn_sage PRIVATE -Wall -Wextra)
 
-# M1a-2 first pixels: CPU mips, D3D-convention matrices, area loader + unlit renderer on rhi, the A7 synthetic scene.
-add_library(lomn_area STATIC src/view/mips.cpp src/view/math.cpp src/view/area.cpp src/view/synthetic.cpp)
-target_link_libraries(lomn_area PUBLIC lomn_sage)
+# M1a-3 faithful states: the D3D8 fixed-function state shim (state log) and its compiler to rhi (uber-shader + pipeline
+# keys). D3D-convention matrices (view/math) live here so the shim can hold transforms.
+add_library(lomn_d3d STATIC src/view/math.cpp src/d3d/device8.cpp src/d3d/ffp.cpp)
+target_link_libraries(lomn_d3d PUBLIC lomn_core)
+target_compile_options(lomn_d3d PRIVATE -Wall -Wextra)
+
+# M1a-2 first pixels: CPU mips, area loader + unlit renderer on rhi, the A7 synthetic scene.
+add_library(lomn_area STATIC src/view/mips.cpp src/view/area.cpp src/view/synthetic.cpp)
+target_link_libraries(lomn_area PUBLIC lomn_sage lomn_d3d)
 target_compile_options(lomn_area PRIVATE -Wall -Wextra)
 
 if(EMSCRIPTEN)
@@ -82,6 +88,12 @@ else()
   target_link_libraries(lomn_view PRIVATE lomn_area $<$<BOOL:${LOMN_WEBGPU}>:lomn_webgpu>)
   target_include_directories(lomn_view PRIVATE src/app "${LOMN_TOOLCHAIN_DIR}/include")
   target_compile_options(lomn_view PRIVATE -Wall -Wextra)
+  # REF3 revision 2: the CPU reference of the D3D8 fixed-function formulas (the GPU probe's expectation) against an
+  # independent Python implementation from the D3D8 documentation, on gpu_ffp's cases + 4000 seeded random samples.
+  add_executable(lomn_ffp_cases tests/ffp_cases.cpp)
+  target_link_libraries(lomn_ffp_cases PRIVATE lomn_d3d)
+  add_test(NAME ffp_oracle COMMAND sh -c "\"$0\" 4000 1 > \"$1\" && timeout 300 python3 \"$2\" \"$1\""
+           $<TARGET_FILE:lomn_ffp_cases> ${CMAKE_CURRENT_BINARY_DIR}/ffp_cases.jsonl ${CMAKE_CURRENT_SOURCE_DIR}/../tools/research/oracle/ffp_oracle.py)
   # A7 contract (no game data): the synthetic scene's null call log must equal the checked-in expected log, twice.
   add_test(NAME a7_null_calls COMMAND ${CMAKE_COMMAND} -DEXE=$<TARGET_FILE:lomn_view> -DOUT=${CMAKE_CURRENT_BINARY_DIR}/a7
            -DEXPECTED=${CMAKE_CURRENT_SOURCE_DIR}/tests/data/a7_calls.txt -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/a7_calls.cmake)
@@ -150,6 +162,11 @@ else()
     target_link_libraries(lomn_gpu_mesh_test PRIVATE lomn_webgpu)
     add_test(NAME gpu_mesh COMMAND lomn_gpu_mesh_test)
     set_tests_properties(gpu_mesh PROPERTIES SKIP_RETURN_CODE 77 LABELS gpu)
+    # M1a-3: the fixed-function uber-shader against the CPU reference of the D3D8 formulas (lighting, fog, alpha).
+    add_executable(lomn_gpu_ffp_test tests/test_gpu_ffp.cpp)
+    target_link_libraries(lomn_gpu_ffp_test PRIVATE lomn_d3d lomn_webgpu)
+    add_test(NAME gpu_ffp COMMAND lomn_gpu_ffp_test)
+    set_tests_properties(gpu_ffp PROPERTIES SKIP_RETURN_CODE 77 LABELS gpu)
     add_test(NAME a7_gpu_no_adapter COMMAND sh -c
              "out=$(\"$0\" --synthetic 1 --out \"$1\" 2>&1); rc=$?; printf '%s\\n' \"$out\"; [ \"$rc\" -eq 3 ] && printf '%s' \"$out\" | grep -q \"webgpu unavailable: no WebGPU adapter\""
              $<TARGET_FILE:lomn_view> ${CMAKE_CURRENT_BINARY_DIR}/a7_noadapter.png)
@@ -159,7 +176,7 @@ endif()
 
 # Unit tests: natively, and under Node when cross-compiled with emcmake (CMAKE_CROSSCOMPILING_EMULATOR=node).
 add_executable(lomn_tests tests/test_main.cpp tests/test_fs.cpp tests/test_rhi_null.cpp tests/test_loop.cpp tests/test_sage_blockfile.cpp tests/test_sage_blockchain.cpp tests/test_sage_slb.cpp tests/test_sage_xfile.cpp tests/test_sage_image.cpp
-               tests/test_rhi_mesh.cpp tests/test_view_mips.cpp tests/test_view_area.cpp)
+               tests/test_rhi_mesh.cpp tests/test_view_mips.cpp tests/test_view_area.cpp tests/test_d3d.cpp)
 target_link_libraries(lomn_tests PRIVATE lomn_area)
 target_include_directories(lomn_tests PRIVATE "${LOMN_TOOLCHAIN_DIR}/include")
 if(EMSCRIPTEN)
