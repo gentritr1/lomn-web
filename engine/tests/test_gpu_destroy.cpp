@@ -5,6 +5,8 @@
 //     end_frame; the frame still renders that texture (WebGPU keeps recorded objects alive) with no Dawn error.
 //  3. Leak loops: 300 x (texture + bind group) and 100 x (depth render target) created and destroyed: live counts flat.
 //  4. Surface calls on a headless device are counted rejections.
+//  5. AreaRenderer::release: the synthetic A7 scene uploaded, rendered, read back and released 8 times on one device:
+//     pixels byte-identical every cycle, live counts back to the baseline after every release.
 //  REF4 r2: destroy_texture/destroy_buffer now Destroy the GPU object (deferred to end_frame inside a frame): probes 2
 //  and 5 cover both paths. 6. the lost handler receives the first uncaptured GPU error once.
 #include <cstdio>
@@ -125,6 +127,48 @@ int main() {
   check(!dev->set_surface_depth(true, 1.0f) && !dev->resize(64, 64) && dev->last_frame_stats().rejected == rej1 + 2,
         "4. set_surface_depth / resize without a surface: counted rejections");
 
+  // 5. AreaRenderer::release cycles on the synthetic A7 scene.
+  fs::MemoryFileSystem mfs;
+  view::AreaData area;
+  if (!view::mount_synthetic_install(mfs) || !view::load_area(mfs, view::kSyntheticLevel, view::kSyntheticArea, view::AreaOptions(), area, &err))
+    return std::printf("FAIL load: %s\n", err.c_str()), 1;
+  const TextureId art = dev->create_render_target_ex(RenderTargetDesc{64, 64, true, 1.0f});
+  const Device::LiveObjects before = dev->live_objects();
+  view::AreaRenderer r;
+  std::vector<uint8_t> first;
+  Device::LiveObjects shown;
+  for (int cycle = 0; cycle < 8; ++cycle) {
+    if (!r.upload(*dev, area, view::RenderOptions(), &err)) {
+      std::printf("FAIL 5. upload cycle %d: %s\n", cycle, err.c_str());
+      ok = false;
+      break;
+    }
+    r.render(*dev, art, area, view::make_camera(area, view::synthetic_camera(), 1.0f));
+    r.render(*dev, art, area, view::make_camera(area, view::synthetic_camera(), 1.0f));
+    std::vector<uint8_t> p;
+    if (!dev->read_pixels(art, p)) {
+      ok = false;
+      break;
+    }
+    if (cycle == 0) {
+      first = p;
+      shown = dev->live_objects();
+      print("area shown", shown);
+    } else if (p != first || !same(dev->live_objects(), shown)) {
+      std::printf("FAIL 5. cycle %d: pixels %s, live counts %s\n", cycle, p == first ? "same" : "DIFFER",
+                  same(dev->live_objects(), shown) ? "same" : "DIFFER");
+      ok = false;
+    }
+    uint32_t failures = 0;
+    r.release(*dev, &failures);
+    if (failures || !same(dev->live_objects(), before)) {
+      std::printf("FAIL 5. cycle %d: release failures %u\n", cycle, failures);
+      print("after release", dev->live_objects());
+      ok = false;
+    }
+  }
+  check(ok, "5. 8 upload/render/release cycles: identical pixels, flat live counts, 0 rejected destroys");
+  check(dev->last_frame_stats().rejected == 0, "5. no rejected call in the last frame");
   // 6. (REF4 r2, C1) The lost handler: a pipeline whose WGSL does not compile passes the shared checks (rhi does not parse
   //    WGSL) and fails inside Dawn as an uncaptured validation error; that first error reaches the handler exactly once,
   //    with a readable reason.

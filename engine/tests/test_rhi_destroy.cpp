@@ -1,5 +1,5 @@
 // M1b rhi additions on the null backend: destroy_* (dependency rule: a referenced object is rejected, never cascaded),
-// live_objects() and the surface calls on a headless device (AreaRenderer::release follows in T2).
+// live_objects(), the surface calls on a headless device, and AreaRenderer::release (area switching without leaks).
 // The log lines are exact: this suite runs natively AND as wasm32 under Node, so both produce the same text.
 #include <string>
 #include <vector>
@@ -161,3 +161,71 @@ TEST_CASE("rhi lost handler (REF4 r2): the null device logs the call and never i
   CHECK(d->last_frame_stats().rejected == 0);
 }
 
+TEST_CASE("AreaRenderer::release: N upload/render/release cycles keep live objects flat; bind groups go first") {
+  fs::MemoryFileSystem mfs;
+  REQUIRE(view::mount_synthetic_install(mfs));
+  std::vector<std::string> log;
+  auto d = create_null_device(&log);
+  const TextureId rt = d->create_render_target_ex(RenderTargetDesc{64, 64, true, 1.0f});
+  const Device::LiveObjects base = d->live_objects();
+  CHECK(base == counts(1, 0, 0, 0, 0));
+  view::AreaRenderer r;
+  Device::LiveObjects shown[2];
+  for (int cycle = 0; cycle < 6; ++cycle) {
+    const char* name = cycle % 2 ? view::kSyntheticStateArea : view::kSyntheticArea;  // alternate two areas
+    view::AreaData a;
+    std::string err;
+    REQUIRE(view::load_area(mfs, view::kSyntheticLevel, name, view::AreaOptions(), a, &err));
+    REQUIRE(r.upload(*d, a, view::RenderOptions(), &err));
+    REQUIRE(r.render(*d, rt, a, view::make_camera(a, view::synthetic_camera(), 1.0f)));
+    REQUIRE(r.render(*d, rt, a, view::make_camera(a, view::synthetic_camera(), 1.0f)));
+    CHECK(d->last_frame_stats().rejected == 0);
+    const Device::LiveObjects live = d->live_objects();
+    if (cycle < 2) shown[cycle] = live;
+    else CHECK(live == shown[cycle % 2]);  // the same area always holds the same number of objects
+    log.clear();
+    uint32_t failures = 7;
+    const uint32_t n = r.release(*d, &failures);
+    CHECK(failures == 0);
+    CHECK(n == live.textures + live.buffers + live.pipelines + live.samplers + live.bind_groups - base.textures);
+    CHECK(d->live_objects() == base);
+    // Dependency order: every destroy_bind_group line comes before any texture/sampler/buffer destroy.
+    size_t last_group = 0, first_other = log.size();
+    for (size_t i = 0; i < log.size(); ++i) {
+      if (log[i].rfind("destroy_bind_group", 0) == 0) last_group = i;
+      else if (first_other == log.size() && log[i].rfind("destroy_pipeline", 0) != 0) first_other = i;
+    }
+    CHECK(last_group < first_other);
+    for (const std::string& l : log) CHECK(l.find("rejected") == std::string::npos);
+  }
+  CHECK(shown[0].bind_groups > 0);
+  CHECK(shown[1].pipelines > 0);
+}
+
+TEST_CASE("AreaRenderer::release: upload twice needs a release in between; a failed upload releases what it created") {
+  fs::MemoryFileSystem mfs;
+  REQUIRE(view::mount_synthetic_install(mfs));
+  view::AreaData a;
+  std::string err;
+  REQUIRE(view::load_area(mfs, view::kSyntheticLevel, view::kSyntheticArea, view::AreaOptions(), a, &err));
+  {
+    auto d = create_null_device(nullptr);
+    view::AreaRenderer r;
+    REQUIRE(r.upload(*d, a, view::RenderOptions(), &err));
+    CHECK_FALSE(r.upload(*d, a, view::RenderOptions(), &err));
+    CHECK(err.find("release") != std::string::npos);
+    r.release(*d);
+    CHECK(d->live_objects() == counts(0, 0, 0, 0, 0));
+    CHECK(r.upload(*d, a, view::RenderOptions(), &err));
+  }
+  {
+    FailingDevice d(create_null_device(nullptr), 2);  // the second model's index buffer is rejected
+    view::AreaRenderer r;
+    CHECK_FALSE(r.upload(d, a, view::RenderOptions(), &err));
+    CHECK(d.live_objects().textures > 0);  // white + the area's textures + the first model's buffers exist
+    uint32_t failures = 9;
+    r.release(d, &failures);
+    CHECK(failures == 0);
+    CHECK(d.live_objects() == counts(0, 0, 0, 0, 0));
+  }
+}
