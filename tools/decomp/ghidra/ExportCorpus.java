@@ -48,13 +48,17 @@ public class ExportCorpus extends GhidraScript {
     };
     cb.setTimeout(timeout);
     long t0 = System.currentTimeMillis();
-    List<R> res = new ArrayList<>(ParallelDecompiler.decompileFunctions(cb, funcs, monitor));
-    cb.dispose();
+    List<R> res;
+    try { res = new ArrayList<>(ParallelDecompiler.decompileFunctions(cb, funcs, monitor)); }
+    finally { cb.dispose(); }
+    if (res.size() != funcs.size()) throw new IllegalStateException("ParallelDecompiler returned " + res.size() + " of " + funcs.size());
     long t1 = System.currentTimeMillis();
     res.sort(Comparator.comparing(r -> r.f().getEntryPoint()));
     DecompInterface di = new DecompInterface(); di.setOptions(opts()); di.openProgram(currentProgram);
     int retried = 0;
-    for (int i = 0; i < res.size(); i++) if (!res.get(i).ok()) { retried++; res.set(i, toResult(res.get(i).f(), di.decompileFunction(res.get(i).f(), timeout * 4, monitor))); }
+    try {
+      for (int i = 0; i < res.size(); i++) if (!res.get(i).ok()) { retried++; res.set(i, toResult(res.get(i).f(), di.decompileFunction(res.get(i).f(), timeout * 4, monitor))); }
+    } finally { di.dispose(); }
     StringBuilder fj = new StringBuilder(), cj = new StringBuilder(), vj = new StringBuilder();
     int ok = 0;
     for (R r : res) {
