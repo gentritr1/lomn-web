@@ -27,12 +27,16 @@ def machine() -> str:
 
 
 def commit() -> str:
-    r = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=REPO, capture_output=True, text=True, timeout=30)
-    return r.stdout.strip() or "uncommitted"
+    """Short HEAD hash, or "unknown" when git is missing, hangs, or REPO is not a git checkout."""
+    try:
+        r = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=REPO, capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
+    return r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else "unknown"
 
 
 def entry(metrics: dict, scene: str, accepted: bool) -> dict:
-    return {"commit": commit(), "machine": machine(), "scene": scene, "accepted": accepted,
+    return {"machine": machine(), "scene": scene, "accepted": accepted,
             **{k: metrics[k] for k in ("frames", "expected_frames", "backend", "adapter", "frame_ms_p50", "frame_ms_p95",
                                        "draws_per_frame", "pipelines", "wall_ms")}}
 
@@ -64,6 +68,7 @@ def main(argv: list[str], history: Path = HISTORY) -> int:
     a = ap.parse_args(argv)
     cur = entry(json.loads(a.metrics.read_text()), a.scene, a.accept)
     if a.cmd == "append":
+        cur["commit"] = commit()   # only an appended row records a commit; `check` never touches git
         history.parent.mkdir(parents=True, exist_ok=True)
         with open(history, "a") as f:
             f.write(json.dumps(cur, sort_keys=True) + "\n")

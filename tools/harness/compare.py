@@ -3,6 +3,7 @@
   compare.py trace A/trace.jsonl B/trace.jsonl [--tol 0]      exit 1 on first mismatch (prints it)
   compare.py ssim  a.png b.png                                prints SSIM in [-1,1]
   compare.py ssim-min a.png b.png --min X                     exit 1 if SSIM < X (X must come from a measured baseline)
+Exit codes: 0 equal/ok, 1 different, 2 tool error (missing/unreadable file, bad JSON, size mismatch; "ERROR: ..." on stderr).
 """
 from __future__ import annotations
 
@@ -23,8 +24,13 @@ def first_trace_mismatch(a: list[dict], b: list[dict], tol: float) -> str | None
             return f"line {i}: keys {sorted(x)} != {sorted(y)}"
         for k in x:
             vx, vy = x[k], y[k]
-            if isinstance(vx, (int, float)) and isinstance(vy, (int, float)):
-                if abs(vx - vy) > tol:
+            if type(vx) is bool or type(vy) is bool:
+                # bool is an int subclass (True == 1); a bool must match a bool of the same value exactly.
+                if type(vx) is not type(vy) or vx != vy:
+                    return f"line {i} {k}: {vx!r} != {vy!r}"
+            elif isinstance(vx, (int, float)) and isinstance(vy, (int, float)):
+                # `not (<=)` rather than `>`: every comparison with NaN is False, so `>` would call NaN equal to anything.
+                if not (vx == vy or abs(vx - vy) <= tol):
                     return f"line {i} {k}: {vx!r} != {vy!r} (tol {tol})"
             elif vx != vy:
                 return f"line {i} {k}: {vx!r} != {vy!r}"
@@ -60,11 +66,15 @@ def main(argv: list[str]) -> int:
     s = sub.add_parser("ssim"); s.add_argument("a", type=Path); s.add_argument("b", type=Path)
     m = sub.add_parser("ssim-min"); m.add_argument("a", type=Path); m.add_argument("b", type=Path); m.add_argument("--min", type=float, required=True)
     a = ap.parse_args(argv)
-    if a.cmd == "trace":
-        mm = first_trace_mismatch(load_trace(a.a), load_trace(a.b), a.tol)
-        print("traces identical" if mm is None else f"TRACE MISMATCH: {mm}")
-        return 0 if mm is None else 1
-    v = ssim(load_png(a.a), load_png(a.b))
+    try:
+        if a.cmd == "trace":
+            mm = first_trace_mismatch(load_trace(a.a), load_trace(a.b), a.tol)
+            print("traces identical" if mm is None else f"TRACE MISMATCH: {mm}")
+            return 0 if mm is None else 1
+        v = ssim(load_png(a.a), load_png(a.b))
+    except (ValueError, OSError) as e:  # ValueError covers json.JSONDecodeError and the SSIM size mismatch
+        print(f"ERROR: {type(e).__name__}: {e}", file=sys.stderr)
+        return 2
     print(f"ssim={v:.6f}")
     return 0 if a.cmd == "ssim" or v >= a.min else 1
 
