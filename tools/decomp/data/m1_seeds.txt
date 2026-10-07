@@ -1,0 +1,22 @@
+# Roots of the M1 (level viewer) call graph: Python regexes matched against Ghidra function names.
+# Area loading
+^GcAreaLoader::
+^GcAreaDirector::LoadArea
+^GcAreaDirector::LoadAreaBlockHeader$
+^GcAreaDirector::LoadCharTexBlockHeader$
+^GcGame::LoadArtBlockHeader$
+# Blockfiles
+^ScBlockFile::
+^ScBlock::
+# Models, materials, textures, images
+^ScDrawableModel::Load
+^ScDrawableMaterial::Load
+^ScDrawableTexture::Load
+^ScImageLoader::
+^ScModelHierarchy::Load
+# Static level content placed by the area loader
+^GcObjectLoader::
+^GcInstanceLoader::
+^GcPositionLoader::
+^GcLightLoader::
+^GcSpecTextureLoader::
