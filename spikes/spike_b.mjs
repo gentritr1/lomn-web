@@ -11,7 +11,7 @@ const server = http.createServer((req, res) => {
   if (!fs.existsSync(f) || fs.statSync(f).isDirectory()) { res.writeHead(404); return res.end(); }
   res.writeHead(200, { 'content-type': types[path.extname(f)] || 'application/octet-stream' });
   fs.createReadStream(f).pipe(res);
-}).listen(0);
+}).listen(0, '127.0.0.1');
 const url = `http://127.0.0.1:${server.address().port}/index.html`;
 const configs = [
   { name: 'headless-shell, no flags', opts: {} },

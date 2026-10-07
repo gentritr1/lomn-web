@@ -48,6 +48,7 @@ test-wasm: wasm test-native
 	cmp build/native/determinism/a/calls.txt build/wasm/determinism/a/calls.txt
 
 test-web: site
+	cd web && timeout 60 node --test tests/serve_test.mjs
 	cd web && timeout 180 node tests/smoke.mjs ../build/site ../build/pw-profile
 
 perf: native
