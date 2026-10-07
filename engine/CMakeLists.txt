@@ -221,6 +221,13 @@ else()
     target_link_libraries(lomn_gpu_ffp_test PRIVATE lomn_d3d lomn_webgpu)
     add_test(NAME gpu_ffp COMMAND lomn_gpu_ffp_test)
     set_tests_properties(gpu_ffp PROPERTIES SKIP_RETURN_CODE 77 LABELS gpu)
+    # M1b: destroy_* on Dawn (dependency rule, ids never reused, live counts), a depth-target re-creation leak loop,
+    # surface calls rejected headless, and AreaRenderer::release over N uploads of the synthetic scene (flat counts,
+    # pixels unchanged).
+    add_executable(lomn_gpu_destroy_test tests/test_gpu_destroy.cpp)
+    target_link_libraries(lomn_gpu_destroy_test PRIVATE lomn_area lomn_webgpu)
+    add_test(NAME gpu_destroy COMMAND lomn_gpu_destroy_test)
+    set_tests_properties(gpu_destroy PROPERTIES SKIP_RETURN_CODE 77 LABELS gpu)
     add_test(NAME a7_gpu_no_adapter COMMAND sh -c
              "out=$(\"$0\" --synthetic 1 --out \"$1\" 2>&1); rc=$?; printf '%s\\n' \"$out\"; [ \"$rc\" -eq 3 ] && printf '%s' \"$out\" | grep -q \"webgpu unavailable: no WebGPU adapter\""
              $<TARGET_FILE:lomn_view> ${CMAKE_CURRENT_BINARY_DIR}/a7_noadapter.png)
@@ -231,7 +238,8 @@ endif()
 # Unit tests: natively, and under Node when cross-compiled with emcmake (CMAKE_CROSSCOMPILING_EMULATOR=node).
 add_executable(lomn_tests tests/test_main.cpp tests/test_fs.cpp tests/test_rhi_null.cpp tests/test_loop.cpp tests/test_sage_blockfile.cpp tests/test_sage_blockchain.cpp tests/test_sage_slb.cpp tests/test_sage_xfile.cpp tests/test_sage_image.cpp
                tests/test_rhi_mesh.cpp tests/test_view_mips.cpp tests/test_view_area.cpp tests/test_d3d.cpp tests/test_sage_osi.cpp
-               tests/test_area_states.cpp tests/test_sage_frame.cpp)
+               tests/test_area_states.cpp tests/test_sage_frame.cpp
+               tests/test_rhi_destroy.cpp)  # M1b
 target_link_libraries(lomn_tests PRIVATE lomn_area)
 target_include_directories(lomn_tests PRIVATE "${LOMN_TOOLCHAIN_DIR}/include")
 if(EMSCRIPTEN)

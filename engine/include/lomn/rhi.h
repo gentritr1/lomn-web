@@ -2,6 +2,8 @@
 // deterministic call log, no GPU) and "webgpu" (Dawn natively, emdawnwebgpu in the browser).
 // M0 surface: render targets, one uniform block per pipeline (dynamic offset, 256-byte aligned), non-indexed draws.
 // M1a-3 additive: MeshPipelineDesc.front_face and .depth_bias (D3D CW front faces, D3DRS_ZBIAS).
+// M1b additive: destroy_* (with a dependency rule), live_objects(), and a presentation-surface depth buffer + resize.
+// REF4 r2 additive: set_lost_handler (device loss / first uncaptured error reaches the caller).
 // M1a-2 additive surface (unlit textured indexed draws): vertex/index buffers, RGBA8 textures with a CPU-supplied mip
 // chain, samplers, render targets with a depth buffer, mesh pipelines (vertex layout, blend, depth, cull), bind groups
 // {dynamic-offset uniform block, texture, sampler} and indexed draws. Every M0 call keeps its behaviour and log text.
@@ -194,6 +196,45 @@ class Device {
   // executes (WebGPU), so rewriting the same range between two draws feeds the last value to both. Give each draw its
   // own dynamic offset.
   virtual void draw_indexed(const DrawIndexedDesc&) {}
+
+  // ---- M1b additive calls (area switching and browser presentation) ----
+  // NOT pure virtual (as the M1a-2 calls): a Device written against an older surface reports them unsupported.
+  // destroy_*: frees the object; ids are still never reused. Returns true when the object was destroyed. Rejected
+  // (counted in FrameStats::rejected, logged by the null backend, reported on stderr by WebGPU; nothing is freed):
+  //  - an unknown or already-destroyed id (0 included; the presentation surface is not a texture that can be destroyed);
+  //  - DEPENDENCY RULE: a sampled texture, a sampler or a uniform buffer still referenced by a LIVE bind group. Destroy the
+  //    bind group first. Rejection was chosen over cascading: a cascade would silently invalidate a bind group id that
+  //    another owner still holds, while a rejection is visible and testable. Pipelines are referenced by no rhi object.
+  // Inside an open frame a destroy is allowed: draws already recorded keep their objects alive (WebGPU reference
+  // counting); a later draw that names a destroyed id is rejected like any unknown id.
+  virtual bool destroy_texture(TextureId) { return false; }  // sampled textures and render targets (+ their depth buffer)
+  virtual bool destroy_buffer(BufferId) { return false; }    // uniform, vertex and index buffers
+  virtual bool destroy_pipeline(PipelineId) { return false; }  // M0 and mesh pipelines (+ every per-format variant)
+  virtual bool destroy_sampler(SamplerId) { return false; }
+  virtual bool destroy_bind_group(BindGroupId) { return false; }
+  // Live objects per kind (created and not destroyed): the leak check of area switching (counts must return to the
+  // same values after N switches). Render targets count as textures.
+  struct LiveObjects {
+    uint32_t textures = 0, buffers = 0, pipelines = 0, samplers = 0, bind_groups = 0;
+    bool operator==(const LiveObjects& o) const {
+      return textures == o.textures && buffers == o.buffers && pipelines == o.pipelines && samplers == o.samplers &&
+             bind_groups == o.bind_groups;
+    }
+  };
+  virtual LiveObjects live_objects() const { return LiveObjects(); }
+  // Presentation surface (browser canvas; target 0). Both are counted rejections returning false on a device without a
+  // surface (headless WebGPU, null) and inside an open frame.
+  // set_surface_depth: gives frames on target 0 a Depth32Float depth buffer (the same format, pipeline variants and
+  // depth-bias units as create_render_target_ex), cleared to clear_depth (0..1) at every begin_frame(0); false turns it off.
+  virtual bool set_surface_depth(bool /*enabled*/, float /*clear_depth*/) { return false; }
+  // resize: reconfigures the surface to width x height (1..kMaxRenderTargetSize; in the browser this also sets the
+  // canvas drawing-buffer size) and recreates the surface depth buffer at the new size when it is enabled.
+  virtual bool resize(uint32_t /*width*/, uint32_t /*height*/) { return false; }
+  // REF4 r2 (C1): called at most once, with a readable reason, when the device becomes unusable: a device loss for any
+  // reason other than the device's own destruction, or the first uncaptured GPU error (a validation error the shared
+  // checks could not see, e.g. bad WGSL). A loss that happened before the handler was set is delivered when it is set.
+  // The null backend never loses its device (it logs the call). Default: no-op.
+  virtual void set_lost_handler(std::function<void(const std::string& reason)> /*handler*/) {}
 };
 
 // Null backend: appends one line per call to *call_log (if non-null). Lines are stable text, so two runs

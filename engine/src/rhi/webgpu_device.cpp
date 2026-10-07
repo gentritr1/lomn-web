@@ -3,6 +3,8 @@
 // is callback-driven and the caller starts its frame loop from the callback).
 // M1a-2: indexed meshes (vertex/index buffers, sampled RGBA8 textures with CPU mips, samplers, depth targets, mesh
 // pipelines, bind groups). Validation is shared with the null backend (registry.h): a rejected call never reaches Dawn.
+// M1b: destroy_* (registry dependency rule; the backend's private M0 bind-group cache is released with its pipeline or
+// buffer), live_objects(), a Depth32Float depth buffer for the presentation surface and resize().
 #include <webgpu/webgpu.h>
 
 #include <cstdio>
@@ -80,12 +82,28 @@ WGPUAddressMode addr(AddressMode a) {
   return a == AddressMode::Wrap ? WGPUAddressMode_Repeat : a == AddressMode::Clamp ? WGPUAddressMode_ClampToEdge : WGPUAddressMode_MirrorRepeat;
 }
 
+// REF4 r2 (C1): where the device-lost and uncaptured-error callbacks report. It is the callbacks' userdata, so it is
+// created before the device and deliberately never freed (Dawn may still deliver a Destroyed loss while the device is
+// released; one small object per device, and a page creates one device).
+struct LostSink {
+  std::function<void(const std::string&)> handler;
+  bool fired = false;
+  std::string pending;  // a loss before set_lost_handler: delivered when the handler is set
+  void notify(std::string why) {
+    if (fired) return;
+    fired = true;
+    if (handler) handler(why);
+    else pending = std::move(why);
+  }
+};
+
 class WebGpuDevice final : public Device {
  public:
   WebGpuDevice(WGPUInstance inst, WGPUAdapter adapter, WGPUDevice dev, WGPUSurface surface, WGPUTextureFormat surface_format,
-               std::string adapter_desc)
+               std::string adapter_desc, uint32_t surface_width = 0, uint32_t surface_height = 0, LostSink* lost = nullptr)
       : inst_(inst), adapter_(adapter), dev_(dev), queue_(wgpuDeviceGetQueue(dev)), surface_(surface),
-        surface_format_(surface_format), adapter_desc_(std::move(adapter_desc)) {}
+        surface_format_(surface_format), adapter_desc_(std::move(adapter_desc)), surface_w_(surface_width), surface_h_(surface_height),
+        lost_(lost) {}
 
   // Releases every owned handle in reverse order of creation (children before the device, then
   // queue, device, adapter, instance).
@@ -95,6 +113,7 @@ class WebGpuDevice final : public Device {
   WebGpuDevice& operator=(WebGpuDevice&&) = delete;
 
   ~WebGpuDevice() override {
+    flush_deferred_destroys();
     if (pass_) {
       wgpuRenderPassEncoderEnd(pass_);
       wgpuRenderPassEncoderRelease(pass_);
@@ -102,6 +121,7 @@ class WebGpuDevice final : public Device {
     if (enc_) wgpuCommandEncoderRelease(enc_);
     if (frame_surface_view_) wgpuTextureViewRelease(frame_surface_view_);
     if (frame_surface_texture_) wgpuTextureRelease(frame_surface_texture_);
+    release_surface_depth();
     for (auto& kv : bind_groups_) wgpuBindGroupRelease(kv.second);
     for (auto& kv : mesh_bind_groups_) wgpuBindGroupRelease(kv.second);
     for (auto& kv : pipelines_) {
@@ -274,6 +294,20 @@ class WebGpuDevice final : public Device {
       frame_surface_texture_ = st.texture;
       frame_surface_view_ = view = wgpuTextureCreateView(st.texture, nullptr);
       pass_format_ = surface_format_;
+      // M1b: the surface depth buffer (set_surface_depth) has the configured surface size; a surface texture of another
+      // size (the canvas resized behind resize()'s back) would fail validation, so that frame is skipped instead.
+      if (surface_depth_view_) {
+        const uint32_t tw = wgpuTextureGetWidth(st.texture), th = wgpuTextureGetHeight(st.texture);
+        if (tw != surface_depth_w_ || th != surface_depth_h_) {
+          log_skip_once("surface texture " + std::to_string(tw) + "x" + std::to_string(th) + " != depth buffer " +
+                        std::to_string(surface_depth_w_) + "x" + std::to_string(surface_depth_h_) + " (call resize)");
+          wgpuTextureViewRelease(frame_surface_view_);
+          wgpuTextureRelease(frame_surface_texture_);
+          frame_surface_view_ = nullptr;
+          frame_surface_texture_ = nullptr;
+          return;
+        }
+      }
     } else {
       auto it = targets_.find(target);
       if (it == targets_.end()) return reject("begin_frame", "unknown render target");  // registry and targets_ agree
@@ -291,11 +325,12 @@ class WebGpuDevice final : public Device {
     rp.colorAttachmentCount = 1;
     rp.colorAttachments = &ca;
     WGPURenderPassDepthStencilAttachment da = WGPU_RENDER_PASS_DEPTH_STENCIL_ATTACHMENT_INIT;
-    if (tgt && tgt->depth_view) {
-      da.view = tgt->depth_view;
+    WGPUTextureView depth_view = tgt ? tgt->depth_view : surface_depth_view_;
+    if (depth_view) {
+      da.view = depth_view;
       da.depthLoadOp = WGPULoadOp_Clear;
       da.depthStoreOp = WGPUStoreOp_Discard;
-      da.depthClearValue = tgt->clear_depth;
+      da.depthClearValue = tgt ? tgt->clear_depth : surface_clear_depth_;
       rp.depthStencilAttachment = &da;
       pass_depth_ = true;
     }
@@ -319,7 +354,7 @@ class WebGpuDevice final : public Device {
 
   void end_frame() override {
     frame_open_ = false;
-    if (!frame_active_) return;
+    if (!frame_active_) return flush_deferred_destroys();
     frame_active_ = false;
     wgpuRenderPassEncoderEnd(pass_);
     wgpuRenderPassEncoderRelease(pass_);
@@ -335,6 +370,7 @@ class WebGpuDevice final : public Device {
       frame_surface_view_ = nullptr;
       frame_surface_texture_ = nullptr;
     }
+    flush_deferred_destroys();  // REF4 r2 (I1): after the submit that may still reference them
   }
 
   bool read_pixels(TextureId target, std::vector<uint8_t>& rgba) override {
@@ -560,7 +596,177 @@ class WebGpuDevice final : public Device {
     stats_.indices += d.index_count;
   }
 
+  // ---- M1b ----
+  bool destroy_texture(TextureId t) override {
+    std::string why = reg_.check_destroy_texture(t);
+    if (!why.empty()) return reject("destroy_texture", why), false;
+    auto ti = targets_.find(t);
+    if (ti != targets_.end()) {
+      if (ti->second.depth_view) wgpuTextureViewRelease(ti->second.depth_view);
+      if (ti->second.depth) destroy_now_or_after_frame(ti->second.depth);
+      if (ti->second.view) wgpuTextureViewRelease(ti->second.view);
+      if (ti->second.texture) destroy_now_or_after_frame(ti->second.texture);
+      targets_.erase(ti);
+    }
+    auto si = sampled_.find(t);
+    if (si != sampled_.end()) {
+      if (si->second.view) wgpuTextureViewRelease(si->second.view);
+      if (si->second.texture) destroy_now_or_after_frame(si->second.texture);
+      sampled_.erase(si);
+    }
+    reg_.textures.erase(t);
+    return true;
+  }
+  bool destroy_buffer(BufferId b) override {
+    std::string why = reg_.check_destroy_buffer(b);
+    if (!why.empty()) return reject("destroy_buffer", why), false;
+    // The backend's private M0 bind groups (per pipeline x uniform buffer) are a cache, not rhi objects: released here.
+    for (auto it = bind_groups_.begin(); it != bind_groups_.end();) {
+      if (static_cast<BufferId>(it->first & 0xffffffffu) == b) {
+        wgpuBindGroupRelease(it->second);
+        it = bind_groups_.erase(it);
+      } else {
+        ++it;
+      }
+    }
+    auto bi = buffers_.find(b);  // absent for a uniform buffer registered without storage
+    if (bi != buffers_.end()) {
+      destroy_now_or_after_frame(bi->second);
+      buffers_.erase(bi);
+    }
+    reg_.buffers.erase(b);
+    return true;
+  }
+  bool destroy_pipeline(PipelineId pid) override {
+    std::string why = reg_.check_destroy_pipeline(pid);
+    if (!why.empty()) return reject("destroy_pipeline", why), false;
+    for (auto it = bind_groups_.begin(); it != bind_groups_.end();) {
+      if (static_cast<PipelineId>(it->first >> 32) == pid) {
+        wgpuBindGroupRelease(it->second);
+        it = bind_groups_.erase(it);
+      } else {
+        ++it;
+      }
+    }
+    auto pi = pipelines_.find(pid);
+    if (pi != pipelines_.end()) {
+      Pipeline& p = pi->second;
+      for (auto& v : p.by_format) wgpuRenderPipelineRelease(v.second);
+      if (p.pipeline_layout) wgpuPipelineLayoutRelease(p.pipeline_layout);
+      if (p.layout && !p.mesh) wgpuBindGroupLayoutRelease(p.layout);  // mesh layouts are shared (mesh_layouts_)
+      if (p.module) wgpuShaderModuleRelease(p.module);
+      pipelines_.erase(pi);
+    }
+    reg_.pipelines.erase(pid);
+    return true;
+  }
+  bool destroy_sampler(SamplerId s) override {
+    std::string why = reg_.check_destroy_sampler(s);
+    if (!why.empty()) return reject("destroy_sampler", why), false;
+    auto si = samplers_.find(s);
+    if (si != samplers_.end()) {
+      wgpuSamplerRelease(si->second);
+      samplers_.erase(si);
+    }
+    reg_.samplers.erase(s);
+    return true;
+  }
+  bool destroy_bind_group(BindGroupId g) override {
+    std::string why = reg_.check_destroy_bind_group(g);
+    if (!why.empty()) return reject("destroy_bind_group", why), false;
+    auto gi = mesh_bind_groups_.find(g);
+    if (gi != mesh_bind_groups_.end()) {
+      wgpuBindGroupRelease(gi->second);
+      mesh_bind_groups_.erase(gi);
+    }
+    reg_.bind_groups.erase(g);
+    return true;
+  }
+  LiveObjects live_objects() const override { return reg_.live(); }
+
+  void set_lost_handler(std::function<void(const std::string&)> h) override {
+    if (!lost_) return;
+    lost_->handler = std::move(h);
+    if (lost_->handler && !lost_->pending.empty()) {
+      std::string why = std::move(lost_->pending);
+      lost_->pending.clear();
+      lost_->handler(why);
+    }
+  }
+
+  bool set_surface_depth(bool on, float clear_depth) override {
+    if (!surface_) return reject("set_surface_depth", "no presentation surface (headless device)"), false;
+    if (frame_open_) return reject("set_surface_depth", "inside a frame"), false;
+    if (!(clear_depth >= 0.0f && clear_depth <= 1.0f)) return reject("set_surface_depth", "clear_depth outside [0,1]"), false;
+    release_surface_depth();
+    surface_clear_depth_ = clear_depth;
+    if (on) make_surface_depth();
+    return true;
+  }
+  bool resize(uint32_t w, uint32_t h) override {
+    if (!surface_) return reject("resize", "no presentation surface (headless device)"), false;
+    if (frame_open_) return reject("resize", "inside a frame"), false;
+    if (w == 0 || h == 0 || w > kMaxRenderTargetSize || h > kMaxRenderTargetSize) return reject("resize", "size out of range"), false;
+    WGPUSurfaceConfiguration cfg = WGPU_SURFACE_CONFIGURATION_INIT;
+    cfg.device = dev_;
+    cfg.format = surface_format_;
+    cfg.width = w;
+    cfg.height = h;
+    wgpuSurfaceConfigure(surface_, &cfg);
+    surface_w_ = w;
+    surface_h_ = h;
+    if (surface_depth_view_) {
+      release_surface_depth();
+      make_surface_depth();
+    }
+    return true;
+  }
+
  private:
+  // REF4 r2 (I1): GPU memory goes back at destroy time, not when a JS wrapper is garbage-collected (emdawnwebgpu) or
+  // the last reference drops: an explicit Destroy, then Release. Inside an open frame the object may be referenced by
+  // the command buffer end_frame() submits, and destroying it before that submit would fail validation, so the Destroy
+  // (and the handle) wait for end_frame(). Same semantics for callers: "destroy inside an open frame is allowed".
+  void destroy_now_or_after_frame(WGPUTexture t) {
+    if (frame_open_) return deferred_textures_.push_back(t);
+    wgpuTextureDestroy(t);
+    wgpuTextureRelease(t);
+  }
+  void destroy_now_or_after_frame(WGPUBuffer b) {
+    if (frame_open_) return deferred_buffers_.push_back(b);
+    wgpuBufferDestroy(b);
+    wgpuBufferRelease(b);
+  }
+  void flush_deferred_destroys() {
+    for (WGPUTexture t : deferred_textures_) {
+      wgpuTextureDestroy(t);
+      wgpuTextureRelease(t);
+    }
+    for (WGPUBuffer b : deferred_buffers_) {
+      wgpuBufferDestroy(b);
+      wgpuBufferRelease(b);
+    }
+    deferred_textures_.clear();
+    deferred_buffers_.clear();
+  }
+  void release_surface_depth() {
+    if (surface_depth_view_) wgpuTextureViewRelease(surface_depth_view_);
+    if (surface_depth_) wgpuTextureRelease(surface_depth_);
+    surface_depth_view_ = nullptr;
+    surface_depth_ = nullptr;
+    surface_depth_w_ = surface_depth_h_ = 0;
+  }
+  void make_surface_depth() {
+    WGPUTextureDescriptor td = WGPU_TEXTURE_DESCRIPTOR_INIT;
+    td.size = {surface_w_, surface_h_, 1};
+    td.format = kDepthFormat;
+    td.usage = WGPUTextureUsage_RenderAttachment;
+    surface_depth_ = wgpuDeviceCreateTexture(dev_, &td);
+    surface_depth_view_ = wgpuTextureCreateView(surface_depth_, nullptr);
+    surface_depth_w_ = surface_w_;
+    surface_depth_h_ = surface_h_;
+  }
+
   Target make_target(uint32_t w, uint32_t h) {
     WGPUTextureDescriptor td = WGPU_TEXTURE_DESCRIPTOR_INIT;
     td.size = {w, h, 1};
@@ -668,6 +874,8 @@ class WebGpuDevice final : public Device {
   WGPUTextureFormat surface_format_;
   std::string adapter_desc_;
   Registry reg_;
+  std::vector<WGPUTexture> deferred_textures_;  // REF4 r2 (I1): destroyed after the open frame's submit
+  std::vector<WGPUBuffer> deferred_buffers_;
   std::map<TextureId, Target> targets_;
   std::map<TextureId, Sampled> sampled_;
   std::map<BufferId, WGPUBuffer> buffers_;
@@ -687,6 +895,13 @@ class WebGpuDevice final : public Device {
   bool frame_open_ = false;  // M1a-3: between begin_frame and end_frame (null-backend parity for out-of-frame draws)
   bool logged_skip_ = false;
   uint32_t rejects_ = 0;
+  // M1b: presentation-surface size and optional depth buffer.
+  uint32_t surface_w_ = 0, surface_h_ = 0;
+  WGPUTexture surface_depth_ = nullptr;
+  WGPUTextureView surface_depth_view_ = nullptr;
+  uint32_t surface_depth_w_ = 0, surface_depth_h_ = 0;
+  float surface_clear_depth_ = 1.0f;
+  LostSink* lost_ = nullptr;  // REF4 r2 (C1): not owned (see LostSink)
 };
 
 struct Pending {
@@ -697,6 +912,7 @@ struct Pending {
   std::string canvas;
   uint32_t width = 0, height = 0;
   DeviceCallback done;
+  LostSink* lost = new LostSink();  // REF4 r2 (C1): handed to the device; never freed (see LostSink)
 };
 
 // Releases whatever creation acquired so far, reports the error and frees p. Never leaks instance/adapter.
@@ -742,7 +958,7 @@ void finish(Pending* p, WGPUDevice dev) {
   wgpuAdapterGetInfo(p->adapter, &info);
   std::string desc = str(info.vendor) + "/" + str(info.architecture) + "/" + str(info.description);
   wgpuAdapterInfoFreeMembers(info);
-  auto device = std::make_unique<WebGpuDevice>(p->inst, p->adapter, dev, surface, fmt, desc);  // takes ownership of all handles
+  auto device = std::make_unique<WebGpuDevice>(p->inst, p->adapter, dev, surface, fmt, desc, p->width, p->height, p->lost);  // owns all handles
   DeviceCallback done = std::move(p->done);
   delete p;
   done(std::move(device), "");
@@ -791,13 +1007,17 @@ void create_webgpu_device(const char* canvas_selector, uint32_t width, uint32_t 
     // Visible errors: bad WGSL / validation failures would otherwise be a silent blank frame.
     WGPUDeviceDescriptor dd = WGPU_DEVICE_DESCRIPTOR_INIT;
     dd.deviceLostCallbackInfo.mode = WGPUCallbackMode_AllowSpontaneous;
-    dd.deviceLostCallbackInfo.callback = [](WGPUDevice const*, WGPUDeviceLostReason reason, WGPUStringView m, void*, void*) {
+    dd.deviceLostCallbackInfo.userdata1 = p->lost;
+    dd.deviceLostCallbackInfo.callback = [](WGPUDevice const*, WGPUDeviceLostReason reason, WGPUStringView m, void* u1, void*) {
       // Destroyed / CallbackCancelled are the normal teardown path, not a loss.
       if (reason == WGPUDeviceLostReason_Destroyed || reason == WGPUDeviceLostReason_CallbackCancelled) return;
       std::fprintf(stderr, "[webgpu] device lost (reason %d): %s\n", int(reason), str(m).c_str());
+      static_cast<LostSink*>(u1)->notify("GPU device lost (reason " + std::to_string(int(reason)) + "): " + str(m));
     };
-    dd.uncapturedErrorCallbackInfo.callback = [](WGPUDevice const*, WGPUErrorType type, WGPUStringView m, void*, void*) {
+    dd.uncapturedErrorCallbackInfo.userdata1 = p->lost;
+    dd.uncapturedErrorCallbackInfo.callback = [](WGPUDevice const*, WGPUErrorType type, WGPUStringView m, void* u1, void*) {
       std::fprintf(stderr, "[webgpu] uncaptured %s error: %s\n", error_type_name(type), str(m).c_str());
+      static_cast<LostSink*>(u1)->notify(std::string("GPU error (") + error_type_name(type) + "): " + str(m));
     };
     WGPURequestDeviceCallbackInfo dcb = WGPU_REQUEST_DEVICE_CALLBACK_INFO_INIT;
     dcb.mode = LOMN_CB_MODE;

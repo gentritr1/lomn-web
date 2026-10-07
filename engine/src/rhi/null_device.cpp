@@ -203,7 +203,44 @@ class NullDevice final : public Device {
         d.index_count, d.bind_group, d.uniform_offset);
   }
 
+  // ---- M1b ----
+  bool destroy_texture(TextureId t) override { return destroy("destroy_texture", t, reg_.check_destroy_texture(t), reg_.textures); }
+  bool destroy_buffer(BufferId b) override { return destroy("destroy_buffer", b, reg_.check_destroy_buffer(b), reg_.buffers); }
+  bool destroy_pipeline(PipelineId p) override { return destroy("destroy_pipeline", p, reg_.check_destroy_pipeline(p), reg_.pipelines); }
+  bool destroy_sampler(SamplerId s) override { return destroy("destroy_sampler", s, reg_.check_destroy_sampler(s), reg_.samplers); }
+  bool destroy_bind_group(BindGroupId g) override {
+    return destroy("destroy_bind_group", g, reg_.check_destroy_bind_group(g), reg_.bind_groups);
+  }
+  LiveObjects live_objects() const override { return reg_.live(); }
+  // The null device never has a presentation surface: both are counted rejections with stable log lines.
+  bool set_surface_depth(bool on, float clear_depth) override {
+    ++stats_.rejected;
+    rec("set_surface_depth %d clear_depth=%.3f rejected: no presentation surface (headless device)", int(on), clear_depth);
+    return false;
+  }
+  bool resize(uint32_t w, uint32_t h) override {
+    ++stats_.rejected;
+    rec("resize %ux%u rejected: no presentation surface (headless device)", w, h);
+    return false;
+  }
+  // REF4 r2: the null device is never lost; the call is logged (the handler is kept, never invoked).
+  void set_lost_handler(std::function<void(const std::string&)> h) override {
+    lost_handler_ = std::move(h);
+    rec("set_lost_handler %s", lost_handler_ ? "set" : "cleared");
+  }
+
  private:
+  template <typename Map>
+  bool destroy(const char* what, uint32_t id, const std::string& why, Map& table) {
+    if (!why.empty()) {
+      ++stats_.rejected;
+      rec("%s %u rejected: %s", what, id, why.c_str());
+      return false;
+    }
+    table.erase(id);
+    rec("%s %u", what, id);
+    return true;
+  }
   BufferId make_buffer(const char* what, BufKind kind, uint32_t bytes) {
     std::string why = Registry::check_buffer_bytes(bytes);
     if (!why.empty()) {
@@ -240,6 +277,7 @@ class NullDevice final : public Device {
   FrameStats stats_;
   bool frame_rejected_ = false;  // the current frame's begin_frame was rejected
   bool frame_open_ = false;      // between begin_frame and end_frame
+  std::function<void(const std::string&)> lost_handler_;
 };
 
 }  // namespace
