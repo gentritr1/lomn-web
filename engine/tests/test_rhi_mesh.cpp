@@ -491,3 +491,23 @@ TEST_CASE("rhi mesh: boundaries are pinned (buffers, targets, textures, mips, wr
   CHECK(d->create_bind_group({ub, 65536, tex, s}) != 0);
   CHECK(d->create_bind_group({ub, 65537, tex, s}) == 0);
 }
+
+TEST_CASE("rhi mesh: draws outside begin_frame/end_frame are counted rejections (M1a-3 null/WebGPU parity)") {
+  std::vector<std::string> log;
+  auto dev = lomn::rhi::create_null_device(&log);
+  const float clear[4] = {0, 0, 0, 1};
+  lomn::rhi::TextureId rt = dev->create_render_target(4, 4);
+  lomn::rhi::PipelineDesc pd;
+  pd.wgsl = "x";
+  lomn::rhi::PipelineId p = dev->create_pipeline(pd);
+  dev->begin_frame(rt, clear);
+  dev->end_frame();
+  log.clear();
+  dev->draw(p, 3, 0, 0);
+  dev->draw_indexed(lomn::rhi::DrawIndexedDesc{});
+  CHECK(dev->last_frame_stats().rejected == 2);
+  CHECK(dev->last_frame_stats().draws == 0);
+  REQUIRE(log.size() == 2);
+  CHECK(log[0] == "draw pipeline=1 vertices=3 uniforms=0+0 rejected: outside a frame");
+  CHECK(log[1].find("rejected: outside a frame") != std::string::npos);
+}

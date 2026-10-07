@@ -220,6 +220,7 @@ class WebGpuDevice final : public Device {
       // M0 pipelines ignore depth (always pass, never write) so they keep their M0 output in a depth pass.
       ds.depthWriteEnabled = p.mesh && p.mesh_desc.depth_write ? WGPUOptionalBool_True : WGPUOptionalBool_False;
       ds.depthCompare = p.mesh ? cmp(p.mesh_desc.depth_compare) : WGPUCompareFunction_Always;
+      if (p.mesh) ds.depthBias = p.mesh_desc.depth_bias;  // M1a-3 (D3DRS_ZBIAS); 0 = M1a-2 behaviour
       rpd.depthStencil = &ds;
     }
     std::vector<WGPUVertexAttribute> attrs;
@@ -241,6 +242,7 @@ class WebGpuDevice final : public Device {
       rpd.primitive.topology = WGPUPrimitiveTopology_TriangleList;
       rpd.primitive.cullMode = p.mesh_desc.cull == CullMode::None ? WGPUCullMode_None
                                : p.mesh_desc.cull == CullMode::Front ? WGPUCullMode_Front : WGPUCullMode_Back;
+      rpd.primitive.frontFace = p.mesh_desc.front_face == FrontFace::CW ? WGPUFrontFace_CW : WGPUFrontFace_CCW;  // M1a-3
     }
     return p.by_format[{fmt, depth}] = wgpuDeviceCreateRenderPipeline(dev_, &rpd);
   }
@@ -250,6 +252,7 @@ class WebGpuDevice final : public Device {
     stats_.indices = 0;
     stats_.rejected = 0;
     frame_active_ = false;
+    frame_open_ = true;  // M1a-3: draws between begin_frame and end_frame are in a frame even if it was rejected
     pass_depth_ = false;
     WGPUTextureView view = nullptr;
     const Target* tgt = nullptr;
@@ -301,7 +304,10 @@ class WebGpuDevice final : public Device {
   }
 
   void draw(PipelineId pid, uint32_t n, BufferId u, uint32_t off) override {
-    if (!frame_active_) return;
+    if (!frame_active_) {  // M1a-3: outside a frame (or in a rejected one) -> skipped; outside any frame it counts
+      if (!frame_open_) reject("draw", "outside a frame");
+      return;
+    }
     std::string why = reg_.check_draw(pid, u, off);
     if (!why.empty()) return reject("draw", why);  // unknown id or a mesh pipeline: never reaches Dawn, never throws
     Pipeline& p = pipelines_.at(pid);
@@ -312,6 +318,7 @@ class WebGpuDevice final : public Device {
   }
 
   void end_frame() override {
+    frame_open_ = false;
     if (!frame_active_) return;
     frame_active_ = false;
     wgpuRenderPassEncoderEnd(pass_);
@@ -536,7 +543,10 @@ class WebGpuDevice final : public Device {
   }
 
   void draw_indexed(const DrawIndexedDesc& d) override {
-    if (!frame_active_) return;
+    if (!frame_active_) {
+      if (!frame_open_) reject("draw_indexed", "outside a frame");
+      return;
+    }
     std::string why = reg_.check_draw_indexed(d);
     if (!why.empty()) return reject("draw_indexed", why);
     Pipeline& p = pipelines_.at(d.pipeline);
@@ -674,6 +684,7 @@ class WebGpuDevice final : public Device {
   bool pass_depth_ = false;
   FrameStats stats_;
   bool frame_active_ = false;
+  bool frame_open_ = false;  // M1a-3: between begin_frame and end_frame (null-backend parity for out-of-frame draws)
   bool logged_skip_ = false;
   uint32_t rejects_ = 0;
 };

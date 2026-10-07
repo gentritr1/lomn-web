@@ -1,6 +1,7 @@
 // Render interface (frozen in M0; additive changes only, reviewed). Two backends: "null" (records a
 // deterministic call log, no GPU) and "webgpu" (Dawn natively, emdawnwebgpu in the browser).
 // M0 surface: render targets, one uniform block per pipeline (dynamic offset, 256-byte aligned), non-indexed draws.
+// M1a-3 additive: MeshPipelineDesc.front_face and .depth_bias (D3D CW front faces, D3DRS_ZBIAS).
 // M1a-2 additive surface (unlit textured indexed draws): vertex/index buffers, RGBA8 textures with a CPU-supplied mip
 // chain, samplers, render targets with a depth buffer, mesh pipelines (vertex layout, blend, depth, cull), bind groups
 // {dynamic-offset uniform block, texture, sampler} and indexed draws. Every M0 call keeps its behaviour and log text.
@@ -77,6 +78,12 @@ enum class CompareFunc : uint8_t { Never, Less, Equal, LessEqual, Greater, NotEq
 // None = render mode 0x11 (D3DCULL_NONE). Front/Back follow WebGPU's front face, counter-clockwise (CCW). D3D8's default
 // front face is clockwise (D3DCULL_CCW culls counter-clockwise = back faces): M1a-3 maps D3DCULL_* onto these.
 enum class CullMode : uint8_t { None, Front, Back };
+// M1a-3: which winding is the front face (WebGPU primitive.frontFace). CCW is WebGPU's default (and M1a-2's); the
+// D3D8 shim uses CW, D3D's front face, and maps D3DCULL_CW -> Front, D3DCULL_CCW -> Back (verified on Dawn by
+// test_gpu_mesh's winding probe).
+enum class FrontFace : uint8_t { CCW, CW };
+// M1a-3: constant depth bias limit (|depth_bias| <= kMaxDepthBias, WebGPU depthBias units).
+constexpr int32_t kMaxDepthBias = 1 << 16;
 
 // Pipeline for indexed meshes. Bind group 0: @binding(0) var<uniform> (dynamic offset, bound size
 // uniform_stride(uniform_bytes)), @binding(1) texture_2d<f32>, @binding(2) sampler (filtering). One vertex buffer
@@ -97,6 +104,9 @@ struct MeshPipelineDesc {
   bool depth_write = true;                  // only meaningful on a target with depth
   CompareFunc depth_compare = CompareFunc::LessEqual;
   CullMode cull = CullMode::None;
+  // ---- M1a-3 additive fields (defaults = M1a-2 behaviour; the null log prints them only when not default) ----
+  FrontFace front_face = FrontFace::CCW;
+  int32_t depth_bias = 0;  // WebGPU depthBias (constant part); D3DRS_ZBIAS maps here (see lomn/d3d/ffp.h)
 };
 
 enum class FilterMode : uint8_t { Nearest, Linear };

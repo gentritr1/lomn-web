@@ -54,6 +54,7 @@ class NullDevice final : public Device {
     stats_.rejected = 0;
     std::string why = reg_.check_begin_frame(t, false);  // the null device never has a presentation surface
     frame_rejected_ = !why.empty();
+    frame_open_ = true;
     if (frame_rejected_) {
       ++stats_.rejected;
       rec("begin_frame target=%u clear=%.3f,%.3f,%.3f,%.3f rejected: %s", t, c[0], c[1], c[2], c[3], why.c_str());
@@ -62,6 +63,11 @@ class NullDevice final : public Device {
     rec("begin_frame target=%u clear=%.3f,%.3f,%.3f,%.3f", t, c[0], c[1], c[2], c[3]);
   }
   void draw(PipelineId p, uint32_t n, BufferId u, uint32_t off) override {
+    if (!frame_open_) {  // M1a-3 parity with WebGPU: a draw outside begin_frame/end_frame is a counted rejection
+      ++stats_.rejected;
+      rec("draw pipeline=%u vertices=%u uniforms=%u+%u rejected: outside a frame", p, n, u, off);
+      return;
+    }
     if (frame_rejected_) {  // as WebGPU: a rejected frame's draws are not drawn and not counted (not rejected again)
       rec("draw pipeline=%u vertices=%u uniforms=%u+%u skipped: frame rejected", p, n, u, off);
       return;
@@ -77,6 +83,7 @@ class NullDevice final : public Device {
   }
   void end_frame() override {
     frame_rejected_ = false;
+    frame_open_ = false;
     rec("end_frame draws=%u", stats_.draws);
   }
   bool read_pixels(TextureId, std::vector<uint8_t>&) override { return false; }
@@ -146,10 +153,14 @@ class NullDevice final : public Device {
       std::snprintf(b, sizeof b, "%s%u:%s@%u", attrs.empty() ? "" : ",", a.location, detail::vertex_format_name(a.format), a.offset);
       attrs += b;
     }
-    rec("create_mesh_pipeline wgsl=%zu bytes sum=%08x vs=%s fs=%s uniforms=%u stride=%u attrs=[%s] blend=%s depth_write=%d depth=%s cull=%s -> %u",
+    // M1a-3 fields are appended only when not default, so M1a-2 pipeline lines keep their exact text.
+    std::string extra;
+    if (d.front_face != FrontFace::CCW) extra += " front=cw";
+    if (d.depth_bias != 0) extra += " depth_bias=" + std::to_string(d.depth_bias);
+    rec("create_mesh_pipeline wgsl=%zu bytes sum=%08x vs=%s fs=%s uniforms=%u stride=%u attrs=[%s] blend=%s depth_write=%d depth=%s cull=%s%s -> %u",
         d.wgsl.size(), detail::checksum(d.wgsl.data(), d.wgsl.size()), d.vs_entry.c_str(), d.fs_entry.c_str(), d.uniform_bytes,
         d.vertex_stride, attrs.c_str(), detail::blend_name(d.blend), int(d.depth_write), detail::compare_name(d.depth_compare),
-        detail::cull_name(d.cull), id);
+        detail::cull_name(d.cull), extra.c_str(), id);
     return id;
   }
   BindGroupId create_bind_group(const BindGroupDesc& d) override {
@@ -168,6 +179,12 @@ class NullDevice final : public Device {
     return id;
   }
   void draw_indexed(const DrawIndexedDesc& d) override {
+    if (!frame_open_) {  // M1a-3 parity with WebGPU (see draw)
+      ++stats_.rejected;
+      rec("draw_indexed pipeline=%u vb=%u ib=%u first=%u count=%u bind_group=%u+%u rejected: outside a frame", d.pipeline, d.vertices,
+          d.indices, d.first_index, d.index_count, d.bind_group, d.uniform_offset);
+      return;
+    }
     if (frame_rejected_) {
       rec("draw_indexed pipeline=%u vb=%u ib=%u first=%u count=%u bind_group=%u+%u skipped: frame rejected", d.pipeline, d.vertices,
           d.indices, d.first_index, d.index_count, d.bind_group, d.uniform_offset);
@@ -222,6 +239,7 @@ class NullDevice final : public Device {
   Registry reg_;
   FrameStats stats_;
   bool frame_rejected_ = false;  // the current frame's begin_frame was rejected
+  bool frame_open_ = false;      // between begin_frame and end_frame
 };
 
 }  // namespace

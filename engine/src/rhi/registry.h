@@ -165,6 +165,8 @@ class Registry {
     if (static_cast<unsigned>(d.blend) > static_cast<unsigned>(BlendMode::AlphaBlend)) return "bad blend mode";
     if (static_cast<unsigned>(d.cull) > static_cast<unsigned>(CullMode::Back)) return "bad cull mode";
     if (static_cast<unsigned>(d.depth_compare) > static_cast<unsigned>(CompareFunc::Always)) return "bad depth compare";
+    if (static_cast<unsigned>(d.front_face) > static_cast<unsigned>(FrontFace::CW)) return "bad front face";
+    if (d.depth_bias > kMaxDepthBias || d.depth_bias < -kMaxDepthBias) return "depth_bias out of range";
     return "";
   }
   std::string check_bind_group(const BindGroupDesc& d) const {

@@ -9,6 +9,10 @@
 //     without depth, and it is not depth-tested against a mesh quad drawn first nearer the camera (compare Always).
 //  3. Invalid M0 draws (unknown pipeline, a mesh pipeline, unknown uniform buffer) are rejected and counted, never
 //     reach Dawn and never throw; the frame's pixels are unchanged.
+//  4. (M1a-3) Winding: with front_face = CW (D3D's front face), a triangle that is clockwise ON SCREEN (NDC y up:
+//     bottom-left, top, bottom-right) is culled by CullMode::Front (= D3DCULL_CW) and drawn by CullMode::Back
+//     (= D3DCULL_CCW); its reverse the other way round. This pins the d3d -> rhi cull mapping of lomn/d3d/ffp.h.
+//  5. (M1a-3) depth_bias: a quad at the same depth as an earlier one, compare LESS, passes only with depth_bias < 0.
 #include <cstdio>
 #include <cstdlib>
 
@@ -212,6 +216,84 @@ int main() {
   std::vector<uint8_t> c;
   if (!dev->read_pixels(depth, c)) return 1;
   report(st.rejected == 3 && st.draws == 1 && c == a, "3 invalid M0 draws rejected, 1 drawn, pixels == the valid frame", &c[(32 * 64 + 32) * 4]);
+  // 4. Winding / cull mapping.
+  {
+    const float tri_v[2][3][7] = {
+        {{-0.8f, -0.8f, 0.5f, 0, 1, 0, 1}, {0.0f, 0.8f, 0.5f, 0, 1, 0, 1}, {0.8f, -0.8f, 0.5f, 0, 1, 0, 1}},   // clockwise on screen
+        {{-0.8f, -0.8f, 0.5f, 0, 1, 0, 1}, {0.8f, -0.8f, 0.5f, 0, 1, 0, 1}, {0.0f, 0.8f, 0.5f, 0, 1, 0, 1}}};  // counter-clockwise
+    const uint32_t tri_i[6] = {0, 1, 2, 3, 4, 5};
+    BufferId tvb = dev->create_vertex_buffer(sizeof tri_v), tib = dev->create_index_buffer(sizeof tri_i);
+    dev->write_buffer(tvb, 0, tri_v, sizeof tri_v);
+    dev->write_buffer(tib, 0, tri_i, sizeof tri_i);
+    MeshPipelineDesc cd = pd;
+    cd.fs_entry = "fs_opaque";
+    cd.blend = BlendMode::Opaque;
+    cd.depth_compare = CompareFunc::LessEqual;
+    cd.depth_write = true;
+    cd.front_face = FrontFace::CW;
+    cd.cull = CullMode::Front;
+    PipelineId cull_cw = dev->create_mesh_pipeline(cd);  // D3DCULL_CW
+    cd.cull = CullMode::Back;
+    PipelineId cull_ccw = dev->create_mesh_pipeline(cd);  // D3DCULL_CCW
+    if (!tvb || !tib || !cull_cw || !cull_ccw) return std::printf("FAIL setup (winding)\n"), 1;
+    struct WCase {
+      PipelineId p;
+      uint32_t first;
+      bool drawn;
+      const char* what;
+    };
+    const WCase wc[] = {{cull_cw, 0, false, "screen-clockwise triangle, D3DCULL_CW: culled"},
+                        {cull_ccw, 0, true, "screen-clockwise triangle, D3DCULL_CCW: drawn"},
+                        {cull_cw, 3, true, "screen-counter-clockwise triangle, D3DCULL_CW: drawn"},
+                        {cull_ccw, 3, false, "screen-counter-clockwise triangle, D3DCULL_CCW: culled"}};
+    for (const WCase& w : wc) {
+      dev->begin_frame(rt, clear);
+      dev->draw_indexed({w.p, tvb, tib, w.first, 3, bw, 0});
+      dev->end_frame();
+      if (!dev->read_pixels(rt, px)) return 1;
+      const uint8_t* c = &px[(4 * 8 + 4) * 4];
+      report(w.drawn ? near(c, 0, 255, 0, 255) : near(c, 0, 0, 64, 255), w.what, c);
+    }
+  }
+  // 5. Depth bias.
+  {
+    MeshPipelineDesc bd = pd;
+    bd.fs_entry = "fs_opaque";
+    bd.blend = BlendMode::Opaque;
+    bd.depth_write = true;
+    bd.depth_compare = CompareFunc::LessEqual;
+    PipelineId first = dev->create_mesh_pipeline(bd);
+    bd.depth_compare = CompareFunc::Less;
+    PipelineId nobias = dev->create_mesh_pipeline(bd);
+    bd.depth_bias = -16;
+    PipelineId bias = dev->create_mesh_pipeline(bd);
+    if (!first || !nobias || !bias) return std::printf("FAIL setup (bias)\n"), 1;
+    // The red quad's vertices moved to z 0.5 (the blue quad's depth): same depth, drawn second with compare LESS.
+    const float same[4][7] = {{-1, -1, 0.5f, 1, 0, 0, 1}, {1, -1, 0.5f, 1, 0, 0, 1}, {1, 1, 0.5f, 1, 0, 0, 1}, {-1, 1, 0.5f, 1, 0, 0, 1}};
+    BufferId svb = dev->create_vertex_buffer(sizeof verts);
+    dev->write_buffer(svb, 0, verts, sizeof verts);
+    dev->write_buffer(svb, 4 * 7 * 4, same, sizeof same);
+    for (int k = 0; k < 2; ++k) {
+      dev->begin_frame(rt, clear);
+      dev->draw_indexed({first, svb, ib, 0, 6, bw, 0});
+      dev->draw_indexed({k ? bias : nobias, svb, ib, 6, 6, bw, 0});
+      dev->end_frame();
+      if (!dev->read_pixels(rt, px)) return 1;
+      const uint8_t* c = &px[(4 * 8 + 4) * 4];
+      report(k ? near(c, 255, 0, 0, 255) : near(c, 0, 0, 255, 255),
+             k ? "equal depth, compare LESS, depth_bias -16: passes (want red)" : "equal depth, compare LESS, no bias: rejected (want blue)", c);
+    }
+  }
+  // 6. (M1a-3) A draw after end_frame is a counted rejection (null-backend parity), not a silent no-op.
+  {
+    dev->begin_frame(rt, clear);
+    dev->end_frame();
+    dev->draw_indexed({opaque, vb, ib, 0, 6, bw, 0});
+    const FrameStats fs = dev->last_frame_stats();
+    std::printf("%s out-of-frame draw_indexed rejected=%u draws=%u (want 1, 0)\n", fs.rejected == 1 && fs.draws == 0 ? "ok  " : "FAIL",
+                fs.rejected, fs.draws);
+    ok = ok && fs.rejected == 1 && fs.draws == 0;
+  }
   std::printf("adapter=%s\n", dev->adapter().c_str());
   return ok ? 0 : 1;
 }
