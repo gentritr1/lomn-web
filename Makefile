@@ -37,8 +37,23 @@ wasm:
 site: wasm
 	timeout 120 node web/tools/build_site.mjs build/wasm build/site
 
-test-tools: $(VENV)/.ok
-	$(EMSDK_ENV); timeout 1800 $(VENV)/bin/pytest -q -rs tools
+# A skipped test is not a pass (M1b T7). pytest runs with -rs and its report is gated: every skip must match the allowlist
+# PYTEST_SKIP_ALLOW (an awk regex over the "SKIPPED [n] file:line: reason" line; EMPTY = no skip is allowed), the sum of
+# the [n] counts must equal the "N skipped" in pytest's summary line (so a changed report format cannot hide skips), and a
+# skip is also tolerated when LOMN_DATA is unset and the reason says so (the data-free subset is all that can run then;
+# check prints "SKIPPED (no LOMN_DATA)" for the data layers too). test-tools needs build/native (test_m1a1_oracles runs
+# lomn_datacheck), so it runs after `native`. The log is build/pytest-tools.log.
+PYTEST_SKIP_ALLOW ?=
+test-tools: native $(VENV)/.ok
+	@mkdir -p build
+	$(EMSDK_ENV); set -o pipefail; timeout 1800 $(VENV)/bin/pytest -q -rs tools 2>&1 | tee build/pytest-tools.log
+	@awk -v allow="$(PYTEST_SKIP_ALLOW)" -v nodata="$$([ -z "$$LOMN_DATA" ] && echo 1)" \
+	  '/^SKIPPED \[[0-9]+\]/ { match($$0, /\[[0-9]+\]/); n = substr($$0, RSTART + 1, RLENGTH - 2) + 0; listed += n; \
+	     if ((allow != "" && $$0 ~ allow) || (nodata == "1" && $$0 ~ /LOMN_DATA/)) next; bad += n; print "  unexpected skip: " $$0 } \
+	   / skipped/ && /in [0-9.]+s/ { if (match($$0, /[0-9]+ skipped/)) summary = substr($$0, RSTART, RLENGTH - 8) + 0 } \
+	   END { if (summary + 0 != listed) { printf "test-tools: summary says %d skipped but -rs lists %d\n", summary, listed; exit 1 } \
+	         if (bad > 0) { printf "test-tools: FAILED, %d unexpected pytest skip(s) (a skip is not a pass); allowlist PYTEST_SKIP_ALLOW is %s\n", bad, (allow == "" ? "empty" : allow); exit 1 } \
+	         printf "test-tools: %d pytest skip(s), all allowed\n", listed }' build/pytest-tools.log
 
 test-native: native
 	ctest --test-dir build/native --output-on-failure --timeout 300
