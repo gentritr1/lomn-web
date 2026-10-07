@@ -110,7 +110,10 @@ EXPECT = {
     "C1 main_web: a lost device does not reach the page state": r"C1",
     "C2 page: the soft-accept warning is not shown": r"C2",
     "I1 webgpu: textures released but never destroyed (left to GC)": r"I1",
-    "I2 main_web: expectation from the snapped p50 again (circular)": r"I2",
+    # T8 P17: only the two spin checks ("I2: a N ms spin per frame -> ... DROPPING", "I2: ?debug=1&debug_spin=N makes DROPPING
+    # fire"). A bare r"I2" also matched the load-sensitive "every unspun page ... NOT DROPPING" check, so under load this
+    # mutation could be scored CAUGHT with no spin check failing (tools/tests/test_mutate4_expect.py).
+    "I2 main_web: expectation from the snapped p50 again (circular)": r"I2: (a \d+ ms spin per frame|\?debug=1&debug_spin=\d+ makes DROPPING)",
     "I3 page: a moved remembered folder is not caught": r"I3",
     "I4 page: no Content-Security-Policy": r"CSP",
     "I6 byo: the copy is never compared with its manifest": r"I6",
