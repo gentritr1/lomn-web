@@ -1,5 +1,5 @@
-import struct,sys,blk
-D="<scratch>"
+import os,struct,sys,blk
+D=os.path.join(os.environ.get("LOMN_DATA",""),"install","data")+os.sep  # source tools/env.sh; check_datacheck.py overrides from --install
 def entry(blkpath,name):
     m,v,e=blk.read(D+blkpath)
     for n,bs,fs,fl,off in e:

@@ -1,5 +1,5 @@
-import struct,sys
-EXE="<scratch>"
+import os,struct,sys
+EXE=os.path.join(os.environ.get("LOMN_DATA",""),"install","LEGOBionicle.exe")  # source tools/env.sh
 d=open(EXE,'rb').read()
 pe=struct.unpack_from('<I',d,0x3c)[0]
 nsec=struct.unpack_from('<H',d,pe+6)[0]; opt=struct.unpack_from('<H',d,pe+20)[0]
