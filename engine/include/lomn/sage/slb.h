@@ -21,6 +21,7 @@ constexpr uint32_t kSlbMagic = 0x00C0FFEEu;
 
 class Slb {
  public:
+  // A rejected table leaves a default-constructed Slb (M1a-4: no bytes, no partial fix-up list).
   bool parse(std::vector<uint8_t> bytes, std::string* err);
 
   const std::vector<uint8_t>& bytes() const { return bytes_; }
@@ -36,6 +37,7 @@ class Slb {
   bool read_ptr(uint64_t offset, uint32_t& target) const;
 
  private:
+  bool parse_impl(std::vector<uint8_t> bytes, std::string* err);
   std::vector<uint8_t> bytes_;
   std::vector<uint32_t> fields_;
   bool has_trailer_ = false;

@@ -350,3 +350,26 @@ TEST_CASE("lzss: round trip through an independent encoder, and compressed block
   BlockFile bad = open_ok(b);
   CHECK_FALSE(bad.read(0, out, &err));
 }
+
+TEST_CASE("lzss / blockfile: a failed decode or read leaves the output empty, never partial (M1a-4 fuzz_formats finding)") {
+  std::string err;
+  Bytes mx = {0x00, 0x00, 0x0f};  // one pair: 18 bytes of output
+  std::vector<uint8_t> out = {1, 2, 3};
+  CHECK_FALSE(decode_lzss(mx.data(), mx.size(), 17, out, &err));  // overrun after 0 bytes written
+  CHECK(out.empty());
+  out = {1, 2, 3};
+  CHECK_FALSE(decode_lzss(mx.data(), mx.size(), 19, out, &err));  // stream ends after 18 of 19 bytes
+  CHECK(out.empty());
+  out = {1, 2, 3};
+  CHECK_FALSE(decode_lzss(mx.data(), mx.size(), 28, out, &err));  // ratio cap, before any decoding
+  CHECK(out.empty());
+  // BlockFile::read: a compressed entry whose stream is short, and an index outside the table.
+  BlockFile bf = open_ok(make_blk({BlkEntrySpec{"c.bin", mx, 19, 3}}));
+  out = {9};
+  CHECK_FALSE(bf.read(0, out, &err));
+  CHECK(err.find("stream ended") != std::string::npos);
+  CHECK(out.empty());
+  out = {9};
+  CHECK_FALSE(bf.read(1, out, &err));
+  CHECK(out.empty());
+}

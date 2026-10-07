@@ -10,7 +10,14 @@ using detail::in_range;
 using detail::le32;
 using detail::lef32;
 
+// M1a-4 (fuzz_formats finding): a rejected table leaves a default Slb (no bytes, no fix-ups read so far).
 bool Slb::parse(std::vector<uint8_t> bytes, std::string* err) {
+  if (parse_impl(std::move(bytes), err)) return true;
+  *this = Slb();
+  return false;
+}
+
+bool Slb::parse_impl(std::vector<uint8_t> bytes, std::string* err) {
   bytes_ = std::move(bytes);
   fields_.clear();
   has_trailer_ = false;

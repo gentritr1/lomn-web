@@ -322,3 +322,25 @@ TEST_CASE("slb: textures.slb caps: records <= kMaxSpecTextures, names < 64 chars
   CHECK_FALSE(parse_spec_textures(bad, t, &err));
   CHECK(t.empty());
 }
+
+TEST_CASE("slb: a rejected parse leaves a default Slb, not the bytes and the fix-ups read so far (M1a-4 fuzz_formats finding)") {
+  // Two fix-up slots: slot 1 (field 8 -> target 12) is valid and is read first; slot 2 names a field outside the data area.
+  Bytes b;
+  put32(b, 0);
+  put32(b, 1);
+  put32(b, 12);
+  put32(b, 0xaaaaaaaau);
+  put32(b, 0x1000);  // slot 2
+  put32(b, 8);       // slot 1
+  put32(b, 2);
+  put32(b, kSlbMagic);
+  Slb s = parse_ok(make_obj({{"wllv", 0x10}}));  // a good table first: a failed parse must not leave it behind either
+  std::string err;
+  CHECK_FALSE(s.parse(b, &err));
+  CHECK(err.find("outside the data area") != std::string::npos);
+  CHECK(s.bytes().empty());
+  CHECK(s.pointer_fields().empty());
+  CHECK_FALSE(s.is_pointer_field(8));
+  CHECK_FALSE(s.has_trailer());
+  CHECK(s.data_end() == 0);
+}

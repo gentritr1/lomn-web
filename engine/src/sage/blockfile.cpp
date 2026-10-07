@@ -36,7 +36,21 @@ std::string_view block_basename(std::string_view request) {
   return cut == std::string_view::npos ? request : request.substr(cut + 1);
 }
 
+// M1a-4 (fuzz_formats finding): decodes into a local buffer; `out` is replaced only on success and cleared on any
+// failure, so a rejected stream never leaves a partial decode behind.
+static bool decode_lzss_into(const uint8_t* in, size_t in_size, uint32_t out_size, std::vector<uint8_t>& out, std::string* err);
+
 bool decode_lzss(const uint8_t* in, size_t in_size, uint32_t out_size, std::vector<uint8_t>& out, std::string* err) {
+  std::vector<uint8_t> dec;
+  if (!decode_lzss_into(in, in_size, out_size, dec, err)) {
+    out.clear();
+    return false;
+  }
+  out = std::move(dec);
+  return true;
+}
+
+static bool decode_lzss_into(const uint8_t* in, size_t in_size, uint32_t out_size, std::vector<uint8_t>& out, std::string* err) {
   if (static_cast<uint64_t>(out_size) > static_cast<uint64_t>(in_size) * kLzssMaxRatio)
     return fail(err, "lzss: declared size exceeds expansion-ratio cap");
   out.assign(out_size, 0);
@@ -160,7 +174,14 @@ int BlockFile::find(std::string_view request) const {
   return -1;
 }
 
+// M1a-4 (fuzz_formats finding): any failure leaves `out` empty (never the caller's old bytes or a partial decode).
 bool BlockFile::read(size_t index, std::vector<uint8_t>& out, std::string* err) const {
+  if (read_entry(index, out, err)) return true;
+  out.clear();
+  return false;
+}
+
+bool BlockFile::read_entry(size_t index, std::vector<uint8_t>& out, std::string* err) const {
   if (!open_) return fail(err, "blk: not open");
   if (index >= entries_.size()) return fail(err, "blk: entry index out of range");
   const BlockEntry& e = entries_[index];

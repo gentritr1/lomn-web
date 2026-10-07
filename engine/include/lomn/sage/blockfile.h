@@ -43,7 +43,8 @@ std::string_view block_basename(std::string_view request);
 
 // SrDecodeLZSS (0x004d2920): Okumura LZSS, N=4096, F=18, threshold 2, ring pre-filled with 0x20, r=0xFEE.
 // Bounded (spec §5): input never read past in_size, output never written past out_size. Unlike the original
-// (which ignores its return value), a stream that does not produce exactly out_size bytes is an error.
+// (which ignores its return value), a stream that does not produce exactly out_size bytes is an error. Any failure
+// leaves `out` empty (M1a-4: never a partial decode).
 bool decode_lzss(const uint8_t* in, size_t in_size, uint32_t out_size, std::vector<uint8_t>& out, std::string* err);
 
 class BlockFile {
@@ -69,9 +70,11 @@ class BlockFile {
   int find(std::string_view request) const;
   // ScBlockFile::LoadDiskBlock (0x006100f0) for an index from find(): flags bit 0 -> read mBlkSize bytes and
   // LZSS-decode into mFullSize; otherwise read mFullSize bytes. offset+size is overflow-checked against the file.
+  // Any failure leaves `out` empty (M1a-4).
   bool read(size_t index, std::vector<uint8_t>& out, std::string* err) const;
 
  private:
+  bool read_entry(size_t index, std::vector<uint8_t>& out, std::string* err) const;
   bool open_ = false;
   uint32_t version_ = 0;
   uint64_t file_size_ = 0;
