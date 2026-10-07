@@ -1,4 +1,5 @@
-"""Acceptance checks over a real `make decomp` run (skipped until it exists). Floors are the 2026-10-07 probe values."""
+"""Acceptance checks over a real `make decomp` run (skipped until it exists). Floors measured 2026-10-07 (two runs,
+identical output) after the decompiler payload fix that makes GcLegoCamera::Process decompile."""
 import json
 
 
@@ -6,7 +7,7 @@ def test_metrics_floors(gen_decomp):
     m = json.loads((gen_decomp / "metrics.json").read_text())
     assert m["functions"] == 5618
     assert m["functions_named"] >= 5429
-    assert m["decompiled_ok"] >= 5617
+    assert m["decompiled_ok"] == 5618          # every function, incl. GcLegoCamera::Process (37 KB)
     assert m["structs"] == 473 and m["members"] == 1817
     assert m["procs_with_locals"] == 580 and m["named_vars"] == 1265
     assert m["x87_nan_noise"] < m["x87_rewrites"]
@@ -19,7 +20,7 @@ def test_ghidra_side_applied(gen_decomp):
     assert m["ghidra_labels_applied"] >= 7042
     assert m["ghidra_local_funcs"] >= 429 and m["ghidra_params_applied"] >= 259 and m["ghidra_locals_applied"] >= 551
     assert m["ghidra_d3d8_globals"] == 4
-    assert m["member_access"] >= 44950 and m["raw_offset_deref"] <= 620 and m["x87_rewrites"] >= 695
+    assert m["member_access"] >= 45891 and m["raw_offset_deref"] <= 620 and m["x87_rewrites"] >= 723
 
 
 def test_device_surface(gen_decomp):
