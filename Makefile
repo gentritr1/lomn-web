@@ -5,7 +5,7 @@ export LOMN_DATA LOMN_CACHE
 VENV := .venv
 PY := $(VENV)/bin/python
 EMSDK_ENV := source .toolchain/emsdk/emsdk_env.sh >/dev/null 2>&1
-.PHONY: setup check-data decomp worklist native wasm site test-tools test-native test-wasm test-web check perf datacheck datacheck-wasm fuzz-osi a9-sweep
+.PHONY: setup check-data decomp worklist native wasm site test-tools test-native test-wasm test-web check perf datacheck datacheck-wasm fuzz-osi fuzz-formats fuzz-formats-help a9-sweep
 
 setup: $(VENV)/.ok
 	timeout 3600 tools/toolchain.sh
@@ -92,6 +92,31 @@ fuzz-osi:
 	@if [ -n "$(LOMN_DATA)" ]; then timeout 1800 build/fuzz/fuzz_osi 2000 2 "$(LOMN_DATA)/install/data/Base.osi"; fi
 	$(EMSDK_ENV) && timeout 900 em++ $(FUZZ_FLAGS) -sNODERAWFS=1 -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=2GB engine/tests/fuzz_osi.cpp engine/src/sage/osi.cpp -o build/fuzz/fuzz_osi.js
 	$(EMSDK_ENV) && timeout 1800 node build/fuzz/fuzz_osi.js $(FUZZ_OSI_N_WASM) 3
+
+# M1a-4 A11: ASan+UBSan (-fno-sanitize-recover) mutation fuzz of every real file format (engine/tests/fuzz_formats.cpp:
+# BLK + LZSS, SLB OBJ/POS/LIGHT/textures, binary .x, DDS, TGA, OSI), natively (build/asan/native) and as wasm32 under
+# Node (build/asan/wasm, 2 GB cap), with real seeds sampled from LOMN_DATA when it is set. On demand only (not part of
+# check; ctest fuzz_formats_smoke is the fast synthetic subset). FUZZ_N inputs per format. Logs and finding inputs stay
+# under build/asan. When FUZZ_N == FUZZ_N_WASM the per-format totals must be byte-identical between the two targets.
+# How to run and read it: tools/research/fuzz_formats.md (`make fuzz-formats-help` prints it).
+FUZZ_N ?= 20000
+FUZZ_N_WASM ?= $(FUZZ_N)
+FUZZ_SEED ?= 1
+FUZZ_TIMEOUT ?= 10800
+ASAN_CXXFLAGS := -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined -fno-sanitize-recover=all
+ASAN_CMAKE := -G Ninja -DCMAKE_BUILD_TYPE=Debug -DLOMN_WEBGPU=OFF "-DCMAKE_CXX_FLAGS=$(ASAN_CXXFLAGS)" "-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined"
+FUZZ_ARGS = --n $(1) --seed $(FUZZ_SEED) $(if $(LOMN_DATA),--data "$(LOMN_DATA)/install",)
+fuzz-formats-help:
+	@cat tools/research/fuzz_formats.md
+
+fuzz-formats:
+	timeout 600 cmake -S engine -B build/asan/native $(ASAN_CMAKE) >/dev/null && timeout 1800 cmake --build build/asan/native --target lomn_fuzz_formats
+	$(EMSDK_ENV) && timeout 600 emcmake cmake -S engine -B build/asan/wasm $(ASAN_CMAKE) >/dev/null && timeout 1800 cmake --build build/asan/wasm --target lomn_fuzz_formats
+	set -o pipefail; timeout $(FUZZ_TIMEOUT) build/asan/native/lomn_fuzz_formats $(call FUZZ_ARGS,$(FUZZ_N)) --crash-dir build/asan/native/fuzz-crashes | tee build/asan/native/fuzz_formats.txt
+	set -o pipefail; $(EMSDK_ENV) && timeout $(FUZZ_TIMEOUT) node build/asan/wasm/lomn_fuzz_formats.js $(call FUZZ_ARGS,$(FUZZ_N_WASM)) --crash-dir build/asan/wasm/fuzz-crashes | tee build/asan/wasm/fuzz_formats.txt
+	@if [ "$(FUZZ_N)" = "$(FUZZ_N_WASM)" ]; then grep '^fuzz_formats: ' build/asan/native/fuzz_formats.txt > build/asan/native/fuzz_totals.txt && \
+	  grep '^fuzz_formats: ' build/asan/wasm/fuzz_formats.txt > build/asan/wasm/fuzz_totals.txt && \
+	  cmp build/asan/native/fuzz_totals.txt build/asan/wasm/fuzz_totals.txt && echo "fuzz-formats: native == wasm32 per-format totals"; fi
 
 check: test-tools test-native test-wasm test-web
 	@if [ -n "$(LOMN_DATA)" ]; then $(MAKE) datacheck datacheck-wasm; else echo "datacheck SKIPPED (no LOMN_DATA)"; fi

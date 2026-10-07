@@ -176,3 +176,93 @@ REF3's own run quoted 290,448 / 43,370 accepted for the same seeds and sources (
 **ASan + UBSan** (`build/asan`: Debug, `-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer`, `-DLOMN_WEBGPU=ON`; Dawn itself is not instrumented): `ctest` 24/24 pass (including the GPU tests); `lomn_tests` 132 cases / 172,064 assertions, rc 0; the vllg, ghut, crss and crss_yaw67 renders rc 0 with 0 bytes of stderr; the survey rc 0 with 0 bytes of stderr and maxima identical to Release. The only stderr text is from `lomn_tests` negative tests (the unwritable-output-path line and three `[area] render skipped` lines), identical to the Release `lomn_tests` stderr.
 
 **Tests**: `make test-native` 24/24 and `make test-wasm` 5/5 (native ctest + wasm32 under Node, including the native == wasm32 call-log and state-log comparisons) on the committed tree.
+
+## A11 fuzz corpus over every real format (M1a-4 Task 1, 2026-10-07, `engine/tests/fuzz_formats.cpp`)
+
+**What was run:**
+- **Target:** `make fuzz-formats FUZZ_N=200000` with `LOMN_DATA` set (Beta 1.5.0 install).
+- **Builds:** `build/asan/native` and `build/asan/wasm`, Debug, `-O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined -fno-sanitize-recover=all`.
+- **Inputs:** seed 1, 200,000 inputs per format.
+- **Real seeds, read only:** 16 per format sampled with the seed (≤ 256 KiB each). LZSS gets 8 real-derived seeds and
+  OSI gets `Base.osi`.
+
+How to run it and what each number means: `tools/research/fuzz_formats.md`.
+
+**Native, final tree (run 5; per-format totals byte-identical to runs 2, 3 and 4):**
+- 202.8 s for 2,000,000 inputs (runs 3 and 4: 354.7 s and 553.2 s at loadavg 16-73).
+- Worst per-input CPU time 29.6 ms (`osi`; worst wall time 179 ms), against the 2 s limit.
+- Worst per-input heap growth 2.04 MiB (`tga`), against the 64 MiB limit.
+- 0 inputs re-timed.
+
+| Format | Inputs | Accepted | Deep reach | Findings |
+|---|---|---|---|---|
+| blk | 200,000 | 169,905 | 167,264 (83.6 %) | 0 |
+| lzss | 200,000 | 35,046 | 137,556 (68.8 %) | 0 |
+| slb.obj | 200,000 | 55,350 | 54,687 (27.3 %) | 0 |
+| slb.pos | 200,000 | 45,258 | 44,723 (22.4 %) | 0 |
+| slb.light | 200,000 | 47,479 | 46,863 (23.4 %) | 0 |
+| slb.tex | 200,000 | 37,246 | 37,583 (18.8 %) | 0 |
+| x | 200,000 | 18,480 | 190,843 (95.4 %) | 0 |
+| dds | 200,000 | 84,944 | 84,944 (42.5 %) | 0 |
+| tga | 200,000 | 65,506 | 108,281 (54.1 %) | 0 |
+| osi | 200,000 | 51,750 | 51,750 (25.9 %) | 0 |
+
+slb.tex deep reach exceeds its accepted count because a failure inside the record loop also counts as deep.
+
+**wasm32 under Node (2 GB cap):** identical per-format totals to native. The make target's `cmp` of the two logs passed
+("fuzz-formats: native == wasm32 per-format totals"), and make exited 0.
+- The wasm32 leg took 5,154 s (whole target 5,397 s, 17:59-19:29, loadavg about 7-12).
+- Worst per-input CPU time 436 ms (`osi`; worst wall time 1.55 s); `x` 125 ms CPU / 706 ms wall.
+- 0 inputs re-timed.
+- Worst heap growth 2.04 MiB.
+- Linear memory peaked at 824 MiB of the 2 GB cap, with the 32 MiB quarantine (see below).
+
+**Per-input time under host load:** the driver checks CPU time, not wall time.
+- In wasm32 run 3 (about 17:30, loadavg about 27), two real-seeded OSI inputs measured 2.34 s and 2.07 s of wall
+  time.
+- Replayed alone, they took under 2 s on 2 of 3 timed replays. Replay process times for identical work ranged from
+  14 s to 52 s.
+- In native run 4 (loadavg 35-73 on 8 cores), 8 OSI inputs needed wall-time re-runs, with a 1.94 s minimum.
+- The brief's 2 s limit is therefore checked as CPU time, with the minimum of up to 3 runs.
+- Scratch controls are still reported:
+  - a `decode_dds` that spins for 2.1 s of CPU gives `CPU time 2.100140 s >= 2 s on 3 runs`;
+  - an infinite loop trips the 10 s CPU watchdog, exit 4.
+
+**Smoke subset (ctest `fuzz_formats_smoke`, Release, synthetic seeds only, 20,000 per format):**
+- 0 findings.
+- Deep reach 16.2 % (slb.pos) to 90.9 % (x).
+- 0.64 s native, 0.29-0.38 s wasm32.
+- Per-format totals byte-identical native vs wasm32.
+
+**Findings, all fixed in this task** (commits `74a5a69` and `2856ce9`, each with a unit test that fails on the old
+code):
+1. `decode_lzss` / `BlockFile::read` left partial output on failure. Found by the synthetic smoke run: 8,261 and
+   1,185 findings out of 20,000.
+2. `Slb::parse` kept its bytes and partial fix-ups after a rejection. Found in 1,816-3,522 of 20,000 inputs per SLB
+   view.
+3. `decode_tga` allocated `w·h·bpp` before checking the data length. Real-seeded `tga` input 49594 grew the heap by
+   67,119,136 bytes: 1 finding in the first 2,000,000-input native run.
+
+`make datacheck` after the fixes: 39/39, including every one of the 2,566 `.tga` entries decoding.
+
+**wasm32 ASan memory** (the reason the driver sets `quarantine_size_mb=32` on wasm32):
+- **Default 256 MiB quarantine:** the linear memory stepped up at each format change: 1,111 → 1,402 → 1,693 →
+  1,887 → 2,048 MiB over blk → slb.light. The run then aborted with `AddressSanitizer: out of memory` at `x` input
+  442. This happened in 2 runs, at the same input.
+- **That input alone:** a benign 24 KB rejection, 0 findings, 246 MB peak RSS under Node.
+- **32 MiB quarantine:** 630 / 630 / 727 / 727 / 727 / 727 MiB through slb.tex, and 824 MiB at `x` 20,000, past
+  input 442. That experiment run was stopped there.
+
+**Proof the fuzzer bites.** Scratch copies (`git archive` of the final tree under `/private/tmp/claude-501/lomn-bites2`)
+each reintroduce one past defect. Each was run with the make target's ASan flags, `--seed 1`, and `--formats <family>`.
+Each format's input stream is independent of the others, so the input numbers are those of the full run.
+
+| Defect reintroduced | Synthetic smoke (20,000) | Normal run (200,000, real seeds) |
+|---|---|---|
+| M1a-1 BLK name-run cap (`kMaxNameRun`) removed | 83 findings, first at input 227: `lookup_name exceeds 40 + kMaxNameRun` | 484 findings, first at input 308 |
+| M1a-3 `textures.slb` per-record name-copy cap (`kMaxSpecTextureName`) removed | 16 findings, first at input 793: `name longer than kMaxSpecTextureName accepted` | 287 findings, first at input 381 |
+| One TGA RLE bound removed (the run-packet `in_range`) | ASan `heap-buffer-overflow ... READ of size 3` at `image.cpp:179`; the death callback names `tga input 157` | the same, at `tga input 1334`; wasm32 ASan reports it at the same input 1334, with the default and with the 32 MiB quarantine |
+
+**Control:** removing the `textures.slb` record-COUNT cap (`kMaxSpecTextures`) instead gives 0 findings in 200,000
+inputs. Mutation cannot build 1,025+ records that each have their own fix-up slot. `slb_probe` catches that one: it
+accepts the 64 MiB table at +651 MB and fails.

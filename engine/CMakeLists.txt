@@ -252,6 +252,18 @@ if(EMSCRIPTEN)
   target_link_options(lomn_slb_probe PRIVATE -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=2GB)
 endif()
 add_test(NAME slb_probe COMMAND lomn_slb_probe)
+# M1a-4 A11: one mutation-fuzz driver over every real file format (BLK + LZSS, SLB OBJ/POS/LIGHT/textures, binary .x,
+# DDS, TGA, OSI) with per-input invariants and per-format inputs/accepted/deep/findings totals. ctest runs the
+# synthetic-seed smoke subset (20,000 inputs per format, 0 findings, deep reach >= 5 % per format) natively and as
+# wasm32; `make fuzz-formats` runs it under ASan+UBSan with real seeds from LOMN_DATA (tools/research/fuzz_formats.md).
+add_executable(lomn_fuzz_formats tests/fuzz_formats.cpp)
+target_link_libraries(lomn_fuzz_formats PRIVATE lomn_sage)
+if(EMSCRIPTEN)
+  target_link_options(lomn_fuzz_formats PRIVATE -sNODERAWFS=1 -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=2GB)
+endif()
+add_test(NAME fuzz_formats_smoke COMMAND lomn_fuzz_formats --smoke --n 20000 --seed 1
+         --crash-dir ${CMAKE_CURRENT_BINARY_DIR}/fuzz_formats_smoke)
+set_tests_properties(fuzz_formats_smoke PROPERTIES TIMEOUT 20)
 
 # Internal JSON string escaper used by metrics.json (header lives in src/app, not in the public include dir).
 target_sources(lomn_tests PRIVATE tests/test_json_escape.cpp)
