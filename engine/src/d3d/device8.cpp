@@ -245,6 +245,9 @@ void Device8::light_enable(uint32_t i, bool on) {
   // on 90 of 123 areas), which has no effect and stays out of the log. M1a-4 (e): the default light is also WRITTEN
   // only then; a disable leaves the slot as it is (only the enable flag changes), so a disabled never-set light never
   // carries values. Enabling it later still gets the default (it stays never-set until SetLight).
+  // Deliberate deviation (M1a-4 fix round 1, M-5): the SDK's LightEnable creates the default light for a never-set index
+  // on EITHER call, enable or disable; the shim defers it to the enable because nothing reads a disabled slot (no
+  // GetLight; pack_uniforms and the state log read enabled lights only), so the difference is never observable.
   if (on && !light_set_[i]) {
     Light8 d;
     d.type = kLightDirectional;
