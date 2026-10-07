@@ -63,7 +63,7 @@ class MemoryFileSystem final : public FileSystem {
 
 #ifndef __EMSCRIPTEN__
 // Native: "root/..." resolves case-insensitively inside install_dir, "user/..." inside user_dir (created on write).
-// Returns nullptr if install_dir is not a readable directory.
+// Returns nullptr if install_dir is not a directory.
 std::unique_ptr<FileSystem> open_disk(const std::string& install_dir, const std::string& user_dir);
 #endif
 

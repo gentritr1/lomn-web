@@ -51,20 +51,21 @@ class DiskFileSystem final : public FileSystem {
     out = s;
     return Error::None;
   }
-  Error read_range(std::string_view path, uint64_t offset, uint64_t size, std::vector<uint8_t>& out) const override {
+  Error read_range(std::string_view path, uint64_t offset, uint64_t len, std::vector<uint8_t>& out) const override {
     std::string n = normalize(path);
     if (n.rfind("root/", 0) != 0 && n.rfind("user/", 0) != 0) return Error::BadMount;
     std::filesystem::path p = resolve(n);
     if (p.empty()) return Error::NotFound;
     std::error_code ec;
     uint64_t total = std::filesystem::file_size(p, ec);
-    if (ec || offset > total || size > total - offset) return Error::Io;
+    if (ec || offset > total || len > total - offset) return Error::Io;
     std::ifstream f(p, std::ios::binary);
     if (!f) return Error::Io;
-    out.resize(static_cast<size_t>(size));
+    std::vector<uint8_t> buf(static_cast<size_t>(len));  // out is only replaced on success
     f.seekg(static_cast<std::streamoff>(offset));
-    if (size) f.read(reinterpret_cast<char*>(out.data()), static_cast<std::streamsize>(size));
+    if (len) f.read(reinterpret_cast<char*>(buf.data()), static_cast<std::streamsize>(len));
     if (!f) return Error::Io;
+    out = std::move(buf);
     log_access(n);
     return Error::None;
   }
