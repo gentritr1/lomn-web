@@ -80,4 +80,20 @@ TEST_CASE("disk fs: case-insensitive Root lookup and User writes") {
   CHECK(fs->exists("user/saves/s0.sav"));
   sfs::remove_all(base);
 }
+
+TEST_CASE("disk fs: User path colliding with a file returns Io, never throws") {
+  namespace sfs = std::filesystem;
+  sfs::path base = sfs::temp_directory_path() / ("lomn_disk_fs_collide_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+  sfs::remove_all(base);
+  sfs::create_directories(base / "install");
+  auto fs = open_disk((base / "install").string(), (base / "user").string());
+  const uint8_t b[1] = {1};
+  CHECK(fs->write("User/a", b, 1) == Error::None);
+  CHECK(fs->write("User/a/b", b, 1) == Error::Io);
+  CHECK(fs->write("User/a/b/c", b, 1) == Error::Io);
+  std::vector<uint8_t> out;
+  CHECK(fs->read("User/a", out) == Error::None);
+  CHECK(out == std::vector<uint8_t>{1});
+  sfs::remove_all(base);
+}
 #endif

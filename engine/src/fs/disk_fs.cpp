@@ -23,7 +23,16 @@ class DiskFileSystem final : public FileSystem {
     if (p.empty()) return Error::NotFound;
     std::ifstream f(p, std::ios::binary);
     if (!f) return Error::Io;
-    out.assign(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
+    // istreambuf_iterator bypasses stream state, so read a known size and check the count instead.
+    std::error_code ec;
+    const std::uintmax_t size = std::filesystem::file_size(p, ec);
+    if (ec) return Error::Io;
+    std::vector<uint8_t> buf(static_cast<size_t>(size));
+    if (size > 0) {
+      f.read(reinterpret_cast<char*>(buf.data()), static_cast<std::streamsize>(size));
+      if (f.bad() || static_cast<std::uintmax_t>(f.gcount()) != size) return Error::Io;  // truncated read
+    }
+    out = std::move(buf);
     log_access(n);
     return Error::None;
   }
@@ -32,11 +41,16 @@ class DiskFileSystem final : public FileSystem {
     if (n.rfind("root/", 0) == 0) return Error::ReadOnly;
     if (n.rfind("user/", 0) != 0) return Error::BadMount;
     std::filesystem::path p = user_ / n.substr(5);  // n is normalised: no ".." can remain
-    std::filesystem::create_directories(p.parent_path());
+    std::error_code ec;
+    std::filesystem::create_directories(p.parent_path(), ec);
+    if (ec) return Error::Io;
     std::ofstream f(p, std::ios::binary | std::ios::trunc);
     if (!f) return Error::Io;
     f.write(reinterpret_cast<const char*>(data), static_cast<std::streamsize>(size));
-    return f ? Error::None : Error::Io;
+    f.flush();
+    if (!f) return Error::Io;
+    f.close();  // close() flushes; a failure here (e.g. full disk) sets failbit
+    return f.fail() ? Error::Io : Error::None;
   }
 
  private:
