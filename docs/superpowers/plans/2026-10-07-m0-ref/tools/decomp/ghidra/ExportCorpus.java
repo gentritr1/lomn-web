@@ -3,58 +3,66 @@
 //   functions.jsonl      {"addr","name","size","ok","lines"}
 //   calls.jsonl          {"from","to":[addrs]}   (direct calls only)
 //   vtable_uses.jsonl    {"addr","iface","method"} for every Xxx->lpVtbl->Method field access (typed COM vtables)
-// Output is ordered by entry address, so two runs over the same program are byte-identical.
-// Optional EXPORT_LIMIT=N exports only the first N functions; EXPORT_NAME_FILTER=substr only matching names (debug runs).
-// Decompile timeout: DECOMP_TIMEOUT_S (default 300) per function, and one retry at 4x for any that fail, so
-// results do not depend on machine load (a 120 s limit made one extra function fail under load on 2026-10-07).
+// Uses Ghidra's ParallelDecompiler (one decompiler process per core); results are sorted by entry address before
+// writing. Measured 2026-10-07 on 8 cores: 325 s vs ~20 min sequential, output byte-identical to the sequential export.
+// Decompiler payload limit raised to 1024 MB: GcLegoCamera::Process (37 KB) exceeds the 50 MB default.
+// DECOMP_TIMEOUT_S (default 300) per function; failures are retried once sequentially at 4x.
+// Optional EXPORT_NAME_FILTER=substr exports only matching functions (debug runs).
 import ghidra.app.script.GhidraScript;
 import ghidra.app.decompiler.*;
+import ghidra.app.decompiler.parallel.*;
 import ghidra.program.model.data.*;
 import ghidra.program.model.listing.*;
+import ghidra.util.task.TaskMonitor;
 import java.nio.file.*; import java.util.*;
 public class ExportCorpus extends GhidraScript {
   static String esc(String s) { return s.replace("\\", "\\\\").replace("\"", "\\\""); }
+  record R(Function f, boolean ok, String c, List<String> vt) {}
+  static R toResult(Function f, DecompileResults r) {
+    boolean ok = r != null && r.decompileCompleted();
+    String c = ok ? r.getDecompiledFunction().getC() : "// DECOMPILE FAILED: " + (r == null ? "null" : r.getErrorMessage()) + "\n";
+    List<String> vt = new ArrayList<>();
+    if (ok) {
+      ArrayList<ClangNode> toks = new ArrayList<>();
+      r.getCCodeMarkup().flatten(toks);
+      for (ClangNode t : toks) {
+        if (!(t instanceof ClangFieldToken)) continue;
+        DataType dt = ((ClangFieldToken) t).getDataType();
+        if (dt == null || !dt.getName().endsWith("Vtbl")) continue;
+        vt.add(dt.getName().substring(0, dt.getName().length() - 4) + "\u0000" + ((ClangFieldToken) t).getText());
+      }
+    }
+    return new R(f, ok, c, vt);
+  }
+  static DecompileOptions opts() { DecompileOptions o = new DecompileOptions(); o.setMaxPayloadMBytes(1024); return o; }
   @Override public void run() throws Exception {
     Path out = Paths.get(System.getenv("OUT_DIR"));
     Files.createDirectories(out.resolve("funcs"));
-    int limit = System.getenv("EXPORT_LIMIT") == null ? Integer.MAX_VALUE : Integer.parseInt(System.getenv("EXPORT_LIMIT"));
-    String filter = System.getenv("EXPORT_NAME_FILTER");
     int timeout = System.getenv("DECOMP_TIMEOUT_S") == null ? 300 : Integer.parseInt(System.getenv("DECOMP_TIMEOUT_S"));
-    DecompInterface di = new DecompInterface();
-    DecompileOptions opts = new DecompileOptions();
-    // GcLegoCamera::Process (37 KB of code) exceeds the default 50 MB decompiler response buffer.
-    opts.setMaxPayloadMBytes(1024);
-    di.setOptions(opts);
-    di.openProgram(currentProgram);
+    List<Function> funcs = new ArrayList<>();
+    String filter = System.getenv("EXPORT_NAME_FILTER");
+    for (Function f : currentProgram.getFunctionManager().getFunctions(true))
+      if (filter == null || f.getName(true).contains(filter)) funcs.add(f);
+    DecompilerCallback<R> cb = new DecompilerCallback<>(currentProgram, d -> { d.setOptions(opts()); d.toggleCCode(true); d.toggleSyntaxTree(true); }) {
+      @Override public R process(DecompileResults r, TaskMonitor m) { return toResult(r.getFunction(), r); }
+    };
+    cb.setTimeout(timeout);
+    long t0 = System.currentTimeMillis();
+    List<R> res = new ArrayList<>(ParallelDecompiler.decompileFunctions(cb, funcs, monitor));
+    cb.dispose();
+    long t1 = System.currentTimeMillis();
+    res.sort(Comparator.comparing(r -> r.f().getEntryPoint()));
+    DecompInterface di = new DecompInterface(); di.setOptions(opts()); di.openProgram(currentProgram);
+    int retried = 0;
+    for (int i = 0; i < res.size(); i++) if (!res.get(i).ok()) { retried++; res.set(i, toResult(res.get(i).f(), di.decompileFunction(res.get(i).f(), timeout * 4, monitor))); }
     StringBuilder fj = new StringBuilder(), cj = new StringBuilder(), vj = new StringBuilder();
-    int n = 0, ok = 0;
-    for (Function f : currentProgram.getFunctionManager().getFunctions(true)) {
-      if (n >= limit || monitor.isCancelled()) break;
-      String name = f.getName(true);
-      if (filter != null && !name.contains(filter)) continue;
-      n++;
-      String addr = "0x" + f.getEntryPoint().toString();
-      DecompileResults r = di.decompileFunction(f, timeout, monitor);
-      if (!r.decompileCompleted()) r = di.decompileFunction(f, timeout * 4, monitor);
-      boolean good = r.decompileCompleted();
-      String c = good ? r.getDecompiledFunction().getC() : "// DECOMPILE FAILED: " + r.getErrorMessage() + "\n";
-      if (good) {
-        ok++;
-        ArrayList<ClangNode> toks = new ArrayList<>();
-        r.getCCodeMarkup().flatten(toks);
-        for (ClangNode t : toks) {
-          if (!(t instanceof ClangFieldToken)) continue;
-          DataType dt = ((ClangFieldToken) t).getDataType();
-          if (dt == null || !dt.getName().endsWith("Vtbl")) continue;
-          String iface = dt.getName().substring(0, dt.getName().length() - 4);
-          vj.append("{\"addr\":\"").append(addr).append("\",\"iface\":\"").append(iface)
-            .append("\",\"method\":\"").append(esc(((ClangFieldToken) t).getText())).append("\"}\n");
-        }
-      }
-      Files.writeString(out.resolve("funcs/" + f.getEntryPoint().toString() + ".c"), "// " + addr + " " + name + "\n" + c);
-      fj.append("{\"addr\":\"").append(addr).append("\",\"name\":\"").append(esc(name)).append("\",\"size\":")
-        .append(f.getBody().getNumAddresses()).append(",\"ok\":").append(good).append(",\"lines\":")
-        .append(c.split("\n", -1).length).append("}\n");
+    int ok = 0;
+    for (R r : res) {
+      Function f = r.f(); String addr = "0x" + f.getEntryPoint(); if (r.ok()) ok++;
+      for (String v : r.vt()) { String[] p = v.split("\u0000"); vj.append("{\"addr\":\"").append(addr).append("\",\"iface\":\"").append(p[0]).append("\",\"method\":\"").append(esc(p[1])).append("\"}\n"); }
+      Files.writeString(out.resolve("funcs/" + f.getEntryPoint() + ".c"), "// " + addr + " " + f.getName(true) + "\n" + r.c());
+      fj.append("{\"addr\":\"").append(addr).append("\",\"name\":\"").append(esc(f.getName(true))).append("\",\"size\":")
+        .append(f.getBody().getNumAddresses()).append(",\"ok\":").append(r.ok()).append(",\"lines\":").append(r.c().split("\n", -1).length).append("}\n");
       TreeSet<String> callees = new TreeSet<>();
       for (Function g : f.getCalledFunctions(monitor)) callees.add("\"0x" + g.getEntryPoint() + "\"");
       cj.append("{\"from\":\"").append(addr).append("\",\"to\":[").append(String.join(",", callees)).append("]}\n");
@@ -62,6 +70,6 @@ public class ExportCorpus extends GhidraScript {
     Files.writeString(out.resolve("functions.jsonl"), fj.toString());
     Files.writeString(out.resolve("calls.jsonl"), cj.toString());
     Files.writeString(out.resolve("vtable_uses.jsonl"), vj.toString());
-    println("ExportCorpus functions=" + Math.min(n, limit) + " decompiled_ok=" + ok);
+    println("ExportCorpus functions=" + res.size() + " decompiled_ok=" + ok + " parallel_ms=" + (t1 - t0) + " retried=" + retried + " cpus=" + Runtime.getRuntime().availableProcessors());
   }
 }
