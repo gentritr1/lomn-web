@@ -3,6 +3,7 @@
 // is tested in test_sage_frame.cpp, the M1a-3 area-loader additions in test_area_states.cpp.
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <limits>
 #include <string>
 #include <vector>
@@ -294,12 +295,27 @@ TEST_CASE("d3d: LightEnable on a light never set uses the D3D8 default light (Ta
   CHECK(d.state().lights[4].diffuse.g == 0.5f);
   CHECK(log == std::vector<std::string>{"LIGHTENABLE 4 1", "LIGHTENABLE 3 0",
                                         "# LightEnable 3: never set, D3D8 default light (white directional +Z)", "LIGHTENABLE 3 1"});
-  // Disabling a never-set light (what every real area does at init) gets the default values but no note.
+  // M1a-4 (e): disabling a never-set light (what every real area does at init) only clears its enable flag: the D3D8
+  // default light is written when such a light is ENABLED, not on disable (no note either).
   log.clear();
   d.light_enable(6, false);
   CHECK(log == std::vector<std::string>{"LIGHTENABLE 6 0"});
-  CHECK(d.state().lights[6].diffuse.r == 1.0f);
   CHECK_FALSE(d.state().light_on[6]);
+  const Light8 untouched;
+  const Light8& l6 = d.state().lights[6];
+  CHECK(l6.type == untouched.type);
+  CHECK(l6.diffuse.r == untouched.diffuse.r);
+  CHECK(l6.diffuse.a == untouched.diffuse.a);
+  CHECK(l6.direction[2] == untouched.direction[2]);
+  CHECK(std::memcmp(&l6, &untouched, sizeof l6) == 0);
+  // Enabling it afterwards still gets the default light (it was never set).
+  log.clear();
+  d.light_enable(6, true);
+  CHECK(d.state().lights[6].type == kLightDirectional);
+  CHECK(d.state().lights[6].diffuse.r == 1.0f);
+  CHECK(d.state().lights[6].direction[2] == 1.0f);
+  CHECK(log == std::vector<std::string>{"# LightEnable 6: never set, D3D8 default light (white directional +Z)", "LIGHTENABLE 6 1"});
+  CHECK(d.state().light_on[6]);
 }
 
 TEST_CASE("d3d: state the compiler ignores sets unsupported bits (Task 8B B3)") {

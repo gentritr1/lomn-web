@@ -242,14 +242,16 @@ void Device8::light_enable(uint32_t i, bool on) {
   // Task 8B B3 (DirectX 8.1 SDK, IDirect3DDevice8::LightEnable): an index SetLight never assigned gets the default light,
   // D3DLIGHT_DIRECTIONAL with Diffuse (1,1,1,0), Direction (0,0,1) and every other member 0. The note is logged only when
   // such a light is ENABLED (it then shines): every real area disables never-set indices at init (LightEnable(i, FALSE)
-  // on 90 of 123 areas), which has no effect and stays out of the log.
-  if (!light_set_[i]) {
+  // on 90 of 123 areas), which has no effect and stays out of the log. M1a-4 (e): the default light is also WRITTEN
+  // only then; a disable leaves the slot as it is (only the enable flag changes), so a disabled never-set light never
+  // carries values. Enabling it later still gets the default (it stays never-set until SetLight).
+  if (on && !light_set_[i]) {
     Light8 d;
     d.type = kLightDirectional;
     d.diffuse = Color4{1, 1, 1, 0};
     d.direction[2] = 1.0f;
     s_.lights[i] = d;
-    if (on) rec(fmt("# LightEnable %u: never set, D3D8 default light (white directional +Z)", i), false);
+    rec(fmt("# LightEnable %u: never set, D3D8 default light (white directional +Z)", i), false);
   }
   s_.light_on[i] = on;
   rec(fmt("LIGHTENABLE %u %d", i, on ? 1 : 0), true);
