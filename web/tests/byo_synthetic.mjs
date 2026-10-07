@@ -112,6 +112,11 @@ const foreignDataDir = variant('foreign-data', null, (d) => {
   b[12] ^= 0x01;  // first byte of the first entry name: the table changes, the file still parses
   fs.writeFileSync(p, b);
 });
+// final I-2: a legal macOS/Linux name with a TAB (and one with LF) beside the real blockfiles: the engine<->JS lists are tab/newline separated.
+const tabDir = variant('tab-name', null, (d) => {
+  fs.copyFileSync(path.join(d, 'data/levels/levt/test.blk'), path.join(d, 'data/levels/levt/a\tb.blk'));
+  fs.copyFileSync(path.join(d, 'data/levels/levt/test.blk'), path.join(d, 'data/levels/levt/c\nd.blk'));
+});
 // Non-game folders (M8 / C2: these still hard-reject): an empty folder; an exe-only folder with no data/**/*.blk.
 const emptyDir = path.join(work, 'empty');
 fs.mkdirSync(emptyDir, { recursive: true });
@@ -807,6 +812,33 @@ try {
     const left = await opfsHas(q.page, 'lomn-install');
     check(!left && /incomplete copy/.test(st.message), 'I7: an interrupted copy is cleared at start', `dir left ${left}; ${st.message}`);
     await q.page.close();
+  });
+  // final I-2: files whose names hold TAB / LF (legal on macOS and Linux) under data/ are skipped with a named warning and the
+  // rest of the install stays usable (pre-fix: the area list was split at the tab and the default area dead-ended in 'error').
+  await section('I-2 control-character file names', async () => {
+    const p = await open(base + '?size=1280x720&pick=1', undefined, { drop: false });
+    await waitState(p.page, ['need-files']);
+    await p.page.setInputFiles('#byo-input', tabDir);
+    const st = await waitState(p.page, ['area-ready'], 120000);
+    const info = await p.page.evaluate(() => ({ areas: window.__lomn.areas.map((a) => `${a.level}/${a.area}`), warnings: window.__lomn.sourceWarnings, files: window.__lomn.source?.files, validation: window.__lomn.validation?.ok }));
+    const warn = (info.warnings ?? []).join('\n');
+    check(st.state === 'area-ready' && info.validation === true && /control character U\+0009/.test(warn) && /control character U\+000A/.test(warn),
+          'final I-2: TAB- and LF-named files are skipped with a warning naming the character, and the install is usable',
+          `${st.state}: ${st.message}; warnings ${JSON.stringify(info.warnings)}`);
+    check(JSON.stringify(info.areas) === JSON.stringify(['levt/stat', 'levt/test']),
+          'final I-2: the area list holds only real areas (no stem split at the tab)', JSON.stringify(info.areas));
+    const copied = await p.page.evaluate(async () => {
+      const d = await (await (await navigator.storage.getDirectory()).getDirectoryHandle('lomn-install')).getDirectoryHandle('data');
+      const names = [];
+      const walk = async (h, pre) => { for await (const [n, x] of h.entries()) { names.push(pre + n); if (x.kind === 'directory') await walk(x, pre + n + '/'); } };
+      await walk(d, '');
+      return names;
+    });
+    check(!copied.some((n) => /[\x00-\x1f\x7f]/.test(n)), 'final I-2: nothing with a control character was copied into OPFS', JSON.stringify(copied.filter((n) => /[\x00-\x1f\x7f]/.test(n))));
+    await p.page.evaluate(() => window.__lomn.showArea('levt/stat'));
+    const sw = await p.page.evaluate(() => window.__lomn.state);
+    check(sw === 'area-ready', 'final I-2: an area still switches on that install', sw);
+    await p.page.close();
   });
   // C2 (decision D13): accepted exe + unknown .blk tables is soft-accepted with a visible warning and a named reason.
   await section('C2 soft accept', async () => {

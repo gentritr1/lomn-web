@@ -180,7 +180,11 @@ async function onInput(ev) {
     $('copy-progress').hidden = true;
     const copy = await opfsCopy();
     if (!copy) throw new Error('the copy finished but its completion manifest is missing');
-    await useSource(await handleSource(copy.dir, 'opfs'), 'copied');
+    // The copy holds only what was admitted, so the names skipped while reading the input (final I-2: control characters, long
+    // names, case duplicates) are carried over to the source the engine starts from.
+    const copied = await handleSource(copy.dir, 'opfs');
+    copied.warnings = [...(src.warnings ?? []), ...copied.warnings].slice(0, 100);
+    await useSource(copied, 'copied');
   } catch (err) {
     if (err instanceof WalkError) setState('rejected', `This folder is not a usable game folder: ${err.message}.`);
     else fail(err);

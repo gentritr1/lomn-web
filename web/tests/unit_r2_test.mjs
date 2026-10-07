@@ -35,6 +35,36 @@ test('review fix 5 checkRelPath: backslash and NUL are rejected with a named rea
   assert.match(checkCopyManifest({ format: 'lomn-opfs-copy', version: 1, files: [{ path: 'data\\x', size: 1 }] }), /entry/);
 });
 
+test('final I-2 checkRelPath: control characters (TAB, LF, anything < 0x20, DEL) are rejected with a reason naming the character', async () => {
+  const { checkRelPath } = await import('../app/paths.js');
+  // The engine<->JS protocols are tab/newline separated ("lev\tarea\n", "path\toffset\tlength\n"): such a name must never get in.
+  assert.match(checkRelPath('data/levels/levt/a\tb.blk'), /control character U\+0009/);
+  assert.match(checkRelPath('data/levels/levt/a\nb.blk'), /control character U\+000A/);
+  assert.match(checkRelPath('data/levels/levt/a\rb.blk'), /control character U\+000D/);
+  assert.match(checkRelPath('data/a\u0001b.blk'), /control character U\+0001/);
+  assert.match(checkRelPath('data/a\u001fb.blk'), /control character U\+001F/);
+  assert.match(checkRelPath('data/a\u007fb.blk'), /control character U\+007F/);
+  assert.match(checkRelPath('d\tata/x'), /control character/);          // in a folder name too
+  assert.equal(checkRelPath('data/a b.blk'), '');                        // a space (0x20) is fine
+  assert.equal(checkRelPath('data/éあ.blk'), '');               // non-ASCII is fine (only < 0x20 and 0x7f are refused)
+  // Skipped with a warning at both entry points (the picked folder, the <input>), naming the character; the rest of the install stays usable.
+  const files = [mkFile('inst/LEGOBionicle.exe', 4), mkFile('inst/data/levels/levt/ok.blk', 2), mkFile('inst/data/levels/levt/a\tb.blk', 1), mkFile('inst/data/x\ny.osi', 1)];
+  return import('../app/byo.js').then(async ({ filesSource, walkHandle, checkCopyManifest }) => {
+    // A completion manifest naming such a file (a tampered OPFS copy) is refused too.
+    assert.match(checkCopyManifest({ format: 'lomn-opfs-copy', version: 1, files: [{ path: 'data/a\tb.blk', size: 1 }] }), /entry/);
+    const s = filesSource(files);
+    assert.deepEqual(s.entries.map((e) => e.path), ['LEGOBionicle.exe', 'data/levels/levt/ok.blk']);
+    assert.match(s.warnings.join('\n'), /control character U\+0009/);
+    assert.match(s.warnings.join('\n'), /control character U\+000A/);
+    const fakeFile1 = (n) => ({ kind: 'file', getFile: async () => ({ size: n }) });
+    const dir = (entries) => ({ kind: 'directory', entries: async function* () { for (const e of entries) yield e; } });
+    const w = await walkHandle(dir([['LEGOBionicle.exe', fakeFile1(4)], ['data', dir([['a\tb.blk', fakeFile1(1)], ['ok.blk', fakeFile1(2)], ['f\u0002', dir([['x.blk', fakeFile1(1)]])]])]]));
+    assert.deepEqual(w.entries.map((e) => e.path).sort(), ['LEGOBionicle.exe', 'data/ok.blk']);
+    assert.match(w.warnings.join('\n'), /control character U\+0009/);
+    assert.match(w.warnings.join('\n'), /skipped folder .*control character U\+0002/);
+  });
+});
+
 test('M11 filesSource: over-long (UTF-8) paths and case duplicates are skipped with a warning, never fatal', async () => {
   const { filesSource } = await import('../app/byo.js');
   const s = filesSource([mkFile('inst/LEGOBionicle.exe', 4), mkFile('inst/data/Base.osi', 2), mkFile('inst/data/base.OSI', 3),

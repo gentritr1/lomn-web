@@ -20,6 +20,12 @@ PrefetchFileSystem::PrefetchFileSystem(uint64_t budget_bytes) : budget_(budget_b
 
 bool PrefetchFileSystem::add_file(std::string_view path, uint64_t size, std::string* err) {
   if (path.size() > kMaxPathBytes) return set_err(err, "path longer than kMaxPathBytes");
+  // The JS bridge's lists are tab/newline separated (lomn_list_areas, lomn_fs_misses/touched): a control character in a
+  // name (UTF-8 bytes < 0x20 or 0x7f; multi-byte sequences never contain them) would corrupt them, so it is never indexed.
+  for (const char ch : path) {
+    const unsigned char c = static_cast<unsigned char>(ch);
+    if (c < 0x20 || c == 0x7f) return set_err(err, "control character in the path (the file lists are tab/newline separated)");
+  }
   const std::string n = normalize(path);
   if (!starts_with(n, "root/") || n.size() <= 5) return set_err(err, "path outside root/: " + n);
   if (size > kMaxJsSafeInteger) return set_err(err, "size out of range: " + n);

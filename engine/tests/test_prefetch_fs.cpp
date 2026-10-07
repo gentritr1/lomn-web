@@ -73,6 +73,18 @@ TEST_CASE("prefetch fs: the index answers exists/size without resident bytes; ba
   CHECK_FALSE(p.add_file(std::string(PrefetchFileSystem::kMaxPathBytes + 1, 'a'), 1, &err));
   CHECK(p.file_count() == 1);
   CHECK(p.exists("ROOT/data/main.blk"));
+  // final I-2 (defence in depth): the engine<->JS protocols are tab/newline separated ("lev\tarea\n", "path\toffset\tlength\n"),
+  // so a path with a control character (< 0x20 or 0x7f) is never indexed, whatever the page let through.
+  for (const char c : {'\t', '\n', '\r', '\x01', '\x1f', '\x7f'}) {
+    const std::string bad = std::string("Root/Data/Levels/levt/a") + c + "b.blk";
+    CHECK_FALSE(p.add_file(bad, 5, &err));
+    CHECK(err.find("control character") != std::string::npos);
+    CHECK_FALSE(p.exists(bad));
+  }
+  CHECK_FALSE(p.add_file("Root/d\tir/x.blk", 5, &err));  // in a folder name too
+  CHECK(p.add_file("Root/Data/Levels/levt/a b.blk", 5, &err));  // a space and non-ASCII bytes are fine
+  CHECK(p.add_file("Root/Data/\xc3\xa9.blk", 5, &err));
+  CHECK(p.file_count() == 3);
   uint64_t sz = 0;
   CHECK(p.size("root/data/main.blk", sz) == Error::None);
   CHECK(sz == 100);

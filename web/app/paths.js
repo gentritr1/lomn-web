@@ -13,6 +13,9 @@ export function checkRelPath(path) {
   // would map to a different engine path than the one the page checked (duplicate or outside-root errors that fail the install).
   if (path.includes('\\')) return 'backslash in the name (the engine treats it as a path separator)';
   if (path.includes('\0')) return 'NUL character in the name';
+  // The engine's file lists are tab/newline separated: TAB, LF or any control character would split a name in two.
+  const ctl = /[\x00-\x1f\x7f]/.exec(path);
+  if (ctl) return `control character U+${ctl[0].charCodeAt(0).toString(16).toUpperCase().padStart(4, '0')} in the name`;
   const bytes = utf8.encode(path).length + ENGINE_PREFIX_BYTES;
   if (bytes > MAX_PATH_BYTES) return `path longer than ${MAX_PATH_BYTES} bytes (${bytes} as UTF-8)`;
   const segs = path.split('/');
