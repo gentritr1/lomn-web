@@ -107,6 +107,7 @@ One JSON object, `format: "lomn-prefetch-manifest"`, `version: 1`:
 - `boot`: `{ranges, reads, bytes}`, what `view::boot_reads` reads (the Art.blk header + table, Base.osi);
 - `areas`: `[{area: "lev1/vllg", ok, reads, bytes, bytes_beyond_boot, files, ranges}]`, one per `<lev>/<area>.blk`;
 - `ranges` entries are `[file_index, offset, length]`, distinct and sorted; a whole-file read is `[f, 0, size]`;
+  zero-length reads are not listed (they move no bytes; the browser's `touched()` cannot list them either; only `lev4/haka.blk`, an empty entry table, has one on Beta 1.5.0);
 - `summary`: area count, failures, the largest area (bytes, reads), the union of all ranges, the ranges common to every
   area and whether they equal the boot set, and the census boot set (whole files) for comparison.
 The manifest holds names, offsets and sizes of the player's files: it is written under `build/` and never committed or

@@ -18,7 +18,9 @@ namespace lomn::view {
 void boot_reads(const fs::FileSystem& fs);
 
 // Runs fn with a range logger installed on fs and returns the distinct ranges it read, sorted (path, offset, length).
-// The previous range logger is removed afterwards.
+// Zero-length reads are left out (T8 P7): they move no bytes, so there is nothing to prefetch, and the browser's
+// PrefetchFileSystem::touched() cannot list them either; the raw range logger still reports them. The previous range
+// logger is removed afterwards.
 std::vector<fs::ByteRange> record_reads(fs::FileSystem& fs, const std::function<void()>& fn);
 
 struct AreaRef {

@@ -8,9 +8,11 @@
 #include "doctest.h"
 #include "lomn/fs.h"
 #include "lomn/prefetch_fs.h"
+#include "lomn/sage/blockchain.h"
 #include "lomn/view/area.h"
 #include "lomn/view/prefetch.h"
 #include "lomn/view/synthetic.h"
+#include "sage_test_util.h"
 
 using namespace lomn;
 using fs::ByteRange;
@@ -211,6 +213,54 @@ TEST_CASE("prefetch discovery: the synthetic areas load from misses alone, equal
     // Everything resident is either pinned (Base.osi, also in the log) or this area's set.
     CHECK(p.resident_bytes() == bytes);
   }
+}
+
+// T8 P7: a zero-length read carries no bytes, so it is no prefetch work. The native `lomn_view --manifest` (record_reads over
+// the disk file system) used to list it ([lev4/haka.blk, 12, 0]: haka.blk is a blockfile with an EMPTY entry table, so
+// BlockFile::open reads the 12-byte header and then a 0-byte table) while PrefetchFileSystem::touched() never could (no
+// resident range), so "browser discovery == native manifest" failed on that area. Decision: excluded from BOTH. The
+// range logger still reports the raw read (it happened); record_reads, which feeds the manifest and the tests, drops it.
+TEST_CASE("prefetch discovery: a zero-length read (an empty blockfile table) is in neither the native read record nor touched()") {
+  const char* kPath = "Root/data/levels/zero/zero.blk";
+  const std::string kNorm = "root/data/levels/zero/zero.blk";
+  const sage_test::Bytes blk = sage_test::make_blk({});  // BLKF, version 1, count 0: 12 bytes, no table
+  REQUIRE(blk.size() == 12);
+  fs::MemoryFileSystem m;
+  REQUIRE(m.mount(kPath, blk));
+  PrefetchFileSystem p;
+  REQUIRE(p.add_file(kPath, blk.size()));
+  auto open_chain = [&](const fs::FileSystem& f) {
+    sage::BlockChain chain(f);
+    std::string err;
+    const bool ok = chain.open_current(kPath, &err);
+    INFO(err);
+    return ok;
+  };
+  // The raw logger sees both reads on the native-style fs: header (0, 12) and the 0-byte table (12, 0).
+  std::vector<ByteRange> raw;
+  m.set_range_logger([&](const std::string& path, uint64_t off, uint64_t len) { raw.push_back({path, off, len}); });
+  REQUIRE(open_chain(m));
+  m.set_range_logger(nullptr);
+  REQUIRE(raw.size() == 2);
+  CHECK(raw[0] == ByteRange{kNorm, 0, 12});
+  CHECK(raw[1] == ByteRange{kNorm, 12, 0});
+  // record_reads (= the manifest rows) keeps only reads that move bytes.
+  bool ok = false;
+  const std::vector<ByteRange> log = view::record_reads(m, [&] { ok = open_chain(m); });
+  REQUIRE(ok);
+  CHECK(log == std::vector<ByteRange>{{kNorm, 0, 12}});
+  CHECK(view::ranges_text(log) == kNorm + "\t0\t12\n");
+  // The browser path: discovery converges on the same set (and the zero-length read is never a miss).
+  const int rounds = discover(p, m, [&] { ok = open_chain(p); });
+  CHECK(rounds == 2);
+  REQUIRE(ok);
+  CHECK(p.touched() == log);
+  CHECK(p.misses().empty());
+  // Zero-length reads at any offset, also at the very end of the file, are served without a resident range.
+  std::vector<uint8_t> out{1, 2, 3};
+  CHECK(p.read_range(kPath, 12, 0, out) == Error::None);
+  CHECK(out.empty());
+  CHECK(p.read_range(kPath, 13, 0, out) == Error::Io);  // beyond the end of the file stays an error
 }
 
 TEST_CASE("list_areas: levels/<lev>/<area>.blk, the level blockfile excluded") {

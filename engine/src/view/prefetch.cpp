@@ -17,7 +17,12 @@ void boot_reads(const fs::FileSystem& fs) {
 
 std::vector<fs::ByteRange> record_reads(fs::FileSystem& fs, const std::function<void()>& fn) {
   std::set<fs::ByteRange> seen;
-  fs.set_range_logger([&seen](const std::string& p, uint64_t off, uint64_t len) { seen.insert({p, off, len}); });
+  // T8 P7: a zero-length read moves no bytes, so it is no prefetch work and PrefetchFileSystem::touched() can never list
+  // it (no resident range); excluded here so the native manifest and the browser's discovery agree (lev4/haka.blk has an
+  // empty entry table: BlockFile::open reads a 0-byte table at offset 12).
+  fs.set_range_logger([&seen](const std::string& p, uint64_t off, uint64_t len) {
+    if (len != 0) seen.insert({p, off, len});
+  });
   fn();
   fs.set_range_logger(nullptr);
   return std::vector<fs::ByteRange>(seen.begin(), seen.end());
