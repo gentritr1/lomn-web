@@ -289,3 +289,17 @@ Measured while building and running the M0 reference implementation (`docs/super
 | A14 | 0.3 caller list | full caller list per slot | `docs/surface.md` has the per-slot table (count + 4 examples) **and** a "Full caller lists" section. The spot check is 5 rows by the implementer, with 2 re-verified by the reviewer. |
 | A15 | Process | parallel streams | Tasks run strictly sequentially on branch `m0-foundations`. Each implementer commits only its own task's files (no push/stash/reset/checkout/`add -A`). The controller reviews each task by re-running its checks and owns merges. |
 | A16 | Browser pixel tolerance | ±2/255 | Kept at ±2 (measured exact match 255,128,0 on Metal). |
+
+## 13. Amendments from M1b (browser viewer), 2026-10-07
+
+Measured while building REF4 (`docs/superpowers/plans/2026-10-07-m1b-ref/`, Fable-reviewed and controller-reproduced) and the M1b task chain. Where these differ from earlier sections, they win.
+
+| # | Topic | Earlier text | Measured fact / decision |
+|---|---|---|---|
+| B1 (D2) | Per-area prefetch (§4.3) | prefetch from a per-area manifest built from a native access log | No per-build manifest is shipped. The browser derives each area's byte ranges from the engine's own misses: up to 16 rounds (cap 12 asserted after measuring a maximum of 8 over 122 areas, 0 B over-fetch). The result is cached in IndexedDB, keyed by (data fingerprint, wasm SHA, area); a revisit takes 1 round. The browser's reads equal the native `--manifest` on the areas compared. A shipped manifest would save only ~70–100 ms per first visit; revisit this if M2 deepens the read chain. |
+| B2 (D13) | Build validation (§4.3) | exe + blk header SHA against the accepted set | An accepted exe whose blk tables are not in `tools/builds.json` is **soft-accepted** with a visible warning ("game data differs from the known build — rendering may differ") and the reason recorded in metrics. A rejected-list exe, an unknown exe or a non-game folder is a hard reject. The owner tightens this by adding the canonical build's `blk_tables_sha256`. |
+| B3 (D14) | Release flags (§4.6) | `-O2` + wasm-opt | Release keeps `-O3` (emcc runs wasm-opt at both levels). 4 interleaved reps per arm: load and frame CPU were indistinguishable, and the `-O3` wasm is 11,749 B smaller. |
+| B4 | Boot set (§4.3) | "boot set" | The boot set is the ranges common to all areas (Art.blk header + table + Base.osi), 632,334 B, pinned before `main()`. The census's whole-file boot set was 167.4 MB. |
+| B5 | Memory (§4.6) | measured sizing | `INITIAL_MEMORY` 96 MiB (peak 83.06 MiB at lev0/frnt). No growth over 30 area switches. GPU textures and buffers are destroyed explicitly; inside an open frame the Destroy is deferred to `end_frame()`. Leaving them to JS GC grew live textures from 174 to 1,238 (~1 GB) over 30 switches. |
+| B6 | Page security (§4.3, M6) | network discipline by test | A `<meta>` CSP (`connect-src 'self'`, `script-src 'self' 'wasm-unsafe-eval'`, …) plus `-sDYNAMIC_EXECUTION=0`. The test network check flags any off-manifest request, any upload (non-GET/HEAD or a request body) and any query string beyond the page's own navigation. **Deploy requirement (M6):** serve the CSP as an HTTP header as well, because a `<meta>` CSP does not apply to workers. |
+| B7 | Display rate (A13) | — | The HUD measures the display rate as the median of 120 empty-frame intervals, snapped to a standard rate only within ±3%. DROPPING means fps < 0.95 × the measured rate. A snapped-p10 version misread 60 Hz as 72 Hz in 1 of 7 runs. |
