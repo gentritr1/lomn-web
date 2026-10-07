@@ -42,11 +42,25 @@ constexpr uint32_t kMaxDraws = 4096;                     // placements x subsets
 constexpr uint32_t kMaxAreaTextures = 1024;              // distinct resolved textures per area
 constexpr uint64_t kMaxAreaTextureBytes = 256ull << 20;  // RGBA8 incl. mips, per area
 constexpr uint64_t kMaxAreaGeometryBytes = 64ull << 20;  // vertex + index bytes, per area
+// Not caps on what is drawn but on the loader's own work and output (Task 6 cleanup):
+// - kMaxStoredWarnings: AreaData::warnings keeps at most this many distinct warnings (the first emitted); the rest are
+//   counted in AreaData::warnings_dropped. (1.11M missing-model records once produced 457k warnings.)
+// - kMaxDrawableRecords = kMaxPlacements x 64: OBJ records routed to a drawn group (placed, missing model or non-finite)
+//   examined per area; one more fails the load. Missing-model records therefore cannot make the loader do unbounded
+//   model lookups. Real maximum: 55 records (lev6/ta03). Ignored/disabled records cost nothing and stay bounded only by
+//   parse_obj (n * 60 <= table bytes).
+constexpr uint32_t kMaxStoredWarnings = 1024;
+constexpr uint32_t kMaxDrawableRecords = kMaxPlacements * 64;
+constexpr float kMaxPitchDeg = 89.9f;  // make_camera clamps the pitch to +-kMaxPitchDeg (LookAtRH degenerates at +-90)
 
 constexpr uint32_t kNoTexture = 0xffffffffu;  // subset drawn with the 1x1 white texture
 
 struct AreaOptions {
   bool draw_main = true, draw_trans = true, draw_back = true, draw_moveable = true, draw_nolight = true;
+  // The R16 caps, injectable so tests can cross them with tiny inputs. They can only be LOWERED: larger values are
+  // clamped to the defaults (the renderer sizes its uniform buffer from draws <= kMaxDraws).
+  uint32_t max_placements = kMaxPlacements, max_draws = kMaxDraws, max_textures = kMaxAreaTextures;
+  uint64_t max_texture_bytes = kMaxAreaTextureBytes, max_geometry_bytes = kMaxAreaGeometryBytes;
 };
 
 struct SubsetDraw {
@@ -94,6 +108,7 @@ struct AreaStats {
   uint32_t routes[6] = {0, 0, 0, 0, 0, 0};  // placements per sage::Route value
   uint32_t models = 0, subsets = 0, alpha_subsets = 0, untextured_subsets = 0, vertices = 0, triangles = 0;
   uint32_t models_without_colors = 0, placements_with_orientation = 0;
+  uint32_t nonfinite_records = 0;  // drawable records skipped for a NaN/Inf position or orientation (with a warning)
   uint32_t textures = 0, textures_missing = 0, textures_failed = 0, textures_alpha = 0;
   uint64_t texture_bytes = 0;   // RGBA8 incl. full mip chains (what is uploaded)
   uint64_t geometry_bytes = 0;  // vertex + index bytes
@@ -114,11 +129,13 @@ struct AreaData {
   bool has_bounds = false;  // world AABB of every placed model (all routes except back)
   float bounds_min[3] = {0, 0, 0}, bounds_max[3] = {0, 0, 0};
   AreaStats stats;
-  std::vector<std::string> warnings;  // sorted, deduplicated
+  std::vector<std::string> warnings;  // sorted, deduplicated, ASCII (file bytes escaped as \xHH), <= kMaxStoredWarnings
+  uint32_t warnings_dropped = 0;      // distinct warnings beyond kMaxStoredWarnings
 };
 
 // False only when the area cannot be entered (no level/area blockfile) or a cap is exceeded; missing models or
-// textures are warnings (counted in stats) like the game's skip-and-continue loaders.
+// textures are warnings (counted in stats) like the game's skip-and-continue loaders. Records with a NaN/Inf position
+// or orientation are skipped with a warning (stats.nonfinite_records). On false, `out` is a default AreaData.
 bool load_area(const fs::FileSystem& fs, std::string_view level, std::string_view area, const AreaOptions& opt, AreaData& out,
                std::string* err);
 
@@ -129,7 +146,7 @@ struct CameraSettings {
   float near_z = 0.5f;
   float far_z = 4000.0f;
   float eye_height = 3.0f;    // added to the POS start y (the record marks where the Toa stands)
-  float pitch_deg = -10.0f;   // negative looks down
+  float pitch_deg = -10.0f;   // negative looks down; clamped to +-kMaxPitchDeg
   bool eye_set = false;       // --eye overrides the POS start (eye_height is then not added)
   float eye[3] = {0, 0, 0};
   bool yaw_set = false;       // default yaw: towards the centre of the area's world bounds (xz)
@@ -163,10 +180,14 @@ uint64_t release_cpu_copies(AreaData& area);
 class AreaRenderer {
  public:
   // Creates every GPU object for `area` (which must outlive the renderer's use of it). False on a device failure.
+  // ONE upload per renderer: rhi has no destroy calls, so a repeat upload (after success or failure) is rejected
+  // without creating anything; use a new AreaRenderer (and device) for another area.
   bool upload(rhi::Device& dev, const AreaData& area, const RenderOptions& opt, std::string* err);
   // One frame into `target` (a render target with depth). Draw order: main, moveable, no-light, back, then trans
-  // sorted far-to-near from the eye; within each object the opaque subsets, then the alpha subsets (DrawX's 2 passes).
-  void render(rhi::Device& dev, rhi::TextureId target, const AreaData& area, const Camera& cam);
+  // sorted far-to-near from the eye (non-finite distances count as farthest); within each object the opaque subsets,
+  // then the alpha subsets (DrawX's 2 passes). Returns false, makes no rhi call and logs once on stderr unless upload()
+  // succeeded for this very AreaData object.
+  bool render(rhi::Device& dev, rhi::TextureId target, const AreaData& area, const Camera& cam);
   uint32_t pipelines() const { return pipelines_created_; }
   uint64_t uploaded_texture_bytes() const { return uploaded_texture_bytes_; }
   uint32_t textures_created() const { return textures_created_; }
@@ -186,6 +207,8 @@ class AreaRenderer {
   uint32_t pipelines_created_ = 0, textures_created_ = 0;
   uint64_t uploaded_texture_bytes_ = 0;
   std::vector<uint8_t> uniform_data_;
+  const AreaData* uploaded_ = nullptr;  // set only by a successful upload
+  bool upload_attempted_ = false, render_refused_logged_ = false;
 };
 
 // The WGSL used by both pipelines (exposed for tests and the call-log checksum).

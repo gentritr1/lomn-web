@@ -29,6 +29,8 @@ Mat4 mat_translation(float x, float y, float z);
 Mat4 perspective_fov_rh(float fovy_radians, float aspect, float zn, float zf);
 // D3DXMatrixLookAtRH: z = normalize(eye - at), x = normalize(cross(up, z)), y = cross(z, x);
 //   [x.x y.x z.x 0; x.y y.y z.y 0; x.z y.z z.z 0; -dot(x,eye) -dot(y,eye) -dot(z,eye) 1]
+// Kept as D3DX computes it: when eye - at is parallel to up, x is the zero vector (degenerate view). make_camera keeps
+// the pitch within +-kMaxPitchDeg (area.h) so that never happens for the area camera.
 Mat4 look_at_rh(const float eye[3], const float at[3], const float up[3]);
 // out = (p, 1) * M (homogeneous, 4 floats).
 void transform_point(const Mat4& m, const float p[3], float out[4]);

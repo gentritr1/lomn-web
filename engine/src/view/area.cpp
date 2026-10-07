@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
+#include <limits>
 #include <map>
 #include <set>
 
@@ -25,10 +27,27 @@ bool ends_with(const std::string& s, const char* suf) {
   const size_t n = std::strlen(suf);
   return s.size() >= n && s.compare(s.size() - n, n, suf) == 0;
 }
+// Warnings and errors may embed file bytes (4CC ids, texture names) or path names: every byte outside printable ASCII
+// becomes \xHH, so logs and JSON stay ASCII and native == wasm32.
+std::string escape_bytes(const std::string& s) {
+  std::string o;
+  o.reserve(s.size());
+  for (unsigned char c : s) {
+    if (c >= 0x20 && c < 0x7f) {
+      o.push_back(static_cast<char>(c));
+    } else {
+      char b[5];
+      std::snprintf(b, sizeof b, "\\x%02x", c);
+      o += b;
+    }
+  }
+  return o;
+}
 bool fail(std::string* err, const std::string& msg) {
-  if (err) *err = msg;
+  if (err) *err = escape_bytes(msg);
   return false;
 }
+bool finite3(const float v[3]) { return std::isfinite(v[0]) && std::isfinite(v[1]) && std::isfinite(v[2]); }
 
 bool route_enabled(sage::Route r, const AreaOptions& o) {
   switch (r) {
@@ -47,6 +66,12 @@ class Loader {
 
   bool run(std::string_view level, std::string_view area, const AreaOptions& opt, std::string* err) {
     const auto t0 = Clock::now();
+    // Caps: AreaOptions may lower them (tests); values above the defaults are clamped to the defaults.
+    max_placements_ = std::min(opt.max_placements, kMaxPlacements);
+    max_draws_ = std::min(opt.max_draws, kMaxDraws);
+    max_textures_ = std::min(opt.max_textures, kMaxAreaTextures);
+    max_texture_bytes_ = std::min(opt.max_texture_bytes, kMaxAreaTextureBytes);
+    max_geometry_bytes_ = std::min(opt.max_geometry_bytes, kMaxAreaGeometryBytes);
     out_.level = std::string(level.substr(0, 4));
     out_.area = std::string(area.substr(0, 4));
     std::string e;
@@ -88,7 +113,8 @@ class Loader {
     AreaStats& st = out_.stats;
     st.obj_records = static_cast<uint32_t>(recs.size());
     const Mat4 rot = mat_rotation_x(kWorldRotX);
-    for (uint32_t i = 0; i < recs.size(); ++i) {  // bounded by parse_obj (n * 60 <= table bytes) and kMaxPlacements
+    uint32_t drawable = 0;
+    for (uint32_t i = 0; i < recs.size(); ++i) {  // bounded by parse_obj (n * 60 <= table bytes) and kMaxDrawableRecords
       const sage::ObjRecord& r = recs[i];
       const sage::Route rt = sage::route(r.flags);
       if (rt == sage::Route::Ignored) {
@@ -99,7 +125,15 @@ class Loader {
         ++st.disabled_records;
         continue;
       }
-      if (out_.placements.size() >= kMaxPlacements) return fail(err, "area: more than kMaxPlacements drawn records");
+      // Every record routed to a drawn group costs a model lookup (or a cached miss) even when nothing is placed: budget.
+      if (++drawable > kMaxDrawableRecords) return fail(err, "area: more than kMaxDrawableRecords drawable records");
+      // A NaN/Inf position or orientation would poison the world matrix, the bounds and the trans sort: skip the record.
+      if (!finite3(r.pos) || !finite3(r.orient)) {
+        ++st.nonfinite_records;
+        warn("obj record " + std::to_string(i) + ": non-finite position or orientation (skipped)");
+        continue;
+      }
+      if (out_.placements.size() >= max_placements_) return fail(err, "area: more than kMaxPlacements drawn records");
       uint32_t model = 0;
       if (!model_for(sage::fourcc(r.id), model)) {
         if (!fatal_.empty()) return fail(err, fatal_);  // a cap was exceeded
@@ -117,7 +151,7 @@ class Loader {
       p.world = mat_mul(rot, mat_translation(r.pos[0], r.pos[1], r.pos[2]));
       st.routes[static_cast<int>(rt)]++;
       const uint64_t draws = uint64_t(st.draws) + out_.models[model].subsets.size();
-      if (draws > kMaxDraws) return fail(err, "area: more than kMaxDraws draws");
+      if (draws > max_draws_) return fail(err, "area: more than kMaxDraws draws");
       st.draws = static_cast<uint32_t>(draws);
       if (rt != sage::Route::Back) grow_bounds(out_.models[model], p.world);
       out_.placements.push_back(p);
@@ -125,15 +159,23 @@ class Loader {
     st.placements = static_cast<uint32_t>(out_.placements.size());
     st.models = static_cast<uint32_t>(out_.models.size());
     st.textures = static_cast<uint32_t>(out_.textures.size());
-    std::sort(warnings_.begin(), warnings_.end());
-    warnings_.erase(std::unique(warnings_.begin(), warnings_.end()), warnings_.end());
-    out_.warnings = warnings_;
+    out_.warnings.assign(warnings_.begin(), warnings_.end());  // sorted, deduplicated (std::set)
+    out_.warnings_dropped = warnings_dropped_;
     st.load_ms = ms_since(t0) - st.decode_ms;
     return true;
   }
 
  private:
-  void warn(std::string w) { warnings_.push_back(std::move(w)); }
+  // At most kMaxStoredWarnings distinct warnings are kept (the first ones emitted, in load order); the rest are counted.
+  void warn(const std::string& w) {
+    std::string e = escape_bytes(w);
+    if (warnings_.count(e)) return;
+    if (warnings_.size() >= kMaxStoredWarnings) {
+      ++warnings_dropped_;
+      return;
+    }
+    warnings_.insert(std::move(e));
+  }
   bool fatal(const std::string& why) {
     fatal_ = why;
     return false;
@@ -188,7 +230,7 @@ class Loader {
         return false;
       }
     const uint64_t bytes = n * kVertexFloats * 4 + uint64_t(x.indices.size()) * 4;
-    if (bytes > kMaxAreaGeometryBytes - std::min(kMaxAreaGeometryBytes, st.geometry_bytes)) return fatal("area: geometry over kMaxAreaGeometryBytes");
+    if (bytes > max_geometry_bytes_ - std::min(max_geometry_bytes_, st.geometry_bytes)) return fatal("area: geometry over kMaxAreaGeometryBytes");
     st.geometry_bytes += bytes;
     m.id = id;
     m.vertex_count = static_cast<uint32_t>(n);
@@ -258,7 +300,7 @@ class Loader {
       return true;
     }
     texture_cache_[key] = -1;
-    if (out_.textures.size() >= kMaxAreaTextures) return fatal("area: more than kMaxAreaTextures textures");
+    if (out_.textures.size() >= max_textures_) return fatal("area: more than kMaxAreaTextures textures");
     std::string e;
     std::vector<uint8_t> bytes;
     if (!chain_.load(chosen, bytes, nullptr, &e)) {
@@ -296,7 +338,7 @@ class Loader {
       return false;
     }
     const uint64_t chain_bytes = mip_chain_bytes(img.width, img.height);
-    if (chain_bytes > kMaxAreaTextureBytes - std::min(kMaxAreaTextureBytes, st.texture_bytes)) {
+    if (chain_bytes > max_texture_bytes_ - std::min(max_texture_bytes_, st.texture_bytes)) {
       st.decode_ms += ms_since(t0);
       return fatal("area: textures over kMaxAreaTextureBytes");
     }
@@ -334,8 +376,11 @@ class Loader {
   std::string prefix_;
   std::vector<uint8_t> bytes_;
   std::map<std::string, int64_t> model_cache_, texture_cache_;  // ordered maps: deterministic, no pointer keys
-  std::vector<std::string> warnings_;
+  std::set<std::string> warnings_;
+  uint32_t warnings_dropped_ = 0;
   std::string fatal_;  // set when a cap is exceeded: the whole load fails
+  uint32_t max_placements_ = kMaxPlacements, max_draws_ = kMaxDraws, max_textures_ = kMaxAreaTextures;
+  uint64_t max_texture_bytes_ = kMaxAreaTextureBytes, max_geometry_bytes_ = kMaxAreaGeometryBytes;
 };
 
 const char* kWgsl = R"(// lomn M1a-2 unlit area shader. Uniform block per draw (dynamic offset).
@@ -434,8 +479,9 @@ Camera make_camera(const AreaData& a, const CameraSettings& s, float aspect) {
     }
   }
   c.yaw_deg = yaw;
-  c.pitch_deg = s.pitch_deg;
-  const double y = yaw * kDeg, p = s.pitch_deg * kDeg;
+  // Clamped to +-89.9 degrees: at +-90 the view direction is parallel to the up vector and LookAtRH's x axis is zero.
+  c.pitch_deg = std::max(-kMaxPitchDeg, std::min(kMaxPitchDeg, s.pitch_deg));
+  const double y = yaw * kDeg, p = c.pitch_deg * kDeg;
   const float fwd[3] = {static_cast<float>(std::sin(y) * std::cos(p)), static_cast<float>(std::sin(p)),
                         static_cast<float>(-std::cos(y) * std::cos(p))};
   for (int k = 0; k < 3; ++k) c.at[k] = c.eye[k] + fwd[k];
@@ -466,6 +512,9 @@ constexpr uint32_t kSlot = rhi::uniform_stride(kAreaUniformBytes);  // one unifo
 
 bool AreaRenderer::upload(rhi::Device& dev, const AreaData& a, const RenderOptions& opt, std::string* err) {
   if (a.cpu_released) return fail(err, "render: area CPU copies were already released");
+  // rhi has no destroy calls: a second upload would leak the first one's GPU objects, so it is rejected.
+  if (upload_attempted_) return fail(err, "render: renderer already uploaded (one upload per AreaRenderer)");
+  upload_attempted_ = true;
   opt_ = opt;
   rhi::MeshPipelineDesc pd;
   pd.wgsl = kWgsl;
@@ -528,12 +577,22 @@ bool AreaRenderer::upload(rhi::Device& dev, const AreaData& a, const RenderOptio
     models_.push_back(g);
   }
   uniform_data_.assign(size_t(uniform_slots_) * kSlot, 0);
+  uploaded_ = &a;
   return true;
 }
 
-void AreaRenderer::render(rhi::Device& dev, rhi::TextureId target, const AreaData& a, const Camera& cam) {
+bool AreaRenderer::render(rhi::Device& dev, rhi::TextureId target, const AreaData& a, const Camera& cam) {
+  if (uploaded_ != &a) {  // never uploaded, upload failed, or a different AreaData: no rhi call at all
+    if (!render_refused_logged_) {
+      render_refused_logged_ = true;
+      std::fprintf(stderr, "[area] render skipped: %s\n", uploaded_ ? "not the AreaData that was uploaded" : "no successful upload");
+    }
+    return false;
+  }
   // Object order: route groups, record order inside a group; trans sorted far-to-near (GcTransDirector::SortIt; the
-  // direction is INFERRED). Distances in double so the order is identical on every platform for equal floats.
+  // direction is INFERRED). Distances in double so the order is identical on every platform for equal floats. The sort
+  // key is a total order: a non-finite distance (NaN/Inf position or eye) counts as +inf (farthest); ties keep record
+  // order (stable sort).
   static const sage::Route kOrder[] = {sage::Route::Main, sage::Route::Moveable, sage::Route::NoLightMoveable, sage::Route::Back};
   std::vector<uint32_t> objects;
   for (sage::Route r : kOrder)
@@ -547,9 +606,9 @@ void AreaRenderer::render(rhi::Device& dev, rhi::TextureId target, const AreaDat
         const double v = double(a.placements[i].pos[k]) - cam.eye[k];
         d += v * v;
       }
-      trans.push_back({-d, i});
+      trans.push_back({std::isfinite(d) ? d : std::numeric_limits<double>::infinity(), i});
     }
-  std::stable_sort(trans.begin(), trans.end(), [](const auto& x, const auto& y) { return x.first < y.first; });
+  std::stable_sort(trans.begin(), trans.end(), [](const auto& x, const auto& y) { return x.first > y.first; });
   for (const auto& t : trans) objects.push_back(t.second);
 
   struct Item {
@@ -593,6 +652,7 @@ void AreaRenderer::render(rhi::Device& dev, rhi::TextureId target, const AreaDat
     dev.draw_indexed(d);
   }
   dev.end_frame();
+  return true;
 }
 
 }  // namespace lomn::view

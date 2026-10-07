@@ -2,7 +2,11 @@
 // backend, failure paths and caps.
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <limits>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -530,4 +534,342 @@ TEST_CASE("area: release_cpu_copies frees vertex/index/mip copies; rendering is 
   CHECK(a.textures[0].mips.empty());
   CHECK(a.models[0].subsets.size() == 3);
   CHECK(kept == released);
+}
+
+// ---- Task 6 cleanup (B1-B7) ----
+namespace {
+
+sage_test::Bytes synthetic_entry(const char* name) {
+  fs::MemoryFileSystem mfs;
+  REQUIRE(mount_synthetic_install(mfs));
+  std::vector<uint8_t> blk;
+  REQUIRE(mfs.read("Root/Data/Levels/levt/test.blk", blk) == fs::Error::None);
+  sage::BlockFile bf;
+  std::string err;
+  REQUIRE(bf.open_bytes(blk, &err));
+  std::vector<uint8_t> x;
+  REQUIRE(bf.find(name) >= 0);
+  REQUIRE(bf.read(static_cast<size_t>(bf.find(name)), x, &err));
+  return x;
+}
+
+// One OBJ record: `id` is the 4CC as fourcc() prints it (stored byte-reversed, little-endian u32).
+struct ObjSpec {
+  std::string id;
+  float pos[3];
+  float orient[3];
+  uint32_t flags;
+};
+sage_test::Bytes obj_table(const std::vector<ObjSpec>& recs) {
+  using namespace sage_test;
+  Bytes b;
+  put32(b, 0);
+  put32(b, static_cast<uint32_t>(recs.size()));
+  put32(b, static_cast<uint32_t>(recs.size()));
+  put32(b, 16);
+  for (const ObjSpec& r : recs) {
+    REQUIRE(r.id.size() == 4);
+    for (int k = 3; k >= 0; --k) put8(b, static_cast<uint8_t>(r.id[k]));
+    for (float v : r.pos) putf(b, v);
+    for (float v : r.orient) putf(b, v);
+    put32(b, 0);
+    for (int k = 0; k < 6; ++k) putf(b, 0.0f);
+    put32(b, r.flags);
+  }
+  put32(b, 12);
+  put32(b, 1);
+  put32(b, 0x00C0FFEEu);
+  return b;
+}
+
+// The vb id of every draw_indexed line, consecutive repeats collapsed (one entry per drawn object).
+std::vector<int> object_vbs(const std::vector<std::string>& log) {
+  std::vector<int> out;
+  for (const auto& l : log) {
+    if (l.rfind("draw_indexed", 0) != 0) continue;
+    const size_t at = l.find(" vb=");
+    const int vb = std::atoi(l.c_str() + at + 4);
+    if (out.empty() || out.back() != vb) out.push_back(vb);
+  }
+  return out;
+}
+
+std::vector<std::string> render_log(const AreaData& a, const Camera& cam) {
+  std::vector<std::string> log;
+  auto dev = rhi::create_null_device(&log);
+  const rhi::TextureId rt = dev->create_render_target_ex(rhi::RenderTargetDesc{16, 16, true, 1.0f});
+  AreaRenderer r;
+  std::string err;
+  REQUIRE_MESSAGE(r.upload(*dev, a, RenderOptions(), &err), err);
+  log.clear();
+  REQUIRE(r.render(*dev, rt, a, cam));
+  return log;
+}
+
+// A rejected load leaves `out` equal to a default AreaData.
+bool is_default(const AreaData& a) {
+  return a.level.empty() && a.area.empty() && a.placements.empty() && a.models.empty() && a.textures.empty() && a.stats.draws == 0 &&
+         a.stats.placements == 0 && a.warnings.empty() && a.warnings_dropped == 0 && !a.has_start && !a.has_bounds && !a.art_blk &&
+         a.pos_records == 0;
+}
+
+std::string id4(uint32_t i) {  // distinct printable 4CCs
+  std::string s(4, 'a');
+  for (int k = 0; k < 4; ++k, i /= 26) s[k] = static_cast<char>('a' + i % 26);
+  return s;
+}
+
+}  // namespace
+
+TEST_CASE("area: non-finite OBJ positions/orientations are skipped at load; the trans sort is a total order (B1)") {
+  const float nan = std::nanf(""), inf = std::numeric_limits<float>::infinity();
+  fs::MemoryFileSystem mfs;
+  REQUIRE(mount_synthetic_install(mfs));
+  const sage_test::Bytes recs = obj_table({
+      {"blue", {0, 0, -10}, {0, 0, 0}, 0x110},
+      {"quad", {nan, 0, 0}, {0, 0, 0}, 0x110},
+      {"quad", {0, 0, -30}, {0, 0, 0}, 0x110},
+      {"blue", {0, inf, 0}, {0, 0, 0}, 0x110},
+      {"trio", {0, 0, -20}, {0, 0, 0}, 0x110},
+      {"blue", {0, 0, -5}, {nan, 0, 0}, 0x110},
+      {"blue", {-inf, 0, 0}, {0, 0, 0}, 0x10},
+  });
+  REQUIRE(mfs.mount("Root/Data/Levels/levt/nanf.blk",
+                    sage_test::make_blk({entry("blue.x", synthetic_entry("blue.x")), entry("nanf_obj.slb", recs),
+                                         entry("quad.x", synthetic_entry("quad.x")), entry("trio.x", x_with_subsets(1, false))})));
+  AreaData a;
+  std::string err;
+  REQUIRE_MESSAGE(load_area(mfs, "levt", "nanf", AreaOptions(), a, &err), err);
+  CHECK(a.stats.obj_records == 7);
+  CHECK(a.stats.placements == 3);
+  CHECK(a.stats.nonfinite_records == 4);
+  for (int r : {1, 3, 5, 6}) CHECK(has_warning(a, "obj record " + std::to_string(r) + ": non-finite position or orientation (skipped)"));
+  REQUIRE(a.models.size() == 3);  // blue, quad, trio: a skipped record never loads its model first
+  CHECK(a.models[1].id == "quad");
+  for (int k = 0; k < 3; ++k) {
+    CHECK(std::isfinite(a.bounds_min[k]));
+    CHECK(std::isfinite(a.bounds_max[k]));
+  }
+  // Buffers: uniforms 1, blue vb 2, quad vb 4, trio vb 6. Trans far-to-near from the origin: quad -30, trio -20, blue -10.
+  CameraSettings cs = synthetic_camera();
+  cs.eye_set = true;
+  CHECK(object_vbs(render_log(a, make_camera(a, cs, 1.0f))) == std::vector<int>{4, 6, 2});
+  // Non-finite distances (here injected after load) sort as +inf, i.e. farthest, ties in record order.
+  AreaData b = a;
+  b.placements[0].pos[0] = nan;  // blue
+  b.placements[1].pos[2] = inf;  // quad
+  CHECK(object_vbs(render_log(b, make_camera(b, cs, 1.0f))) == std::vector<int>{2, 4, 6});
+  // A non-finite eye makes every distance non-finite: record order.
+  Camera c = make_camera(a, cs, 1.0f);
+  c.eye[0] = nan;
+  CHECK(object_vbs(render_log(a, c)) == std::vector<int>{2, 4, 6});
+}
+
+TEST_CASE("area: geometry-byte and texture-byte caps fail the load cleanly, leaving a default AreaData (B2)") {
+  CHECK(AreaOptions().max_geometry_bytes == kMaxAreaGeometryBytes);  // injectable for tests, defaults unchanged
+  CHECK(AreaOptions().max_texture_bytes == kMaxAreaTextureBytes);
+  CHECK(AreaOptions().max_placements == kMaxPlacements);
+  CHECK(AreaOptions().max_draws == kMaxDraws);
+  CHECK(AreaOptions().max_textures == kMaxAreaTextures);
+  const AreaData base = load_synthetic();
+  const uint64_t geo = base.stats.geometry_bytes, tex = base.stats.texture_bytes;
+  // Two models (quad 12 x 48 + 18 x 4, blue 4 x 48 + 6 x 4) and two textures (84 + 340 bytes with mips).
+  CHECK(geo == (12 * 48 + 18 * 4) + (4 * 48 + 6 * 4));
+  CHECK(tex == 424);
+  fs::MemoryFileSystem mfs;
+  REQUIRE(mount_synthetic_install(mfs));
+  std::string err;
+  AreaOptions o;
+  AreaData a;
+  o.max_geometry_bytes = geo;  // exactly the sum: fits
+  REQUIRE_MESSAGE(load_area(mfs, "levt", "test", o, a, &err), err);
+  o.max_geometry_bytes = geo - 1;  // the second model crosses it
+  CHECK_FALSE(load_area(mfs, "levt", "test", o, a, &err));
+  CHECK(err.find("kMaxAreaGeometryBytes") != std::string::npos);
+  CHECK(is_default(a));
+  o = AreaOptions();
+  o.max_texture_bytes = tex;
+  REQUIRE_MESSAGE(load_area(mfs, "levt", "test", o, a, &err), err);
+  o.max_texture_bytes = tex - 1;  // the second texture crosses it
+  CHECK_FALSE(load_area(mfs, "levt", "test", o, a, &err));
+  CHECK(err.find("kMaxAreaTextureBytes") != std::string::npos);
+  CHECK(is_default(a));
+}
+
+TEST_CASE("area: targeted OBJ / .x mutations reach the cap and mid-load rejection paths (deterministic fuzz, B3)") {
+  const sage_test::Bytes quad = synthetic_entry("quad.x"), blue = synthetic_entry("blue.x"), obj = synthetic_entry("test_obj.slb"),
+                         pos = synthetic_entry("test_pos.slb");
+  fs::MemoryFileSystem base;
+  REQUIRE(mount_synthetic_install(base));
+  std::vector<uint8_t> level;
+  REQUIRE(base.read("Root/Data/Levels/levt/levt.blk", level) == fs::Error::None);
+  // Each iteration lowers ONE cap to a value in [0, the unmutated scene's total]: what a mutation adds (or the scene
+  // itself) then crosses it mid-load, after models and textures were already loaded.
+  const AreaData ref = load_synthetic();
+  // quad.x's MeshMaterialList ints {3 materials, 3 faces, 0, 1, 2} (binary .x: token 6, count 5, five u32).
+  const uint8_t mml[] = {6, 0, 5, 0, 0, 0, 3, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0};
+  const auto mml_at = std::search(quad.begin(), quad.end(), std::begin(mml), std::end(mml));
+  REQUIRE(mml_at != quad.end());
+  const size_t mml_off = static_cast<size_t>(mml_at - quad.begin()) + 6;  // first of the five u32
+  const uint32_t n_obj = 8, rec0 = 0x16;
+  uint32_t seed = 0x5eedu;
+  auto rnd = [&]() {
+    seed = seed * 1664525u + 1013904223u;
+    return seed >> 8;
+  };
+  std::map<std::string, int> reasons;
+  const int iterations = 1200;
+  for (int it = 0; it < iterations; ++it) {
+    sage_test::Bytes q = quad, o = obj;
+    for (int m = 0, n = 1 + rnd() % 3; m < n; ++m) {
+      switch (rnd() % 4) {
+        case 0: {  // record count (both copies of n)
+          static const uint32_t counts[] = {0, 1, 7, 9, 0xffffffffu, 0x10000000u};
+          const uint32_t v = counts[rnd() % 6];
+          sage_test::set32(o, 4, v);
+          if (rnd() % 2) sage_test::set32(o, 8, v);
+          break;
+        }
+        case 1: {  // routing flags of one record
+          static const uint32_t flags[] = {0x0, 0x04, 0x08, 0x10, 0x20, 0x30, 0x110, 0x01};
+          sage_test::set32(o, rec0 + (rnd() % n_obj) * 60 + 0x38, rnd() % 4 ? flags[rnd() % 8] : rnd());
+          break;
+        }
+        case 2: {  // model id of one record: an existing, a missing or a random model
+          static const char* ids[] = {"dauq", "eulb", "ssim", "xxxx"};
+          const char* id = ids[rnd() % 4];
+          for (int k = 0; k < 4; ++k) o[rec0 + (rnd() % n_obj) * 60 + k] = static_cast<uint8_t>(id[k]);
+          break;
+        }
+        default: {  // quad.x material count / per-face material index
+          static const uint32_t vals[] = {0, 1, 2, 3, 4, 0xffffffffu};
+          sage_test::set32(q, mml_off + 4 * (rnd() % 5), vals[rnd() % 6]);
+          break;
+        }
+      }
+    }
+    AreaOptions caps;
+    switch (rnd() % 5) {
+      case 0: caps.max_placements = rnd() % (ref.stats.placements + 1); break;
+      case 1: caps.max_draws = rnd() % (ref.stats.draws + 1); break;
+      case 2: caps.max_textures = rnd() % static_cast<uint32_t>(ref.textures.size() + 1); break;
+      case 3: caps.max_texture_bytes = rnd() % (ref.stats.texture_bytes + 1); break;
+      default: caps.max_geometry_bytes = rnd() % (ref.stats.geometry_bytes + 1); break;
+    }
+    fs::MemoryFileSystem mfs;
+    REQUIRE(mfs.mount("Root/Data/Levels/levt/levt.blk", std::vector<uint8_t>(level)));
+    REQUIRE(mfs.mount("Root/Data/Levels/levt/test.blk",
+                      sage_test::make_blk({entry("blue.x", blue), entry("quad.x", q), entry("test_obj.slb", o), entry("test_pos.slb", pos)})));
+    AreaData out;
+    std::string err;
+    if (!load_area(mfs, "levt", "test", caps, out, &err)) {
+      CHECK(is_default(out));
+      ++reasons[err];
+      continue;
+    }
+    ++reasons["(loaded)"];
+    std::vector<std::string> log;
+    auto dev = rhi::create_null_device(&log);
+    const rhi::TextureId rt = dev->create_render_target_ex(rhi::RenderTargetDesc{16, 16, true, 1.0f});
+    AreaRenderer r;
+    REQUIRE(r.upload(*dev, out, RenderOptions(), &err));
+    REQUIRE(r.render(*dev, rt, out, make_camera(out, synthetic_camera(), 1.0f)));
+    for (const auto& line : log) CHECK(line.find("rejected") == std::string::npos);
+    CHECK(dev->last_frame_stats().draws == out.stats.draws);
+  }
+  std::printf("B3 targeted fuzz, %d iterations, outcome histogram:\n", iterations);
+  for (const auto& kv : reasons) std::printf("  %5d  %s\n", kv.second, kv.first.c_str());
+  CHECK(reasons["(loaded)"] > 0);
+  CHECK(reasons["area: more than kMaxPlacements drawn records"] > 0);  // mid-load: after models were loaded
+  CHECK(reasons["area: more than kMaxDraws draws"] > 0);
+  CHECK(reasons["area: geometry over kMaxAreaGeometryBytes"] > 0);
+  CHECK(reasons["area: more than kMaxAreaTextures textures"] > 0);
+  CHECK(reasons["area: textures over kMaxAreaTextureBytes"] > 0);
+}
+
+TEST_CASE("area: stored warnings are capped at 1024 (+ warnings_dropped); drawable records have a budget (B4)") {
+  CHECK(kMaxStoredWarnings == 1024);
+  CHECK(kMaxDrawableRecords == kMaxPlacements * 64);
+  fs::MemoryFileSystem mfs;
+  REQUIRE(mount_synthetic_install(mfs));
+  std::vector<ObjSpec> few, many;
+  for (uint32_t i = 0; i < 2000; ++i) few.push_back({id4(i), {0, 0, 0}, {0, 0, 0}, 0x10});
+  for (uint32_t i = 0; i < 100000; ++i) many.push_back({id4(i), {0, 0, 0}, {0, 0, 0}, 0x10});
+  REQUIRE(mfs.mount("Root/Data/Levels/levt/fewm.blk", sage_test::make_blk({entry("fewm_obj.slb", obj_table(few))})));
+  REQUIRE(mfs.mount("Root/Data/Levels/levt/manm.blk", sage_test::make_blk({entry("manm_obj.slb", obj_table(many))})));
+  AreaData a;
+  std::string err;
+  REQUIRE_MESSAGE(load_area(mfs, "levt", "fewm", AreaOptions(), a, &err), err);
+  CHECK(a.stats.missing_models == 2000);
+  CHECK(a.warnings.size() == kMaxStoredWarnings);
+  CHECK(a.warnings_dropped == 2002 - kMaxStoredWarnings);  // + "art.blk not opened" and "no pos table"
+  CHECK(std::is_sorted(a.warnings.begin(), a.warnings.end()));
+  CHECK_FALSE(load_area(mfs, "levt", "manm", AreaOptions(), a, &err));
+  CHECK(err.find("kMaxDrawableRecords") != std::string::npos);
+  CHECK(is_default(a));
+}
+
+TEST_CASE("area: pitch is clamped to +-89.9 degrees, so straight up/down still gives a full view basis (B5)") {
+  const AreaData a = load_synthetic();
+  for (float pitch : {-90.0f, 90.0f, -1000.0f}) {
+    CameraSettings s = synthetic_camera();
+    s.pitch_deg = pitch;
+    const Camera c = make_camera(a, s, 1.0f);
+    CHECK(c.pitch_deg == (pitch > 0 ? 89.9f : -89.9f));
+    for (int col = 0; col < 3; ++col) {  // the x, y, z axes of the view basis are columns 0..2 of rows 0..2
+      const float* m = c.view.m;
+      const float len2 = m[col] * m[col] + m[4 + col] * m[4 + col] + m[8 + col] * m[8 + col];
+      CHECK(len2 == doctest::Approx(1.0f).epsilon(1e-4));
+    }
+  }
+  CameraSettings s = synthetic_camera();
+  s.pitch_deg = -10.0f;  // in range: unchanged
+  CHECK(make_camera(a, s, 1.0f).pitch_deg == -10.0f);
+}
+
+TEST_CASE("area: render() needs a successful upload of the same AreaData; a repeat upload is rejected (B6)") {
+  AreaData a = load_synthetic();
+  std::vector<std::string> log;
+  auto dev = rhi::create_null_device(&log);
+  const rhi::TextureId rt = dev->create_render_target_ex(rhi::RenderTargetDesc{16, 16, true, 1.0f});
+  const Camera cam = make_camera(a, synthetic_camera(), 1.0f);
+  AreaRenderer fresh;
+  log.clear();
+  CHECK_FALSE(fresh.render(*dev, rt, a, cam));  // never uploaded
+  CHECK_FALSE(fresh.render(*dev, rt, a, cam));  // (logged once)
+  CHECK(log.empty());                           // no frame, no rhi call
+  AreaRenderer r;
+  std::string err;
+  REQUIRE(r.upload(*dev, a, RenderOptions(), &err));
+  const size_t after_upload = log.size();
+  CHECK_FALSE(r.upload(*dev, a, RenderOptions(), &err));  // repeat: rejected, creates nothing (no leaked GPU objects)
+  CHECK(err.find("already uploaded") != std::string::npos);
+  CHECK(log.size() == after_upload);
+  CHECK(r.render(*dev, rt, a, cam));  // the first upload still renders
+  CHECK(dev->last_frame_stats().draws == 10);
+  const AreaData other = a;  // same content, different object: not what was uploaded
+  log.clear();
+  CHECK_FALSE(r.render(*dev, rt, other, cam));
+  CHECK(log.empty());
+  // A refused upload leaves the renderer without anything to render.
+  AreaData released = load_synthetic();
+  release_cpu_copies(released);
+  AreaRenderer failed;
+  CHECK_FALSE(failed.upload(*dev, released, RenderOptions(), &err));
+  CHECK_FALSE(failed.render(*dev, rt, released, cam));
+}
+
+TEST_CASE("area: warnings escape file bytes (non-printable, >= 0x80) as \\xHH (B7)") {
+  fs::MemoryFileSystem mfs;
+  REQUIRE(mount_synthetic_install(mfs));
+  const std::string raw_id = std::string("\x01\xff", 2) + "ab";  // fourcc order
+  REQUIRE(mfs.mount("Root/Data/Levels/levt/esc1.blk",
+                    sage_test::make_blk({entry("esc1_obj.slb", obj_table({{raw_id, {0, 0, 0}, {0, 0, 0}, 0x10}}))})));
+  AreaData a;
+  std::string err;
+  REQUIRE_MESSAGE(load_area(mfs, "levt", "esc1", AreaOptions(), a, &err), err);
+  CHECK(a.stats.missing_models == 1);
+  CHECK(has_warning(a, "model \\x01\\xffab: "));
+  for (const std::string& w : a.warnings)
+    for (char ch : w) CHECK((ch >= 0x20 && ch < 0x7f));
 }
