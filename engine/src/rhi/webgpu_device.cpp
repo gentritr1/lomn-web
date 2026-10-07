@@ -3,6 +3,7 @@
 // is callback-driven and the caller starts its frame loop from the callback).
 #include <webgpu/webgpu.h>
 
+#include <cstdio>
 #include <cstring>
 #include <map>
 
@@ -39,6 +40,39 @@ class WebGpuDevice final : public Device {
                std::string adapter_desc)
       : inst_(inst), adapter_(adapter), dev_(dev), queue_(wgpuDeviceGetQueue(dev)), surface_(surface),
         surface_format_(surface_format), adapter_desc_(std::move(adapter_desc)) {}
+
+  // Releases every owned handle in reverse order of creation (children before the device, then
+  // queue, device, adapter, instance).
+  ~WebGpuDevice() override {
+    if (pass_) {
+      wgpuRenderPassEncoderEnd(pass_);
+      wgpuRenderPassEncoderRelease(pass_);
+    }
+    if (enc_) wgpuCommandEncoderRelease(enc_);
+    if (frame_surface_view_) wgpuTextureViewRelease(frame_surface_view_);
+    if (frame_surface_texture_) wgpuTextureRelease(frame_surface_texture_);
+    for (auto& kv : bind_groups_) wgpuBindGroupRelease(kv.second);
+    for (auto& kv : pipelines_) {
+      Pipeline& p = kv.second;
+      for (auto& v : p.by_format) wgpuRenderPipelineRelease(v.second);
+      if (p.pipeline_layout) wgpuPipelineLayoutRelease(p.pipeline_layout);
+      if (p.layout) wgpuBindGroupLayoutRelease(p.layout);
+      if (p.module) wgpuShaderModuleRelease(p.module);
+    }
+    for (auto& kv : buffers_) wgpuBufferRelease(kv.second);
+    for (auto& kv : targets_) {
+      if (kv.second.view) wgpuTextureViewRelease(kv.second.view);
+      if (kv.second.texture) wgpuTextureRelease(kv.second.texture);
+    }
+    if (surface_) {
+      wgpuSurfaceUnconfigure(surface_);
+      wgpuSurfaceRelease(surface_);
+    }
+    wgpuQueueRelease(queue_);
+    wgpuDeviceRelease(dev_);
+    wgpuAdapterRelease(adapter_);
+    wgpuInstanceRelease(inst_);
+  }
 
   std::string backend() const override { return "webgpu"; }
   std::string adapter() const override { return adapter_desc_; }
@@ -118,10 +152,23 @@ class WebGpuDevice final : public Device {
 
   void begin_frame(TextureId target, const float c[4]) override {
     stats_.draws = 0;
+    frame_active_ = false;
     WGPUTextureView view = nullptr;
     if (target == 0) {
+      // Skip the frame (draw/end_frame become no-ops) rather than touching a null surface or texture.
+      if (!surface_) {
+        log_skip_once("no presentation surface (headless device)");
+        return;
+      }
       WGPUSurfaceTexture st = WGPU_SURFACE_TEXTURE_INIT;
       wgpuSurfaceGetCurrentTexture(surface_, &st);
+      const bool ok = (st.status == WGPUSurfaceGetCurrentTextureStatus_SuccessOptimal ||
+                       st.status == WGPUSurfaceGetCurrentTextureStatus_SuccessSuboptimal) && st.texture;
+      if (!ok) {
+        log_skip_once("surface texture unavailable, status=" + std::to_string(int(st.status)));
+        if (st.texture) wgpuTextureRelease(st.texture);
+        return;
+      }
       frame_surface_texture_ = st.texture;
       frame_surface_view_ = view = wgpuTextureCreateView(st.texture, nullptr);
       pass_format_ = surface_format_;
@@ -139,9 +186,11 @@ class WebGpuDevice final : public Device {
     rp.colorAttachmentCount = 1;
     rp.colorAttachments = &ca;
     pass_ = wgpuCommandEncoderBeginRenderPass(enc_, &rp);
+    frame_active_ = true;
   }
 
   void draw(PipelineId pid, uint32_t n, BufferId u, uint32_t off) override {
+    if (!frame_active_) return;
     Pipeline& p = pipelines_.at(pid);
     wgpuRenderPassEncoderSetPipeline(pass_, variant(p, pass_format_));
     if (p.desc.uniform_bytes) wgpuRenderPassEncoderSetBindGroup(pass_, 0, bind_group(pid, p, u), 1, &off);
@@ -150,12 +199,16 @@ class WebGpuDevice final : public Device {
   }
 
   void end_frame() override {
+    if (!frame_active_) return;
+    frame_active_ = false;
     wgpuRenderPassEncoderEnd(pass_);
     wgpuRenderPassEncoderRelease(pass_);
+    pass_ = nullptr;
     WGPUCommandBuffer cb = wgpuCommandEncoderFinish(enc_, nullptr);
     wgpuQueueSubmit(queue_, 1, &cb);
     wgpuCommandBufferRelease(cb);
     wgpuCommandEncoderRelease(enc_);
+    enc_ = nullptr;
     if (frame_surface_view_) {
       wgpuTextureViewRelease(frame_surface_view_);
       wgpuTextureRelease(frame_surface_texture_);  // the surface texture is acquired per frame and must be released
@@ -187,18 +240,29 @@ class WebGpuDevice final : public Device {
     wgpuCommandEncoderCopyTextureToBuffer(enc, &src, &dst, &ext);
     WGPUCommandBuffer cb = wgpuCommandEncoderFinish(enc, nullptr);
     wgpuQueueSubmit(queue_, 1, &cb);
-    bool ok = false;
+    bool mapped = false;
     WGPUBufferMapCallbackInfo mcb = WGPU_BUFFER_MAP_CALLBACK_INFO_INIT;
     mcb.mode = WGPUCallbackMode_WaitAnyOnly;
-    mcb.callback = [](WGPUMapAsyncStatus s, WGPUStringView, void* u1, void*) { *static_cast<bool*>(u1) = s == WGPUMapAsyncStatus_Success; };
-    mcb.userdata1 = &ok;
+    mcb.callback = [](WGPUMapAsyncStatus s, WGPUStringView msg, void* u1, void*) {
+      *static_cast<bool*>(u1) = s == WGPUMapAsyncStatus_Success;
+      if (s != WGPUMapAsyncStatus_Success) std::fprintf(stderr, "[webgpu] readback map failed (status %d): %s\n", int(s), str(msg).c_str());
+    };
+    mcb.userdata1 = &mapped;
     WGPUFutureWaitInfo w = WGPU_FUTURE_WAIT_INFO_INIT;
     w.future = wgpuBufferMapAsync(buf, WGPUMapMode_Read, 0, bd.size, mcb);
-    wgpuInstanceWaitAny(inst_, 1, &w, UINT64_MAX);
-    if (ok) {
+    const WGPUWaitStatus ws = wgpuInstanceWaitAny(inst_, 1, &w, UINT64_MAX);
+    bool ok = false;
+    if (ws != WGPUWaitStatus_Success) {
+      std::fprintf(stderr, "[webgpu] readback wait failed (status %d)\n", int(ws));
+    } else if (mapped) {
       const uint8_t* px = static_cast<const uint8_t*>(wgpuBufferGetConstMappedRange(buf, 0, bd.size));
-      rgba.resize(size_t(t.width) * t.height * 4);
-      for (uint32_t y = 0; y < t.height; ++y) std::memcpy(&rgba[size_t(y) * t.width * 4], px + size_t(y) * row, t.width * 4);
+      if (!px) {
+        std::fprintf(stderr, "[webgpu] readback: mapped range is null\n");
+      } else {
+        rgba.resize(size_t(t.width) * t.height * 4);
+        for (uint32_t y = 0; y < t.height; ++y) std::memcpy(&rgba[size_t(y) * t.width * 4], px + size_t(y) * row, t.width * 4);
+        ok = true;
+      }
       wgpuBufferUnmap(buf);
     }
     wgpuCommandBufferRelease(cb);
@@ -226,6 +290,12 @@ class WebGpuDevice final : public Device {
     return bind_groups_[key] = wgpuDeviceCreateBindGroup(dev_, &bd);
   }
 
+  void log_skip_once(const std::string& why) {
+    if (logged_skip_) return;
+    logged_skip_ = true;
+    std::fprintf(stderr, "[webgpu] skipping frame(s): %s\n", why.c_str());
+  }
+
   WGPUInstance inst_;
   WGPUAdapter adapter_;
   WGPUDevice dev_;
@@ -244,15 +314,30 @@ class WebGpuDevice final : public Device {
   WGPUTexture frame_surface_texture_ = nullptr;
   WGPUTextureFormat pass_format_ = WGPUTextureFormat_RGBA8Unorm;
   FrameStats stats_;
+  bool frame_active_ = false;
+  bool logged_skip_ = false;
 };
 
 struct Pending {
   WGPUInstance inst = nullptr;
   WGPUAdapter adapter = nullptr;
+  WGPUDevice device = nullptr;  // native: set by the device callback, consumed after the wait
+  std::string error;            // native: set by a failing callback, consumed after the wait
   std::string canvas;
   uint32_t width = 0, height = 0;
   DeviceCallback done;
 };
+
+// Releases whatever creation acquired so far, reports the error and frees p. Never leaks instance/adapter.
+void fail(Pending* p, const std::string& msg, WGPUDevice dev = nullptr, WGPUSurface surface = nullptr) {
+  if (surface) wgpuSurfaceRelease(surface);
+  if (dev) wgpuDeviceRelease(dev);
+  if (p->adapter) wgpuAdapterRelease(p->adapter);
+  if (p->inst) wgpuInstanceRelease(p->inst);
+  DeviceCallback done = std::move(p->done);
+  delete p;
+  done(nullptr, msg);
+}
 
 void finish(Pending* p, WGPUDevice dev) {
   WGPUSurface surface = nullptr;
@@ -264,9 +349,15 @@ void finish(Pending* p, WGPUDevice dev) {
     WGPUSurfaceDescriptor sd = WGPU_SURFACE_DESCRIPTOR_INIT;
     sd.nextInChain = &cs.chain;
     surface = wgpuInstanceCreateSurface(p->inst, &sd);
+    if (!surface) return fail(p, "cannot create surface for canvas " + p->canvas, dev);
     WGPUSurfaceCapabilities caps = WGPU_SURFACE_CAPABILITIES_INIT;
     wgpuSurfaceGetCapabilities(surface, p->adapter, &caps);
+    if (caps.formatCount == 0) {
+      wgpuSurfaceCapabilitiesFreeMembers(caps);
+      return fail(p, "surface reports no supported texture formats", dev, surface);
+    }
     fmt = caps.formats[0];
+    wgpuSurfaceCapabilitiesFreeMembers(caps);
     WGPUSurfaceConfiguration cfg = WGPU_SURFACE_CONFIGURATION_INIT;
     cfg.device = dev;
     cfg.format = fmt;
@@ -279,14 +370,29 @@ void finish(Pending* p, WGPUDevice dev) {
   wgpuAdapterGetInfo(p->adapter, &info);
   std::string desc = str(info.vendor) + "/" + str(info.architecture) + "/" + str(info.description);
   wgpuAdapterInfoFreeMembers(info);
-  p->done(std::make_unique<WebGpuDevice>(p->inst, p->adapter, dev, surface, fmt, desc), "");
+  auto device = std::make_unique<WebGpuDevice>(p->inst, p->adapter, dev, surface, fmt, desc);  // takes ownership of all handles
+  DeviceCallback done = std::move(p->done);
   delete p;
+  done(std::move(device), "");
+}
+
+const char* error_type_name(WGPUErrorType t) {
+  switch (t) {
+    case WGPUErrorType_Validation: return "validation";
+    case WGPUErrorType_OutOfMemory: return "out-of-memory";
+    case WGPUErrorType_Internal: return "internal";
+    default: return "unknown";
+  }
 }
 
 }  // namespace
 
 void create_webgpu_device(const char* canvas_selector, uint32_t width, uint32_t height, DeviceCallback done) {
-  auto* p = new Pending{nullptr, nullptr, canvas_selector ? canvas_selector : "", width, height, std::move(done)};
+  auto* p = new Pending;
+  p->canvas = canvas_selector ? canvas_selector : "";
+  p->width = width;
+  p->height = height;
+  p->done = std::move(done);
 #if defined(__EMSCRIPTEN__)
   p->inst = wgpuCreateInstance(nullptr);
 #else
@@ -296,44 +402,69 @@ void create_webgpu_device(const char* canvas_selector, uint32_t width, uint32_t 
   idesc.requiredFeatures = &feat;
   p->inst = wgpuCreateInstance(&idesc);
 #endif
+  if (!p->inst) return fail(p, "cannot create WebGPU instance");
   WGPURequestAdapterCallbackInfo acb = WGPU_REQUEST_ADAPTER_CALLBACK_INFO_INIT;
   acb.mode = LOMN_CB_MODE;
   acb.userdata1 = p;
   acb.callback = [](WGPURequestAdapterStatus st, WGPUAdapter a, WGPUStringView msg, void* u1, void*) {
     auto* p = static_cast<Pending*>(u1);
-    if (st != WGPURequestAdapterStatus_Success) {
-      p->done(nullptr, "no WebGPU adapter: " + str(msg));
-      delete p;
-      return;
+    if (st != WGPURequestAdapterStatus_Success || !a) {
+      p->error = "no WebGPU adapter: " + str(msg);
+#if defined(__EMSCRIPTEN__)
+      fail(p, p->error);  // browser: callbacks are spontaneous, nothing runs after this
+#endif
+      return;  // native: the outer function reports the failure after wgpuInstanceWaitAny returns
     }
     p->adapter = a;
+    // Visible errors: bad WGSL / validation failures would otherwise be a silent blank frame.
+    WGPUDeviceDescriptor dd = WGPU_DEVICE_DESCRIPTOR_INIT;
+    dd.deviceLostCallbackInfo.mode = WGPUCallbackMode_AllowSpontaneous;
+    dd.deviceLostCallbackInfo.callback = [](WGPUDevice const*, WGPUDeviceLostReason reason, WGPUStringView m, void*, void*) {
+      // Destroyed / CallbackCancelled are the normal teardown path, not a loss.
+      if (reason == WGPUDeviceLostReason_Destroyed || reason == WGPUDeviceLostReason_CallbackCancelled) return;
+      std::fprintf(stderr, "[webgpu] device lost (reason %d): %s\n", int(reason), str(m).c_str());
+    };
+    dd.uncapturedErrorCallbackInfo.callback = [](WGPUDevice const*, WGPUErrorType type, WGPUStringView m, void*, void*) {
+      std::fprintf(stderr, "[webgpu] uncaptured %s error: %s\n", error_type_name(type), str(m).c_str());
+    };
     WGPURequestDeviceCallbackInfo dcb = WGPU_REQUEST_DEVICE_CALLBACK_INFO_INIT;
     dcb.mode = LOMN_CB_MODE;
     dcb.userdata1 = p;
     dcb.callback = [](WGPURequestDeviceStatus st2, WGPUDevice d, WGPUStringView msg2, void* u, void*) {
       auto* p2 = static_cast<Pending*>(u);
-      if (st2 != WGPURequestDeviceStatus_Success) {
-        p2->done(nullptr, "no WebGPU device: " + str(msg2));
-        delete p2;
+      if (st2 != WGPURequestDeviceStatus_Success || !d) {
+        p2->error = "no WebGPU device: " + str(msg2);
+#if defined(__EMSCRIPTEN__)
+        fail(p2, p2->error);
+#endif
         return;
       }
+#if defined(__EMSCRIPTEN__)
       finish(p2, d);
+#else
+      p2->device = d;
+#endif
     };
-    WGPUFuture f = wgpuAdapterRequestDevice(a, nullptr, dcb);
+    WGPUFuture f = wgpuAdapterRequestDevice(a, &dd, dcb);
 #if !defined(__EMSCRIPTEN__)
     WGPUFutureWaitInfo w = WGPU_FUTURE_WAIT_INFO_INIT;
     w.future = f;
-    wgpuInstanceWaitAny(p->inst, 1, &w, UINT64_MAX);
+    const WGPUWaitStatus ws = wgpuInstanceWaitAny(p->inst, 1, &w, UINT64_MAX);
+    if (ws != WGPUWaitStatus_Success && !p->device && p->error.empty())
+      p->error = "WebGPU device request did not complete (wait status " + std::to_string(int(ws)) + ")";
 #else
     (void)f;
 #endif
   };
   WGPUFuture f = wgpuInstanceRequestAdapter(p->inst, nullptr, acb);
 #if !defined(__EMSCRIPTEN__)
-  WGPUInstance inst = p->inst;  // p may be deleted inside the callbacks
   WGPUFutureWaitInfo w = WGPU_FUTURE_WAIT_INFO_INIT;
   w.future = f;
-  wgpuInstanceWaitAny(inst, 1, &w, UINT64_MAX);
+  const WGPUWaitStatus ws = wgpuInstanceWaitAny(p->inst, 1, &w, UINT64_MAX);
+  if (p->device) return finish(p, p->device);
+  if (p->error.empty())
+    p->error = "WebGPU adapter request did not complete (wait status " + std::to_string(int(ws)) + ")";
+  fail(p, p->error);
 #else
   (void)f;
 #endif

@@ -42,3 +42,22 @@ TEST_CASE("deterministic loop: two null runs give identical trace and call log")
   CHECK(traces[0].rfind("{\"frame\":0,\"sim_time\":0.0066666668280959129,", 0) == 0);
   fs::remove_all(base);
 }
+
+#ifndef __EMSCRIPTEN__
+TEST_CASE("deterministic loop: unwritable out_dir returns false instead of throwing") {
+  namespace fs = std::filesystem;
+  fs::path base = fs::temp_directory_path() / ("lomn_loop_badout_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+  fs::remove_all(base);
+  fs::create_directories(base);
+  fs::path blocker = base / "plain_file";
+  { std::ofstream(blocker) << "x"; }
+  auto dev = lomn::rhi::create_null_device(nullptr);
+  lomn::LoopOptions o;
+  o.frames = 3;
+  o.out_dir = (blocker / "sub").string();  // parent exists but is a regular file
+  bool ok = true;
+  CHECK_NOTHROW(ok = lomn::run_deterministic(*dev, o, nullptr));
+  CHECK_FALSE(ok);
+  fs::remove_all(base);
+}
+#endif

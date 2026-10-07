@@ -11,6 +11,9 @@ enable_testing()
 add_library(lomn_core STATIC src/fs/memory_fs.cpp src/rhi/null_device.cpp src/app/loop.cpp)
 target_include_directories(lomn_core PUBLIC include PRIVATE "${LOMN_TOOLCHAIN_DIR}/include")
 target_compile_options(lomn_core PRIVATE -Wall -Wextra)
+# Native clang fuses a*b+c into FMA by default and wasm never does; forbid it so native == wasm32 bit for bit.
+# PUBLIC: every target linking lomn_core inherits it.
+target_compile_options(lomn_core PUBLIC -ffp-contract=off)
 
 if(EMSCRIPTEN)
   set(EMDAWN_PORT "--use-port=${LOMN_TOOLCHAIN_DIR}/emdawnwebgpu_pkg/emdawnwebgpu.port.py")

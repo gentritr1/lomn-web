@@ -59,7 +59,12 @@ void TriangleScene::render(rhi::Device& dev, rhi::TextureId target, double sim_t
 
 bool run_deterministic(rhi::Device& dev, const LoopOptions& opts, std::vector<FrameRecord>* records) {
   namespace fs = std::filesystem;
-  fs::create_directories(opts.out_dir);
+  std::error_code ec;
+  fs::create_directories(opts.out_dir, ec);
+  if (ec) {
+    std::fprintf(stderr, "cannot create %s: %s\n", opts.out_dir.c_str(), ec.message().c_str());
+    return false;
+  }
   std::ofstream trace(fs::path(opts.out_dir) / "trace.jsonl");
   if (!trace) {
     std::fprintf(stderr, "cannot write %s/trace.jsonl\n", opts.out_dir.c_str());
@@ -95,6 +100,11 @@ bool run_deterministic(rhi::Device& dev, const LoopOptions& opts, std::vector<Fr
     if (records) records->push_back({f, sim_time, angle, ms});
   }
   double wall = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t_start).count();
+  trace.close();
+  if (!trace) {
+    std::fprintf(stderr, "failed writing %s/trace.jsonl\n", opts.out_dir.c_str());
+    return false;
+  }
   std::ofstream m(fs::path(opts.out_dir) / "metrics.json");
   m << "{\n \"frames\": " << frame_ms.size() << ",\n \"expected_frames\": " << opts.frames
     << ",\n \"backend\": \"" << dev.backend() << "\",\n \"adapter\": \"" << dev.adapter()
@@ -102,7 +112,12 @@ bool run_deterministic(rhi::Device& dev, const LoopOptions& opts, std::vector<Fr
     << ",\n \"frame_ms_p95\": " << percentile(frame_ms, 0.95) << ",\n \"draws_per_frame\": "
     << (opts.frames ? double(draws) / opts.frames : 0.0) << ",\n \"pipelines\": " << dev.last_frame_stats().pipelines_total
     << ",\n \"shots_written\": " << shots_written << "\n}\n";
-  return static_cast<bool>(m);
+  m.close();
+  if (!m) {
+    std::fprintf(stderr, "failed writing %s/metrics.json\n", opts.out_dir.c_str());
+    return false;
+  }
+  return true;
 }
 
 }  // namespace lomn
