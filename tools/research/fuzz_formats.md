@@ -156,8 +156,10 @@ The weights below are out of 16.
     - A hang in a seed is reported as `seed #0`.
   - wasm32 has no watchdog: a synchronous wasm loop cannot be interrupted. A hang there ends at the make target's
     `timeout`. The wasm32 leg runs with `--last-input build/asan/wasm/last_input.txt` (the format and index of the
-    input about to run, overwritten before every input), and the target prints it when the leg fails, so the hanging
-    input is named. Replay it with `--replay`.
+    input about to run, overwritten before every input and before every warm-up seed, e.g.
+    `x         seed #1 (synthetic, unmutated)`), and the target prints it when the leg fails, so the hanging
+    input or seed is named. Replay an input with `--replay`. ctest `fuzz_formats_warmup_hang` pins the warm-up case
+    (`--test-hang-seed K`, test only, makes synthetic seed K spin in the warm-up), natively and as wasm32.
   - `retimed=` in the resources lines counts the re-run inputs.
 - **Per-input memory growth:**
   - peak live heap bytes (every `operator new` is counted) and process-memory growth are each ≤ 64 MiB natively

@@ -290,6 +290,11 @@ endif()
 add_test(NAME fuzz_formats_smoke COMMAND lomn_fuzz_formats --smoke --n 20000 --seed 1
          --crash-dir ${CMAKE_CURRENT_BINARY_DIR}/fuzz_formats_smoke)
 set_tests_properties(fuzz_formats_smoke PROPERTIES TIMEOUT 20)
+# M1a-4 cleanup C4: a hang in the seed warm-up is named by --last-input (wasm32 has no watchdog; natively the CPU
+# watchdog would name it after 10 s, the script reads the file well before). Runs under Node when cross-compiled.
+add_test(NAME fuzz_formats_warmup_hang COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/fuzz_warmup_hang.sh $<TARGET_FILE:lomn_fuzz_formats>
+         ${CMAKE_CURRENT_BINARY_DIR}/fuzz_warmup_last_input.txt ${CMAKE_CROSSCOMPILING_EMULATOR})
+set_tests_properties(fuzz_formats_warmup_hang PROPERTIES TIMEOUT 90)
 
 # Internal JSON string escaper used by metrics.json (header lives in src/app, not in the public include dir).
 target_sources(lomn_tests PRIVATE tests/test_json_escape.cpp)

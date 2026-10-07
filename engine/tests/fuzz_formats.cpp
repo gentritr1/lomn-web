@@ -30,6 +30,7 @@
 // below --min-deep (default 0.05), 2 on usage errors, 3 when --data yields no real seed for a format.
 // Usage: lomn_fuzz_formats [--n N] [--seed S] [--data INSTALL] [--formats a,b] [--real-per-format K] [--crash-dir D]
 //                          [--min-deep F] [--smoke] [--replay FMT ITER --dump FILE] [--last-input FILE]
+//                          [--test-hang-seed K]
 // How to run: tools/research/fuzz_formats.md (make fuzz-formats; ctest fuzz_formats_smoke).
 #include <algorithm>
 #include <chrono>
@@ -214,9 +215,27 @@ std::string g_crash_dir;
 std::string g_replay_args;  // --seed / --data part of the replay command
 bool g_warmup = false;      // findings name the seed (index g_iter in the format's synthetic / real pool), not an input
 bool g_quiet = false;       // re-timing run: invariant findings were already checked on the first run
-// --last-input FILE: the format and index of the input about to run, overwritten before every input. wasm32 has no
-// per-input watchdog (a synchronous wasm loop cannot be interrupted), so after an outer timeout this names the input.
+// --last-input FILE: the format and index of the input about to run, overwritten before every input and before every
+// warm-up seed ("x         seed #1 (synthetic, unmutated)"). wasm32 has no per-input watchdog (a synchronous wasm loop
+// cannot be interrupted), so after an outer timeout this names the input.
 std::FILE* g_last = nullptr;
+// --test-hang-seed K (ctest fuzz_formats_warmup_hang only): synthetic seed K spins forever in the warm-up, after
+// --last-input names it, as a parser hang there would. UINT64_MAX = off.
+uint64_t g_test_hang_seed = UINT64_MAX;
+
+// Rewrites the --last-input line in place. Every line is padded to one width, so a shorter line never leaves the tail
+// of a longer one behind.
+void note_last(const char* line) {
+  if (!g_last) return;
+  std::rewind(g_last);
+  std::fprintf(g_last, "%-47.47s\n", line);
+  std::fflush(g_last);
+}
+void note_last_seed(const char* fmt, uint64_t index, bool real) {
+  char buf[64];
+  std::snprintf(buf, sizeof buf, "%-9s seed #%llu (%s, unmutated)", fmt, static_cast<unsigned long long>(index), real ? "real" : "synthetic");
+  note_last(buf);
+}
 
 struct Format {
   const char* name;
@@ -1338,7 +1357,8 @@ void make_input(const Format& f, uint64_t seed, uint64_t iter, Rng& r, Bytes& b,
 int usage() {
   std::printf(
       "usage: lomn_fuzz_formats [--n N] [--seed S] [--data INSTALL] [--formats a,b] [--real-per-format K] [--crash-dir D]\n"
-      "                         [--min-deep F] [--smoke] [--replay FMT ITER --dump FILE] [--last-input FILE]\n");
+      "                         [--min-deep F] [--smoke] [--replay FMT ITER --dump FILE] [--last-input FILE]\n"
+      "                         [--test-hang-seed K]   (test only: synthetic seed K hangs in the warm-up)\n");
   return 2;
 }
 
@@ -1373,6 +1393,7 @@ int main(int argc, char** argv) {
       g_last = std::fopen(v.c_str(), "w");
       if (!g_last) return usage();
     }
+    else if (a == "--test-hang-seed" && val(v)) g_test_hang_seed = std::strtoull(v.c_str(), nullptr, 10);
     else return usage();
   }
   if (smoke) data.clear();  // the ctest subset uses synthetic seeds only
@@ -1422,6 +1443,8 @@ int main(int argc, char** argv) {
         g_fmt = &f;
         g_warmup = true;  // warm-up: one-time statics, as in a normal run
         for (const Seed& sd : f.syn) {
+          g_iter = static_cast<uint64_t>(&sd - f.syn.data());
+          note_last_seed(f.name, g_iter, false);
 #if !defined(__EMSCRIPTEN__)
           watchdog(10);
 #endif
@@ -1471,9 +1494,13 @@ int main(int argc, char** argv) {
       for (const Seed& sd : *pool) {
         g_iter = static_cast<uint64_t>(&sd - pool->data());
         g_input = &sd.bytes;
+        note_last_seed(f.name, g_iter, pool == &f.real);  // a seed that hangs on wasm32 is named too (cleanup C4)
 #if !defined(__EMSCRIPTEN__)
         watchdog(10);  // a seed that hangs is a finding too
 #endif
+        if (pool == &f.syn && g_iter == g_test_hang_seed)
+          for (volatile uint64_t spin = 0;; spin = spin + 1) {
+          }
         (void)run_one(f.name, sd.bytes, r, pool == &f.real);
       }
 #if !defined(__EMSCRIPTEN__)
@@ -1486,9 +1513,9 @@ int main(int argc, char** argv) {
       g_iter = it;
       g_input = &b;
       if (g_last) {
-        std::rewind(g_last);
-        std::fprintf(g_last, "%-9s %12llu\n", f.name, static_cast<unsigned long long>(it));
-        std::fflush(g_last);
+        char line[64];
+        std::snprintf(line, sizeof line, "%-9s %12llu", f.name, static_cast<unsigned long long>(it));
+        note_last(line);
       }
       (void)run_measured(f, b, r, is_real);
       if ((it + 1) % (n / 10 ? n / 10 : 1) == 0)  // progress, with the process memory (wasm32: linear memory size)
