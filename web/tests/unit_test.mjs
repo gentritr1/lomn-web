@@ -67,21 +67,20 @@ test('blkTablesFingerprint: order-independent, path-case-insensitive, bounded', 
   await bad({ 'other/a.blk': blk(0) }, /not a LOMN install/);
 });
 
-test('blkTablesFingerprint: the total table byte cap (review fix 4: a mutant without it survived)', async () => {
-  // Each file declares the largest legal table (MAX_BLK_ENTRIES entries = 3,670,028 bytes); the bytes are made up on read, so
-  // nothing big is held. 64 MiB holds 18 such tables and not 19.
-  const per = 12 + MAX_BLK_ENTRIES * 56;
+test('blkTablesFingerprint: the total table byte cap (review fixes 4 and N1: small tables, an injectable cap)', async () => {
+  // The cap is an option (default MAX_TOTAL_TABLE_BYTES, which the page uses), so the test needs a few KB, not 64 MiB: the
+  // earlier version allocated ~70 MB and hashed 18 x 3.6 MB, which deadlocked Node 23.7's exit in about 1 run in 5.
+  assert.equal(MAX_TOTAL_TABLE_BYTES, 64 * 1024 * 1024);
+  const per = 12 + MAX_BLK_ENTRIES * 56;  // the largest legal table: 64 MiB holds 18 of them and not 19 (arithmetic only)
   assert.equal(Math.floor(MAX_TOTAL_TABLE_BYTES / per), 18);
-  const files = (n) => Array.from({ length: n }, (_, i) => ({ path: `data/t${String(i).padStart(2, '0')}.blk`, size: per }));
-  const read = async (e, o, l) => {
-    const b = new Uint8Array(l);
-    b.set([0x42, 0x4c, 0x4b, 0x46]);
-    new DataView(b.buffer).setUint32(8, MAX_BLK_ENTRIES, true);
-    return b;
-  };
-  const ok = await blkTablesFingerprint(files(18), read);
-  assert.equal(ok.tableBytes, 18 * per);
-  await assert.rejects(blkTablesFingerprint(files(19), read), /blockfile tables over the size cap/);
+  const tables = Array.from({ length: 3 }, (_, i) => ({ path: `data/t${i}.blk`, size: 12 + 10 * 56 + 5, bytes: blk(10, 5) }));  // 572 B each
+  const f = { entries: tables, read: async (e, o, l) => e.bytes.subarray(o, o + l) };
+  const ok = await blkTablesFingerprint(f.entries, f.read, { maxTotalTableBytes: 3 * 572 });  // exactly the total: allowed
+  assert.equal(ok.tableBytes, 3 * 572);
+  await assert.rejects(blkTablesFingerprint(f.entries, f.read, { maxTotalTableBytes: 3 * 572 - 1 }), /blockfile tables over the size cap/);
+  await assert.rejects(blkTablesFingerprint(f.entries, f.read, { maxTotalTableBytes: 572 }), /blockfile tables over the size cap/);
+  // The default is the 64 MiB constant (the option is only a test seam): three small tables pass without it.
+  assert.equal((await blkTablesFingerprint(f.entries, f.read)).tableBytes, 3 * 572);
 });
 
 test('blkTablesFingerprint: names sort by UTF-8 bytes, as the Python oracle does (review fix 6)', async () => {
@@ -100,6 +99,23 @@ test('blkTablesFingerprint: names sort by UTF-8 bytes, as the Python oracle does
   const r = await blkTablesFingerprint(f.entries, f.read);
   assert.equal(r.blkFiles, 4);
   assert.equal(r.fingerprint, '1d3c18ccade5d471383564557ea58b48b0231674b0ff062047d8e0a50bd5175a');
+});
+
+test('blkTablesFingerprint: a name that is a byte prefix of another sorts first (review fix N4)', async () => {
+  // Same install as tools/tests/test_byo_fingerprint.py::test_prefix_names_sort_shorter_first (the oracle's value is hard-coded
+  // in both): a.blk is a prefix of a.blk.blk, and é.blk of é.blk.blk. A tie-break that put the longer name first changes it.
+  const mk = (count, tail) => {
+    const b = new Uint8Array(12 + count * 56 + tail);
+    b.set([0x42, 0x4c, 0x4b, 0x46]);
+    new DataView(b.buffer).setUint32(4, 7, true);
+    new DataView(b.buffer).setUint32(8, count, true);
+    for (let i = 0; i < count; ++i) for (let j = 0; j < 56; ++j) b[12 + i * 56 + j] = j;
+    return b;
+  };
+  const f = fromBytes({ 'data/\u00e9.blk.blk': mk(1, 2), 'data/ab.blk': mk(1, 0), 'data/a.blk.blk': mk(0, 2), 'data/\u00e9.blk': mk(2, 1), 'data/a.blk': mk(1, 1) });
+  const r = await blkTablesFingerprint(f.entries, f.read);
+  assert.equal(r.blkFiles, 5);
+  assert.equal(r.fingerprint, '05283d38aaad7e482b04ac1f8c2b558523e80c41509b4fd1a05395cc6a72e82b');
 });
 
 test('wanted(): the exe at the top and data/ except dot files, exes and DLLs', () => {

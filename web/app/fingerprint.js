@@ -39,8 +39,9 @@ function compareBytes(a, b) {
 
 // entries: [{path, size}] relative to the install root ('/' separators, any case). readRange(entry, offset, length)
 // resolves to a Uint8Array of exactly `length` bytes. Returns {fingerprint, blkFiles, tableBytes}; throws Error with a
-// message naming the file on malformed input.
-export async function blkTablesFingerprint(entries, readRange) {
+// message naming the file on malformed input. `maxTotalTableBytes` is a test seam (the page never passes it): the cap on the
+// summed table bytes, MAX_TOTAL_TABLE_BYTES by default.
+export async function blkTablesFingerprint(entries, readRange, { maxTotalTableBytes = MAX_TOTAL_TABLE_BYTES } = {}) {
   const blks = entries
     .map((e) => ({ e, key: lowerAscii(e.path) }))
     .filter((x) => x.key.startsWith('data/') && x.key.endsWith('.blk'))
@@ -60,7 +61,7 @@ export async function blkTablesFingerprint(entries, readRange) {
     const len = BLK_HEADER + count * BLK_ENTRY;
     if (len > e.size) throw new Error(`${e.path}: entry table larger than the file`);
     total += len;
-    if (total > MAX_TOTAL_TABLE_BYTES) throw new Error('blockfile tables over the size cap');
+    if (total > maxTotalTableBytes) throw new Error('blockfile tables over the size cap');
     const table = await readRange(e, 0, len);
     if (table.length !== len) throw new Error(`${e.path}: short read`);
     lines.push(`${key} ${e.size} ${await sha256hex(table)}`);

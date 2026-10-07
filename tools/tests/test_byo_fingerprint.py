@@ -75,6 +75,25 @@ def test_non_ascii_names_sort_by_utf8_bytes_in_js_and_python(tmp_path: Path) -> 
     assert js_fingerprint(root) == py
 
 
+# Review fix N4: a name that is a byte prefix of another sorts first (a.blk before a.blk.blk). PREFIX_FP is the oracle's value
+# for exactly this install (web/tests/unit_test.mjs builds the same one).
+PREFIX_FP = "05283d38aaad7e482b04ac1f8c2b558523e80c41509b4fd1a05395cc6a72e82b"
+PREFIX_FILES = [("a.blk", 1, b"a"), ("a.blk.blk", 0, b"bb"), ("ab.blk", 1, b""), ("\u00e9.blk", 2, b"c"), ("\u00e9.blk.blk", 1, b"dd")]
+
+
+@pytest.mark.skipif(NODE is None, reason="node not found")
+def test_prefix_names_sort_shorter_first(tmp_path: Path) -> None:
+    root = tmp_path / "inst"
+    (root / "data").mkdir(parents=True)
+    (root / "LEGOBionicle.exe").write_bytes(b"x")
+    for name, count, tail in PREFIX_FILES:
+        (root / "data" / name).write_bytes(blk(count, tail))
+    py = byo_fingerprint.fingerprint(root)
+    assert py["blk_tables_sha256"] == PREFIX_FP
+    assert py["blk_files"] == 5
+    assert js_fingerprint(root) == py
+
+
 @pytest.mark.skipif(NODE is None or not os.environ.get("LOMN_DATA"), reason="needs node and LOMN_DATA")
 def test_real_install_is_the_accepted_build() -> None:
     root = Path(os.environ["LOMN_DATA"]) / "install"
