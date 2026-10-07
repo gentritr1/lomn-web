@@ -204,3 +204,14 @@ Measured cost (native Release, M1 Pro, warm file cache, 3 runs):
 | ASan + UBSan full-data run | clean |
 | Deliberate code mutations caught by the tests | 10 of 10 |
 
+
+### 7.1 Corrections from M1a-1 hardening and the M1a-2 reference (2026-10-07)
+
+| # | Earlier text | Measured fact / decision |
+|---|---|---|
+| R11 | §5 security bounds (BLK/`.x`/DDS) | Added hostile-input caps, each derived from a measured Beta maximum: BLK name run 512 B (max 2), entry 64 MiB (max 2.51 MB), `.x` objects 131,072 (max 5,489), materials 65,536 (max 3,110), texture name 576 B (max 36), `.x` input 64 MiB. Evidence: `docs/knowledge/audits/2026-10-07-m1a1-parser-security.md`. |
+| R12 | §2.3 `ALPHAFUNC GREATEREQUAL` | `GREATER`: DrawX 0x5528c0 sets D3DRS_ALPHAFUNC (0x19) to 5. §2.3 corrected. |
+| R13 | §2.3 "ALPHAREF 0 or 1 per the code" | **History-dependent.** `SrPushRenderMode` 0x531100 sets ALPHAREF 1 only when *leaving* a 0x80000 mode, and 0 when entering one; the D3D8 default is 0. M1a-2 uses 1 behind `--alpha-ref`; M1a-3 derives it from the real mode sequence. Pixels differ only where texture alpha is exactly 1/255. |
+| R14 | §2.3 alpha pass "ALPHABLEND on" | DrawX turns ALPHABLEND **off** for the alpha pass (alpha-test only) when the flag at `*param_2+0xc` is set (0x5528c0 ≈ lines 295–298). M1a-2 blends every alpha subset. M1a-3 must read which callers set the flag before A8 is judged final. |
+| R15 | Parent spec: depth `depth24plus-stencil8` | M1a-2 uses `Depth32Float` without stencil (no stencil use before shadows). `GcShadow::Render` 0x5dbdb0 enables STENCIL, so stencil arrives with shadows (M2) as an additive render-target option. The original's clear Z decompiles as 0.0, which is unusable with LESSEQUAL; M1a-2 clears to 1.0. A disassembly check is pending (M1a-3). |
+| R16 | §5 per-area volume | Survey of all 123 areas (M1a-2 reference): at most 55 drawn placements (lev6/ta03), 165 draws (lev6/ta11), 76 textures (lev2/vllg), 57.0 MB of RGBA8+mips texture bytes (lev0/frnt), and 1.27 MB of geometry (lev6/ta14). Caps: 1,024 / 4,096 / 1,024 / 256 MiB / 64 MiB. RGBA8 with mips is ≈ 5.3× the DDS size, which feeds the M1b memory budget. |
