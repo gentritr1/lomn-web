@@ -480,9 +480,12 @@ TEST_CASE("x: MeshVertexColors with fewer entries than nColors is rejected ('Mes
     CHECK_FALSE(xf.mesh.has_colors);
   }
   {
-    X x;  // nColors 3 with one vertex index (and one colour)
+    // nColors 3 with one vertex index but 3 colours of floats: only the index half (nc > ints.size()-1) can fire.
+    // (Cleanup C2: this input used to carry one colour, so the floats half fired too and deleting only the index half
+    // stayed green.) Without it ints[2] / ints[3] are read past a size-2 list (ASan heap-buffer-overflow).
+    X x;
     x.obj("Mesh").ints({3}).floats({0, 0, 0, 1, 0, 0, 0, 1, 0}).ints({1, 3, 0, 1, 2});
-    x.obj("MeshVertexColors").ints({3}).ints({0}).floats({0.1f, 0.2f, 0.3f, 1}).close();
+    x.obj("MeshVertexColors").ints({3}).ints({0}).floats({0.1f, 0.2f, 0.3f, 1, 0.4f, 0.5f, 0.6f, 1, 0.7f, 0.8f, 0.9f, 1}).close();
     x.close();
     XFile xf;
     std::string err;
