@@ -219,3 +219,32 @@ TEST_CASE("tga: uncompressed 24/32 bpp, origin handling, RLE packets and their b
   Bytes zero = header(2, 0, 2, 24, 0);
   CHECK_FALSE(decode_tga(zero.data(), zero.size(), img, &ti, &err));
 }
+
+TEST_CASE("tga: a header promising more pixels than the input can hold is rejected before the pixel buffer exists (M1a-4 fuzz_formats finding)") {
+  // 4096x4096x32 RLE needs at least ceil(16M / 128) packets of 1 + 4 bytes; 10 bytes of packets cannot be enough. The
+  // decoder used to allocate the 64 MiB pixel buffer first and fail inside the packet loop.
+  Bytes big = {0, 0, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+  put16(big, 4096);
+  put16(big, 4096);
+  put8(big, 32);
+  put8(big, 0x28);
+  for (uint8_t x : {0xff, 1, 2, 3, 4, 0x00, 5, 6, 7, 8}) big.push_back(x);
+  Image img;
+  TgaInfo ti;
+  std::string err;
+  CHECK_FALSE(decode_tga(big.data(), big.size(), img, &ti, &err));
+  CHECK(err.find("too short for the image") != std::string::npos);
+  CHECK(img.rgba.empty());
+  // Uncompressed: same rule (the data length is checked before the allocation).
+  big[2] = 2;
+  CHECK_FALSE(decode_tga(big.data(), big.size(), img, &ti, &err));
+  CHECK(err.find("pixel data truncated") != std::string::npos);
+  // The exact lower bound still reaches the packet loop: 2x1 RLE with one packet of 1 + 4 bytes is accepted.
+  Bytes ok = {0, 0, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+  put16(ok, 2);
+  put16(ok, 1);
+  put8(ok, 32);
+  put8(ok, 0x28);
+  for (uint8_t x : {0x81, 1, 2, 3, 4}) ok.push_back(x);
+  CHECK(decode_tga(ok.data(), ok.size(), img, &ti, &err));
+}

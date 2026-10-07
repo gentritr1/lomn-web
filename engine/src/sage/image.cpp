@@ -157,9 +157,15 @@ bool decode_tga(const uint8_t* d, size_t size, Image& out, TgaInfo* info, std::s
   if (pos > size) return fail(err, "tga: header fields run past the file");
   size_t bytes_pp = bpp / 8;
   size_t npix = static_cast<size_t>(w) * h;
+  // M1a-4 (fuzz_formats finding): the input must be able to hold the pixels BEFORE the w*h*bpp buffer is allocated (a
+  // 4096x4096 header over a few bytes used to allocate 64 MiB and then fail). Uncompressed: the exact size. RLE: every
+  // packet is a header byte + at least one pixel and covers at most 128 pixels, so any stream that can complete has
+  // at least ceil(npix / 128) * (1 + bpp) bytes; shorter ones would only fail later, in the packet loop.
+  if (type == 2 && !in_range(size, pos, static_cast<uint64_t>(npix) * bytes_pp)) return fail(err, "tga: pixel data truncated");
+  if (type == 10 && size - pos < (static_cast<uint64_t>(npix) + 127) / 128 * (1 + bytes_pp))
+    return fail(err, "tga: RLE data too short for the image");
   std::vector<uint8_t> raw(npix * bytes_pp);  // file pixel order
   if (type == 2) {
-    if (!in_range(size, pos, raw.size())) return fail(err, "tga: pixel data truncated");
     std::memcpy(raw.data(), d + pos, raw.size());
   } else {
     size_t pix = 0;
