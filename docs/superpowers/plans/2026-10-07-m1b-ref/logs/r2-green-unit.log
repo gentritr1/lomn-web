@@ -1,0 +1,22 @@
+✔ serves index.html for / and by name (54.269542ms)
+✔ sibling directory sharing the root prefix is not reachable (..%2f) (5.845416ms)
+✔ sibling directory is not reachable (%2e%2e%2f) (3.211125ms)
+✔ malformed percent escape answers 400 and the server keeps serving (8.036792ms)
+✔ M12 checkRelPath: no empty, ".", ".." or over-long segments; byte length counted in UTF-8 (27.36625ms)
+✔ M11 filesSource: over-long (UTF-8) paths and case duplicates are skipped with a warning, never fatal (21.212209ms)
+✔ I6 checkCopyManifest / sameFiles: the completion manifest is shape-checked and compared with the copy (1.451875ms)
+✔ M2 filterCached: a cached prefetch set over the byte cap is dropped (discovery runs instead) (16.381167ms)
+✔ classify: accepted, rejected-list (named), unknown exe, unknown data (0.9885ms)
+✔ checkBuilds rejects malformed lists (0.35925ms)
+✔ blkTablesFingerprint: order-independent, path-case-insensitive, bounded (18.328917ms)
+✔ wanted(): the exe at the top and data/ except dot files, exes and DLLs (0.17825ms)
+✔ filesSource: strips the picked folder, keeps only wanted files (1.095166ms)
+✔ parseRanges: integers only, malformed lines rejected (0.399584ms)
+ℹ tests 14
+ℹ suites 0
+ℹ pass 14
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 342.676833

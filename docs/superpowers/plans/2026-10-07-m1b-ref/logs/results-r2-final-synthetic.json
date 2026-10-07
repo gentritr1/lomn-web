@@ -1,0 +1,743 @@
+{
+ "results": [
+  {
+   "ok": true,
+   "what": "hashed assets: JS and wasm published under content-hashed names, index.html unhashed",
+   "detail": "app/byo.54139dc112.js app/engine.71dfe8122d.js app/fingerprint.d343aef215.js app/idb.ee7e6e00af.js app/main.e7fbda700b.js app/opfs_worker.2dfb9d6a68.js app/paths.2f6a6c5095.js builds.json index.html lomn_web.916a914816.wasm lomn_web.cdc9dac69b.js"
+  },
+  {
+   "ok": true,
+   "what": "first visit asks for the folder",
+   "detail": "Choose your BIONICLE: The Legend of Mata Nui (Beta 1.5.0) folder. Nothing is uploaded: the files are read on this computer."
+  },
+  {
+   "ok": true,
+   "what": "unknown exe -> named rejection",
+   "detail": "Unknown build: LEGOBionicle.exe SHA-256 26a10d6cdf2b… is not an accepted build. Only BIONICLE: The Legend of Mata Nui Beta 1.5.0 is supported (REBUILT and other mods are not)."
+  },
+  {
+   "ok": true,
+   "what": "rejected-list (REBUILT-style) exe -> named rejection",
+   "detail": "This is REBUILT (test fixture) (LEGOBionicle.exe SHA-256 459d1786b2a3…), which is not supported: REBUILT needs the LOMNHook mod natives (e.g. BetterSaver), which a browser cannot load"
+  },
+  {
+   "ok": true,
+   "what": "non-game folder (exe, no .blk) -> hard rejection (C2)",
+   "detail": "The game data could not be validated: no data/**/*.blk files: this is not a LOMN install"
+  },
+  {
+   "ok": true,
+   "what": "empty folder -> rejection (M8, the empty-fixture negative test)",
+   "detail": "LEGOBionicle.exe was not found at the top of the chosen folder. Choose the game folder itself (the one that contains LEGOBionicle.exe and data/)."
+  },
+  {
+   "ok": true,
+   "what": "CSP meta present (default-src/connect-src self, object-src none)",
+   "detail": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'"
+  },
+  {
+   "ok": true,
+   "what": "rejected folders copied nothing into OPFS",
+   "detail": ""
+  },
+  {
+   "ok": true,
+   "what": "network discipline: rejections",
+   "detail": "9 responses, 53477 of 456042 build bytes"
+  },
+  {
+   "ok": true,
+   "what": "quota short -> message, no copy",
+   "detail": "Not enough browser storage to copy the game files: 0.0 MiB needed, 0.0 MiB available (persistent storage not granted). Free some space, or use Chrome or Edge, which read the folder in place without copying."
+  },
+  {
+   "ok": true,
+   "what": "quota-short: nothing written to OPFS",
+   "detail": ""
+  },
+  {
+   "ok": true,
+   "what": "OPFS path: copied, validated and showing levt/test",
+   "detail": "levt/test"
+  },
+  {
+   "ok": true,
+   "what": "OPFS path: source is the copy",
+   "detail": "{\"kind\":\"opfs\",\"how\":\"copied\",\"name\":\"lomn-install\",\"files\":5,\"bytes\":9219}"
+  },
+  {
+   "ok": true,
+   "what": "pixels levt/test (OPFS path) vs native",
+   "detail": "0 of 921600 differ, max delta 0, over tolerance 0: 0"
+  },
+  {
+   "ok": true,
+   "what": "measured configuration: the page runs the wasm this test built (Release)",
+   "detail": "Release [-O3 -DNDEBUG] 916a914816bd vs built 916a914816bd"
+  },
+  {
+   "ok": true,
+   "what": "discovery: the browser fetched exactly the native access log of levt/test",
+   "detail": "8 rounds, 11 ranges, 3394 bytes"
+  },
+  {
+   "ok": true,
+   "what": "switch 1 to levt/stat: live objects + resident bytes flat",
+   "detail": "{\"textures\":7,\"buffers\":15,\"pipelines\":4,\"samplers\":1,\"bind_groups\":7} fs=6815"
+  },
+  {
+   "ok": true,
+   "what": "switch 1: resident file bytes == levt/stat's own read set (previous area released)",
+   "detail": "6815 vs 6815"
+  },
+  {
+   "ok": true,
+   "what": "pixels levt/stat (OPFS path, after a switch) vs native",
+   "detail": "0 of 921600 differ, max delta 0, over tolerance 0: 0"
+  },
+  {
+   "ok": true,
+   "what": "discovery: levt/stat fetched exactly its native access log",
+   "detail": ""
+  },
+  {
+   "ok": true,
+   "what": "switch 2 to levt/test: live objects + resident bytes flat",
+   "detail": "{\"textures\":3,\"buffers\":5,\"pipelines\":4,\"samplers\":1,\"bind_groups\":3} fs=3549"
+  },
+  {
+   "ok": true,
+   "what": "switch 2: resident file bytes == levt/test's own read set (previous area released)",
+   "detail": "3549 vs 3549"
+  },
+  {
+   "ok": true,
+   "what": "switch 3 to levt/stat: live objects + resident bytes flat",
+   "detail": "{\"textures\":7,\"buffers\":15,\"pipelines\":4,\"samplers\":1,\"bind_groups\":7} fs=6815"
+  },
+  {
+   "ok": true,
+   "what": "switch 3: resident file bytes == levt/stat's own read set (previous area released)",
+   "detail": "6815 vs 6815"
+  },
+  {
+   "ok": true,
+   "what": "switch 4 to levt/test: live objects + resident bytes flat",
+   "detail": "{\"textures\":3,\"buffers\":5,\"pipelines\":4,\"samplers\":1,\"bind_groups\":3} fs=3549"
+  },
+  {
+   "ok": true,
+   "what": "switch 4: resident file bytes == levt/test's own read set (previous area released)",
+   "detail": "3549 vs 3549"
+  },
+  {
+   "ok": true,
+   "what": "switch 5 to levt/stat: live objects + resident bytes flat",
+   "detail": "{\"textures\":7,\"buffers\":15,\"pipelines\":4,\"samplers\":1,\"bind_groups\":7} fs=6815"
+  },
+  {
+   "ok": true,
+   "what": "switch 5: resident file bytes == levt/stat's own read set (previous area released)",
+   "detail": "6815 vs 6815"
+  },
+  {
+   "ok": true,
+   "what": "switch 6 to levt/test: live objects + resident bytes flat",
+   "detail": "{\"textures\":3,\"buffers\":5,\"pipelines\":4,\"samplers\":1,\"bind_groups\":3} fs=3549"
+  },
+  {
+   "ok": true,
+   "what": "switch 6: resident file bytes == levt/test's own read set (previous area released)",
+   "detail": "3549 vs 3549"
+  },
+  {
+   "ok": true,
+   "what": "network discipline: OPFS first visit",
+   "detail": "12 responses, 455221 of 456042 build bytes"
+  },
+  {
+   "ok": true,
+   "what": "OPFS revisit: no picker, no copy",
+   "detail": "{\"kind\":\"opfs\",\"how\":\"revisit\",\"name\":\"lomn-install\",\"files\":5,\"bytes\":9219}"
+  },
+  {
+   "ok": true,
+   "what": "revisit: the cached prefetch set loads the area in 1 round",
+   "detail": "rounds 1"
+  },
+  {
+   "ok": true,
+   "what": "pixels levt/test (OPFS revisit) vs native",
+   "detail": "0 of 921600 differ, max delta 0, over tolerance 0: 0"
+  },
+  {
+   "ok": true,
+   "what": "pixel gate null: levt/test on two fresh pages",
+   "detail": "0 differ, max delta 0"
+  },
+  {
+   "ok": true,
+   "what": "network discipline: OPFS revisit",
+   "detail": "10 responses, 451409 of 456042 build bytes"
+  },
+  {
+   "ok": true,
+   "what": "I6: a copy missing a file is cleared and the folder asked for again",
+   "detail": "need-files: The browser copy of the game files was incomplete (missing data/Base.osi) and was removed. Choose your BIONICLE: The Legend of Mata Nui (Beta 1.5.0) folder. Nothing is uploaded: the files are read on this computer.; copy removed true"
+  },
+  {
+   "ok": true,
+   "what": "I6: copied again for the following steps",
+   "detail": ""
+  },
+  {
+   "ok": true,
+   "what": "handle path: picked handle read in place (no copy)",
+   "detail": "{\"kind\":\"handle\",\"how\":\"picked\",\"name\":\"lomn-install\",\"files\":5,\"bytes\":9219}"
+  },
+  {
+   "ok": true,
+   "what": "pixels levt/stat (handle path) vs native",
+   "detail": "0 of 921600 differ, max delta 0, over tolerance 0: 0"
+  },
+  {
+   "ok": true,
+   "what": "handle revisit: the IndexedDB handle is used without a picker",
+   "detail": "{\"kind\":\"handle\",\"how\":\"revisit\",\"name\":\"lomn-install\",\"files\":5,\"bytes\":9219}"
+  },
+  {
+   "ok": true,
+   "what": "network discipline: handle revisit",
+   "detail": "10 responses, 451409 of 456042 build bytes"
+  },
+  {
+   "ok": true,
+   "what": "pixel gate positive control: fog off exceeds the tolerance",
+   "detail": "424494 pixels over tolerance 0, max delta 28"
+  },
+  {
+   "ok": true,
+   "what": "network positive control: a non-manifest path and a foreign origin are flagged",
+   "detail": "foreign paths /not-in-manifest.bin, urls , CSP-blocked http://127.0.0.1:9/elsewhere"
+  },
+  {
+   "ok": true,
+   "what": "I4: the CSP blocks the foreign-origin request itself",
+   "detail": "blocked [\"http://127.0.0.1:9/elsewhere\"]"
+  },
+  {
+   "ok": true,
+   "what": "leak positive control: one leaked texture is counted by the flat-count check",
+   "detail": "{\"textures\":7,\"buffers\":15,\"pipelines\":4,\"samplers\":1,\"bind_groups\":7} -> {\"textures\":8,\"buffers\":15,\"pipelines\":4,\"samplers\":1,\"bind_groups\":7}"
+  },
+  {
+   "ok": true,
+   "what": "M13: ?fog=off without ?debug=1 is ignored",
+   "detail": "fog true"
+  },
+  {
+   "ok": true,
+   "what": "revisit with permission \"prompt\": asks again",
+   "detail": "The game folder \"lomn-install\" needs your permission again."
+  },
+  {
+   "ok": true,
+   "what": "after the re-grant click the area shows",
+   "detail": ""
+  },
+  {
+   "ok": true,
+   "what": "HUD reconciliation: dt samples == frames in window - 1",
+   "detail": "121 frames, 120 dt samples, window 1999.8 ms, expected 119.988 intervals at 60 Hz"
+  },
+  {
+   "ok": true,
+   "what": "HUD overlay shows fps, reconciliation, breakdown, heap",
+   "detail": "build Release [-O3 -DNDEBUG] emscripten 6.0.11 wasm 916a914816bd  canvas 1280x720 @1x  apple/metal-3/"
+  },
+  {
+   "ok": true,
+   "what": "M3: W without canvas focus leaves the camera alone",
+   "detail": "moved false"
+  },
+  {
+   "ok": true,
+   "what": "free-fly: W moves forward, drag turns",
+   "detail": "eye z 10 -> 9.475, yaw 27.474 -> 57.474"
+  },
+  {
+   "ok": true,
+   "what": "reset camera returns to the POS-start view",
+   "detail": ""
+  },
+  {
+   "ok": true,
+   "what": "resize: surface follows the canvas, frames keep drawing",
+   "detail": "1280x720 -> 868x488, draws 10"
+  },
+  {
+   "ok": true,
+   "what": "network discipline: HUD page",
+   "detail": "10 responses, 451409 of 456042 build bytes"
+  },
+  {
+   "ok": true,
+   "what": "responsive sweep, BYO page (40 widths 360..1920): no horizontal scroll, no overlap",
+   "detail": "min clearance 8.0 px"
+  },
+  {
+   "ok": true,
+   "what": "resize to 328x185 (viewport 360): pixels == native render of that size (depth valid)",
+   "detail": "0 differ, max delta 0"
+  },
+  {
+   "ok": true,
+   "what": "resize to 968x545 (viewport 1000): pixels == native render of that size (depth valid)",
+   "detail": "0 differ, max delta 0"
+  },
+  {
+   "ok": true,
+   "what": "resize to 1280x720 (viewport 1920): pixels == native render of that size (depth valid)",
+   "detail": "0 differ, max delta 0"
+  },
+  {
+   "ok": true,
+   "what": "responsive sweep, viewer (40 widths): no h-scroll/overlap, HUD inside the canvas, every resize draws all draws, 0 rejected, no WebGPU message",
+   "detail": "min clearance 8.0 px"
+  },
+  {
+   "ok": true,
+   "what": "I2: the display rate is measured before the first area; the unspun run is not DROPPING",
+   "detail": "display 60 Hz (p10 interval 16.1 ms), fps 60.001"
+  },
+  {
+   "ok": true,
+   "what": "I2: the old circular expectation hides (or understates) the drop",
+   "detail": "old: p50 25.7 ms -> snapped 30 Hz -> expected 46.9 vs counted 60 (ratio 1.28); new: display 60 Hz -> expected 93.9 (ratio 0.64)"
+  },
+  {
+   "ok": true,
+   "what": "I2: a 25 ms spin per frame -> measured fps vs the display rate -> DROPPING",
+   "detail": "display 60 Hz, fps 38.348, expected 93.876 intervals, dropping true"
+  },
+  {
+   "ok": true,
+   "what": "I2: ?debug=1&debug_spin=25 makes DROPPING fire",
+   "detail": "fps 39.314 vs display 60 Hz, spin 25"
+  },
+  {
+   "ok": true,
+   "what": "I1: live GPUTexture/GPUBuffer counts flat over 30 switches",
+   "detail": "first {\"textures\":4,\"buffers\":5,\"created\":14,\"destroyed\":10}, last {\"textures\":4,\"buffers\":5,\"created\":154,\"destroyed\":150}"
+  },
+  {
+   "ok": true,
+   "what": "M2: a stale build's cached prefetch sets are pruned at boot",
+   "detail": "[]"
+  },
+  {
+   "ok": true,
+   "what": "M4: concurrent picks start exactly one engine",
+   "detail": "wasm fetches 1, results [true,false]"
+  },
+  {
+   "ok": true,
+   "what": "I3: a moved remembered folder -> need-files with a message and the picker",
+   "detail": "need-files: The remembered folder \"lomn-moved\" could not be read (moved or deleted). Choose your BIONICLE: The Legend of Mata Nui (Beta 1.5.0) folder. Nothing is uploaded: the files are read on this computer.; picker visible true"
+  },
+  {
+   "ok": true,
+   "what": "I7: an interrupted copy is cleared at start",
+   "detail": "dir left false; An incomplete copy (interrupted before it finished) was removed. Choose your BIONICLE: The Legend of Mata Nui (Beta 1.5.0) folder. Nothing is uploaded: the files are read on this computer."
+  },
+  {
+   "ok": true,
+   "what": "C2: accepted exe + unknown tables -> shown with a warning; the reason is in metrics",
+   "detail": "area-ready; warning \"Game data differs from the known build — rendering may differ (.blk table fingerprint 980c3068aa7a… is not in builds.json for \"synthetic-test\")\"; metrics {\"build\":\"synthetic-test\",\"data\":\"unknown\",\"warning\":\"Game data differs from the known build — rendering may differ (.blk table fingerprint 980c3068aa7a… is not in builds.json for \\\"synthetic-test\\\")\",\"source_warnings\":0}"
+  },
+  {
+   "ok": true,
+   "what": "C1: GPU process crash -> state error with the reason and a Reload button",
+   "detail": "error: GPU device lost (reason 1): A valid external Instance reference no longer exists.; reload visible true; frames 105"
+  },
+  {
+   "ok": true,
+   "what": "no page exceptions on any page",
+   "detail": ""
+  }
+ ],
+ "summary": {
+  "refs": [
+   "test",
+   "stat"
+  ],
+  "csp": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'",
+  "copy": {
+   "bytes": 9219,
+   "ms": 60.10000038146973
+  },
+  "boot_first": {
+   "rounds": 2,
+   "fetch_ms": 2,
+   "bytes": 155,
+   "ranges": 1,
+   "total_ms": 2.4000000953674316,
+   "cached": false,
+   "pinned_bytes": 155
+  },
+  "measured_config": {
+   "build": {
+    "type": "Release",
+    "cxx_flags": "-O3 -DNDEBUG",
+    "emscripten": "6.0.11",
+    "compiler": "Clang 24.0.0git (https:/github.com/llvm/llvm-project f718ebe873411a562ef6e5c27da36d75b7aaec98)",
+    "wasm_sha256": "916a914816bd801a98e1e9df5f1f25c1baa55c05a07cd8c55495e2f9cce04ed3",
+    "wasm_bytes": 332642
+   },
+   "canvas": {
+    "width": 1280,
+    "height": 720,
+    "css_width": 1280,
+    "css_height": 720,
+    "device_pixel_ratio": 1
+   },
+   "adapter": "apple/metal-3/",
+   "loadavg": "8.91 9.31 14.72"
+  },
+  "first_load": {
+   "area": "levt/test",
+   "rounds": 8,
+   "fetch_ms": 9.900000095367432,
+   "bytes": 3394,
+   "ranges": 11,
+   "total_ms": 16,
+   "cached": false,
+   "touched": "root/data/base.osi\t0\t155\nroot/data/levels/levt/levt.blk\t0\t12\nroot/data/levels/levt/levt.blk\t12\t392\nroot/data/levels/levt/levt.blk\t404\t384\nroot/data/levels/levt/levt.blk\t1116\t136\nroot/data/levels/levt/levt.blk\t1252\t112\nroot/data/levels/levt/test.blk\t0\t12\nroot/data/levels/levt/test.blk\t12\t224\nroot/data/levels/levt/test.blk\t236\t236\nroot/data/levels/levt/test.blk\t472\t1306\nroot/data/levels/levt/test.blk\t1778\t516\nroot/data/levels/levt/test.blk\t2294\t64\n",
+   "over_fetch_bytes": 0,
+   "concurrency": 1,
+   "load_total_ms": 20.700000286102295
+  },
+  "after_switches": {
+   "live_objects": {
+    "textures": 3,
+    "buffers": 5,
+    "pipelines": 4,
+    "samplers": 1,
+    "bind_groups": 3
+   },
+   "heap": {
+    "wasm_memory_bytes": 100663296,
+    "malloc_in_use_bytes": 95896,
+    "malloc_arena_bytes": 129872,
+    "fs_resident_bytes": 3549,
+    "fs_pinned_bytes": 155,
+    "fs_peak_bytes": 9173,
+    "fs_ranges": 12
+   },
+   "areas_shown": 7
+  },
+  "pixel_gate": {
+   "tolerance": 0,
+   "native_vs_browser": [
+    {
+     "label": "levt/test (OPFS path)",
+     "differing": 0,
+     "max": 0
+    },
+    {
+     "label": "levt/stat (OPFS path, after a switch)",
+     "differing": 0,
+     "max": 0
+    },
+    {
+     "label": "levt/test (OPFS revisit)",
+     "differing": 0,
+     "max": 0
+    },
+    {
+     "label": "levt/stat (handle path)",
+     "differing": 0,
+     "max": 0
+    }
+   ],
+   "null": {
+    "differing": 0,
+    "max": 0
+   },
+   "positive": {
+    "what": "levt/stat with fog off vs native (fog on)",
+    "differing": 424494,
+    "max": 28,
+    "over_tolerance": 424494
+   }
+  },
+  "hud": {
+   "frames": 224,
+   "frames_since_show": 121,
+   "fps": {
+    "dt_samples": 120,
+    "frames_in_window": 121,
+    "window_ms": 1999.8,
+    "p50_ms": 16.7,
+    "p95_ms": 17.5,
+    "nominal_hz": 60,
+    "display_hz": 60,
+    "display_p10_ms": 15.9,
+    "display_samples": 90,
+    "hz_source": "display measured before the first area",
+    "expected_intervals": 119.988,
+    "fps": 60.006,
+    "dropping": false,
+    "spin_ms": 0
+   },
+   "breakdown_ms": {
+    "script": 0,
+    "physics": 0,
+    "replay_p50": 0.1,
+    "replay_p95": 0.3,
+    "submit_p50": 0.1,
+    "submit_p95": 0.3,
+    "frame_cpu_p50": 0.3,
+    "frame_cpu_p95": 0.4
+   },
+   "draws": 10,
+   "rejected_last_frame": 0,
+   "pipelines": 4,
+   "textures": 3,
+   "texture_bytes": 428,
+   "state_calls": 101,
+   "live_objects": {
+    "textures": 3,
+    "buffers": 5,
+    "pipelines": 4,
+    "samplers": 1,
+    "bind_groups": 3
+   },
+   "heap": {
+    "wasm_memory_bytes": 100663296,
+    "malloc_in_use_bytes": 86720,
+    "malloc_arena_bytes": 101200,
+    "fs_resident_bytes": 3549,
+    "fs_pinned_bytes": 155,
+    "fs_peak_bytes": 3549,
+    "fs_ranges": 12
+   },
+   "fs": {
+    "files": 5,
+    "misses_total": 0,
+    "generation": 3
+   },
+   "area": {
+    "level": "levt",
+    "area": "test",
+    "rounds": 1,
+    "probe_ms": 2.2,
+    "load_ms": 1.4,
+    "decode_ms": 0.1,
+    "upload_ms": 0.5,
+    "show_ms": 0.6,
+    "cpu_bytes_released": 1288,
+    "fs_bytes_released": 0,
+    "draws_expected": 10,
+    "warnings": 4,
+    "camera": {
+     "moved": false,
+     "eye": [
+      0,
+      3,
+      10
+     ],
+     "yaw_deg": 27.474,
+     "pitch_deg": -10,
+     "fov_deg": 72,
+     "eye_source": "pos_start"
+    }
+   },
+   "areas_shown": 1,
+   "objects_released": 0,
+   "release_failures": 0,
+   "surface": {
+    "width": 1280,
+    "height": 720
+   },
+   "render": {
+    "fog": true,
+    "debug_leaked_textures": 0
+   },
+   "lost": false,
+   "lost_reason": "",
+   "adapter": "apple/metal-3/",
+   "validation": {
+    "build": "synthetic-test",
+    "data": "synthetic-data",
+    "warning": null,
+    "source_warnings": 0
+   },
+   "build": {
+    "type": "Release",
+    "cxx_flags": "-O3 -DNDEBUG",
+    "emscripten": "6.0.11",
+    "compiler": "Clang 24.0.0git (https:/github.com/llvm/llvm-project f718ebe873411a562ef6e5c27da36d75b7aaec98)",
+    "wasm_sha256": "916a914816bd801a98e1e9df5f1f25c1baa55c05a07cd8c55495e2f9cce04ed3",
+    "wasm_bytes": 332642
+   },
+   "canvas": {
+    "width": 1280,
+    "height": 720,
+    "css_width": 1280,
+    "css_height": 720,
+    "device_pixel_ratio": 1
+   }
+  },
+  "responsive": {
+   "widths": 40,
+   "byo_min_clearance_px": 8,
+   "viewer_min_clearance_px": 8,
+   "pixels": [
+    {
+     "viewport": 360,
+     "canvas": "328x185",
+     "differing": 0,
+     "max": 0
+    },
+    {
+     "viewport": 1000,
+     "canvas": "968x545",
+     "differing": 0,
+     "max": 0
+    },
+    {
+     "viewport": 1920,
+     "canvas": "1280x720",
+     "differing": 0,
+     "max": 0
+    }
+   ]
+  },
+  "i2_spin_ms": 25,
+  "i2": {
+   "fps": {
+    "dt_samples": 60,
+    "frames_in_window": 61,
+    "window_ms": 1564.6,
+    "p50_ms": 25.7,
+    "p95_ms": 27.1,
+    "nominal_hz": 60,
+    "display_hz": 60,
+    "display_p10_ms": 16.2,
+    "display_samples": 90,
+    "hz_source": "display measured before the first area",
+    "expected_intervals": 93.876,
+    "fps": 38.348,
+    "dropping": true,
+    "spin_ms": 0
+   },
+   "old_snapped_hz": 30,
+   "old_expected_intervals": 46.938,
+   "counted_intervals": 60,
+   "loadavg": "9.03 9.31 14.50",
+   "old_ratio": 1.278281989006775,
+   "new_ratio": 0.6391409945033875
+  },
+  "i1_gpu_live": [
+   {
+    "textures": 4,
+    "buffers": 5,
+    "created": 14,
+    "destroyed": 10
+   },
+   {
+    "textures": 4,
+    "buffers": 5,
+    "created": 24,
+    "destroyed": 20
+   },
+   {
+    "textures": 4,
+    "buffers": 5,
+    "created": 34,
+    "destroyed": 30
+   },
+   {
+    "textures": 4,
+    "buffers": 5,
+    "created": 44,
+    "destroyed": 40
+   },
+   {
+    "textures": 4,
+    "buffers": 5,
+    "created": 54,
+    "destroyed": 50
+   },
+   {
+    "textures": 4,
+    "buffers": 5,
+    "created": 64,
+    "destroyed": 60
+   },
+   {
+    "textures": 4,
+    "buffers": 5,
+    "created": 74,
+    "destroyed": 70
+   },
+   {
+    "textures": 4,
+    "buffers": 5,
+    "created": 84,
+    "destroyed": 80
+   },
+   {
+    "textures": 4,
+    "buffers": 5,
+    "created": 94,
+    "destroyed": 90
+   },
+   {
+    "textures": 4,
+    "buffers": 5,
+    "created": 104,
+    "destroyed": 100
+   },
+   {
+    "textures": 4,
+    "buffers": 5,
+    "created": 114,
+    "destroyed": 110
+   },
+   {
+    "textures": 4,
+    "buffers": 5,
+    "created": 124,
+    "destroyed": 120
+   },
+   {
+    "textures": 4,
+    "buffers": 5,
+    "created": 134,
+    "destroyed": 130
+   },
+   {
+    "textures": 4,
+    "buffers": 5,
+    "created": 144,
+    "destroyed": 140
+   },
+   {
+    "textures": 4,
+    "buffers": 5,
+    "created": 154,
+    "destroyed": 150
+   }
+  ],
+  "c1": {
+   "state": "error",
+   "message": "GPU device lost (reason 1): A valid external Instance reference no longer exists."
+  },
+  "loadavg": {
+   "start": "8.91 9.31 14.72",
+   "end": "10.84 9.71 14.52"
+  }
+ }
+}

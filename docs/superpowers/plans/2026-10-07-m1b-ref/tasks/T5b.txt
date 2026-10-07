@@ -1,0 +1,14 @@
+T5b: browser viewer: main_web bridge (r2 C1 loss -> error, I2 display rate + DROPPING), page (r2 I3, I6, I7, M3, M4, M13, CSP I4), engine.js (r2 M2), site builder, smoke + synthetic A13 test (red-first r2 sections)
+  full     engine/src/app/main_web.cpp
+  full     engine/CMakeLists.txt
+  full     web/index.html
+  full     web/app/main.js
+  full     web/app/engine.js
+  full     web/tools/build_site.mjs
+  full     web/tests/serve.mjs
+  full     web/tests/smoke.mjs
+  full     web/tests/lib.mjs
+  full     web/tests/byo_synthetic.mjs
+  full     web/tests/unit_test.mjs
+  full     web/tests/unit_r2_test.mjs
+  partial  Makefile  (site via build_site.mjs; test-web += byo_synthetic)

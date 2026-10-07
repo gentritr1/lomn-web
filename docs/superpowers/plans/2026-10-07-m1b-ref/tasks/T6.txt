@@ -1,0 +1,8 @@
+T6: real-data A13 smoke (r2 I5 sweep + rounds cap, I1 GPU-object probe, M14), A/B harness (M10/M1), mutation script, docs
+  full     web/tests/a13_real.mjs
+  full     web/tests/README.md
+  full     web/tests/measure_arms.mjs
+  full     tools/research/oracle/mutate4.py
+  full     docs/knowledge/web-porting-playbook.md
+  full     docs/knowledge/measurements.md
+  full     Makefile

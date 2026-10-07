@@ -1,0 +1,13 @@
+T5a: BYO validation and storage modules (no page yet): fingerprint (r2 C2 soft accept, D13), sources (r2 M11), paths (r2 M12), copy-manifest checks (r2 I6), OPFS worker, IndexedDB, builds.json data entry, oracle
+  full     web/app/fingerprint.js
+  full     web/app/byo.js
+  full     web/app/opfs_worker.js
+  full     web/app/idb.js
+  full     web/app/paths.js
+  full     web/tools/fingerprint_cli.mjs
+  partial  web/tests/unit_r2_test.mjs  (without the filterCached test (engine.js is T5b))
+  partial  web/tests/unit_test.mjs  (without the parseRanges test (engine.js is T5b))
+  full     tools/builds.json
+  full     tools/byo_fingerprint.py
+  full     tools/tests/test_byo_fingerprint.py
+  partial  Makefile  (test-web += unit_test.mjs)

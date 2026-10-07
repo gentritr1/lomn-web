@@ -1,0 +1,664 @@
+{
+ "results": [
+  {
+   "ok": true,
+   "what": "real install: validated, copied to OPFS, lev1/vllg shown",
+   "detail": "lev1/vllg"
+  },
+  {
+   "ok": true,
+   "what": "accepted as beta-1.5.0-installer + beta-1.5.0-data",
+   "detail": ""
+  },
+  {
+   "ok": true,
+   "what": "pixels lev1/vllg (first visit, OPFS path) vs native",
+   "detail": "0 of 921600 differ, max delta 0; over tolerance 0: 0"
+  },
+  {
+   "ok": true,
+   "what": "measured configuration: the page runs the wasm in the build dir (Release)",
+   "detail": "Release [-O3 -DNDEBUG] wasm d6c5687fcd84 vs built d6c5687fcd84; canvas 1280x720; apple/metal-3/"
+  },
+  {
+   "ok": true,
+   "what": "discovery: lev1/vllg fetched exactly its native access log",
+   "detail": "8 rounds, 45 ranges, 2027888 bytes"
+  },
+  {
+   "ok": true,
+   "what": "lev1/vllg: draws == the area's expected draws, 0 rejected",
+   "detail": "draws 31"
+  },
+  {
+   "ok": true,
+   "what": "pixels lev2/ghut (first visit, OPFS path) vs native",
+   "detail": "0 of 921600 differ, max delta 0; over tolerance 0: 0"
+  },
+  {
+   "ok": true,
+   "what": "discovery: lev2/ghut fetched exactly its native access log",
+   "detail": "8 rounds, 39 ranges, 2469250 bytes"
+  },
+  {
+   "ok": true,
+   "what": "lev2/ghut: draws == the area's expected draws, 0 rejected",
+   "detail": "draws 30"
+  },
+  {
+   "ok": true,
+   "what": "pixels lev4/crss (first visit, OPFS path) vs native",
+   "detail": "0 of 921600 differ, max delta 0; over tolerance 0: 0"
+  },
+  {
+   "ok": true,
+   "what": "discovery: lev4/crss fetched exactly its native access log",
+   "detail": "8 rounds, 59 ranges, 5763178 bytes"
+  },
+  {
+   "ok": true,
+   "what": "lev4/crss: draws == the area's expected draws, 0 rejected",
+   "detail": "draws 42"
+  },
+  {
+   "ok": true,
+   "what": "pixels lev0/frnt vs native",
+   "detail": "0 of 921600 differ, max delta 0; over tolerance 0: 0"
+  },
+  {
+   "ok": true,
+   "what": "switch 1 -> lev1/vllg: live objects and resident file bytes flat",
+   "detail": "{\"textures\":28,\"buffers\":21,\"pipelines\":3,\"samplers\":1,\"bind_groups\":27} fs=2660222"
+  },
+  {
+   "ok": true,
+   "what": "switch 1: resident file bytes == lev1/vllg's own read set (previous area released)",
+   "detail": "2660222 vs 2660222"
+  },
+  {
+   "ok": true,
+   "what": "switch 2 -> lev2/ghut: live objects and resident file bytes flat",
+   "detail": "{\"textures\":31,\"buffers\":3,\"pipelines\":2,\"samplers\":1,\"bind_groups\":30} fs=3101584"
+  },
+  {
+   "ok": true,
+   "what": "switch 2: resident file bytes == lev2/ghut's own read set (previous area released)",
+   "detail": "3101584 vs 3101584"
+  },
+  {
+   "ok": true,
+   "what": "switch 3 -> lev4/crss: live objects and resident file bytes flat",
+   "detail": "{\"textures\":38,\"buffers\":29,\"pipelines\":4,\"samplers\":1,\"bind_groups\":37} fs=6395512"
+  },
+  {
+   "ok": true,
+   "what": "switch 3: resident file bytes == lev4/crss's own read set (previous area released)",
+   "detail": "6395512 vs 6395512"
+  },
+  {
+   "ok": true,
+   "what": "switch 4 -> lev1/vllg: live objects and resident file bytes flat",
+   "detail": "{\"textures\":28,\"buffers\":21,\"pipelines\":3,\"samplers\":1,\"bind_groups\":27} fs=2660222"
+  },
+  {
+   "ok": true,
+   "what": "switch 4: resident file bytes == lev1/vllg's own read set (previous area released)",
+   "detail": "2660222 vs 2660222"
+  },
+  {
+   "ok": true,
+   "what": "switch 5 -> lev2/ghut: live objects and resident file bytes flat",
+   "detail": "{\"textures\":31,\"buffers\":3,\"pipelines\":2,\"samplers\":1,\"bind_groups\":30} fs=3101584"
+  },
+  {
+   "ok": true,
+   "what": "switch 5: resident file bytes == lev2/ghut's own read set (previous area released)",
+   "detail": "3101584 vs 3101584"
+  },
+  {
+   "ok": true,
+   "what": "switch 6 -> lev4/crss: live objects and resident file bytes flat",
+   "detail": "{\"textures\":38,\"buffers\":29,\"pipelines\":4,\"samplers\":1,\"bind_groups\":37} fs=6395512"
+  },
+  {
+   "ok": true,
+   "what": "switch 6: resident file bytes == lev4/crss's own read set (previous area released)",
+   "detail": "6395512 vs 6395512"
+  },
+  {
+   "ok": true,
+   "what": "switch 7 -> lev1/vllg: live objects and resident file bytes flat",
+   "detail": "{\"textures\":28,\"buffers\":21,\"pipelines\":3,\"samplers\":1,\"bind_groups\":27} fs=2660222"
+  },
+  {
+   "ok": true,
+   "what": "switch 7: resident file bytes == lev1/vllg's own read set (previous area released)",
+   "detail": "2660222 vs 2660222"
+  },
+  {
+   "ok": true,
+   "what": "switch 8 -> lev2/ghut: live objects and resident file bytes flat",
+   "detail": "{\"textures\":31,\"buffers\":3,\"pipelines\":2,\"samplers\":1,\"bind_groups\":30} fs=3101584"
+  },
+  {
+   "ok": true,
+   "what": "switch 8: resident file bytes == lev2/ghut's own read set (previous area released)",
+   "detail": "3101584 vs 3101584"
+  },
+  {
+   "ok": true,
+   "what": "switch 9 -> lev4/crss: live objects and resident file bytes flat",
+   "detail": "{\"textures\":38,\"buffers\":29,\"pipelines\":4,\"samplers\":1,\"bind_groups\":37} fs=6395512"
+  },
+  {
+   "ok": true,
+   "what": "switch 9: resident file bytes == lev4/crss's own read set (previous area released)",
+   "detail": "6395512 vs 6395512"
+  },
+  {
+   "ok": true,
+   "what": "memory budget: no wasm memory growth from boot through vllg/ghut/crss/frnt and 9 switches",
+   "detail": "100663296 -> 100663296 bytes"
+  },
+  {
+   "ok": true,
+   "what": "network discipline: first visit (OPFS copy)",
+   "detail": "11 responses, 434651 of 436418 build bytes"
+  },
+  {
+   "ok": true,
+   "what": "revisit: no picker, no copy",
+   "detail": "{\"kind\":\"opfs\",\"how\":\"revisit\",\"name\":\"lomn-install\",\"files\":505,\"bytes\":1099991943}"
+  },
+  {
+   "ok": true,
+   "what": "revisit lev1/vllg: cached prefetch set, 1 round",
+   "detail": "rounds 1"
+  },
+  {
+   "ok": true,
+   "what": "pixels lev1/vllg (revisit) vs native",
+   "detail": "0 of 921600 differ, max delta 0; over tolerance 0: 0"
+  },
+  {
+   "ok": true,
+   "what": "pixel gate null: lev1/vllg first visit vs revisit page",
+   "detail": "0 differ, max delta 0"
+  },
+  {
+   "ok": true,
+   "what": "revisit lev2/ghut: cached prefetch set, 1 round",
+   "detail": "rounds 1"
+  },
+  {
+   "ok": true,
+   "what": "pixels lev2/ghut (revisit) vs native",
+   "detail": "0 of 921600 differ, max delta 0; over tolerance 0: 0"
+  },
+  {
+   "ok": true,
+   "what": "pixel gate null: lev2/ghut first visit vs revisit page",
+   "detail": "0 differ, max delta 0"
+  },
+  {
+   "ok": true,
+   "what": "revisit lev4/crss: cached prefetch set, 1 round",
+   "detail": "rounds 1"
+  },
+  {
+   "ok": true,
+   "what": "pixels lev4/crss (revisit) vs native",
+   "detail": "0 of 921600 differ, max delta 0; over tolerance 0: 0"
+  },
+  {
+   "ok": true,
+   "what": "pixel gate null: lev4/crss first visit vs revisit page",
+   "detail": "0 differ, max delta 0"
+  },
+  {
+   "ok": true,
+   "what": "network discipline: revisit",
+   "detail": "9 responses, 432206 of 436418 build bytes"
+  },
+  {
+   "ok": true,
+   "what": "handle path: ghut from a directory handle (no copy)",
+   "detail": "{\"kind\":\"handle\",\"how\":\"picked\",\"name\":\"lomn-install\",\"files\":505,\"bytes\":1099991943}"
+  },
+  {
+   "ok": true,
+   "what": "pixels lev2/ghut (handle path) vs native",
+   "detail": "0 of 921600 differ, max delta 0; over tolerance 0: 0"
+  },
+  {
+   "ok": true,
+   "what": "handle revisit from IndexedDB",
+   "detail": "{\"kind\":\"handle\",\"how\":\"revisit\",\"name\":\"lomn-install\",\"files\":505,\"bytes\":1099991943}"
+  },
+  {
+   "ok": true,
+   "what": "pixels lev4/crss (handle revisit) vs native",
+   "detail": "0 of 921600 differ, max delta 0; over tolerance 0: 0"
+  },
+  {
+   "ok": true,
+   "what": "network discipline: handle revisit",
+   "detail": "9 responses, 432206 of 436418 build bytes"
+  },
+  {
+   "ok": true,
+   "what": "pixel gate positive control: vllg with fog off exceeds the tolerance",
+   "detail": "155532 pixels over 0, max delta 29"
+  },
+  {
+   "ok": true,
+   "what": "lev1/vllg fps reconciliation: dt samples == frames - 1",
+   "detail": "601 frames in 9984 ms; expected 599.0 intervals at 60 Hz; p50 16.7 p95 17.4"
+  },
+  {
+   "ok": true,
+   "what": "lev2/ghut fps reconciliation: dt samples == frames - 1",
+   "detail": "601 frames in 9986.8 ms; expected 599.2 intervals at 60 Hz; p50 16.7 p95 17.5"
+  },
+  {
+   "ok": true,
+   "what": "lev4/crss fps reconciliation: dt samples == frames - 1",
+   "detail": "601 frames in 9975.6 ms; expected 598.5 intervals at 60 Hz; p50 16.7 p95 17.5"
+  },
+  {
+   "ok": true,
+   "what": "network discipline: HUD",
+   "detail": "9 responses, 432206 of 436418 build bytes"
+  },
+  {
+   "ok": true,
+   "what": "no page exceptions",
+   "detail": ""
+  }
+ ],
+ "summary": {
+  "loadavg_start": "13.45 16.38 16.55",
+  "areas": {
+   "lev1/vllg": {
+    "first": {
+     "rounds": 8,
+     "ranges": 45,
+     "bytes": 2027888,
+     "fetch_ms": 61.80000066757202,
+     "total_ms": 145.40000009536743,
+     "probe_ms": 31,
+     "load_ms": 3.8,
+     "decode_ms": 16.9,
+     "upload_ms": 7.2
+    },
+    "pixels": {
+     "differing": 0,
+     "max": 0
+    },
+    "draws": 31,
+    "pipelines": 3,
+    "textures": 28,
+    "texture_bytes": 6995936,
+    "heap": {
+     "wasm_memory_bytes": 100663296,
+     "malloc_in_use_bytes": 2878480,
+     "malloc_arena_bytes": 11255344,
+     "fs_resident_bytes": 2660222,
+     "fs_pinned_bytes": 632334,
+     "fs_peak_bytes": 2660222,
+     "fs_ranges": 48
+    },
+    "live": {
+     "textures": 28,
+     "buffers": 21,
+     "pipelines": 3,
+     "samplers": 1,
+     "bind_groups": 27
+    },
+    "revisit": {
+     "rounds": 1,
+     "bytes": 2027888,
+     "fetch_ms": 36.90000009536743,
+     "total_ms": 78
+    },
+    "fps": {
+     "dt_samples": 600,
+     "frames_in_window": 601,
+     "window_ms": 9984,
+     "p50_ms": 16.7,
+     "p95_ms": 17.4,
+     "nominal_hz": 60,
+     "expected_intervals": 599.04,
+     "fps": 60.096,
+     "breakdown": {
+      "script": 0,
+      "physics": 0,
+      "replay_p50": 0.5,
+      "replay_p95": 0.6,
+      "submit_p50": 0.2,
+      "submit_p95": 0.3,
+      "frame_cpu_p50": 0.6,
+      "frame_cpu_p95": 0.8
+     },
+     "loadavg_before": "15.22 16.46 16.58",
+     "loadavg_after": "14.39 16.25 16.50"
+    }
+   },
+   "lev2/ghut": {
+    "first": {
+     "rounds": 8,
+     "ranges": 39,
+     "bytes": 2469250,
+     "fetch_ms": 39.40000009536743,
+     "total_ms": 72.40000009536743,
+     "probe_ms": 19.3,
+     "load_ms": 2.1,
+     "decode_ms": 11.9,
+     "upload_ms": 6.1
+    },
+    "pixels": {
+     "differing": 0,
+     "max": 0
+    },
+    "draws": 30,
+    "pipelines": 2,
+    "textures": 31,
+    "texture_bytes": 10052916,
+    "heap": {
+     "wasm_memory_bytes": 100663296,
+     "malloc_in_use_bytes": 3306144,
+     "malloc_arena_bytes": 17129008,
+     "fs_resident_bytes": 3101584,
+     "fs_pinned_bytes": 632334,
+     "fs_peak_bytes": 5129472,
+     "fs_ranges": 42
+    },
+    "live": {
+     "textures": 31,
+     "buffers": 3,
+     "pipelines": 2,
+     "samplers": 1,
+     "bind_groups": 30
+    },
+    "revisit": {
+     "rounds": 1,
+     "bytes": 2469250,
+     "fetch_ms": 130.40000009536743,
+     "total_ms": 162.90000009536743
+    },
+    "fps": {
+     "dt_samples": 600,
+     "frames_in_window": 601,
+     "window_ms": 9986.8,
+     "p50_ms": 16.7,
+     "p95_ms": 17.5,
+     "nominal_hz": 60,
+     "expected_intervals": 599.208,
+     "fps": 60.079,
+     "breakdown": {
+      "script": 0,
+      "physics": 0,
+      "replay_p50": 0.3,
+      "replay_p95": 0.4,
+      "submit_p50": 0.2,
+      "submit_p95": 0.3,
+      "frame_cpu_p50": 0.5,
+      "frame_cpu_p95": 0.6
+     },
+     "loadavg_before": "14.39 16.25 16.50",
+     "loadavg_after": "12.71 15.83 16.35"
+    }
+   },
+   "lev4/crss": {
+    "first": {
+     "rounds": 8,
+     "ranges": 59,
+     "bytes": 5763178,
+     "fetch_ms": 82.80000019073486,
+     "total_ms": 161.5,
+     "probe_ms": 47.7,
+     "load_ms": 4.4,
+     "decode_ms": 37.7,
+     "upload_ms": 20.9
+    },
+    "pixels": {
+     "differing": 0,
+     "max": 0
+    },
+    "draws": 42,
+    "pipelines": 4,
+    "textures": 38,
+    "texture_bytes": 26678568,
+    "heap": {
+     "wasm_memory_bytes": 100663296,
+     "malloc_in_use_bytes": 6635976,
+     "malloc_arena_bytes": 37301808,
+     "fs_resident_bytes": 6395512,
+     "fs_pinned_bytes": 632334,
+     "fs_peak_bytes": 8864762,
+     "fs_ranges": 62
+    },
+    "live": {
+     "textures": 38,
+     "buffers": 29,
+     "pipelines": 4,
+     "samplers": 1,
+     "bind_groups": 37
+    },
+    "revisit": {
+     "rounds": 1,
+     "bytes": 5763178,
+     "fetch_ms": 96.89999961853027,
+     "total_ms": 160
+    },
+    "fps": {
+     "dt_samples": 600,
+     "frames_in_window": 601,
+     "window_ms": 9975.6,
+     "p50_ms": 16.7,
+     "p95_ms": 17.5,
+     "nominal_hz": 60,
+     "expected_intervals": 598.536,
+     "fps": 60.147,
+     "breakdown": {
+      "script": 0,
+      "physics": 0,
+      "replay_p50": 0.4,
+      "replay_p95": 0.6,
+      "submit_p50": 0.2,
+      "submit_p95": 0.3,
+      "frame_cpu_p50": 0.6,
+      "frame_cpu_p95": 0.9
+     },
+     "loadavg_before": "12.17 15.67 16.29",
+     "loadavg_after": "11.48 15.40 16.18"
+    }
+   }
+  },
+  "heap_at_ready": {
+   "wasm_memory_bytes": 100663296,
+   "malloc_in_use_bytes": 766488,
+   "malloc_arena_bytes": 1674800,
+   "fs_resident_bytes": 632334,
+   "fs_pinned_bytes": 632334,
+   "fs_peak_bytes": 632334,
+   "fs_ranges": 3
+  },
+  "first_visit": {
+   "wall_ms": 10772,
+   "validation": {
+    "build": "beta-1.5.0-installer",
+    "data": "beta-1.5.0-data",
+    "ms": 371.30000019073486,
+    "blk_files": 189,
+    "table_bytes": 643748
+   },
+   "source": {
+    "kind": "opfs",
+    "how": "copied",
+    "name": "lomn-install",
+    "files": 505,
+    "bytes": 1099991943
+   },
+   "copy": {
+    "bytes": 1099991943,
+    "ms": 9422.5
+   },
+   "quota": {
+    "ok": true,
+    "free": 10737418240,
+    "need": 1099991943,
+    "persisted": false,
+    "quota": 10737420009,
+    "usage": 1769
+   },
+   "boot": {
+    "rounds": 3,
+    "fetch_ms": 4.800000190734863,
+    "bytes": 632334,
+    "ranges": 3,
+    "total_ms": 6.799999713897705,
+    "cached": false,
+    "pinned_bytes": 632334
+   }
+  },
+  "heap_after_first_area": {
+   "wasm_memory_bytes": 100663296,
+   "malloc_in_use_bytes": 2881256,
+   "malloc_arena_bytes": 11255344,
+   "fs_resident_bytes": 2660222,
+   "fs_pinned_bytes": 632334,
+   "fs_peak_bytes": 2660222,
+   "fs_ranges": 48
+  },
+  "measured_config": {
+   "build": {
+    "type": "Release",
+    "cxx_flags": "-O3 -DNDEBUG",
+    "emscripten": "6.0.11",
+    "compiler": "Clang 24.0.0git (https:/github.com/llvm/llvm-project f718ebe873411a562ef6e5c27da36d75b7aaec98)",
+    "wasm_sha256": "d6c5687fcd84fadeacfb1d7a5189f12e50aeecb96d7f27c5c3592ca10ca67e39",
+    "wasm_bytes": 326077
+   },
+   "canvas": {
+    "width": 1280,
+    "height": 720,
+    "css_width": 1280,
+    "css_height": 720,
+    "device_pixel_ratio": 1
+   },
+   "adapter": "apple/metal-3/",
+   "loadavg": "13.54 16.19 16.48"
+  },
+  "frnt": {
+   "load": {
+    "rounds": 8,
+    "bytes": 12434082,
+    "total_ms": 356.19999980926514
+   },
+   "heap": {
+    "wasm_memory_bytes": 100663296,
+    "malloc_in_use_bytes": 13316720,
+    "malloc_arena_bytes": 78396976,
+    "fs_resident_bytes": 13066416,
+    "fs_pinned_bytes": 632334,
+    "fs_peak_bytes": 18829594,
+    "fs_ranges": 64
+   },
+   "texture_bytes": 56994416,
+   "draws": 47
+  },
+  "heap_after_switches": {
+   "wasm_memory_bytes": 100663296,
+   "malloc_in_use_bytes": 6641080,
+   "malloc_arena_bytes": 78396976,
+   "fs_resident_bytes": 6395512,
+   "fs_pinned_bytes": 632334,
+   "fs_peak_bytes": 18829594,
+   "fs_ranges": 62
+  },
+  "revisit_boot": {
+   "rounds": 1,
+   "fetch_ms": 5.700000286102295,
+   "bytes": 632334,
+   "ranges": 3,
+   "total_ms": 6.700000286102295,
+   "cached": true,
+   "pinned_bytes": 632334
+  },
+  "pixel_gate": {
+   "tolerance": 0,
+   "native_vs_browser": [
+    {
+     "label": "lev1/vllg (first visit, OPFS path)",
+     "differing": 0,
+     "max": 0
+    },
+    {
+     "label": "lev2/ghut (first visit, OPFS path)",
+     "differing": 0,
+     "max": 0
+    },
+    {
+     "label": "lev4/crss (first visit, OPFS path)",
+     "differing": 0,
+     "max": 0
+    },
+    {
+     "label": "lev0/frnt",
+     "differing": 0,
+     "max": 0
+    },
+    {
+     "label": "lev1/vllg (revisit)",
+     "differing": 0,
+     "max": 0
+    },
+    {
+     "label": "lev2/ghut (revisit)",
+     "differing": 0,
+     "max": 0
+    },
+    {
+     "label": "lev4/crss (revisit)",
+     "differing": 0,
+     "max": 0
+    },
+    {
+     "label": "lev2/ghut (handle path)",
+     "differing": 0,
+     "max": 0
+    },
+    {
+     "label": "lev4/crss (handle revisit)",
+     "differing": 0,
+     "max": 0
+    }
+   ],
+   "null": [
+    {
+     "area": "lev1/vllg",
+     "differing": 0,
+     "max": 0
+    },
+    {
+     "area": "lev2/ghut",
+     "differing": 0,
+     "max": 0
+    },
+    {
+     "area": "lev4/crss",
+     "differing": 0,
+     "max": 0
+    }
+   ],
+   "positive": {
+    "what": "lev1/vllg fog off vs native",
+    "differing": 155532,
+    "max": 29,
+    "over_tolerance": 155532
+   }
+  },
+  "loadavg_end": "11.48 15.40 16.18"
+ }
+}

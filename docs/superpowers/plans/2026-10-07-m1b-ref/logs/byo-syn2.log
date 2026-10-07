@@ -1,0 +1,76 @@
+$R/engine/src/app/main_web.cpp:331:30: warning: macro '__EMSCRIPTEN_major__' has been marked as deprecated: Use __EMSCRIPTEN_MAJOR__ instead [-Wdeprecated-pragma]
+  331 |               std::to_string(__EMSCRIPTEN_major__) + "." + std::to_string(__EMSCRIPTEN_minor__) + "." + std::to_string(__EMSCRIPTEN_tiny__) +
+      |                              ^
+<ws>/lomn-web/.toolchain/emsdk/upstream/emscripten/cache/sysroot/include/emscripten/version.h:10:82: note: macro marked 'deprecated' here
+--
+$R/engine/src/app/main_web.cpp:331:75: warning: macro '__EMSCRIPTEN_minor__' has been marked as deprecated: Use __EMSCRIPTEN_MINOR__ instead [-Wdeprecated-pragma]
+  331 |               std::to_string(__EMSCRIPTEN_major__) + "." + std::to_string(__EMSCRIPTEN_minor__) + "." + std::to_string(__EMSCRIPTEN_tiny__) +
+      |                                                                           ^
+<ws>/lomn-web/.toolchain/emsdk/upstream/emscripten/cache/sysroot/include/emscripten/version.h:11:82: note: macro marked 'deprecated' here
+--
+$R/engine/src/app/main_web.cpp:331:120: warning: macro '__EMSCRIPTEN_tiny__' has been marked as deprecated: Use __EMSCRIPTEN_TINY__ instead [-Wdeprecated-pragma]
+  331 |               std::to_string(__EMSCRIPTEN_major__) + "." + std::to_string(__EMSCRIPTEN_minor__) + "." + std::to_string(__EMSCRIPTEN_tiny__) +
+      |                                                                                                                        ^
+<ws>/lomn-web/.toolchain/emsdk/upstream/emscripten/cache/sysroot/include/emscripten/version.h:12:80: note: macro marked 'deprecated' here
+site: 11 files, 436418 bytes -> build/site
+adapter=apple/metal-3 frames=177 dt_samples=176 window_ms=4015 p50_dt_ms=16.60 expected_intervals=241 at 60 Hz
+pixels {"centre":[255,128,0,255],"corner":[0,0,64,255]}
+requests ["/index.html","/app/main.825f9e2fff.js","/app/fingerprint.6b13b2f65c.js","/app/byo.c838745e1a.js","/app/engine.65aaaa89c9.js","/app/idb.6dc6057378.js","/lomn_web.d6c5687fcd.wasm","/lomn_web.86f51154c7.js","/favicon.ico"]
+console_errors [] page_errors []
+ok   hashed assets: JS and wasm published under content-hashed names, index.html unhashed :: app/byo.c838745e1a.js app/engine.65aaaa89c9.js app/fingerprint.6b13b2f65c.js app/idb.6dc6057378.js app/main.825f9e2fff.js app/opfs_worker.1fd888be2e.js builds.json index.html lomn_web.86f51154c7.js lomn_web.d6c5687fcd.wasm
+ok   first visit asks for the folder :: Choose your BIONICLE: The Legend of Mata Nui (Beta 1.5.0) folder. Nothing is uploaded: the files are read on this computer.
+ok   unknown exe -> named rejection :: Unknown build: LEGOBionicle.exe SHA-256 26a10d6cdf2b… is not an accepted build. Only BIONICLE: The Legend of Mata Nui Beta 1.5.0 is supported (REBUILT and other mods are not).
+ok   rejected-list (REBUILT-style) exe -> named rejection :: This is REBUILT (test fixture) (LEGOBionicle.exe SHA-256 459d1786b2a3…), which is not supported: REBUILT needs the LOMNHook mod natives (e.g. BetterSaver), which a browser cannot load
+ok   accepted exe + foreign .blk tables -> rejection :: Unknown game data: the .blk tables (fingerprint 980c3068aa7a…) do not match Beta 1.5.0 although the exe is the accepted build "synthetic-test". Modified or REBUILT data is not supported.
+ok   rejected folders copied nothing into OPFS
+ok   network discipline: rejections :: 8 responses, 41922 of 436930 build bytes
+ok   quota short -> message, no copy :: Not enough browser storage to copy the game files: 0.0 MiB needed, 0.0 MiB available (persistent storage not granted). Free some space, or use Chrome or Edge, which read the folder in place without copying.
+ok   quota-short: nothing written to OPFS
+ok   OPFS path: copied, validated and showing levt/test :: levt/test
+ok   OPFS path: source is the copy :: {"kind":"opfs","how":"copied","name":"lomn-install","files":5,"bytes":9219}
+ok   pixels levt/test (OPFS path) vs native :: 0 of 921600 differ, max delta 0, over tolerance 0: 0
+ok   measured configuration: the page runs the wasm this test built (Release) :: Release [-O3 -DNDEBUG] d6c5687fcd84 vs built d6c5687fcd84
+ok   discovery: the browser fetched exactly the native access log of levt/test :: 8 rounds, 11 ranges, 3394 bytes
+ok   switch 1 to levt/stat: live objects + resident bytes flat :: {"textures":7,"buffers":15,"pipelines":4,"samplers":1,"bind_groups":7} fs=6815
+ok   switch 1: resident file bytes == levt/stat's own read set (previous area released) :: 6815 vs 6815
+ok   pixels levt/stat (OPFS path, after a switch) vs native :: 0 of 921600 differ, max delta 0, over tolerance 0: 0
+ok   discovery: levt/stat fetched exactly its native access log
+ok   switch 2 to levt/test: live objects + resident bytes flat :: {"textures":3,"buffers":5,"pipelines":4,"samplers":1,"bind_groups":3} fs=3549
+ok   switch 2: resident file bytes == levt/test's own read set (previous area released) :: 3549 vs 3549
+ok   switch 3 to levt/stat: live objects + resident bytes flat :: {"textures":7,"buffers":15,"pipelines":4,"samplers":1,"bind_groups":7} fs=6815
+ok   switch 3: resident file bytes == levt/stat's own read set (previous area released) :: 6815 vs 6815
+ok   switch 4 to levt/test: live objects + resident bytes flat :: {"textures":3,"buffers":5,"pipelines":4,"samplers":1,"bind_groups":3} fs=3549
+ok   switch 4: resident file bytes == levt/test's own read set (previous area released) :: 3549 vs 3549
+ok   switch 5 to levt/stat: live objects + resident bytes flat :: {"textures":7,"buffers":15,"pipelines":4,"samplers":1,"bind_groups":7} fs=6815
+ok   switch 5: resident file bytes == levt/stat's own read set (previous area released) :: 6815 vs 6815
+ok   switch 6 to levt/test: live objects + resident bytes flat :: {"textures":3,"buffers":5,"pipelines":4,"samplers":1,"bind_groups":3} fs=3549
+ok   switch 6: resident file bytes == levt/test's own read set (previous area released) :: 3549 vs 3549
+ok   network discipline: OPFS first visit :: 10 responses, 435162 of 436930 build bytes
+ok   OPFS revisit: no picker, no copy :: {"kind":"opfs","how":"revisit","name":"lomn-install","files":5,"bytes":9219}
+ok   revisit: the cached prefetch set loads the area in 1 round :: rounds 1
+ok   pixels levt/test (OPFS revisit) vs native :: 0 of 921600 differ, max delta 0, over tolerance 0: 0
+ok   pixel gate null: levt/test on two fresh pages :: 0 differ, max delta 0
+ok   network discipline: OPFS revisit :: 9 responses, 432717 of 436930 build bytes
+ok   handle path: picked handle read in place (no copy) :: {"kind":"handle","how":"picked","name":"lomn-install","files":5,"bytes":9219}
+ok   pixels levt/stat (handle path) vs native :: 0 of 921600 differ, max delta 0, over tolerance 0: 0
+ok   handle revisit: the IndexedDB handle is used without a picker :: {"kind":"handle","how":"revisit","name":"lomn-install","files":5,"bytes":9219}
+ok   network discipline: handle revisit :: 9 responses, 432717 of 436930 build bytes
+ok   pixel gate positive control: fog off exceeds the tolerance :: 424494 pixels over tolerance 0, max delta 28
+ok   network positive control: a non-manifest path and a foreign origin are flagged :: foreign paths /not-in-manifest.bin, urls http://127.0.0.1:9/elsewhere
+ok   leak positive control: one leaked texture is counted by the flat-count check :: {"textures":7,"buffers":15,"pipelines":4,"samplers":1,"bind_groups":7} -> {"textures":8,"buffers":15,"pipelines":4,"samplers":1,"bind_groups":7}
+ok   revisit with permission "prompt": asks again :: The game folder "lomn-install" needs your permission again.
+ok   after the re-grant click the area shows
+ok   HUD reconciliation: dt samples == frames in window - 1 :: 120 frames, 119 dt samples, window 1978.2 ms, expected 118.692 intervals at 60 Hz
+ok   HUD overlay shows fps, reconciliation, breakdown, heap :: build Release [-O3 -DNDEBUG] emscripten 6.0.11 wasm d6c5687fcd84  canvas 1280x720 @1x  apple/metal-3/
+ok   free-fly: W moves forward, drag turns :: eye z 10 -> 9.475, yaw 27.474 -> 57.474
+ok   reset camera returns to the POS-start view
+ok   resize: surface follows the canvas, frames keep drawing :: 1280x720 -> 868x488, draws 10
+ok   network discipline: HUD page :: 9 responses, 432717 of 436930 build bytes
+ok   responsive sweep, BYO page (40 widths 360..1920): no horizontal scroll, no overlap :: min clearance 8.0 px
+ok   resize to 328x185 (viewport 360): pixels == native render of that size (depth valid) :: 0 differ, max delta 0
+ok   resize to 968x545 (viewport 1000): pixels == native render of that size (depth valid) :: 0 differ, max delta 0
+ok   resize to 1280x720 (viewport 1920): pixels == native render of that size (depth valid) :: 0 differ, max delta 0
+ok   responsive sweep, viewer (40 widths): no h-scroll/overlap, HUD inside the canvas, every resize draws all draws, 0 rejected, no WebGPU message :: min clearance 8.0 px
+ok   no page exceptions on any page
+byo_synthetic: 55/55 checks passed
+rc=0

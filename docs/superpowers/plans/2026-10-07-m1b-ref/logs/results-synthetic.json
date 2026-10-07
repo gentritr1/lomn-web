@@ -1,0 +1,328 @@
+{
+ "results": [
+  {
+   "ok": true,
+   "what": "first visit asks for the folder",
+   "detail": "Choose your BIONICLE: The Legend of Mata Nui (Beta 1.5.0) folder. Nothing is uploaded: the files are read on this computer."
+  },
+  {
+   "ok": true,
+   "what": "unknown exe -> named rejection",
+   "detail": "Unknown build: LEGOBionicle.exe SHA-256 26a10d6cdf2b… is not an accepted build. Only BIONICLE: The Legend of Mata Nui Beta 1.5.0 is supported (REBUILT and other mods are not)."
+  },
+  {
+   "ok": true,
+   "what": "rejected-list (REBUILT-style) exe -> named rejection",
+   "detail": "This is REBUILT (test fixture) (LEGOBionicle.exe SHA-256 459d1786b2a3…), which is not supported: REBUILT needs the LOMNHook mod natives (e.g. BetterSaver), which a browser cannot load"
+  },
+  {
+   "ok": true,
+   "what": "accepted exe + foreign .blk tables -> rejection",
+   "detail": "Unknown game data: the .blk tables (fingerprint 980c3068aa7a…) do not match Beta 1.5.0 although the exe is the accepted build \"synthetic-test\". Modified or REBUILT data is not supported."
+  },
+  {
+   "ok": true,
+   "what": "rejected folders copied nothing into OPFS",
+   "detail": ""
+  },
+  {
+   "ok": true,
+   "what": "network discipline: rejections",
+   "detail": "8 responses, 39158 of 431171 build bytes"
+  },
+  {
+   "ok": true,
+   "what": "quota short -> message, no copy",
+   "detail": "Not enough browser storage to copy the game files: 0.0 MB needed, 0.0 MB available (persistent storage not granted). Free some space, or use Chrome or Edge, which read the folder in place without copying."
+  },
+  {
+   "ok": true,
+   "what": "quota-short: nothing written to OPFS",
+   "detail": ""
+  },
+  {
+   "ok": true,
+   "what": "OPFS path: copied, validated and showing levt/test",
+   "detail": "levt/test"
+  },
+  {
+   "ok": true,
+   "what": "OPFS path: source is the copy",
+   "detail": "{\"kind\":\"opfs\",\"how\":\"copied\",\"name\":\"lomn-install\",\"files\":5,\"bytes\":9219}"
+  },
+  {
+   "ok": true,
+   "what": "pixels levt/test (OPFS path) vs native",
+   "detail": "0 of 921600 differ, max delta 0, over tolerance 0: 0"
+  },
+  {
+   "ok": true,
+   "what": "discovery: the browser fetched exactly the native access log of levt/test",
+   "detail": "8 rounds, 11 ranges, 3394 bytes"
+  },
+  {
+   "ok": true,
+   "what": "switch 1 to levt/stat: live objects + resident bytes flat",
+   "detail": "{\"textures\":7,\"buffers\":15,\"pipelines\":4,\"samplers\":1,\"bind_groups\":7} fs=6815"
+  },
+  {
+   "ok": true,
+   "what": "pixels levt/stat (OPFS path, after a switch) vs native",
+   "detail": "0 of 921600 differ, max delta 0, over tolerance 0: 0"
+  },
+  {
+   "ok": true,
+   "what": "discovery: levt/stat fetched exactly its native access log",
+   "detail": ""
+  },
+  {
+   "ok": true,
+   "what": "switch 2 to levt/test: live objects + resident bytes flat",
+   "detail": "{\"textures\":3,\"buffers\":5,\"pipelines\":4,\"samplers\":1,\"bind_groups\":3} fs=3549"
+  },
+  {
+   "ok": true,
+   "what": "switch 3 to levt/stat: live objects + resident bytes flat",
+   "detail": "{\"textures\":7,\"buffers\":15,\"pipelines\":4,\"samplers\":1,\"bind_groups\":7} fs=6815"
+  },
+  {
+   "ok": true,
+   "what": "switch 4 to levt/test: live objects + resident bytes flat",
+   "detail": "{\"textures\":3,\"buffers\":5,\"pipelines\":4,\"samplers\":1,\"bind_groups\":3} fs=3549"
+  },
+  {
+   "ok": true,
+   "what": "switch 5 to levt/stat: live objects + resident bytes flat",
+   "detail": "{\"textures\":7,\"buffers\":15,\"pipelines\":4,\"samplers\":1,\"bind_groups\":7} fs=6815"
+  },
+  {
+   "ok": true,
+   "what": "switch 6 to levt/test: live objects + resident bytes flat",
+   "detail": "{\"textures\":3,\"buffers\":5,\"pipelines\":4,\"samplers\":1,\"bind_groups\":3} fs=3549"
+  },
+  {
+   "ok": true,
+   "what": "network discipline: OPFS first visit",
+   "detail": "11 responses, 431171 of 431171 build bytes"
+  },
+  {
+   "ok": true,
+   "what": "OPFS revisit: no picker, no copy",
+   "detail": "{\"kind\":\"opfs\",\"how\":\"revisit\",\"name\":\"lomn-install\",\"files\":5,\"bytes\":9219}"
+  },
+  {
+   "ok": true,
+   "what": "revisit: the cached prefetch set loads the area in 1 round",
+   "detail": "rounds 1"
+  },
+  {
+   "ok": true,
+   "what": "pixels levt/test (OPFS revisit) vs native",
+   "detail": "0 of 921600 differ, max delta 0, over tolerance 0: 0"
+  },
+  {
+   "ok": true,
+   "what": "network discipline: OPFS revisit",
+   "detail": "10 responses, 428726 of 431171 build bytes"
+  },
+  {
+   "ok": true,
+   "what": "handle path: picked handle read in place (no copy)",
+   "detail": "{\"kind\":\"handle\",\"how\":\"picked\",\"name\":\"lomn-install\",\"files\":5,\"bytes\":9219}"
+  },
+  {
+   "ok": true,
+   "what": "pixels levt/stat (handle path) vs native",
+   "detail": "0 of 921600 differ, max delta 0, over tolerance 0: 0"
+  },
+  {
+   "ok": true,
+   "what": "handle revisit: the IndexedDB handle is used without a picker",
+   "detail": "{\"kind\":\"handle\",\"how\":\"revisit\",\"name\":\"lomn-install\",\"files\":5,\"bytes\":9219}"
+  },
+  {
+   "ok": true,
+   "what": "network discipline: handle revisit",
+   "detail": "10 responses, 428726 of 431171 build bytes"
+  },
+  {
+   "ok": true,
+   "what": "revisit with permission \"prompt\": asks again",
+   "detail": "The game folder \"lomn-install\" needs your permission again."
+  },
+  {
+   "ok": true,
+   "what": "after the re-grant click the area shows",
+   "detail": ""
+  },
+  {
+   "ok": true,
+   "what": "HUD reconciliation: dt samples == frames in window - 1",
+   "detail": "120 frames, 119 dt samples, window 1983.3 ms, expected 118.998 intervals at 60 Hz"
+  },
+  {
+   "ok": true,
+   "what": "HUD overlay shows fps, reconciliation, breakdown, heap",
+   "detail": "fps 60.0  frames 119 in 1.97 s; expected 119.0 at 60 Hz  (dt samples 118 = frames - 1)  dt p50 16.70 p95 16.80 ms"
+  },
+  {
+   "ok": true,
+   "what": "free-fly: W moves forward, drag turns",
+   "detail": "eye z 10 -> 9.476, yaw 27.474 -> 57.474"
+  },
+  {
+   "ok": true,
+   "what": "reset camera returns to the POS-start view",
+   "detail": ""
+  },
+  {
+   "ok": true,
+   "what": "resize: surface follows the canvas, frames keep drawing",
+   "detail": "1280x720 -> 868x488, draws 10"
+  },
+  {
+   "ok": true,
+   "what": "network discipline: HUD page",
+   "detail": "10 responses, 428726 of 431171 build bytes"
+  },
+  {
+   "ok": true,
+   "what": "no page exceptions on any page",
+   "detail": ""
+  }
+ ],
+ "summary": {
+  "refs": [
+   "test",
+   "stat"
+  ],
+  "copy": {
+   "bytes": 9219,
+   "ms": 55.200000286102295
+  },
+  "boot_first": {
+   "rounds": 2,
+   "fetch_ms": 3,
+   "bytes": 155,
+   "ranges": 1,
+   "total_ms": 4.100000381469727,
+   "cached": false,
+   "pinned_bytes": 155
+  },
+  "first_load": {
+   "area": "levt/test",
+   "rounds": 8,
+   "fetch_ms": 16.800000190734863,
+   "bytes": 3394,
+   "ranges": 11,
+   "total_ms": 24.600000381469727,
+   "cached": false,
+   "touched": "root/data/base.osi\t0\t155\nroot/data/levels/levt/levt.blk\t0\t12\nroot/data/levels/levt/levt.blk\t12\t392\nroot/data/levels/levt/levt.blk\t404\t384\nroot/data/levels/levt/levt.blk\t1116\t136\nroot/data/levels/levt/levt.blk\t1252\t112\nroot/data/levels/levt/test.blk\t0\t12\nroot/data/levels/levt/test.blk\t12\t224\nroot/data/levels/levt/test.blk\t236\t236\nroot/data/levels/levt/test.blk\t472\t1306\nroot/data/levels/levt/test.blk\t1778\t516\nroot/data/levels/levt/test.blk\t2294\t64\n",
+   "load_total_ms": 38.60000038146973
+  },
+  "after_switches": {
+   "live_objects": {
+    "textures": 3,
+    "buffers": 5,
+    "pipelines": 4,
+    "samplers": 1,
+    "bind_groups": 3
+   },
+   "heap": {
+    "wasm_memory_bytes": 16777216,
+    "malloc_in_use_bytes": 94768,
+    "malloc_arena_bytes": 130816,
+    "fs_resident_bytes": 3549,
+    "fs_pinned_bytes": 155,
+    "fs_peak_bytes": 9173,
+    "fs_ranges": 12
+   },
+   "areas_shown": 7
+  },
+  "hud": {
+   "frames": 121,
+   "frames_since_show": 120,
+   "fps": {
+    "dt_samples": 119,
+    "frames_in_window": 120,
+    "window_ms": 1983.3,
+    "p50_ms": 16.7,
+    "p95_ms": 16.8,
+    "nominal_hz": 60,
+    "expected_intervals": 118.998,
+    "fps": 60.001
+   },
+   "breakdown_ms": {
+    "script": 0,
+    "physics": 0,
+    "replay_p50": 0.2,
+    "replay_p95": 0.2,
+    "submit_p50": 0.1,
+    "submit_p95": 0.2,
+    "frame_cpu_p50": 0.3,
+    "frame_cpu_p95": 0.4
+   },
+   "draws": 10,
+   "rejected_last_frame": 0,
+   "pipelines": 4,
+   "textures": 3,
+   "texture_bytes": 428,
+   "state_calls": 101,
+   "live_objects": {
+    "textures": 3,
+    "buffers": 5,
+    "pipelines": 4,
+    "samplers": 1,
+    "bind_groups": 3
+   },
+   "heap": {
+    "wasm_memory_bytes": 16777216,
+    "malloc_in_use_bytes": 85576,
+    "malloc_arena_bytes": 93952,
+    "fs_resident_bytes": 3549,
+    "fs_pinned_bytes": 155,
+    "fs_peak_bytes": 3549,
+    "fs_ranges": 12
+   },
+   "fs": {
+    "files": 5,
+    "misses_total": 0,
+    "generation": 3
+   },
+   "area": {
+    "level": "levt",
+    "area": "test",
+    "rounds": 1,
+    "probe_ms": 1.8,
+    "load_ms": 1.4,
+    "decode_ms": 0.1,
+    "upload_ms": 0.8,
+    "show_ms": 1,
+    "cpu_bytes_released": 1288,
+    "fs_bytes_released": 0,
+    "draws_expected": 10,
+    "warnings": 4,
+    "camera": {
+     "moved": false,
+     "eye": [
+      0,
+      3,
+      10
+     ],
+     "yaw_deg": 27.474,
+     "pitch_deg": -10,
+     "fov_deg": 72,
+     "eye_source": "pos_start"
+    }
+   },
+   "areas_shown": 1,
+   "objects_released": 0,
+   "release_failures": 0,
+   "surface": {
+    "width": 1280,
+    "height": 720
+   },
+   "adapter": "apple/metal-3/"
+  }
+ }
+}

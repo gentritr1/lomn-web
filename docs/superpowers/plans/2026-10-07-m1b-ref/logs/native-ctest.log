@@ -1,0 +1,100 @@
+Test project $R/build/native
+      Start  1: determinism_null
+ 1/29 Test  #1: determinism_null .................   Passed    0.59 sec
+      Start  2: ffp_oracle
+ 2/29 Test  #2: ffp_oracle .......................   Passed    0.81 sec
+      Start  3: a7_null_calls
+ 3/29 Test  #3: a7_null_calls ....................   Passed    0.67 sec
+      Start  4: a9_state_log
+ 4/29 Test  #4: a9_state_log .....................   Passed    0.13 sec
+      Start  5: a9_oracle_synthetic
+ 5/29 Test  #5: a9_oracle_synthetic ..............   Passed    0.43 sec
+      Start  6: a9_oracle_real
+ 6/29 Test  #6: a9_oracle_real ...................   Passed    2.36 sec
+      Start  7: osi_all_methods
+ 7/29 Test  #7: osi_all_methods ..................   Passed    1.33 sec
+      Start  8: view_cli_dangling_flag
+ 8/29 Test  #8: view_cli_dangling_flag ...........   Passed    0.02 sec
+      Start  9: view_cli_missing_install
+ 9/29 Test  #9: view_cli_missing_install .........   Passed    0.02 sec
+      Start 10: view_cli_nonfinite
+10/29 Test #10: view_cli_nonfinite ...............   Passed    0.37 sec
+      Start 11: view_cli_modes
+11/29 Test #11: view_cli_modes ...................   Passed    0.12 sec
+      Start 12: view_cli_ints
+12/29 Test #12: view_cli_ints ....................   Passed    0.15 sec
+      Start 13: view_cli_stale_outputs
+13/29 Test #13: view_cli_stale_outputs ...........   Passed    0.08 sec
+      Start 14: view_cli_null_frames
+14/29 Test #14: view_cli_null_frames .............   Passed    0.04 sec
+      Start 15: view_cli_paths
+15/29 Test #15: view_cli_paths ...................   Passed    0.14 sec
+      Start 16: datacheck_no_tmpdir
+16/29 Test #16: datacheck_no_tmpdir ..............   Passed    0.43 sec
+      Start 17: view_cli_survey_empty
+17/29 Test #17: view_cli_survey_empty ............   Passed    0.03 sec
+      Start 18: view_cli_camera_json
+18/29 Test #18: view_cli_camera_json .............   Passed    0.28 sec
+      Start 19: cli_dangling_flag
+19/29 Test #19: cli_dangling_flag ................   Passed    0.02 sec
+      Start 20: gpu_triangle
+20/29 Test #20: gpu_triangle .....................   Passed    0.98 sec
+      Start 21: gpu_no_adapter
+21/29 Test #21: gpu_no_adapter ...................   Passed    0.03 sec
+      Start 22: a7_gpu_pixels
+22/29 Test #22: a7_gpu_pixels ....................   Passed    0.63 sec
+      Start 23: gpu_mesh
+23/29 Test #23: gpu_mesh .........................   Passed    1.03 sec
+      Start 24: gpu_ffp
+24/29 Test #24: gpu_ffp ..........................   Passed    0.64 sec
+      Start 25: gpu_destroy
+25/29 Test #25: gpu_destroy ......................   Passed    0.93 sec
+      Start 26: a7_gpu_no_adapter
+26/29 Test #26: a7_gpu_no_adapter ................   Passed    0.04 sec
+      Start 27: unit
+27/29 Test #27: unit .............................***Failed    1.20 sec
+cannot create $TMPDIR/... Not a directory
+[area] render skipped: not the AreaData that was uploaded
+[area] render skipped: no successful upload
+[area] render skipped: not the AreaData that was uploaded
+[area] render skipped: no successful upload
+[doctest] doctest version is "2.5.3"
+[doctest] run with "--help" for options
+===============================================================================
+$R/engine/tests/test_prefetch_fs.cpp:121:
+TEST CASE:  prefetch fs: byte budget, miss cap, user/ writes, root/ is read-only
+
+$R/engine/tests/test_prefetch_fs.cpp:131: ERROR: CHECK( p.misses().size() == PrefetchFileSystem::kMaxMissesPerGeneration ) is NOT correct!
+  values: CHECK( 900 == 4096 )
+
+$R/engine/tests/test_prefetch_fs.cpp:132: ERROR: CHECK( p.misses_dropped() == 10 ) is NOT correct!
+  values: CHECK( 0 == 10 )
+
+B3 targeted fuzz, 1200 iterations, outcome histogram:
+    561  (loaded)
+    159  area: geometry over kMaxAreaGeometryBytes
+     87  area: more than kMaxAreaTextures textures
+    104  area: more than kMaxDraws draws
+    166  area: more than kMaxPlacements drawn records
+    123  area: textures over kMaxAreaTextureBytes
+===============================================================================
+[doctest] test cases:    170 |    169 passed | 1 failed | 0 skipped
+[doctest] assertions: 176046 | 176044 passed | 2 failed |
+[doctest] Status: FAILURE!
+
+      Start 28: osi_probe
+28/29 Test #28: osi_probe ........................   Passed    0.41 sec
+      Start 29: slb_probe
+29/29 Test #29: slb_probe ........................   Passed    0.53 sec
+
+97% tests passed, 1 tests failed out of 29
+
+Label Time Summary:
+gpu    =   4.28 sec*proc (7 tests)
+
+Total Test time (real) =  14.49 sec
+
+The following tests FAILED:
+	 27 - unit (Failed)
+Errors while running CTest
+rc=8

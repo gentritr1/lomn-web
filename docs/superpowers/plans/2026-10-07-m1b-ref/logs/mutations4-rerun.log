@@ -1,0 +1,6 @@
+rerun after strengthening the tests (unit_test.mjs DLL case; resident == own read set): 16:13:20 loadavg { 22.05 18.67 13.79 }
+[17] CAUGHT js byo: DLLs are copied / indexed :: node rc=1 (0 s): 
+[22] CAUGHT main_web: area switch never releases the previous area's ranges :: browser rc=1 (10 s): 
+[23] MISSED no-op control (comment only; must be MISSED)
+restored: native build rc=0, wasm build rc=0, lomn_tests rc=0
+mutations: 2 CAUGHT, 1 MISSED (the no-op control must be among the MISSED)

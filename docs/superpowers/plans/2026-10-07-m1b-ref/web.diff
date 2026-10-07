@@ -1,0 +1,2823 @@
+diff -ruN -x node_modules base/web/app/byo.js ref/web/app/byo.js
+--- base/web/app/byo.js	1970-01-01 01:00:00
++++ ref/web/app/byo.js	2026-10-07 17:16:48
+@@ -0,0 +1,220 @@
++// Bring-your-own files (spec §4.3). Nothing here sends anything over the network: every byte is read locally through
++// the File System Access API (Chromium: the player's folder, in place) or from OPFS (Safari/Firefox: a one-time copy).
++//
++// A "source" is {kind, name, entries, file(entry)}: entries = [{path, size}] relative to the install root (the folder
++// that holds LEGOBionicle.exe), file(entry) -> Promise<File>. Three kinds:
++//   'handle' a FileSystemDirectoryHandle the player picked (showDirectoryPicker); persisted in IndexedDB
++//   'opfs'   the copy inside the origin-private file system (directory COPY_DIR)
++//   'files'  the File objects of <input webkitdirectory> (only to validate and copy them; they do not survive a reload)
++import { blkTablesFingerprint, classify, lowerAscii, MAX_EXE_BYTES, sha256hex } from './fingerprint.js';
++import { checkRelPath, MAX_DEPTH, MAX_PATH_BYTES } from './paths.js';
++
++export const COPY_DIR = 'lomn-install';
++export const COPY_DONE = 'lomn-copy-complete.json';
++export const EXE = 'legobionicle.exe';
++// Caps on what a picked folder may make the page walk (real install: 529 files, depth 5, longest path 54 bytes). The path
++// rules (UTF-8 bytes, depth, segments) are paths.js's, shared with the copy worker.
++export const MAX_FILES = 65536;
++export { MAX_DEPTH, MAX_PATH_BYTES };
++const MAX_DONE_BYTES = 8 * 1024 * 1024;
++
++const isHidden = (name) => name.startsWith('.');
++
++// Which files the copy (and the engine's index) takes: the exe at the top and everything under data/ except dot files and
++// executables/DLLs (the port never runs them). The quota check sums exactly this set.
++export function wanted(path) {
++  const k = lowerAscii(path);
++  if (k === EXE) return true;
++  if (!k.startsWith('data/')) return false;
++  if (k.split('/').some(isHidden)) return false;
++  return !(k.endsWith('.exe') || k.endsWith('.dll'));
++}
++
++// REF4 r2 (M11): one rule for both sources. A wanted file whose path breaks paths.js's rules, or whose name differs from
++// an earlier one only in case (one engine path; possible on a case-sensitive file system), is skipped with a warning
++// instead of failing the whole install. Returns true when the entry is taken.
++function admit(path, seen, warnings) {
++  const why = checkRelPath(path);
++  if (why) {
++    if (warnings.length < 100) warnings.push(`skipped ${path.slice(0, 80)}: ${why}`);
++    return false;
++  }
++  const key = lowerAscii(path);
++  if (seen.has(key)) {
++    if (warnings.length < 100) warnings.push(`skipped ${path.slice(0, 80)}: same name as ${seen.get(key)} (names are case-insensitive)`);
++    return false;
++  }
++  seen.set(key, path);
++  return true;
++}
++
++export async function walkHandle(dir) {
++  const entries = [];
++  const handles = new Map();
++  const seen = new Map(), warnings = [];
++  let visited = 0;
++  async function walk(d, prefix, depth) {
++    if (depth > MAX_DEPTH) throw new Error(`folder nested deeper than ${MAX_DEPTH} levels`);
++    for await (const [name, h] of d.entries()) {
++      if (++visited > MAX_FILES) throw new Error(`more than ${MAX_FILES} entries in the folder`);
++      if (isHidden(name)) continue;
++      const path = prefix + name;
++      if (h.kind === 'directory') {
++        if (!checkRelPath(path)) await walk(h, path + '/', depth + 1);
++        else if (warnings.length < 100) warnings.push(`skipped folder ${path.slice(0, 80)}: ${checkRelPath(path)}`);
++      } else {
++        if (!wanted(path) || !admit(path, seen, warnings)) continue;
++        const f = await h.getFile();
++        const e = { path, size: f.size };
++        entries.push(e);
++        handles.set(e, h);
++      }
++    }
++  }
++  await walk(dir, '', 0);
++  const cache = new Map();
++  return {
++    entries,
++    warnings,
++    file: async (e) => {
++      let f = cache.get(e);
++      if (!f) cache.set(e, (f = await handles.get(e).getFile()));
++      return f;
++    },
++  };
++}
++
++export async function handleSource(dir, kind) {
++  const w = await walkHandle(dir);
++  return { kind, name: dir.name, dir, entries: w.entries, warnings: w.warnings, file: w.file };
++}
++
++// <input webkitdirectory>: webkitRelativePath = "<picked folder>/data/...". The first segment is dropped.
++export function filesSource(fileList) {
++  const entries = [];
++  const files = new Map();
++  const seen = new Map(), warnings = [];
++  let name = '';
++  if (fileList.length > MAX_FILES) throw new Error(`more than ${MAX_FILES} files`);
++  for (const f of fileList) {
++    const rel = f.webkitRelativePath || f.name;
++    const slash = rel.indexOf('/');
++    if (!name) name = slash > 0 ? rel.slice(0, slash) : '';
++    const path = slash > 0 ? rel.slice(slash + 1) : rel;
++    if (!path || path.split('/').some(isHidden) || !wanted(path) || !admit(path, seen, warnings)) continue;
++    const e = { path, size: f.size };
++    entries.push(e);
++    files.set(e, f);
++  }
++  return { kind: 'files', name, entries, warnings, file: async (e) => files.get(e) };
++}
++
++export async function readRange(source, e, offset, length) {
++  const f = await source.file(e);
++  if (offset + length > f.size) throw new Error(`${e.path}: read past the end (the file changed?)`);
++  return new Uint8Array(await f.slice(offset, offset + length).arrayBuffer());
++}
++
++// exe hash + blockfile-table fingerprint -> classify() against builds.json. {ok, message, build, data, exeSha, dataFp}.
++export async function validate(source, builds) {
++  const exe = source.entries.find((e) => lowerAscii(e.path) === EXE);
++  if (!exe) return { ok: false, message: 'LEGOBionicle.exe was not found at the top of the chosen folder. Choose the game folder itself (the one that contains LEGOBionicle.exe and data/).' };
++  if (exe.size > MAX_EXE_BYTES) return { ok: false, message: 'LEGOBionicle.exe is larger than any known build: not an accepted build.' };
++  const t0 = performance.now();
++  const exeSha = await sha256hex(await readRange(source, exe, 0, exe.size));
++  let fp;
++  try {
++    fp = await blkTablesFingerprint(source.entries, (e, o, l) => readRange(source, e, o, l));
++  } catch (err) {
++    return { ok: false, message: 'The game data could not be validated: ' + err.message, exeSha };
++  }
++  const v = classify(builds, exeSha, fp.fingerprint);
++  return { ...v, exeSha, dataFp: fp.fingerprint, blkFiles: fp.blkFiles, tableBytes: fp.tableBytes, ms: performance.now() - t0 };
++}
++
++export const totalBytes = (source) => source.entries.reduce((n, e) => n + e.size, 0);
++
++// Quota first (spec §4.3): persist() then estimate(); never start a copy that cannot finish.
++export async function quotaCheck(needBytes) {
++  let persisted = false;
++  try {
++    persisted = (await navigator.storage.persist?.()) ?? false;
++  } catch { /* not fatal: the estimate decides */ }
++  const est = await navigator.storage.estimate();
++  const free = Math.max(0, (est.quota ?? 0) - (est.usage ?? 0));
++  return { ok: free >= needBytes, free, need: needBytes, persisted, quota: est.quota, usage: est.usage };
++}
++
++// REF4 r2 (I6): the completion manifest's shape ('' when valid): bounded file list of {path (paths.js rules), size}.
++export function checkCopyManifest(done) {
++  if (done?.format !== 'lomn-opfs-copy' || done.version !== 1) return 'unknown format';
++  if (!Array.isArray(done.files) || done.files.length > MAX_FILES) return 'bad files list';
++  for (const f of done.files)
++    if (!f || checkRelPath(f.path) || !Number.isSafeInteger(f.size) || f.size < 0) return 'bad entry ' + JSON.stringify(f).slice(0, 80);
++  return '';
++}
++// The copy (entries walked from OPFS) against the manifest's files: '' when every listed file is there with its size.
++export function sameFiles(entries, files) {
++  const have = new Map(entries.map((e) => [lowerAscii(e.path), e.size]));
++  for (const f of files) {
++    const k = lowerAscii(f.path);
++    if (!have.has(k)) return `missing ${f.path}`;
++    if (have.get(k) !== f.size) return `size of ${f.path} is ${have.get(k)}, the copy wrote ${f.size}`;
++  }
++  return '';
++}
++
++// The completion manifest of a finished OPFS copy, or null (absent or malformed; the files themselves are compared with
++// it by sameFiles once the copy is walked).
++export async function opfsCopy() {
++  try {
++    const root = await navigator.storage.getDirectory();
++    const dir = await root.getDirectoryHandle(COPY_DIR);
++    const doneFile = await (await dir.getFileHandle(COPY_DONE)).getFile();
++    if (doneFile.size > MAX_DONE_BYTES) return null;
++    const done = JSON.parse(await doneFile.text());
++    if (checkCopyManifest(done)) return null;
++    return { dir, done };
++  } catch {
++    return null;
++  }
++}
++// REF4 r2 (I7): a copy directory exists (with or without its completion manifest).
++export async function opfsDirExists() {
++  try {
++    await (await navigator.storage.getDirectory()).getDirectoryHandle(COPY_DIR);
++    return true;
++  } catch {
++    return false;
++  }
++}
++
++// Removes a previous (possibly partial) copy so the estimate sees the space it held.
++export async function opfsClear() {
++  const root = await navigator.storage.getDirectory();
++  try {
++    await root.removeEntry(COPY_DIR, { recursive: true });
++  } catch { /* nothing to clear */ }
++}
++
++// Copies the source into OPFS in a worker (createSyncAccessHandle, chunked). onProgress(bytesDone, bytesTotal).
++// The completion manifest is written last, so an interrupted copy is never mistaken for a complete one.
++export function copyToOpfs(source, verdict, onProgress) {
++  return new Promise((resolve, reject) => {
++    const worker = new Worker(new URL('./opfs_worker.js', import.meta.url), { type: 'module' });
++    const files = source.entries.map((e) => ({ path: e.path, size: e.size }));
++    Promise.all(source.entries.map((e) => source.file(e))).then((blobs) => {
++      worker.onmessage = ({ data }) => {
++        if (data.type === 'progress') onProgress(data.done, data.total);
++        else if (data.type === 'done') { worker.terminate(); resolve(data); }
++        else if (data.type === 'error') { worker.terminate(); reject(new Error(data.message)); }
++      };
++      worker.onerror = (ev) => { worker.terminate(); reject(new Error('copy worker failed: ' + (ev.message || 'error'))); };
++      worker.postMessage({
++        type: 'copy', dir: COPY_DIR, doneName: COPY_DONE, files, blobs,
++        done: { format: 'lomn-opfs-copy', version: 1, build: verdict.build, data: verdict.data, exe_sha256: verdict.exeSha,
++                blk_tables_sha256: verdict.dataFp, files, bytes: totalBytes(source) },
++      });
++    }, reject);
++  });
++}
+diff -ruN -x node_modules base/web/app/engine.js ref/web/app/engine.js
+--- base/web/app/engine.js	1970-01-01 01:00:00
++++ ref/web/app/engine.js	2026-10-07 17:17:42
+@@ -0,0 +1,236 @@
++// The wasm engine (lomn_web.js, an ES module factory built with INVOKE_RUN=0) and its file bridge.
++//
++// Prefetch by discovery (REF4 decision D2; engine side: engine/src/app/main_web.cpp): a load runs in rounds; each
++// round's misses (reads whose bytes are not resident) are fetched from the player's files straight into wasm heap
++// buffers, chunk by chunk (CHUNK bytes at a time: the JS-side peak is one chunk, never a whole file), and the load
++// runs again until a round has no miss. The last round's reads (lomn_fs_touched) are cached in IndexedDB per
++// (data fingerprint, engine build, area), so a revisit prefetches everything in one go and needs one round.
++import { idbDelete, idbGet, idbKeys, idbSet } from './idb.js';
++import { lowerAscii, sha256hex } from './fingerprint.js';
++
++export const CHUNK = 8 * 1024 * 1024;
++export const MAX_ROUNDS = 16;  // hard limit; measured maximum 8 over all 122 Beta 1.5.0 areas (a13_real asserts <= 12)
++// REF4 r2 (M2): a cached prefetch set is a hint from IndexedDB (tamperable): over this many bytes it is ignored and the
++// area is discovered instead. The largest real area set is 13,066,416 bytes (lev0/frnt incl. boot).
++export const MAX_CACHED_BYTES = 64 * 1024 * 1024;
++
++// Cached ranges that are inside an indexed file, non-empty, and together under MAX_CACHED_BYTES ([] otherwise).
++export function filterCached(ranges, byNorm) {
++  const ok = ranges.filter((r) => {
++    const e = byNorm.get(r.path);
++    return e && r.length > 0 && r.offset + r.length <= e.size;
++  });
++  return ok.reduce((n, r) => n + r.length, 0) > MAX_CACHED_BYTES ? [] : ok;
++}
++const MAX_RANGES_TEXT = 4096;  // ranges accepted from one miss list or cached set (engine cap: 4,096 misses per round)
++
++// "path\toffset\tlength\n" lines -> [{path, offset, length}], bounded and integer-checked.
++export function parseRanges(text) {
++  const out = [];
++  for (const line of text.split('\n')) {
++    if (!line) continue;
++    if (out.length >= MAX_RANGES_TEXT * 16) throw new Error('range list over the cap');
++    const [path, o, l] = line.split('\t');
++    const offset = Number(o), length = Number(l);
++    if (!path || !Number.isSafeInteger(offset) || !Number.isSafeInteger(length) || offset < 0 || length < 0)
++      throw new Error('malformed range line');
++    out.push({ path, offset, length });
++  }
++  return out;
++}
++
++export class Engine {
++  constructor(M, source, onState) {
++    this.M = M;
++    this.source = source;
++    this.onState = onState;
++    this.byNorm = new Map();  // engine path ("root/...", lower-case) -> source entry
++    this.load = null;         // metrics of the last area load (JS side)
++    this.boot = null;
++    this.cacheKey = '';
++    this.concurrency = 1;     // debug (M1 measurement): ranges fetched in parallel per round
++    this.useCache = true;     // debug: false = always discover
++    this.validation = null;   // the BYO verdict shown with the metrics (C2: data 'unknown' + warning)
++  }
++
++  str(s, fn) {
++    const p = this.M.stringToNewUTF8(s);
++    try {
++      return fn(p);
++    } finally {
++      this.M._free(p);
++    }
++  }
++  lastError() { return this.M.UTF8ToString(this.M._lomn_last_error()); }
++  // Engine metrics + the measured configuration (build flavour, the SHA-256 of the wasm bytes actually instantiated,
++  // canvas size); the adapter is in the engine part.
++  metrics() {
++    const m = JSON.parse(this.M.UTF8ToString(this.M._lomn_metrics_json()));
++    if (this.validation) m.validation = this.validation;
++    const c = document.getElementById('canvas');
++    m.build = { ...this.build, wasm_sha256: this.wasmSha, wasm_bytes: this.wasmBytes };
++    m.canvas = { width: c.width, height: c.height, css_width: c.clientWidth, css_height: c.clientHeight, device_pixel_ratio: window.devicePixelRatio };
++    return m;
++  }
++  areas() {
++    return this.M.UTF8ToString(this.M._lomn_list_areas()).split('\n').filter(Boolean).map((l) => {
++      const [level, area] = l.split('\t');
++      return { level, area };
++    });
++  }
++
++  // Registers every file (path, size) of the source: exists()/size() answer from this index; no bytes move.
++  index() {
++    for (const e of this.source.entries) {
++      const norm = 'root/' + lowerAscii(e.path);
++      if (!this.str('Root/' + e.path, (p) => this.M._lomn_fs_add_file(p, e.size))) throw new Error('index: ' + this.lastError());
++      this.byNorm.set(norm, e);
++    }
++  }
++
++  // One range into the heap. Returns the bytes moved (0 when it was already resident).
++  async fetchRange(r) {
++    const e = this.byNorm.get(r.path);
++    if (!e) throw new Error('prefetch: not in the index: ' + r.path);
++    if (r.length === 0 || this.str(r.path, (p) => this.M._lomn_fs_is_resident(p, r.offset, r.length))) return 0;
++    const f = await this.source.file(e);
++    if (r.offset + r.length > f.size) throw new Error(`prefetch: ${e.path} is shorter than the index says (changed on disk?)`);
++    const ptr = this.str(r.path, (p) => this.M._lomn_fs_reserve(p, r.offset, r.length));
++    if (!ptr) throw new Error('prefetch: ' + this.lastError());
++    try {
++      for (let pos = 0; pos < r.length; pos += CHUNK) {
++        const n = Math.min(CHUNK, r.length - pos);
++        const buf = new Uint8Array(await f.slice(r.offset + pos, r.offset + pos + n).arrayBuffer());
++        if (buf.length !== n) throw new Error(`prefetch: short read of ${e.path}`);
++        this.M.HEAPU8.set(buf, ptr + pos);  // re-read HEAPU8 each time: a reserve may have grown the memory
++      }
++    } catch (err) {
++      this.M._lomn_fs_abort(ptr);
++      throw err;
++    }
++    this.M._lomn_fs_commit(ptr);
++    return r.length;
++  }
++
++  // Rounds of probe() until it returns 0 (no miss). probe() returns the miss count, or < 0 on a real error.
++  // Fetches a list of ranges, `concurrency` at a time; returns [bytes moved, ranges moved].
++  async fetchAll(list, fetched) {
++    let bytes = 0, n = 0, next = 0;
++    const worker = async () => {
++      while (next < list.length) {
++        const r = list[next++];
++        const b = await this.fetchRange(r);
++        if (b) {
++          bytes += b;
++          ++n;
++          fetched.push(r);
++        }
++      }
++    };
++    await Promise.all(Array.from({ length: Math.max(1, Math.min(this.concurrency, 16)) }, worker));
++    return [bytes, n];
++  }
++
++  async rounds(probe, what, prefetch = []) {
++    const t0 = performance.now();
++    let fetchMs = 0, bytes = 0, ranges = 0;
++    const fetched = [];  // every range this load moved (I5: over-fetch = moved but not read by the final round)
++    this.fetched = fetched;
++    const tf = performance.now();
++    [bytes, ranges] = await this.fetchAll(prefetch, fetched);
++    fetchMs += performance.now() - tf;
++    for (let round = 1; round <= MAX_ROUNDS; ++round) {
++      const m = probe();
++      if (m === 0) return { rounds: round, fetch_ms: fetchMs, bytes, ranges, total_ms: performance.now() - t0, cached: prefetch.length > 0 };
++      if (m < 0) throw new Error(this.lastError());
++      const misses = parseRanges(this.M.UTF8ToString(this.M._lomn_fs_misses()));
++      const t1 = performance.now();
++      const [moved, nMoved] = await this.fetchAll(misses, fetched);
++      ranges += nMoved;
++      fetchMs += performance.now() - t1;
++      bytes += moved;
++      if (moved === 0 && misses.every((r) => r.length > 0)) throw new Error(`${what}: prefetch made no progress (${misses[0]?.path})`);
++    }
++    throw new Error(`${what}: prefetch did not converge in ${MAX_ROUNDS} rounds`);
++  }
++
++  async cached(key) {
++    if (!this.useCache) return [];
++    try {
++      const text = await idbGet(this.cacheKey + key);
++      if (typeof text !== 'string' || text.length > 16 * 1024 * 1024) return [];
++      // Validated against the index and capped before use: a stale or tampered cache can only cost a fetch, never a bad
++      // read or an oversized heap.
++      return filterCached(parseRanges(text), this.byNorm);
++    } catch {
++      return [];
++    }
++  }
++  forgetCachedSet(area) { return idbDelete(this.cacheKey + 'area:' + area).catch(() => {}); }
++  // REF4 r2 (M2): cached sets of other wasm builds can never be used again: drop them (keys "prefetch|<fp>|<sha>|...").
++  async pruneOtherBuilds() {
++    const sha = this.cacheKey.split('|')[2];
++    const keys = await idbKeys().catch(() => []);
++    let n = 0;
++    for (const k of keys)
++      if (typeof k === 'string' && k.startsWith('prefetch|') && k.split('|')[2] !== sha) {
++        await idbDelete(k).catch(() => {});
++        ++n;
++      }
++    return n;
++  }
++
++  // Boot set before main() (spec §4.3): Art.blk header + table and Base.osi, discovered like an area, then pinned.
++  async bootAndMain(width, height, cacheKey) {
++    this.cacheKey = cacheKey;
++    this.pruned = await this.pruneOtherBuilds();
++    this.index();
++    const pre = await this.cached('boot');
++    this.boot = await this.rounds(() => this.M._lomn_boot_probe(), 'boot', pre);
++    this.boot.pinned_bytes = this.M._lomn_boot_done();
++    await idbSet(this.cacheKey + 'boot', this.M.UTF8ToString(this.M._lomn_fs_touched())).catch(() => {});
++    this.M._lomn_configure(width, height, 0);
++    this.M.callMain([]);
++  }
++
++  async showArea(level, area) {
++    const key = `area:${level}/${area}`;
++    const t0 = performance.now();
++    this.str(level, (l) => this.str(area, (a) => this.M._lomn_area_begin(l, a)));
++    const pre = await this.cached(key);
++    const r = await this.rounds(() => this.M._lomn_area_probe(), `${level}/${area}`, pre);
++    const touched = this.M.UTF8ToString(this.M._lomn_fs_touched());
++    const read = new Set(touched.split('\n').filter(Boolean));
++    const overFetch = this.fetched.filter((x) => !read.has(`${x.path}\t${x.offset}\t${x.length}`)).reduce((n, x) => n + x.length, 0);
++    if (!this.M._lomn_area_show()) throw new Error(this.lastError());
++    await idbSet(this.cacheKey + key, touched).catch(() => {});
++    this.load = { area: `${level}/${area}`, ...r, touched, over_fetch_bytes: overFetch, concurrency: this.concurrency, load_total_ms: performance.now() - t0 };
++    return this.load;
++  }
++}
++
++// Instantiates the module from wasm bytes fetched (once) and hashed here, so the page knows exactly which build it runs
++// (metrics.build.wasm_sha256; also the prefetch-cache key). onState(state, detail) receives the engine's own states.
++// The two file names below are rewritten to their content-hashed names by web/tools/build_site.mjs.
++export async function createEngine(source, onState) {
++  const res = await fetch(new URL('../lomn_web.wasm', import.meta.url));
++  if (!res.ok) throw new Error('lomn_web.wasm: HTTP ' + res.status);
++  const wasm = new Uint8Array(await res.arrayBuffer());
++  const wasmSha = await sha256hex(wasm);
++  const { default: createLomn } = await import('../lomn_web.js');
++  const M = await createLomn({
++    // Instantiate from the bytes hashed above (no second download; Emscripten 6 ignores a plain wasmBinary option).
++    instantiateWasm: (imports, receive) => {
++      WebAssembly.instantiate(wasm, imports).then((r) => receive(r.instance, r.module), (e) => onState('error', 'wasm instantiate: ' + e));
++      return {};
++    },
++    onLomnState: (s, d) => onState(s, d),
++    print: (t) => console.log(t),
++    printErr: (t) => console.warn(t),
++  });
++  const e = new Engine(M, source, onState);
++  e.wasmSha = wasmSha;
++  e.wasmBytes = wasm.length;
++  e.build = JSON.parse(M.UTF8ToString(M._lomn_build_info()));
++  return e;
++}
+diff -ruN -x node_modules base/web/app/fingerprint.js ref/web/app/fingerprint.js
+--- base/web/app/fingerprint.js	1970-01-01 01:00:00
++++ ref/web/app/fingerprint.js	2026-10-07 17:17:16
+@@ -0,0 +1,96 @@
++// Build identification for the bring-your-own-files page (spec §4.3 "validation is cheap"). Shared by the browser
++// (web/app/byo.js) and Node (web/tools/fingerprint_cli.mjs, the test fixtures); the independent oracle is
++// tools/byo_fingerprint.py. Everything read here is untrusted: every count and length is bounded before use.
++//
++// exe:  SHA-256 of LEGOBionicle.exe at the top of the chosen folder (whole file, <= MAX_EXE_BYTES).
++// data: the blockfile-table fingerprint. For every file data/**/*.blk (path relative to the install root, '/'-separated,
++//       ASCII lower-case, sorted by that path in UTF-16 code-unit order = byte order for ASCII):
++//         header = bytes [0, 12): "BLKF", u32 version, u32 count (little-endian)
++//         table  = bytes [0, 12 + count * 56)           (the ScBlock entry table: names, sizes, flags, offsets)
++//         line   = `${path} ${fileSize} ${sha256hex(table)}`
++//       fingerprint = sha256hex(lines.join('\n') + '\n'). A file whose header is not "BLKF" or whose table does not fit
++//       is an error naming the file.
++export const MAX_EXE_BYTES = 64 * 1024 * 1024;        // real exe: 6,180,412 bytes (canonical) / 6,180,xxx (installer)
++export const MAX_BLK_ENTRIES = 65536;                 // real maximum: 2,608 entries (data/Art/Art.blk)
++export const MAX_BLK_FILES = 4096;                    // real: 189 .blk files
++export const MAX_TOTAL_TABLE_BYTES = 64 * 1024 * 1024; // real: 643,748 bytes over all 189 tables
++const BLK_HEADER = 12;
++const BLK_ENTRY = 56;
++
++const hex = (buf) => Array.from(new Uint8Array(buf), (b) => b.toString(16).padStart(2, '0')).join('');
++export async function sha256hex(bytes) {
++  return hex(await globalThis.crypto.subtle.digest('SHA-256', bytes));
++}
++
++// Lower-case ASCII only (the engine's fs::normalize rule); other bytes are kept.
++export function lowerAscii(s) {
++  return s.replace(/[A-Z]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 32));
++}
++
++// entries: [{path, size}] relative to the install root ('/' separators, any case). readRange(entry, offset, length)
++// resolves to a Uint8Array of exactly `length` bytes. Returns {fingerprint, blkFiles, tableBytes}; throws Error with a
++// message naming the file on malformed input.
++export async function blkTablesFingerprint(entries, readRange) {
++  const blks = entries
++    .map((e) => ({ e, key: lowerAscii(e.path) }))
++    .filter((x) => x.key.startsWith('data/') && x.key.endsWith('.blk'))
++    .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
++  if (blks.length === 0) throw new Error('no data/**/*.blk files: this is not a LOMN install');
++  if (blks.length > MAX_BLK_FILES) throw new Error(`more than ${MAX_BLK_FILES} .blk files`);
++  const lines = [];
++  let total = 0;
++  for (const { e, key } of blks) {
++    if (!(e.size >= BLK_HEADER)) throw new Error(`${e.path}: too small for a blockfile header`);
++    const h = await readRange(e, 0, BLK_HEADER);
++    if (h.length !== BLK_HEADER || h[0] !== 0x42 || h[1] !== 0x4c || h[2] !== 0x4b || h[3] !== 0x46)
++      throw new Error(`${e.path}: not a blockfile (no BLKF magic)`);
++    const count = new DataView(h.buffer, h.byteOffset, h.byteLength).getUint32(8, true);
++    if (count > MAX_BLK_ENTRIES) throw new Error(`${e.path}: ${count} entries (cap ${MAX_BLK_ENTRIES})`);
++    const len = BLK_HEADER + count * BLK_ENTRY;
++    if (len > e.size) throw new Error(`${e.path}: entry table larger than the file`);
++    total += len;
++    if (total > MAX_TOTAL_TABLE_BYTES) throw new Error('blockfile tables over the size cap');
++    const table = await readRange(e, 0, len);
++    if (table.length !== len) throw new Error(`${e.path}: short read`);
++    lines.push(`${key} ${e.size} ${await sha256hex(table)}`);
++  }
++  const text = new TextEncoder().encode(lines.join('\n') + '\n');
++  return { fingerprint: await sha256hex(text), blkFiles: blks.length, tableBytes: total };
++}
++
++// builds.json (tools/builds.json, copied into the site): shape-checked before use.
++export function checkBuilds(b) {
++  const isHex = (s) => typeof s === 'string' && /^[0-9a-f]{64}$/.test(s);
++  const isId = (s) => typeof s === 'string' && s.length > 0 && s.length <= 64;
++  if (!b || typeof b !== 'object' || !Array.isArray(b.accepted) || b.accepted.length > 64) throw new Error('builds.json: bad accepted list');
++  for (const a of b.accepted) if (!isId(a.id) || !isHex(a.exe_sha256)) throw new Error('builds.json: bad accepted entry');
++  const data = b.data ?? [];
++  if (!Array.isArray(data) || data.length > 64) throw new Error('builds.json: bad data list');
++  for (const d of data) if (!isId(d.id) || !isHex(d.blk_tables_sha256)) throw new Error('builds.json: bad data entry');
++  const rejected = b.rejected ?? [];
++  if (!Array.isArray(rejected) || rejected.length > 64) throw new Error('builds.json: bad rejected list');
++  for (const r of rejected)
++    if (!isId(r.id) || !isHex(r.exe_sha256) || typeof r.name !== 'string' || typeof r.reason !== 'string')
++      throw new Error('builds.json: bad rejected entry');
++  return { accepted: b.accepted, data, rejected };
++}
++
++// The verdict for an exe hash + data fingerprint. {ok, build, data, message}; message names the build on rejection.
++export function classify(builds, exeSha, dataFp) {
++  const short = exeSha.slice(0, 12);
++  const rej = builds.rejected.find((r) => r.exe_sha256 === exeSha);
++  if (rej) return { ok: false, message: `This is ${rej.name} (LEGOBionicle.exe SHA-256 ${short}…), which is not supported: ${rej.reason}` };
++  const acc = builds.accepted.find((a) => a.exe_sha256 === exeSha);
++  if (!acc)
++    return { ok: false, message: `Unknown build: LEGOBionicle.exe SHA-256 ${short}… is not an accepted build. Only BIONICLE: The Legend of Mata Nui Beta 1.5.0 is supported (REBUILT and other mods are not).` };
++  const data = builds.data.find((d) => d.blk_tables_sha256 === dataFp);
++  // REF4 r2 decision D13 (controller ruling C2, option b): an accepted exe with blockfile tables no accepted build lists is
++  // SOFT-accepted: every parser is bounded, so differing tables are a fidelity risk, not a safety one (the canonical
++  // build's own data has never been fingerprinted). The page shows a persistent warning and the reason goes into the
++  // metrics. The owner can tighten this to a rejection by adding the canonical fingerprint to builds.json `data`.
++  if (!data) {
++    const warning = `Game data differs from the known build — rendering may differ (.blk table fingerprint ${dataFp.slice(0, 12)}… is not in builds.json for "${acc.id}")`;
++    return { ok: true, build: acc.id, data: 'unknown', warning, message: `Accepted with a warning: ${acc.id}, unknown data` };
++  }
++  return { ok: true, build: acc.id, data: data.id, message: `Accepted: ${acc.id} with ${data.id}` };
++}
+diff -ruN -x node_modules base/web/app/idb.js ref/web/app/idb.js
+--- base/web/app/idb.js	1970-01-01 01:00:00
++++ ref/web/app/idb.js	2026-10-07 17:17:16
+@@ -0,0 +1,33 @@
++// Minimal IndexedDB key/value store (one database, one object store). Holds the picked directory handle (Chromium:
++// FileSystemDirectoryHandle is structured-cloneable) and the per-area prefetch sets the engine discovered.
++const DB = 'lomn-web';
++const STORE = 'kv';
++
++function open() {
++  return new Promise((resolve, reject) => {
++    const req = indexedDB.open(DB, 1);
++    req.onupgradeneeded = () => req.result.createObjectStore(STORE);
++    req.onsuccess = () => resolve(req.result);
++    req.onerror = () => reject(req.error);
++  });
++}
++
++async function tx(mode, fn) {
++  const db = await open();
++  try {
++    return await new Promise((resolve, reject) => {
++      const t = db.transaction(STORE, mode);
++      const req = fn(t.objectStore(STORE));
++      t.oncomplete = () => resolve(req?.result);
++      t.onerror = () => reject(t.error);
++      t.onabort = () => reject(t.error);
++    });
++  } finally {
++    db.close();
++  }
++}
++
++export const idbGet = (key) => tx('readonly', (s) => s.get(key));
++export const idbSet = (key, value) => tx('readwrite', (s) => s.put(value, key));
++export const idbDelete = (key) => tx('readwrite', (s) => s.delete(key));
++export const idbKeys = () => tx('readonly', (s) => s.getAllKeys());
+diff -ruN -x node_modules base/web/app/main.js ref/web/app/main.js
+--- base/web/app/main.js	1970-01-01 01:00:00
++++ ref/web/app/main.js	2026-10-07 17:36:03
+@@ -0,0 +1,379 @@
++// LOMN Web viewer page: bring-your-own files -> validation -> (copy) -> engine -> area viewer.
++// window.__lomn: {state, message, error, build, source, areas, metrics (getter), load, boot, copy, showArea(), ...}.
++// States: boot | need-files | need-permission | validating | rejected | quota-short | copying | starting | ready |
++//         loading-area | area-ready | error. Tests wait on these (never on time).
++import { checkBuilds } from './fingerprint.js';
++import { copyToOpfs, filesSource, handleSource, opfsClear, opfsCopy, opfsDirExists, quotaCheck, sameFiles, totalBytes, validate } from './byo.js';
++import { createEngine } from './engine.js';
++import { idbDelete, idbGet, idbSet } from './idb.js';
++
++const $ = (id) => document.getElementById(id);
++const params = new URLSearchParams(location.search);
++const L = (window.__lomn = window.__lomn || {});
++let engine = null;
++let builds = null;
++let busy = false;
++let starting = false;  // M4: one engine per page (a second pick while one starts is refused)
++// M13: unfaithful or test-only switches need ?debug=1, so a pasted URL never silently renders differently.
++const debug = params.get('debug') === '1';
++
++function setState(state, message = '') {
++  L.state = state;
++  L.message = message;
++  $('status').textContent = state;
++  $('message').textContent = message;
++  $('message').dataset.state = state;
++}
++function fail(err) {
++  L.error = String(err?.message ?? err);
++  setState('error', L.error);
++}
++const pickerMessage = 'Choose your BIONICLE: The Legend of Mata Nui (Beta 1.5.0) folder. Nothing is uploaded: the files are read on this computer.';
++// I3/I6/I7: back to the folder choice with a reason (the picker button shown where the browser has one).
++function needFiles(reason) {
++  $('byo').hidden = false;
++  $('viewer').hidden = true;
++  if ('showDirectoryPicker' in window && params.get('fs') !== 'opfs') $('pick-dir').hidden = false;
++  setState('need-files', reason ? `${reason} ${pickerMessage}` : pickerMessage);
++}
++const mb = (n) => (n / 1048576).toFixed(1) + ' MiB';
++
++// Canvas: ?size=WxH fixes the drawing buffer and CSS size (tests compare pixels at 1280x720); otherwise the canvas takes
++// its container's width (min(100%, 1280px)) and a 16:9 height rounded to a whole CSS pixel, and the drawing buffer is that
++// size x devicePixelRatio (ResizeObserver -> lomn_resize: surface + depth buffer recreated).
++function canvasSize() {
++  const m = /^(\d{2,4})x(\d{2,4})$/.exec(params.get('size') || '');
++  if (m) return { w: +m[1], h: +m[2], fixed: true };
++  const c = $('canvas');
++  const dpr = window.devicePixelRatio || 1;
++  const cssW = Math.max(1, Math.round(c.parentElement.clientWidth)), cssH = Math.max(1, Math.round((cssW * 9) / 16));
++  return { w: Math.round(cssW * dpr), h: Math.round(cssH * dpr), cssW, cssH, fixed: false };
++}
++
++async function start() {
++  try {
++    if (params.get('scene') === 'triangle') return startTriangle();
++    setState('boot');
++    const res = await fetch('builds.json');
++    builds = checkBuilds(await res.json());
++    if ('showDirectoryPicker' in window && params.get('fs') !== 'opfs') $('pick-dir').hidden = false;
++    // ?pick=1: choose a (different) folder even when one is remembered.
++    if (params.get('pick') === '1') return setState('need-files', 'Choose the game folder.');
++    // Revisit 1: a folder handle the player picked earlier (Chromium).
++    const handle = await idbGet('install-handle').catch(() => null);
++    if (handle && params.get('fs') !== 'opfs') {
++      // I3: a remembered folder that was moved or deleted is forgotten and the folder asked for again (never a dead end).
++      const revisit = async () => {
++        let src;
++        try {
++          src = await handleSource(handle, 'handle');
++        } catch (err) {
++          await idbDelete('install-handle').catch(() => {});
++          L.forgottenHandle = String(err?.message ?? err);
++          return needFiles(`The remembered folder "${handle.name}" could not be read (moved or deleted).`);
++        }
++        return useSource(src, 'revisit');
++      };
++      const perm = await handle.queryPermission({ mode: 'read' });
++      if (perm === 'granted') return revisit();
++      $('regrant').hidden = false;
++      $('regrant').textContent = `Allow access to "${handle.name}" again`;
++      $('regrant').onclick = async () => {
++        if ((await handle.requestPermission({ mode: 'read' })) === 'granted') {
++          $('regrant').hidden = true;
++          revisit();
++        } else {
++          setState('need-permission', 'Permission was not granted. Choose the folder again.');
++        }
++      };
++      return setState('need-permission', `The game folder "${handle.name}" needs your permission again.`);
++    }
++    // Revisit 2: a finished OPFS copy (Safari/Firefox path), checked against its completion manifest (I6).
++    const copy = await opfsCopy();
++    if (copy) {
++      let src, why = '';
++      try {
++        src = await handleSource(copy.dir, 'opfs');
++        why = sameFiles(src.entries, copy.done.files);
++      } catch (err) {
++        why = String(err?.message ?? err);
++      }
++      if (!why) return useSource(src, 'revisit');
++      await opfsClear();
++      L.copyProblem = why;
++      return needFiles(`The browser copy of the game files was incomplete (${why}) and was removed.`);
++    }
++    // I7: a copy directory without its completion manifest is an interrupted copy: free its space now.
++    if (await opfsDirExists()) {
++      await opfsClear();
++      return needFiles('An incomplete copy (interrupted before it finished) was removed.');
++    }
++    needFiles('');
++  } catch (err) {
++    fail(err);
++  }
++}
++
++async function onPickDir() {
++  try {
++    const handle = await window.showDirectoryPicker({ id: 'lomn-install', mode: 'read' });
++    await adoptHandle(handle);
++  } catch (err) {
++    if (err?.name !== 'AbortError') fail(err);
++  }
++}
++// The Chromium path: the handle is read in place (no copy) and persisted for the next visit.
++async function adoptHandle(handle) {
++  const src = await handleSource(handle, 'handle');
++  const ok = await useSource(src, 'picked');
++  if (ok) await idbSet('install-handle', handle);
++  return ok;
++}
++
++// Safari/Firefox path (also used by Chromium when the folder comes from the input): validate the File objects, check the
++// quota, copy into OPFS in a worker, then read from the copy.
++async function onInput(ev) {
++  if (busy) return;
++  busy = true;
++  try {
++    const src = filesSource(ev.target.files);
++    setState('validating', `Checking ${src.entries.length} files…`);
++    const v = await validate(src, builds);
++    L.validation = v;
++    if (!v.ok) return setState('rejected', v.message);
++    await opfsClear();
++    const need = totalBytes(src);
++    const q = await quotaCheck(need);
++    L.quota = q;
++    if (!q.ok)
++      return setState('quota-short', `Not enough browser storage to copy the game files: ${mb(q.need)} needed, ${mb(q.free)} available` +
++        ` (persistent storage ${q.persisted ? 'granted' : 'not granted'}). Free some space, or use Chrome or Edge, which read the folder in place without copying.`);
++    setState('copying', `Copying ${mb(need)} into browser storage (one time)…`);
++    $('copy-progress').hidden = false;
++    $('copy-progress').max = need;
++    const t0 = performance.now();
++    const res = await copyToOpfs(src, v, (done, total) => {
++      $('copy-progress').value = done;
++      L.copyProgress = { done, total };
++    });
++    L.copy = { bytes: res.bytes, ms: performance.now() - t0 };
++    $('copy-progress').hidden = true;
++    const copy = await opfsCopy();
++    if (!copy) throw new Error('the copy finished but its completion manifest is missing');
++    await useSource(await handleSource(copy.dir, 'opfs'), 'copied');
++  } catch (err) {
++    fail(err);
++  } finally {
++    busy = false;
++    ev.target.value = '';
++  }
++}
++
++async function useSource(src, how) {
++  if (starting || engine) return false;  // M4: a second pick never starts a second engine on the same canvas
++  starting = true;
++  try {
++    return await startWith(src, how);
++  } finally {
++    if (!engine) starting = false;
++  }
++}
++
++async function startWith(src, how) {
++  setState('validating', `Checking ${src.entries.length} files…`);
++  const v = await validate(src, builds);
++  L.validation = v;
++  L.sourceWarnings = src.warnings ?? [];
++  if (!v.ok) {
++    setState('rejected', v.message);
++    return false;
++  }
++  // C2 (D13): accepted exe + unknown tables: shown, with a persistent warning; the reason also goes into the metrics.
++  if (v.warning) {
++    $('warning').hidden = false;
++    $('warning').textContent = v.warning;
++  }
++  L.build = v.build;
++  L.source = { kind: src.kind, how, name: src.name, files: src.entries.length, bytes: totalBytes(src) };
++  $('byo').hidden = true;
++  $('viewer').hidden = false;
++  setState('starting', `${v.message}. Starting the engine…`);
++  const size = canvasSize();
++  applyCanvasSize(size);
++  engine = await createEngine(src, onEngineState);
++  L.engine = engine;
++  engine.validation = { build: v.build, data: v.data, warning: v.warning ?? null, source_warnings: (src.warnings ?? []).length };
++  if (debug) {
++    // ?debug=1&fog=off: the pixel gate's positive control. ?debug_spin=MS: busy-wait per frame (I2). ?fetch_concurrency=N,
++    // ?nocache=1: prefetch measurement switches (M1).
++    if (params.get('fog') === 'off') engine.M._lomn_set_fog(0);
++    const spin = Number(params.get('debug_spin') || 0);
++    if (spin > 0) engine.M._lomn_debug_spin(spin);
++    engine.concurrency = Math.max(1, Math.min(16, Number(params.get('fetch_concurrency') || 1)));
++    if (params.get('nocache') === '1') engine.useCache = false;
++  }
++  await engine.bootAndMain(size.w, size.h, `prefetch|${v.dataFp}|${engine.wasmSha}|`);
++  L.boot = engine.boot;
++  return true;
++}
++
++function applyCanvasSize(size) {
++  const c = $('canvas');
++  if (size.fixed) {
++    c.parentElement.style.width = size.w + 'px';
++    c.style.width = size.w + 'px';
++    c.style.height = size.h + 'px';
++  } else {
++    c.style.height = size.cssH + 'px';  // whole CSS pixels (the 16:9 aspect-ratio alone can give x.5)
++  }
++  c.width = size.w;
++  c.height = size.h;
++}
++
++function onEngineState(state, detail) {
++  if (state === 'error') {
++    // C1: a lost GPU device (or the engine's first uncaptured GPU error) ends the session: say so, offer a reload.
++    L.lost = detail;
++    $('loading').hidden = true;
++    $('reload').hidden = false;
++    return fail(new Error(detail));
++  }
++  if (state !== 'ready') return;
++  L.adapter = detail;
++  L.metricsAtReady = engine.metrics();  // the heap after the boot set, before any area (memory budget)
++  L.areas = engine.areas();
++  const pick = $('area-picker');
++  pick.textContent = '';
++  for (const a of L.areas) pick.add(new Option(`${a.level}/${a.area}`, `${a.level}/${a.area}`));
++  pick.onchange = () => showArea(pick.value);
++  if (!canvasSize().fixed) new ResizeObserver(() => {
++    const s = canvasSize();
++    $('canvas').style.height = s.cssH + 'px';
++    if (s.w !== $('canvas').width || s.h !== $('canvas').height) engine.M._lomn_resize(s.w, s.h);
++  }).observe($('canvas').parentElement);
++  setState('ready', `${L.areas.length} areas. Pick one.`);
++  startInput();
++  if (params.get('hud') === '1') startHud();
++  const first = params.get('area') || (L.areas[0] ? `${L.areas[0].level}/${L.areas[0].area}` : '');
++  // I2: the engine measures the display rate from 100 empty frames before the first area (about 1.7 s at 60 Hz); the
++  // first area waits for it (at most 6 s; without it the HUD says the rate is not measured).
++  const t0 = performance.now();
++  const wait = () => {
++    if (engine.metrics().fps.display_hz > 0 || performance.now() - t0 > 6000) {
++      if (first) showArea(first);
++    } else {
++      requestAnimationFrame(wait);
++    }
++  };
++  requestAnimationFrame(wait);
++}
++
++// Area switch: the previous area keeps rendering under the loading overlay while the next one is prefetched.
++async function showArea(name) {
++  if (!engine || busy) return false;
++  const [level, area] = String(name).split('/');
++  if (!L.areas.some((a) => a.level === level && a.area === area)) return false;
++  busy = true;
++  $('area-picker').value = name;
++  $('area-picker').disabled = true;
++  $('loading').hidden = false;
++  setState('loading-area', `Loading ${name}…`);
++  try {
++    L.load = await engine.showArea(level, area);
++    setState('area-ready', name);
++    return true;
++  } catch (err) {
++    fail(err);
++    return false;
++  } finally {
++    busy = false;
++    $('area-picker').disabled = false;
++    $('loading').hidden = true;
++  }
++}
++
++// Free-fly camera input: WASD / arrows move, Q/E down/up, Shift faster; drag (or pointer lock after a click) looks.
++function startInput() {
++  const c = $('canvas');
++  const bits = { KeyW: 1, ArrowUp: 1, KeyS: 2, ArrowDown: 2, KeyA: 4, ArrowLeft: 4, KeyD: 8, ArrowRight: 8, KeyE: 16, KeyQ: 32, ShiftLeft: 64, ShiftRight: 64 };
++  let keys = 0, dragging = false;
++  const push = (dx = 0, dy = 0) => engine.M._lomn_input(keys, dx, dy);
++  // M3: keys move the camera only while the canvas has focus (click it) or the pointer is locked to it; elsewhere the
++  // page keeps its normal keyboard behaviour (Tab, Shift+Tab, arrows in the picker).
++  const ours = () => document.activeElement === c || document.pointerLockElement === c;
++  addEventListener('keydown', (e) => {
++    if (!ours() || !(e.code in bits)) return;
++    keys |= bits[e.code];
++    push();
++    e.preventDefault();
++  });
++  addEventListener('keyup', (e) => {
++    if (!(e.code in bits)) return;
++    keys &= ~bits[e.code];
++    push();
++  });
++  addEventListener('blur', () => { keys = 0; push(); });
++  c.addEventListener('mousedown', () => { dragging = true; c.focus(); });
++  addEventListener('mouseup', () => { dragging = false; });
++  c.addEventListener('dblclick', () => {
++    const r = c.requestPointerLock?.();  // a promise in current Chromium: a refused lock is not an unhandled rejection
++    if (r && r.catch) r.catch(() => {});
++  });
++  addEventListener('mousemove', (e) => {
++    if (dragging || document.pointerLockElement === c) push(e.movementX, e.movementY);
++  });
++  $('reset-camera').onclick = () => engine.M._lomn_camera_reset();
++}
++
++function startHud() {
++  const hud = $('hud');
++  hud.hidden = false;
++  const f = (v, d = 1) => (typeof v === 'number' ? v.toFixed(d) : '-');
++  setInterval(() => {
++    const m = engine.metrics();
++    const p = m.fps, b = m.breakdown_ms, h = m.heap, lo = m.live_objects;
++    const ld = L.load;
++    const bd = m.build;
++    hud.textContent =
++      `build ${bd.type} [${bd.cxx_flags}] emscripten ${bd.emscripten} wasm ${bd.wasm_sha256.slice(0, 12)}  canvas ${m.canvas.width}x${m.canvas.height} @${m.canvas.device_pixel_ratio}x  ${m.adapter}${m.render.fog ? '' : '  FOG OFF (debug)'}\n` +
++      `measured fps ${f(p.fps)} vs display ${p.display_hz > 0 ? f(p.display_hz, 0) + ' Hz (measured before the first area)' : 'not measured'}` +
++      `${p.dropping ? '  DROPPING' : ''}${p.spin_ms > 0 ? `  (debug spin ${p.spin_ms} ms)` : ''}\n` +
++      `frames ${p.frames_in_window} in ${f(p.window_ms / 1000, 2)} s; expected ${f(p.expected_intervals + (p.dt_samples ? 1 : 0))} at ${f(p.nominal_hz, 0)} Hz` +
++      `  (dt samples ${p.dt_samples} = frames - 1)  dt p50 ${f(p.p50_ms, 2)} p95 ${f(p.p95_ms, 2)} ms\n` +
++      `frame ms: script ${b.script}  physics ${b.physics}  replay p50 ${f(b.replay_p50, 2)}  submit p50 ${f(b.submit_p50, 2)}  cpu p50 ${f(b.frame_cpu_p50, 2)} p95 ${f(b.frame_cpu_p95, 2)}\n` +
++      `draws ${m.draws}  pipelines ${m.pipelines}  textures ${m.textures} (${mb(m.texture_bytes)})  rejected ${m.rejected_last_frame}  ` +
++      `objects t${lo.textures}/b${lo.buffers}/p${lo.pipelines}/s${lo.samplers}/g${lo.bind_groups}\n` +
++      `heap: wasm ${mb(h.wasm_memory_bytes)}  malloc ${mb(h.malloc_in_use_bytes)}  files resident ${mb(h.fs_resident_bytes)} (boot ${mb(h.fs_pinned_bytes)}, peak ${mb(h.fs_peak_bytes)})\n` +
++      (ld ? `${ld.area}: ${ld.rounds} rounds${ld.cached ? ' (cached set)' : ''}, ${mb(ld.bytes)} read in ${f(ld.fetch_ms, 0)} ms, total ${f(ld.load_total_ms, 0)} ms` : '');
++  }, 250);
++}
++
++function startTriangle() {
++  setState('starting');
++  $('byo').hidden = true;
++  $('viewer').hidden = false;
++  const c = $('canvas');
++  c.className = 'triangle';
++  c.width = c.height = 64;
++  createEngine(null, (s, d) => {
++    if (s === 'ready') setState('running', d);
++    else if (s === 'error') fail(new Error(d));
++  }).then((e) => {
++    engine = e;
++    L.engine = e;
++    e.M._lomn_configure(64, 64, 1);
++    e.M.callMain([]);
++  }, fail);
++}
++
++// Programmatic entry points (also what the Playwright tests drive; documented in web/tests/README.md).
++L.showArea = showArea;
++L.useDirectoryHandle = adoptHandle;
++L.forget = async () => { await idbDelete('install-handle'); await opfsClear(); };
++L.forgetCachedSet = (area) => engine?.forgetCachedSet(area);  // tests: force discovery for one area (I5 sweep)
++Object.defineProperty(L, 'metrics', { configurable: true, get: () => (engine && engine.M._lomn_metrics_json ? engine.metrics() : null) });
++
++$('pick-dir').onclick = onPickDir;
++$('reload').onclick = () => location.reload();
++$('byo-input').onchange = onInput;
++start();
+diff -ruN -x node_modules base/web/app/opfs_worker.js ref/web/app/opfs_worker.js
+--- base/web/app/opfs_worker.js	1970-01-01 01:00:00
++++ ref/web/app/opfs_worker.js	2026-10-07 17:17:16
+@@ -0,0 +1,59 @@
++// Safari/Firefox fallback (spec §4.3): copies the chosen files into the origin-private file system, chunk by chunk
++// through createSyncAccessHandle (worker-only API); never a whole-file arrayBuffer(). The completion manifest is
++// written last. Messages out: {type:'progress', done, total} | {type:'done', bytes, ms} | {type:'error', message}.
++import { checkRelPath } from './paths.js';
++
++const CHUNK = 8 * 1024 * 1024;
++
++async function dirFor(root, path) {
++  const bad = checkRelPath(path);  // REF4 r2 (M12): defence in depth, the page checked the same rule
++  if (bad) throw new Error(`refusing to copy "${String(path).slice(0, 80)}": ${bad}`);
++  const parts = path.split('/');
++  let d = root;
++  for (const p of parts.slice(0, -1)) d = await d.getDirectoryHandle(p, { create: true });
++  return { dir: d, name: parts[parts.length - 1] };
++}
++
++async function writeFile(root, path, blob, onBytes) {
++  const { dir, name } = await dirFor(root, path);
++  const fh = await dir.getFileHandle(name, { create: true });
++  const access = await fh.createSyncAccessHandle();
++  try {
++    access.truncate(0);
++    for (let pos = 0; pos < blob.size; pos += CHUNK) {
++      const buf = new Uint8Array(await blob.slice(pos, Math.min(blob.size, pos + CHUNK)).arrayBuffer());
++      const n = access.write(buf, { at: pos });
++      if (n !== buf.length) throw new Error(`${path}: short write (${n} of ${buf.length})`);
++      onBytes(buf.length);
++    }
++    access.flush();
++    if (access.getSize() !== blob.size) throw new Error(`${path}: size after copy ${access.getSize()} != ${blob.size}`);
++  } finally {
++    access.close();
++  }
++}
++
++self.onmessage = async ({ data }) => {
++  if (data?.type !== 'copy') return;
++  const t0 = performance.now();
++  try {
++    const root = await (await navigator.storage.getDirectory()).getDirectoryHandle(data.dir, { create: true });
++    const total = data.files.reduce((n, f) => n + f.size, 0);
++    let done = 0, last = 0;
++    for (let i = 0; i < data.files.length; ++i) {
++      await writeFile(root, data.files[i].path, data.blobs[i], (n) => {
++        done += n;
++        if (done - last >= CHUNK || done === total) {
++          last = done;
++          self.postMessage({ type: 'progress', done, total });
++        }
++      });
++    }
++    const json = new TextEncoder().encode(JSON.stringify({ ...data.done, copied_ms: Math.round(performance.now() - t0) }));
++    await writeFile(root, data.doneName, new Blob([json]), () => {});
++    self.postMessage({ type: 'progress', done: total, total });
++    self.postMessage({ type: 'done', bytes: total, ms: performance.now() - t0 });
++  } catch (err) {
++    self.postMessage({ type: 'error', message: String(err?.message ?? err) });
++  }
++};
+diff -ruN -x node_modules base/web/app/paths.js ref/web/app/paths.js
+--- base/web/app/paths.js	1970-01-01 01:00:00
++++ ref/web/app/paths.js	2026-10-07 17:16:08
+@@ -0,0 +1,18 @@
++// Relative path rules shared by the page (byo.js) and the OPFS copy worker (opfs_worker.js). Paths are relative to the
++// install root, '/'-separated. The byte limit is the engine's (PrefetchFileSystem::kMaxPathBytes counts UTF-8 bytes of
++// "Root/" + path), so a path the page accepts can never make the engine's index reject the whole install.
++export const MAX_PATH_BYTES = 1024;  // real install: 54 bytes at most
++export const MAX_DEPTH = 16;         // real install: depth 5
++const ENGINE_PREFIX_BYTES = 5;       // "Root/"
++const utf8 = new TextEncoder();
++
++// '' when the path is acceptable, else a short reason.
++export function checkRelPath(path) {
++  if (typeof path !== 'string' || path.length === 0) return 'empty path';
++  const bytes = utf8.encode(path).length + ENGINE_PREFIX_BYTES;
++  if (bytes > MAX_PATH_BYTES) return `path longer than ${MAX_PATH_BYTES} bytes (${bytes} as UTF-8)`;
++  const segs = path.split('/');
++  if (segs.length > MAX_DEPTH + 1) return `nested deeper than ${MAX_DEPTH} levels`;
++  for (const s of segs) if (s === '' || s === '.' || s === '..') return `bad path segment "${s}"`;
++  return '';
++}
+diff -ruN -x node_modules base/web/index.html ref/web/index.html
+--- base/web/index.html	2026-10-07 15:21:46
++++ ref/web/index.html	2026-10-07 17:18:38
+@@ -2,8 +2,63 @@
+ <html lang="en">
+ <meta charset="utf-8">
+ <meta name="viewport" content="width=device-width, initial-scale=1">
++<!-- REF4 r2 (I4): the browser itself refuses any request to another origin; 'wasm-unsafe-eval' only allows compiling the
++     engine's WebAssembly (no JS eval: the module is linked with -sDYNAMIC_EXECUTION=0). Mirror as a header at deploy. -->
++<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+ <title>LOMN Web</title>
+-<style>body{margin:0;background:#111;color:#eee;font:14px system-ui}canvas{width:256px;height:256px;image-rendering:pixelated}</style>
+-<canvas id="canvas" width="64" height="64"></canvas>
+-<script src="lomn_web.js"></script>
++<style>
++  :root { color-scheme: dark; }
++  [hidden] { display: none !important; }
++  /* Integer pixel line heights everywhere above the canvas: the canvas then sits on whole device pixels, so a screenshot
++     of it is the drawing buffer unresampled (the pixel tests compare it with native renders). */
++  body { margin: 0; background: #111; color: #eee; font: 14px/20px system-ui, sans-serif; }
++  header { display: flex; gap: 12px; align-items: baseline; height: 20px; padding: 8px 16px; background: #1b1b1b; }
++  header h1 { font-size: 16px; line-height: 20px; margin: 0; }
++  #status { color: #8ab; font: 12px/20px ui-monospace, monospace; }
++  main { padding: 12px 16px; }
++  #byo p { max-width: 60em; }
++  #byo .pick { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
++  #byo-input { max-width: 100%; }
++  /* Controls have integer heights so the canvas below them stays on whole pixels when the bar wraps (narrow screens). */
++  #byo button, #viewer button, select { font: inherit; line-height: 20px; height: 30px; box-sizing: border-box; padding: 4px 10px; }
++  #message { min-height: 20px; margin: 0 0 8px; color: #fc6; }
++  #warning { margin: 0 0 8px; padding: 4px 8px; line-height: 20px; color: #111; background: #fc6; }
++  #reload { font: inherit; line-height: 20px; height: 30px; box-sizing: border-box; padding: 4px 10px; margin: 0 0 8px; }
++  #message[data-state="rejected"], #message[data-state="quota-short"], #message[data-state="error"] { color: #f66; }
++  #viewer .bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; min-height: 32px; margin-bottom: 8px; }
++  .stage { position: relative; width: min(100%, 1280px); }
++  canvas { display: block; width: 100%; aspect-ratio: 16 / 9; background: #000; outline: none; }
++  canvas.triangle { width: 256px; height: 256px; image-rendering: pixelated; aspect-ratio: auto; }
++  #loading { position: absolute; inset: 0; display: grid; place-items: center; background: rgb(0 0 0 / 0.45); font-size: 18px; }
++  #hud { position: absolute; left: 8px; top: 8px; max-width: calc(100% - 32px); max-height: calc(100% - 32px); overflow: hidden; margin: 0; padding: 6px 8px; background: rgb(0 0 0 / 0.6); font: 11px/15px ui-monospace, monospace; white-space: pre-wrap; overflow-wrap: anywhere; pointer-events: none; }
++</style>
++<header><h1>LOMN Web</h1><span id="status">loading</span></header>
++<main>
++  <section id="byo">
++    <p>This viewer runs <em>BIONICLE: The Legend of Mata Nui</em> (Beta 1.5.0) from <strong>your own copy</strong> of the game.
++      Choose the game folder (the one with <code>LEGOBionicle.exe</code> and <code>data</code>). Nothing is uploaded: the files are read on this computer.</p>
++    <p class="pick">
++      <button id="pick-dir" hidden>Choose game folder…</button>
++      <button id="regrant" hidden></button>
++      <label for="byo-input">Select the folder:</label> <input type="file" id="byo-input" webkitdirectory multiple>
++    </p>
++    <progress id="copy-progress" hidden></progress>
++  </section>
++  <p id="message" role="status" aria-live="polite"></p>
++  <p id="warning" role="alert" hidden></p>
++  <button id="reload" hidden>Reload the page</button>
++  <section id="viewer" hidden>
++    <div class="bar">
++      <label>Area <select id="area-picker"></select></label>
++      <button id="reset-camera">Reset camera</button>
++      <span class="help">Drag to look (double-click locks the pointer), WASD to move, Q/E down/up, Shift faster.</span>
++    </div>
++    <div class="stage">
++      <canvas id="canvas" tabindex="0"></canvas>
++      <div id="loading" hidden>Loading…</div>
++      <pre id="hud" hidden></pre>
++    </div>
++  </section>
++</main>
++<script type="module" src="app/main.js"></script>
+ </html>
+diff -ruN -x node_modules base/web/tests/README.md ref/web/tests/README.md
+--- base/web/tests/README.md	1970-01-01 01:00:00
++++ ref/web/tests/README.md	2026-10-07 17:23:18
+@@ -0,0 +1,49 @@
++# Browser tests (M1b)
++
++All browser tests launch ONE persistent Chromium per file (`channel: 'chromium'` + `--enable-unsafe-webgpu`: the real
++GPU; the default headless shell falls back to SwiftShader, whose canvases screenshot blank) and wait on
++`window.__lomn.state` / metrics, never on time. Pixels are always checked.
++
++| File | Runs in | Data |
++|---|---|---|
++| `serve_test.mjs`, `unit_test.mjs` | `make test-web` (node --test) | none |
++| `smoke.mjs` | `make test-web` | none: the M0 triangle (`index.html?scene=triangle`) |
++| `byo_synthetic.mjs` | `make test-web` | the synthetic install `lomn_view --write-install` writes + a stand-in exe; test-only `builds.json` entries (`build_site.mjs --extra-builds`) |
++| `a13_real.mjs` | `make a13-real` (inside `make check` when `LOMN_DATA` is set; exit 77 = skipped otherwise) | the real Beta 1.5.0 install |
++
++## Which path each step exercises
++
++| Path | How the test drives it | Exercised for real | Not exercised (UNVERIFIED) |
++|---|---|---|---|
++| Safari/Firefox fallback: `<input webkitdirectory>` -> validate -> `persist()` + `estimate()` -> copy to OPFS in a worker (`createSyncAccessHandle`, 8 MiB chunks) -> completion manifest -> read from OPFS | `page.setInputFiles('#byo-input', <install dir>)` (Playwright passes the directory's files with `webkitRelativePath`) | the page code, the worker, OPFS writes and reads, the revisit that skips the copy (persistent profile) — **in Chromium** | the same code in **Safari and Firefox** (no WebKit/Firefox Playwright build is installed here; installing one is a third-party download) |
++| Chromium handle path: `showDirectoryPicker` -> handle in IndexedDB -> read in place | `__lomn.useDirectoryHandle(handle)` with the OPFS directory handle of the copy (the same `FileSystemDirectoryHandle` type the picker returns) | everything after the picker: walking the handle, validation, reading in place (no copy), IndexedDB persistence, the revisit that reuses the stored handle | the **picker dialog itself** (needs a user gesture; Playwright cannot drive it) and a handle onto a **real disk folder** |
++| Permission re-request on revisit | `FileSystemHandle.prototype.queryPermission` stubbed to `'prompt'` (and `requestPermission` to `'granted'`), then a real click on the re-grant button | the page's `need-permission` state, the button, the resumed load | the **browser's real permission prompt** and a real `'prompt'` state |
++| Quota-short | `navigator.storage.estimate` stubbed to 10 bytes free | the message, and that nothing is copied | a real full disk / real quota |
++| Rejections (unknown exe, a rejected-list exe, accepted exe + foreign data) | crafted synthetic folders through the input | the validation code and the named messages | the real **REBUILT** exe (its SHA-256 is not known; `builds.json` `rejected` is empty, so REBUILT gets the generic "Unknown build" message that names it) |
++| Revisit after the folder moved (I3), an incomplete copy (I6), an interrupted copy (I7) | an OPFS "folder" adopted then deleted; a copied file deleted; the completion manifest deleted | the page's recovery to `need-files` with a reason (the picker shown, the stale handle or copy removed) | a real disk folder moved by the user |
++| Device loss (C1) | CDP `Browser.crashGpuProcess` on an `area-ready` page | the engine's lost handler -> state `error` with the reason, the Reload button, the main loop stopped | a real driver reset, GPU switch or tab eviction (same callback, other causes) |
++| Real screen input | — | — | **owner check, UNVERIFIED**: the real `showDirectoryPicker` gesture and dialog, the real permission re-prompt, and mouse look on a real screen (the tests drag with Playwright's synthetic mouse in headless Chromium; pointer lock is not exercised) |
++
++## Gates and their controls (every zero needs a detector that is shown to fire)
++
++| Gate | Measured value | Control that must fire |
++|---|---|---|
++| Pixels, native vs browser (tolerance = max per-channel delta; LOMN_PIXEL_TOLERANCE, default **0**) | 0 differing pixels of 921,600 on levt/test, levt/stat, lev1/vllg, lev2/ghut, lev4/crss, lev0/frnt, and on levt/stat at 328x185 / 968x545 / 1280x720 after resizes | **null**: the same build and area on two fresh pages (levt/test; vllg/ghut/crss first visit vs revisit): 0 / max delta 0. **positive**: fog off (`?fog=off`, a debug switch) vs the native faithful render: levt/stat 424,494 pixels over the tolerance, lev1/vllg see `a13_real` |
++| Network discipline | only asset-manifest files, bytes <= the site | a fetch of `/not-in-manifest.bin` and of another origin are both flagged |
++| Leaks (flat live objects per area across switches) | flat | one texture leaked on purpose (`_lomn_debug_leak_texture`) changes the key by exactly +1 texture |
++| Release on switch | resident file bytes == the shown area's own read set | mutation "never release" (mutate4.py #22) is caught |
++| Build under test | `metrics.build.wasm_sha256` == SHA-256 of `build/wasm/lomn_web.wasm`, type Release, flags `-O3 -DNDEBUG` | (identity check, not a detector) |
++| Device-lost reporting (C1) | a crashed GPU process -> `error` "GPU device lost (reason 1) …" + Reload | natively, gpu_destroy probe 6: a WGSL that does not compile reaches the handler once; pre-fix the page stayed `area-ready` (r2 red log) |
++| GPU memory returned at switch time (I1) | an init-script hook counts GPUTexture/GPUBuffer created minus `destroy()`ed: flat over 30 switches (synthetic; real vllg<->frnt) | pre-fix the same hook counted 174 -> 1,238 textures and ≈ 1.0 GB of texture bytes left to garbage collection over 30 real switches |
++| fps reconciliation (I2) | measured fps vs the display rate measured before the first area; `dropping` flag | a 20 ms per-frame spin (init script) and `?debug=1&debug_spin=25` both flag DROPPING; the old snapped-p50 expectation called the same run clean |
++| CSP (I4) | `connect-src 'self'` etc. in `index.html` | the foreign-origin fetch is blocked by the browser (securitypolicyviolation) and still flagged by the test |
++| Data acceptance (C2, D13) | accepted exe + unknown tables: shown with a warning, `metrics.validation.data = "unknown"` | a rejected-list exe, an unknown exe, an exe without `.blk` files and an empty folder still hard-reject |
++| Responsive (40 widths, 360..1920 px) | no horizontal scroll, no overlap, minimum clearance 8 px (BYO page and viewer), HUD inside the canvas, every resize draws all draws with 0 rejected calls and no `[webgpu]` message | the pixel checks at three widths need a valid depth buffer (levt/stat has overlapping quads) |
++
++**Another GPU (M7).** Tolerance 0 holds because native Dawn/Metal and Chromium's Dawn/Metal run the same code on the same
++GPU; the null control cannot see cross-GPU drift. On another GPU or browser: (1) run the null (same build, two fresh
++pages) and native-vs-browser there, (2) set `LOMN_PIXEL_TOLERANCE` to the larger max delta seen, (3) check that the
++positive control (fog off) still exceeds it by a wide margin. A failing pixel check prints the adapter for this reason.
++
++**Debug switches** need `?debug=1` (M13): `fog=off`, `debug_spin=MS`, `fetch_concurrency=N`, `nocache=1`. Without it a
++pasted URL always renders faithfully.
+diff -ruN -x node_modules base/web/tests/a13_real.mjs ref/web/tests/a13_real.mjs
+--- base/web/tests/a13_real.mjs	1970-01-01 01:00:00
++++ ref/web/tests/a13_real.mjs	2026-10-07 17:50:11
+@@ -0,0 +1,311 @@
++// A13 browser smoke on the REAL install (needs LOMN_DATA; exits 77 = skipped otherwise). One persistent Chromium
++// (real GPU), state waits only. Usage: node tests/a13_real.mjs <site_dir> <work_dir> <native lomn_view> <wasm_build_dir>
++// The sweep over all 122 areas runs by default (rounds, bytes and over-fetch per area; draws == expected; heap growth);
++// A13_SWEEP=0 skips it.
++//      A13_FPS_FRAMES (default 600) frames per area for the fps measurement; LOMN_PIXEL_TOLERANCE (default 0).
++// Steps: (1) the real folder through <input webkitdirectory> (setInputFiles with the install directory) -> exe +
++// blockfile-table validation -> quota -> OPFS copy in the worker; (2) lev1/vllg, lev2/ghut, lev4/crss at the default
++// camera vs native renders of the same build; (3) discovery == `lomn_view --manifest` for the three areas; (4) area
++// switches with flat live-object counts; lev0/frnt (largest texture set) for the heap; (5) revisit: no copy, cached
++// prefetch sets; (6) the handle path (OPFS directory handle as a picked handle) + revisit; (7) ?hud=1 fps with
++// reconciliation per area; (8) network discipline on every page. The OPFS copy and the profile are removed at the end.
++import { execFileSync } from 'node:child_process';
++import crypto from 'node:crypto';
++import fs from 'node:fs';
++import os from 'node:os';
++import path from 'node:path';
++import { serve } from './serve.mjs';
++import { decodePng, diffRgb, launch, networkCheck, waitFrames, waitState, watch } from './lib.mjs';
++
++const [siteArg, workArg, lomnView, wasmDir] = process.argv.slice(2);
++if (!siteArg || !workArg || !lomnView || !wasmDir) {
++  console.error('usage: a13_real.mjs <site_dir> <work_dir> <lomn_view> <wasm_build_dir>');
++  process.exit(2);
++}
++if (!process.env.LOMN_DATA) {
++  console.log('SKIPPED (no LOMN_DATA)');
++  process.exit(77);
++}
++const install = path.join(process.env.LOMN_DATA, 'install');
++const site = path.resolve(siteArg), work = path.resolve(workArg);
++const AREAS = ['lev1/vllg', 'lev2/ghut', 'lev4/crss'];
++const tolerance = Number(process.env.LOMN_PIXEL_TOLERANCE ?? 0);
++// I5: measured on Beta 1.5.0 (REF4 r2 pre-fix run, all 122 areas, fresh discovery): max 8 rounds (lev1/atrm and 6 others;
++// histogram 1:4 2:1 3:4 5:1 6:104 7:1 8:7). Cap 12 = 1.5x headroom, under the engine's hard limit of 16 (MAX_ROUNDS).
++const ROUNDS_CAP = 12;
++const fpsFrames = Number(process.env.A13_FPS_FRAMES ?? 600);
++const results = [];
++const check = (ok, what, detail = '') => {
++  results.push({ ok: !!ok, what, detail });
++  console.log(`${ok ? 'ok  ' : 'FAIL'} ${what}${detail ? ' :: ' + detail : ''}`);
++};
++const loadavg = () => os.loadavg().map((x) => x.toFixed(2)).join(' ');
++fs.rmSync(work, { recursive: true, force: true });
++fs.mkdirSync(path.join(work, 'shots'), { recursive: true });
++const summary = { loadavg_start: loadavg(), areas: {} };
++const builtWasmSha = crypto.createHash('sha256').update(fs.readFileSync(path.join(wasmDir, 'lomn_web.wasm'))).digest('hex');
++const gate = { tolerance, native_vs_browser: [] };
++const kept = {};
++
++// Native references from the same build (default camera, 1280x720, 60 frames: the M1a-3 evidence command line).
++const refs = {};
++for (const a of [...AREAS, 'lev0/frnt']) {
++  const [level, area] = a.split('/');
++  const out = path.join(work, `native_${area}.png`);
++  execFileSync(lomnView, ['--install', install, '--level', level, '--area', area, '--frames', '60', '--out', out], { timeout: 120000 });
++  refs[a] = decodePng(fs.readFileSync(out));
++}
++execFileSync(lomnView, ['--install', install, '--manifest', '1', '--out', path.join(work, 'manifest.json')], { timeout: 120000 });
++const manifest = JSON.parse(fs.readFileSync(path.join(work, 'manifest.json'), 'utf8'));
++const nativeRanges = (name) => manifest.areas.find((x) => x.area === name).ranges.map(([f, o, l]) => `${manifest.files[f].path}\t${o}\t${l}`).sort().join('\n');
++
++const srv = await serve(site);
++const ctx = await launch(path.join(work, 'profile'));
++const base = srv.url + 'index.html';
++const watchers = [];
++const open = async (url, init) => {
++  const page = await ctx.newPage();
++  if (init) await page.addInitScript(init);
++  const w = watch(page);
++  watchers.push(w);
++  const r0 = srv.responses.length;
++  await page.goto(url, { timeout: 30000 });
++  return { page, w, r0 };
++};
++const netOk = (p, label) => {
++  const n = networkCheck(srv, site, p.w, p.r0, 0);
++  check(n.ok, `network discipline: ${label}`, `${n.responses} responses, ${n.bytes} of ${n.buildBytes} build bytes` +
++        (n.foreignPaths.length ? ` foreign ${n.foreignPaths}` : '') + (n.foreignUrls.length ? ` foreign urls ${n.foreignUrls}` : ''));
++};
++const shot = async (page, name) => {
++  // A clip on whole CSS pixels (deviceScaleFactor 1): the drawing buffer exactly. A fractional box would resample.
++  const box = await page.locator('#canvas').boundingBox();
++  if (![box.x, box.y, box.width, box.height].every(Number.isInteger)) throw new Error('canvas not on whole pixels: ' + JSON.stringify(box));
++  const png = await page.screenshot({ clip: box });
++  fs.writeFileSync(path.join(work, 'shots', name), png);
++  return decodePng(png);
++};
++const compare = (img, ref, label) => {
++  const d = diffRgb(img, ref);
++  if (d.sameSize) gate.native_vs_browser.push({ label, differing: d.differing, max: d.max });
++  const ok = d.sameSize && d.over(tolerance) === 0;
++  // M7: tolerance 0 is a same-machine (same GPU) gate; a failure names the adapter so a cross-GPU run is recognisable.
++  check(ok, `pixels ${label} vs native`, (d.sameSize ?
++        `${d.differing} of ${d.pixels} differ, max delta ${d.max}; over tolerance ${tolerance}: ${d.over(tolerance)}` : 'size differs') +
++        (ok ? '' : `; adapter ${summary.measured_config?.adapter ?? 'unknown'} (set LOMN_PIXEL_TOLERANCE after measuring null + native-vs-browser on this GPU)`));
++  return d.sameSize ? { differing: d.differing, max: d.max } : null;
++};
++const metrics = (page) => page.evaluate(() => window.__lomn.metrics);
++const show = async (page, name) => {
++  const ok = await page.evaluate((n) => window.__lomn.showArea(n), name);
++  const st = await page.evaluate(() => ({ state: window.__lomn.state, error: window.__lomn.error }));
++  if (!ok || st.state !== 'area-ready') throw new Error(`showArea ${name}: ${st.state} ${st.error ?? ''}`);
++  await waitFrames(page, 3);
++  return page.evaluate(() => window.__lomn.load);
++};
++
++try {
++  // (1) + (2) + (3) + (4): first visit through the directory input (OPFS path).
++  {
++    const p = await open(base + '?size=1280x720&area=lev1/vllg');
++    await waitState(p.page, ['need-files']);
++    const t0 = Date.now();
++    await p.page.setInputFiles('#byo-input', install);
++    const st = await waitState(p.page, ['area-ready', 'rejected', 'quota-short'], 600000);
++    check(st.state === 'area-ready', 'real install: validated, copied to OPFS, lev1/vllg shown', st.message || st.error);
++    const info = await p.page.evaluate(() => ({ v: window.__lomn.validation, source: window.__lomn.source, copy: window.__lomn.copy, quota: window.__lomn.quota, boot: window.__lomn.boot, ready: window.__lomn.metricsAtReady }));
++    summary.heap_at_ready = info.ready.heap;
++    summary.first_visit = { wall_ms: Date.now() - t0, validation: { build: info.v.build, data: info.v.data, ms: info.v.ms, blk_files: info.v.blkFiles, table_bytes: info.v.tableBytes },
++                            source: info.source, copy: info.copy, quota: info.quota, boot: info.boot };
++    check(info.v.build === 'beta-1.5.0-installer' && info.v.data === 'beta-1.5.0-data', 'accepted as beta-1.5.0-installer + beta-1.5.0-data');
++    const m0 = await metrics(p.page);
++    summary.heap_after_first_area = m0.heap;
++    for (const a of AREAS) {
++      const load = a === 'lev1/vllg' ? await p.page.evaluate(() => window.__lomn.load) : await show(p.page, a);
++      await waitFrames(p.page, 3);
++      const m = await metrics(p.page);
++      kept['first ' + a] = await shot(p.page, `first_${a.replace('/', '_')}.png`);
++      const px = compare(kept['first ' + a], refs[a], `${a} (first visit, OPFS path)`);
++      if (a === 'lev1/vllg') {
++        summary.measured_config = { build: m.build, canvas: m.canvas, adapter: m.adapter, loadavg: loadavg() };
++        check(m.build.wasm_sha256 === builtWasmSha && m.build.type === 'Release', 'measured configuration: the page runs the wasm in the build dir (Release)',
++              `${m.build.type} [${m.build.cxx_flags}] wasm ${m.build.wasm_sha256.slice(0, 12)} vs built ${builtWasmSha.slice(0, 12)}; canvas ${m.canvas.width}x${m.canvas.height}; ${m.adapter}`);
++      }
++      const touched = load.touched.trim().split('\n').sort().join('\n');
++      check(touched === nativeRanges(a), `discovery: ${a} fetched exactly its native access log`, `${load.rounds} rounds, ${load.ranges} ranges, ${load.bytes} bytes`);
++      check(m.draws === m.area.draws_expected && m.rejected_last_frame === 0, `${a}: draws == the area's expected draws, 0 rejected`, `draws ${m.draws}`);
++      summary.areas[a] = { first: { rounds: load.rounds, ranges: load.ranges, bytes: load.bytes, fetch_ms: load.fetch_ms, total_ms: load.load_total_ms,
++                                    probe_ms: m.area.probe_ms, load_ms: m.area.load_ms, decode_ms: m.area.decode_ms, upload_ms: m.area.upload_ms },
++                           pixels: px, draws: m.draws, pipelines: m.pipelines, textures: m.textures, texture_bytes: m.texture_bytes, heap: m.heap, live: m.live_objects };
++    }
++    // Largest texture set.
++    const lf = await show(p.page, 'lev0/frnt');
++    const mf = await metrics(p.page);
++    summary.frnt = { load: { rounds: lf.rounds, bytes: lf.bytes, total_ms: lf.load_total_ms }, heap: mf.heap, texture_bytes: mf.texture_bytes, draws: mf.draws };
++    compare(await shot(p.page, 'first_lev0_frnt.png'), refs['lev0/frnt'], 'lev0/frnt');
++    // Switch cycles: flat counts per area.
++    const per = {};
++    for (let i = 0; i < 9; ++i) {
++      const a = AREAS[i % 3];
++      await show(p.page, a);
++      const m = await metrics(p.page);
++      const key = JSON.stringify(m.live_objects) + ` fs=${m.heap.fs_resident_bytes}`;
++      if (!per[a]) per[a] = key;
++      check(per[a] === key && m.release_failures === 0, `switch ${i + 1} -> ${a}: live objects and resident file bytes flat`, key);
++      const own = (await p.page.evaluate(() => window.__lomn.load.touched)).trim().split('\n').reduce((n, l) => n + Number(l.split('\t')[2]), 0);
++      check(m.heap.fs_resident_bytes === own, `switch ${i + 1}: resident file bytes == ${a}'s own read set (previous area released)`, `${m.heap.fs_resident_bytes} vs ${own}`);
++    }
++    summary.heap_after_switches = (await metrics(p.page)).heap;
++    // Memory budget (spec §4.6): INITIAL_MEMORY covers boot + the largest texture set + the switches, so the heap never
++    // grew in this page (growth copies the heap without pthreads).
++    // M14: a same-machine regression gate. One growth step of <= 16 MiB is printed, not failed (a different malloc
++    // pattern may cross the line by one step); more, or a bigger step, fails.
++    const grewBy = summary.heap_after_switches.wasm_memory_bytes - info.ready.heap.wasm_memory_bytes;
++    summary.memory_growth_bytes = grewBy;
++    check(grewBy <= 16 * 1048576, 'memory budget: wasm memory growth from boot through vllg/ghut/crss/frnt and 9 switches <= one 16 MiB step',
++          `${info.ready.heap.wasm_memory_bytes} -> ${summary.heap_after_switches.wasm_memory_bytes} bytes (growth ${grewBy})`);
++    if (process.env.A13_SWEEP !== '0') {
++      const all = await p.page.evaluate(() => window.__lomn.areas.map((a) => `${a.level}/${a.area}`));
++      let maxMem = (await metrics(p.page)).heap.wasm_memory_bytes;
++      const bad = [], grew = [], rows = [];
++      const t1 = Date.now();
++      for (const a of all) {
++        try {
++          // I5: discovery on a fresh set (no cached set: forget it first) to record the rounds every area needs.
++          await p.page.evaluate((k) => window.__lomn.forgetCachedSet?.(k), a);
++          const ld = await show(p.page, a);
++          const own = ld.touched.trim().split('\n').reduce((n, l) => n + Number(l.split('\t')[2]), 0);
++          rows.push({ area: a, rounds: ld.rounds, cached: ld.cached, bytes_fetched: ld.bytes, read_set: own, over_fetch: ld.over_fetch_bytes });
++          const m = await metrics(p.page);
++          if (m.heap.wasm_memory_bytes > maxMem) { maxMem = m.heap.wasm_memory_bytes; grew.push(`${a}: ${maxMem}`); }
++          if (m.draws !== m.area.draws_expected || m.rejected_last_frame) bad.push(`${a}: draws ${m.draws}/${m.area.draws_expected} rejected ${m.rejected_last_frame}`);
++        } catch (e) { bad.push(`${a}: ${e.message}`); }
++      }
++      // wasm memory never shrinks: "grew_at" lists the areas whose load grew it (none = it fits the current size).
++      const maxRow = rows.reduce((b, r) => (r.rounds > b.rounds ? r : b), rows[0] ?? { rounds: 0 });
++      summary.sweep = { areas: all.length, wall_ms: Date.now() - t1, max_wasm_memory: maxMem, grew_at: grew, problems: bad,
++                        rounds_max: maxRow.rounds, rounds_max_at: maxRow.area, rounds_histogram: rows.reduce((h, r) => ((h[r.rounds] = (h[r.rounds] || 0) + 1), h), {}),
++                        rows, final_heap: (await metrics(p.page)).heap };
++      // I5: measured first (REF4 r2: every area converges in <= ROUNDS_MEASURED rounds), then capped with headroom below
++      // the engine's hard limit of 16 so a loader change that deepens the chain fails here first.
++      check(rows.every((r) => !r.cached) && maxRow.rounds <= ROUNDS_CAP, `sweep: every area discovers its set in <= ${ROUNDS_CAP} rounds (max ${maxRow.rounds} at ${maxRow.area})`,
++            JSON.stringify(summary.sweep.rounds_histogram));
++      check(bad.length === 0, `sweep: all ${all.length} areas load and draw their expected draws with 0 rejected`, bad.slice(0, 5).join('; '));
++      check(grew.length === 0, 'sweep: no wasm memory growth over every area', grew.slice(0, 5).join('; '));
++    }
++    netOk(p, 'first visit (OPFS copy)');
++    await p.page.close();
++  }
++  // (5) Revisit: the OPFS copy, cached prefetch sets.
++  {
++    const p = await open(base + '?size=1280x720&area=lev1/vllg', () => {
++      // I1 probe: GPUTextures/GPUBuffers created minus explicitly destroyed (a GC'd wrapper never counts as freed).
++      const live = { textures: 0, buffers: 0, texture_bytes: 0 };
++      window.__gpuLive = live;
++      const D = GPUDevice.prototype, ct = D.createTexture, cb = D.createBuffer;
++      const bytesOf = (d) => { const s = d.size; const w = s.width ?? s[0], h = s.height ?? s[1] ?? 1; return w * h * 4 * ((d.mipLevelCount ?? 1) > 1 ? 4 / 3 : 1); };
++      D.createTexture = function (d) { const t = ct.call(this, d); t.__lomnBytes = bytesOf(d); live.textures++; live.texture_bytes += t.__lomnBytes; return t; };
++      D.createBuffer = function (d) { live.buffers++; return cb.call(this, d); };
++      const td = GPUTexture.prototype.destroy, bd = GPUBuffer.prototype.destroy;
++      GPUTexture.prototype.destroy = function () { if (!this.__lomnGone) { this.__lomnGone = 1; live.textures--; live.texture_bytes -= this.__lomnBytes ?? 0; } return td.call(this); };
++      GPUBuffer.prototype.destroy = function () { if (!this.__lomnGone) { this.__lomnGone = 1; live.buffers--; } return bd.call(this); };
++    });
++    const st = await waitState(p.page, ['area-ready'], 120000);
++    const info = await p.page.evaluate(() => ({ source: window.__lomn.source, copy: window.__lomn.copy, load: window.__lomn.load, boot: window.__lomn.boot }));
++    check(st.state === 'area-ready' && info.source.kind === 'opfs' && info.source.how === 'revisit' && !info.copy, 'revisit: no picker, no copy', JSON.stringify(info.source));
++    summary.revisit_boot = info.boot;
++    for (const a of AREAS) {
++      const load = a === 'lev1/vllg' ? info.load : await show(p.page, a);
++      check(load.cached && load.rounds === 1, `revisit ${a}: cached prefetch set, 1 round`, `rounds ${load.rounds}`);
++      summary.areas[a].revisit = { rounds: load.rounds, bytes: load.bytes, fetch_ms: load.fetch_ms, total_ms: load.load_total_ms };
++      const img = await shot(p.page, `revisit_${a.replace('/', '_')}.png`);
++      compare(img, refs[a], `${a} (revisit)`);
++      const n = diffRgb(img, kept['first ' + a]);  // null control: same build, same area, two fresh pages
++      (gate.null ??= []).push({ area: a, differing: n.differing, max: n.max });
++      check(n.sameSize && n.max <= tolerance, `pixel gate null: ${a} first visit vs revisit page`, `${n.differing} differ, max delta ${n.max}`);
++    }
++    // I1: 30 switches between lev1/vllg and lev0/frnt (the largest texture set): GPU objects not explicitly destroyed
++    // pile up until garbage collection; with explicit Destroy the live count is the same every time vllg is shown.
++    const seen = [];
++    for (let i = 0; i < 30; ++i) {
++      const a = i % 2 ? 'lev1/vllg' : 'lev0/frnt';
++      await show(p.page, a);
++      if (a === 'lev1/vllg') seen.push(await p.page.evaluate(() => ({ ...window.__gpuLive })));
++    }
++    summary.i1_gpu_live_vllg = seen;
++    check(seen.every((x) => x.textures === seen[0].textures && x.buffers === seen[0].buffers),
++          'I1: live GPUTexture/GPUBuffer counts flat over 30 vllg<->frnt switches',
++          `at vllg: first ${JSON.stringify(seen[0])}, last ${JSON.stringify(seen[seen.length - 1])}`);
++    netOk(p, 'revisit');
++    await p.page.close();
++  }
++  // (6) Handle path: the OPFS copy's directory handle adopted as a picked handle (read in place), then a revisit.
++  {
++    const p = await open(base + '?size=1280x720&area=lev2/ghut&pick=1');
++    await waitState(p.page, ['need-files']);
++    await p.page.evaluate(async () => window.__lomn.useDirectoryHandle(await (await navigator.storage.getDirectory()).getDirectoryHandle('lomn-install')));
++    const st = await waitState(p.page, ['area-ready'], 120000);
++    const src = await p.page.evaluate(() => window.__lomn.source);
++    check(st.state === 'area-ready' && src.kind === 'handle', 'handle path: ghut from a directory handle (no copy)', JSON.stringify(src));
++    compare(await shot(p.page, 'handle_lev2_ghut.png'), refs['lev2/ghut'], 'lev2/ghut (handle path)');
++    await p.page.close();
++    const q = await open(base + '?size=1280x720&area=lev4/crss');
++    await waitState(q.page, ['area-ready'], 120000);
++    const src2 = await q.page.evaluate(() => window.__lomn.source);
++    check(src2.kind === 'handle' && src2.how === 'revisit', 'handle revisit from IndexedDB', JSON.stringify(src2));
++    compare(await shot(q.page, 'handle_revisit_lev4_crss.png'), refs['lev4/crss'], 'lev4/crss (handle revisit)');
++    netOk(q, 'handle revisit');
++    await q.page.close();
++  }
++  // (6b) Pixel gate positive control: lev1/vllg with fog off (debug switch) vs the native faithful render.
++  {
++    const p = await open(base + '?size=1280x720&area=lev1/vllg&debug=1&fog=off');
++    await waitState(p.page, ['area-ready'], 120000);
++    await waitFrames(p.page, 3);
++    const d = diffRgb(await shot(p.page, 'positive_fog_off_lev1_vllg.png'), refs['lev1/vllg']);
++    gate.positive = { what: 'lev1/vllg fog off vs native', differing: d.differing, max: d.max, over_tolerance: d.over(tolerance) };
++    check(d.sameSize && d.over(tolerance) > 10000, 'pixel gate positive control: vllg with fog off exceeds the tolerance', `${d.over(tolerance)} pixels over ${tolerance}, max delta ${d.max}`);
++    await p.page.close();
++  }
++  summary.pixel_gate = gate;
++  // (7) fps with reconciliation per area (?hud=1; the HUD overlays the canvas, so no pixel compare here).
++  {
++    const p = await open(base + '?size=1280x720&hud=1&area=lev1/vllg');
++    await waitState(p.page, ['area-ready'], 120000);
++    for (const a of AREAS) {
++      if (a !== 'lev1/vllg') await show(p.page, a);
++      const la = loadavg();
++      await waitFrames(p.page, fpsFrames + 1, fpsFrames * 50 + 30000);
++      const m = await metrics(p.page);
++      const f = m.fps;
++      check(f.dt_samples === f.frames_in_window - 1, `${a} fps reconciliation: dt samples == frames - 1`,
++            `${f.frames_in_window} frames in ${f.window_ms} ms; expected ${f.expected_intervals.toFixed(1)} intervals at ${f.nominal_hz} Hz; p50 ${f.p50_ms} p95 ${f.p95_ms}`);
++      summary.areas[a].fps = { ...f, breakdown: m.breakdown_ms, loadavg_before: la, loadavg_after: loadavg() };
++      await p.page.screenshot({ path: path.join(work, 'shots', `hud_${a.replace('/', '_')}.png`) });
++    }
++    netOk(p, 'HUD');
++    await p.page.close();
++  }
++  for (const w of watchers) {
++    const gpu = w.console.filter((t) => t.includes('[webgpu]') || t.includes('[area]'));
++    if (gpu.length || w.errors.length) check(false, 'no WebGPU errors / page exceptions', JSON.stringify({ gpu: gpu.slice(0, 5), errors: w.errors.slice(0, 5) }));
++  }
++  check(watchers.every((w) => !w.errors.length), 'no page exceptions');
++} catch (e) {
++  check(false, 'test run', e.stack || String(e));
++} finally {
++  // Remove the 1 GB OPFS copy and the handle, then the profile (game data never stays under build/).
++  try {
++    const p = await ctx.newPage();
++    await p.goto(srv.url + 'index.html?pick=1');
++    await p.evaluate(() => window.__lomn.forget());
++  } catch { /* the profile is deleted below anyway */ }
++  await ctx.close();
++  srv.close();
++  fs.rmSync(path.join(work, 'profile'), { recursive: true, force: true });
++}
++summary.loadavg_end = loadavg();
++fs.writeFileSync(path.join(work, 'results.json'), JSON.stringify({ results, summary }, null, 1));
++const failed = results.filter((r) => !r.ok);
++console.log(`a13_real: ${results.length - failed.length}/${results.length} checks passed`);
++process.exitCode = failed.length ? 1 : 0;
+diff -ruN -x node_modules base/web/tests/byo_synthetic.mjs ref/web/tests/byo_synthetic.mjs
+--- base/web/tests/byo_synthetic.mjs	1970-01-01 01:00:00
++++ ref/web/tests/byo_synthetic.mjs	2026-10-07 17:41:19
+@@ -0,0 +1,715 @@
++// M1b data-free browser test (runs in `make check`): the whole BYO page + viewer on a SYNTHETIC install that
++// `lomn_view --write-install` writes (the A7/A9 scenes as blockfiles + Base.osi; no game data), with a stand-in exe.
++// Usage: node tests/byo_synthetic.mjs <wasm_build_dir> <work_dir> <native lomn_view>
++//
++// Which path each step exercises (and what stays UNVERIFIED) is listed in web/tests/README.md. In short:
++//  - rejections: unknown exe, a "rejected" (REBUILT-style) exe, accepted exe + foreign data, quota-short (estimate()
++//    stubbed); all through the real <input webkitdirectory> (setInputFiles with a directory path);
++//  - OPFS fallback: input -> validate -> quota -> worker copy -> engine; revisit skips the copy (persistent profile);
++//  - handle path: an OPFS directory handle handed to __lomn.useDirectoryHandle (= what showDirectoryPicker returns),
++//    persisted in IndexedDB, revisit without a picker; the permission re-request with queryPermission stubbed 'prompt';
++//  - pixels vs the native renders of the same install; area switching with flat object counts; discovery == the native
++//    `lomn_view --manifest` access log; HUD metrics with reconciliation; resize; free-fly input; network discipline.
++import { execFileSync } from 'node:child_process';
++import crypto from 'node:crypto';
++import fs from 'node:fs';
++import os from 'node:os';
++import path from 'node:path';
++import { fileURLToPath } from 'node:url';
++import { blkTablesFingerprint, sha256hex } from '../app/fingerprint.js';
++import { serve } from './serve.mjs';
++import { decodePng, diffRgb, launch, networkCheck, waitFrames, waitState, watch } from './lib.mjs';
++
++const here = path.dirname(fileURLToPath(import.meta.url));
++const [wasmDir, workArg, lomnView] = process.argv.slice(2);
++if (!wasmDir || !workArg || !lomnView) {
++  console.error('usage: byo_synthetic.mjs <wasm_build_dir> <work_dir> <lomn_view>');
++  process.exit(2);
++}
++const work = path.resolve(workArg);
++const results = [];
++const check = (ok, what, detail = '') => {
++  results.push({ ok: !!ok, what, detail });
++  console.log(`${ok ? 'ok  ' : 'FAIL'} ${what}${detail ? ' :: ' + detail : ''}`);
++};
++// REF4 r2 sections run independently: a failure (or a missing feature on pre-fix code) is recorded and the run goes on.
++const section = async (name, fn) => {
++  try {
++    await fn();
++  } catch (e) {
++    check(false, `${name} (threw)`, String(e.message || e).split('\n')[0]);
++  }
++};
++// Page-side helpers (run in the page through evaluate).
++const opfsHas = async (p, dir, file) => p.evaluate(async ([d, f]) => {
++  try {
++    const h = await (await navigator.storage.getDirectory()).getDirectoryHandle(d);
++    if (f) await h.getFileHandle(f);
++    return true;
++  } catch { return false; }
++}, [dir, file]);
++const idbDeleteHandle = (p) => p.evaluate(() => new Promise((res) => {
++  const r = indexedDB.open('lomn-web', 1);
++  r.onupgradeneeded = () => r.result.createObjectStore('kv');
++  r.onsuccess = () => { const t = r.result.transaction('kv', 'readwrite'); t.objectStore('kv').delete('install-handle'); t.oncomplete = () => { r.result.close(); res(true); }; };
++  r.onerror = () => res(false);
++}));
++// I1 probe: counts GPUTextures/GPUBuffers created minus explicitly destroyed (a GC'd wrapper never counts as freed).
++const gpuLiveHook = () => {
++  const live = { textures: 0, buffers: 0, created: 0, destroyed: 0 };
++  window.__gpuLive = live;
++  const D = GPUDevice.prototype, ct = D.createTexture, cb = D.createBuffer;
++  D.createTexture = function (d) { live.textures++; live.created++; return ct.call(this, d); };
++  D.createBuffer = function (d) { live.buffers++; return cb.call(this, d); };
++  const td = GPUTexture.prototype.destroy, bd = GPUBuffer.prototype.destroy;
++  GPUTexture.prototype.destroy = function () { if (!this.__lomnGone) { this.__lomnGone = 1; live.textures--; live.destroyed++; } return td.call(this); };
++  GPUBuffer.prototype.destroy = function () { if (!this.__lomnGone) { this.__lomnGone = 1; live.buffers--; } return bd.call(this); };
++};
++
++// ---- fixtures ----
++fs.rmSync(work, { recursive: true, force: true });
++fs.mkdirSync(work, { recursive: true });
++const inst = path.join(work, 'inst');
++execFileSync(lomnView, ['--synthetic', '2', '--backend', 'null', '--out', path.join(work, 'syn.txt'), '--write-install', inst], { timeout: 60000 });
++fs.writeFileSync(path.join(inst, 'LEGOBionicle.exe'), 'LOMN-WEB SYNTHETIC TEST EXE (not a game file)\n');
++const variant = (name, exe, mutate) => {
++  const dir = path.join(work, name);
++  fs.cpSync(inst, dir, { recursive: true });
++  if (exe) fs.writeFileSync(path.join(dir, 'LEGOBionicle.exe'), exe);
++  if (mutate) mutate(dir);
++  return dir;
++};
++const unknownDir = variant('unknown', 'LOMN-WEB SYNTHETIC UNKNOWN EXE\n');
++const rebuiltDir = variant('rebuilt', 'LOMN-WEB SYNTHETIC REBUILT EXE\n');
++const foreignDataDir = variant('foreign-data', null, (d) => {
++  const p = path.join(d, 'data/levels/levt/test.blk');
++  const b = fs.readFileSync(p);
++  b[12] ^= 0x01;  // first byte of the first entry name: the table changes, the file still parses
++  fs.writeFileSync(p, b);
++});
++// Non-game folders (M8 / C2: these still hard-reject): an empty folder; an exe-only folder with no data/**/*.blk.
++const emptyDir = path.join(work, 'empty');
++fs.mkdirSync(emptyDir, { recursive: true });
++const nonGameDir = path.join(work, 'non-game');
++fs.mkdirSync(path.join(nonGameDir, 'data'), { recursive: true });
++fs.writeFileSync(path.join(nonGameDir, 'LEGOBionicle.exe'), 'LOMN-WEB SYNTHETIC TEST EXE (not a game file)\n');
++fs.writeFileSync(path.join(nonGameDir, 'data', 'readme.txt'), 'not a game\n');
++const nodeEntries = (root) => {
++  const out = [];
++  const walk = (dir, prefix) => {
++    for (const f of fs.readdirSync(dir)) {
++      const p = path.join(dir, f);
++      if (fs.statSync(p).isDirectory()) walk(p, prefix + f + '/');
++      else out.push({ path: prefix + f, size: fs.statSync(p).size, abs: p });
++    }
++  };
++  walk(root, '');
++  return out;
++};
++const readRange = async (e, o, l) => new Uint8Array(fs.readFileSync(e.abs).subarray(o, o + l));
++const fp = await blkTablesFingerprint(nodeEntries(inst), readRange);
++const exeSha = (dir) => crypto.createHash('sha256').update(fs.readFileSync(path.join(dir, 'LEGOBionicle.exe'))).digest('hex');
++fs.writeFileSync(path.join(work, 'extra-builds.json'), JSON.stringify({
++  accepted: [{ id: 'synthetic-test', exe_sha256: exeSha(inst) }],
++  data: [{ id: 'synthetic-data', blk_tables_sha256: fp.fingerprint }],
++  rejected: [{ id: 'synthetic-rebuilt', exe_sha256: exeSha(rebuiltDir), name: 'REBUILT (test fixture)',
++               reason: 'REBUILT needs the LOMNHook mod natives (e.g. BetterSaver), which a browser cannot load' }],
++}));
++const site = path.join(work, 'site');
++execFileSync('node', [path.join(here, '../tools/build_site.mjs'), wasmDir, site, '--extra-builds', path.join(work, 'extra-builds.json')], { timeout: 60000 });
++const loadavg = () => os.loadavg().map((x) => x.toFixed(2)).join(' ');
++const loadavgStart = loadavg();
++// Hashed assets (deploy prep): every JS/wasm name carries its content hash; index.html (and the JSON) do not.
++const assets = JSON.parse(fs.readFileSync(path.join(site, 'asset-manifest.json'), 'utf8'));
++const unhashed = assets.files.filter((f) => /\.(js|wasm|css)$/.test(f.path) && !/\.[0-9a-f]{10}\.(js|wasm|css)$/.test(f.path)).map((f) => f.path);
++check(unhashed.length === 0 && assets.files.some((f) => f.path === 'index.html') && assets.files.some((f) => /^lomn_web\.[0-9a-f]{10}\.wasm$/.test(f.path)),
++      'hashed assets: JS and wasm published under content-hashed names, index.html unhashed', unhashed.join(', ') || assets.files.map((f) => f.path).join(' '));
++// The build under test: the wasm this test built (build dir) must be the one the page instantiates.
++const builtWasmSha = crypto.createHash('sha256').update(fs.readFileSync(path.join(wasmDir, 'lomn_web.wasm'))).digest('hex');
++// Native references of the same install (default camera, 1280x720, steady state after 3 frames) and the access log.
++const refs = {};
++for (const area of ['test', 'stat']) {
++  const out = path.join(work, `native_${area}.png`);
++  execFileSync(lomnView, ['--install', inst, '--level', 'levt', '--area', area, '--frames', '3', '--out', out], { timeout: 60000 });
++  refs[area] = decodePng(fs.readFileSync(out));
++}
++execFileSync(lomnView, ['--install', inst, '--manifest', '1', '--out', path.join(work, 'manifest.json')], { timeout: 60000 });
++const manifest = JSON.parse(fs.readFileSync(path.join(work, 'manifest.json'), 'utf8'));
++const nativeRanges = (name) => {
++  const a = manifest.areas.find((x) => x.area === name);
++  return a.ranges.map(([f, o, l]) => `${manifest.files[f].path}\t${o}\t${l}`).sort().join('\n');
++};
++
++// ---- browser ----
++const srv = await serve(site);
++const ctx = await launch(path.join(work, 'profile'));
++const base = srv.url + 'index.html';
++const shots = path.join(work, 'shots');
++fs.mkdirSync(shots, { recursive: true });
++const canvasPng = async (page, name) => {
++  // A clip on whole CSS pixels (deviceScaleFactor 1): the drawing buffer exactly. A fractional box would resample.
++  const box = await page.locator('#canvas').boundingBox();
++  if (![box.x, box.y, box.width, box.height].every(Number.isInteger)) throw new Error('canvas not on whole pixels: ' + JSON.stringify(box));
++  const png = await page.screenshot({ clip: box });
++  fs.writeFileSync(path.join(shots, name), png);
++  return decodePng(png);
++};
++const pageWatchers = [];
++const open = async (url, init) => {
++  const page = await ctx.newPage();
++  if (init) await page.addInitScript(typeof init === 'string' ? { content: init } : init);
++  const w = watch(page);
++  pageWatchers.push(w);
++  const r0 = srv.responses.length;
++  await page.goto(url, { timeout: 30000 });
++  return { page, w, r0 };
++};
++const netOk = (p, label) => {
++  const n = networkCheck(srv, site, p.w, p.r0, 0);
++  check(n.ok, `network discipline: ${label}`, `${n.responses} responses, ${n.bytes} of ${n.buildBytes} build bytes` +
++        (n.foreignPaths.length ? ` foreign paths ${n.foreignPaths}` : '') + (n.foreignUrls.length ? ` foreign urls ${n.foreignUrls}` : ''));
++};
++// Pixel gate: tolerance = max per-channel delta accepted. Measured first (null = the same build twice on fresh pages:
++// 0; native vs browser: 0), so 0; a positive control (fog off) must exceed it. LOMN_PIXEL_TOLERANCE overrides it.
++const tolerance = Number(process.env.LOMN_PIXEL_TOLERANCE ?? 0);
++const gate = { tolerance, native_vs_browser: [] };
++const comparePixels = (img, ref, label) => {
++  const d = diffRgb(img, ref);
++  const ok = d.sameSize && d.over(tolerance) === 0;
++  // M7: tolerance 0 is a same-machine (same GPU) gate; a failure names the adapter so a cross-GPU run is recognisable.
++  check(ok, `pixels ${label} vs native`, (d.sameSize ?
++        `${d.differing} of ${d.pixels} differ, max delta ${d.max}, over tolerance ${tolerance}: ${d.over(tolerance)}` : 'size differs') +
++        (ok ? '' : `; adapter ${summary.measured_config?.adapter ?? 'unknown'} (set LOMN_PIXEL_TOLERANCE after measuring null + native-vs-browser on this GPU)`));
++  if (d.sameSize) gate.native_vs_browser.push({ label, differing: d.differing, max: d.max });
++  return d;
++};
++const shotsKept = {};
++const summary = { refs: Object.keys(refs) };
++try {
++  // A. Rejections through the real directory input.
++  {
++    const p = await open(base);
++    let st = await waitState(p.page, ['need-files']);
++    check(st.state === 'need-files', 'first visit asks for the folder', st.message);
++    const cases = [
++      [unknownDir, /Unknown build: LEGOBionicle\.exe SHA-256 [0-9a-f]{12}/, 'unknown exe -> named rejection'],
++      [rebuiltDir, /This is REBUILT \(test fixture\).*not supported: REBUILT needs/, 'rejected-list (REBUILT-style) exe -> named rejection'],
++      [nonGameDir, /not a LOMN install/, 'non-game folder (exe, no .blk) -> hard rejection (C2)'],
++      [emptyDir, /LEGOBionicle\.exe was not found/, 'empty folder -> rejection (M8, the empty-fixture negative test)'],
++    ];
++    for (const [dir, re, what] of cases) {
++      await section(what, async () => {
++        await p.page.evaluate(() => { window.__lomn.state = 'test-reset'; });
++        await p.page.setInputFiles('#byo-input', dir);
++        st = await waitState(p.page, ['rejected'], 20000);
++        check(st.state === 'rejected' && re.test(st.message), what, st.message);
++      });
++    }
++    // I4: the page carries a Content-Security-Policy (the browser then blocks any foreign request itself).
++    await section('CSP meta', async () => {
++      const csp = await p.page.evaluate(() => document.querySelector('meta[http-equiv="Content-Security-Policy"]')?.content ?? '');
++      summary.csp = csp;
++      check(/default-src 'self'/.test(csp) && /connect-src 'self'/.test(csp) && /object-src 'none'/.test(csp), 'CSP meta present (default-src/connect-src self, object-src none)', csp || 'none');
++    });
++    const copies = await p.page.evaluate(async () => { try { await (await navigator.storage.getDirectory()).getDirectoryHandle('lomn-install'); return true; } catch { return false; } });
++    check(!copies, 'rejected folders copied nothing into OPFS');
++    netOk(p, 'rejections');
++    await p.page.close();
++  }
++  // B. Quota-short: estimate() stubbed to 10 bytes free.
++  {
++    const p = await open(base, () => {
++      navigator.storage.estimate = async () => ({ quota: 1000, usage: 990 });
++    });
++    await waitState(p.page, ['need-files']);
++    await p.page.setInputFiles('#byo-input', inst);
++    const st = await waitState(p.page, ['quota-short', 'copying']);
++    check(st.state === 'quota-short' && /Not enough browser storage.*needed, 0\.0 MiB available/.test(st.message), 'quota short -> message, no copy', st.message);
++    const copied = await p.page.evaluate(async () => { try { await (await navigator.storage.getDirectory()).getDirectoryHandle('lomn-install'); return true; } catch { return false; } });
++    check(!copied, 'quota-short: nothing written to OPFS');
++    await p.page.close();
++  }
++  // C. OPFS fallback path: input -> validate -> quota -> copy -> engine -> area.
++  let opfsMetrics;
++  {
++    const p = await open(base + '?size=1280x720&area=levt/test');
++    await waitState(p.page, ['need-files']);
++    await p.page.setInputFiles('#byo-input', inst);
++    const st = await waitState(p.page, ['area-ready'], 120000);
++    check(st.state === 'area-ready', 'OPFS path: copied, validated and showing levt/test', st.message || st.error);
++    const info = await p.page.evaluate(() => ({ source: window.__lomn.source, copy: window.__lomn.copy, quota: window.__lomn.quota, load: window.__lomn.load, boot: window.__lomn.boot }));
++    check(info.source?.kind === 'opfs' && info.source.how === 'copied' && info.copy?.bytes > 0, 'OPFS path: source is the copy', JSON.stringify(info.source));
++    summary.copy = info.copy;
++    summary.boot_first = info.boot;
++    await waitFrames(p.page, 3);
++    shotsKept.opfs_test = await canvasPng(p.page, 'opfs_test.png');
++    comparePixels(shotsKept.opfs_test, refs.test, 'levt/test (OPFS path)');
++    const mb = await p.page.evaluate(() => window.__lomn.metrics);
++    summary.measured_config = { build: mb.build, canvas: mb.canvas, adapter: mb.adapter, loadavg: loadavg() };
++    check(mb.build.wasm_sha256 === builtWasmSha && mb.build.type === 'Release' && /-O\d/.test(mb.build.cxx_flags),
++          'measured configuration: the page runs the wasm this test built (Release)', `${mb.build.type} [${mb.build.cxx_flags}] ${mb.build.wasm_sha256.slice(0, 12)} vs built ${builtWasmSha.slice(0, 12)}`);
++    const touched = info.load.touched.trim().split('\n').sort().join('\n');
++    check(touched === nativeRanges('levt/test'), 'discovery: the browser fetched exactly the native access log of levt/test',
++          `${info.load.rounds} rounds, ${info.load.ranges} ranges, ${info.load.bytes} bytes`);
++    summary.first_load = info.load;
++    // Area switching: alternate test/stat 6 times; counts flat per area; stat pixels vs native.
++    const per = {};
++    for (let i = 0; i < 6; ++i) {
++      const name = i % 2 ? 'levt/test' : 'levt/stat';
++      const ok = await p.page.evaluate((n) => window.__lomn.showArea(n), name);
++      await waitFrames(p.page, 3);
++      const m = await p.page.evaluate(() => window.__lomn.metrics);
++      const key = JSON.stringify(m.live_objects) + ` fs=${m.heap.fs_resident_bytes}`;
++      if (!per[name]) per[name] = key;
++      check(ok && per[name] === key && m.release_failures === 0 && m.rejected_last_frame === 0, `switch ${i + 1} to ${name}: live objects + resident bytes flat`, key);
++      // Release on switch: what stays resident is exactly this area's read set (it includes the pinned boot reads).
++      const own = (await p.page.evaluate(() => window.__lomn.load.touched)).trim().split('\n').reduce((n, l) => n + Number(l.split('\t')[2]), 0);
++      check(m.heap.fs_resident_bytes === own, `switch ${i + 1}: resident file bytes == ${name}'s own read set (previous area released)`, `${m.heap.fs_resident_bytes} vs ${own}`);
++      if (i === 0) {
++        comparePixels(await canvasPng(p.page, 'opfs_stat.png'), refs.stat, 'levt/stat (OPFS path, after a switch)');
++        const t2 = (await p.page.evaluate(() => window.__lomn.load.touched)).trim().split('\n').sort().join('\n');
++        check(t2 === nativeRanges('levt/stat'), 'discovery: levt/stat fetched exactly its native access log');
++      }
++    }
++    opfsMetrics = await p.page.evaluate(() => window.__lomn.metrics);
++    summary.after_switches = { live_objects: opfsMetrics.live_objects, heap: opfsMetrics.heap, areas_shown: opfsMetrics.areas_shown };
++    netOk(p, 'OPFS first visit');
++    await p.page.close();
++  }
++  // D. OPFS revisit: no input, no copy, cached prefetch set (1 round).
++  {
++    const p = await open(base + '?size=1280x720&area=levt/test');
++    const st = await waitState(p.page, ['area-ready'], 60000);
++    const info = await p.page.evaluate(() => ({ source: window.__lomn.source, copy: window.__lomn.copy, load: window.__lomn.load }));
++    check(st.state === 'area-ready' && info.source?.kind === 'opfs' && info.source.how === 'revisit' && !info.copy,
++          'OPFS revisit: no picker, no copy', JSON.stringify(info.source));
++    check(info.load.cached && info.load.rounds === 1, 'revisit: the cached prefetch set loads the area in 1 round', `rounds ${info.load.rounds}`);
++    await waitFrames(p.page, 3);
++    shotsKept.revisit_test = await canvasPng(p.page, 'revisit_test.png');
++    comparePixels(shotsKept.revisit_test, refs.test, 'levt/test (OPFS revisit)');
++    // Null control: the same build and area on two fresh pages (C and D).
++    const n = diffRgb(shotsKept.opfs_test, shotsKept.revisit_test);
++    gate.null = { differing: n.differing, max: n.max };
++    check(n.sameSize && n.max <= tolerance, 'pixel gate null: levt/test on two fresh pages', `${n.differing} differ, max delta ${n.max}`);
++    netOk(p, 'OPFS revisit');
++    await p.page.close();
++  }
++  // I6: a copy whose completion manifest no longer matches the files (Base.osi deleted) is treated as incomplete:
++  // cleared and the folder is asked for again (pre-fix: it loads with default fog). Then the copy is made again.
++  await section('I6 incomplete copy', async () => {
++    const p = await open(base + '?pick=1');
++    await waitState(p.page, ['need-files']);
++    await p.page.evaluate(async () => {
++      const d = await (await (await navigator.storage.getDirectory()).getDirectoryHandle('lomn-install')).getDirectoryHandle('data');
++      await d.removeEntry('Base.osi');
++    });
++    await p.page.close();
++    const q = await open(base + '?size=1280x720&area=levt/test');
++    const st = await waitState(q.page, ['need-files', 'area-ready'], 60000);
++    const gone = !(await opfsHas(q.page, 'lomn-install'));
++    check(st.state === 'need-files' && /incomplete/.test(st.message) && gone, 'I6: a copy missing a file is cleared and the folder asked for again',
++          `${st.state}: ${st.message}; copy removed ${gone}`);
++    await q.page.close();
++    const r = await open(base + '?size=1280x720&area=levt/test&pick=1');
++    await waitState(r.page, ['need-files']);
++    await r.page.setInputFiles('#byo-input', inst);
++    const st2 = await waitState(r.page, ['area-ready'], 120000);
++    check(st2.state === 'area-ready', 'I6: copied again for the following steps');
++    await r.page.close();
++  });
++  // E. Handle path (what showDirectoryPicker returns): an OPFS directory handle, persisted in IndexedDB, read in place.
++  {
++    const p = await open(base + '?size=1280x720&area=levt/stat&pick=1');
++    await waitState(p.page, ['need-files']);
++    const ok = await p.page.evaluate(async () => {
++      const d = await (await navigator.storage.getDirectory()).getDirectoryHandle('lomn-install');
++      return window.__lomn.useDirectoryHandle(d);
++    });
++    const st = await waitState(p.page, ['area-ready'], 60000);
++    const src = await p.page.evaluate(() => window.__lomn.source);
++    check(ok && st.state === 'area-ready' && src.kind === 'handle' && src.how === 'picked', 'handle path: picked handle read in place (no copy)', JSON.stringify(src));
++    await waitFrames(p.page, 3);
++    comparePixels(await canvasPng(p.page, 'handle_stat.png'), refs.stat, 'levt/stat (handle path)');
++    await p.page.close();
++    const q = await open(base + '?size=1280x720&area=levt/stat');
++    await waitState(q.page, ['area-ready'], 60000);
++    const src2 = await q.page.evaluate(() => window.__lomn.source);
++    check(src2.kind === 'handle' && src2.how === 'revisit', 'handle revisit: the IndexedDB handle is used without a picker', JSON.stringify(src2));
++    netOk(q, 'handle revisit');
++    await q.page.close();
++  }
++  // E2. Pixel gate positive control: fog off (debug switch) on levt/stat (script fog 5..50) must exceed the tolerance.
++  {
++    const p = await open(base + '?size=1280x720&area=levt/stat&debug=1&fog=off', () => {
++      window.__csp = [];
++      document.addEventListener('securitypolicyviolation', (e) => window.__csp.push(e.blockedURI));
++    });
++    await waitState(p.page, ['area-ready'], 60000);
++    await waitFrames(p.page, 3);
++    const d = diffRgb(await canvasPng(p.page, 'positive_fog_off_stat.png'), refs.stat);
++    gate.positive = { what: 'levt/stat with fog off vs native (fog on)', differing: d.differing, max: d.max, over_tolerance: d.over(tolerance) };
++    check(d.sameSize && d.over(tolerance) > 1000, 'pixel gate positive control: fog off exceeds the tolerance', `${d.over(tolerance)} pixels over tolerance ${tolerance}, max delta ${d.max}`);
++    // Network-discipline positive control: one request outside the asset manifest and one to another origin are flagged.
++    const r0 = srv.responses.length, u0 = p.w.urls.length;
++    await p.page.evaluate(async () => {
++      await fetch('/not-in-manifest.bin').catch(() => {});
++      await fetch('http://127.0.0.1:9/elsewhere').catch(() => {});
++    });
++    await p.page.waitForFunction(() => true);
++    const n = networkCheck(srv, site, p.w, r0, u0);
++    const blocked = await p.page.evaluate(() => window.__csp);
++    // A request the CSP blocks may never reach the network layer Playwright watches: the violation report flags it.
++    const foreignFlagged = n.foreignUrls.some((u) => u.includes('127.0.0.1:9/')) || blocked.some((u) => u.includes('127.0.0.1:9'));
++    check(!n.ok && n.foreignPaths.includes('/not-in-manifest.bin') && foreignFlagged,
++          'network positive control: a non-manifest path and a foreign origin are flagged', `foreign paths ${n.foreignPaths}, urls ${n.foreignUrls}, CSP-blocked ${blocked}`);
++    check(blocked.some((u) => u.includes('127.0.0.1:9')), 'I4: the CSP blocks the foreign-origin request itself', `blocked ${JSON.stringify(blocked)}`);
++    // Leak-detector positive control: one deliberately leaked texture changes the per-area live-object key.
++    const before = (await p.page.evaluate(() => window.__lomn.metrics)).live_objects;
++    await p.page.evaluate(() => window.__lomn.engine.M._lomn_debug_leak_texture());
++    await p.page.evaluate(() => window.__lomn.showArea('levt/stat'));
++    await waitFrames(p.page, 3);
++    const after = (await p.page.evaluate(() => window.__lomn.metrics)).live_objects;
++    check(JSON.stringify(before) !== JSON.stringify(after) && after.textures === before.textures + 1,
++          'leak positive control: one leaked texture is counted by the flat-count check', `${JSON.stringify(before)} -> ${JSON.stringify(after)}`);
++    await p.page.close();
++  }
++  summary.pixel_gate = gate;
++  // M13: the unfaithful debug switch needs ?debug=1 (a pasted ?fog=off URL renders faithfully).
++  await section('M13 debug gate', async () => {
++    const p = await open(base + '?size=1280x720&area=levt/stat&fog=off');
++    await waitState(p.page, ['area-ready'], 60000);
++    const m = await p.page.evaluate(() => window.__lomn.metrics);
++    check(m.render.fog === true, 'M13: ?fog=off without ?debug=1 is ignored', `fog ${m.render.fog}`);
++    await p.page.close();
++  });
++  // F. Permission re-request (queryPermission STUBBED to 'prompt'; the real browser prompt stays UNVERIFIED).
++  {
++    const p = await open(base + '?size=1280x720&area=levt/test', () => {
++      FileSystemHandle.prototype.queryPermission = async () => 'prompt';
++      FileSystemHandle.prototype.requestPermission = async () => 'granted';
++    });
++    let st = await waitState(p.page, ['need-permission', 'area-ready']);
++    check(st.state === 'need-permission' && /needs your permission again/.test(st.message), 'revisit with permission "prompt": asks again', st.message);
++    await p.page.click('#regrant');
++    st = await waitState(p.page, ['area-ready'], 60000);
++    check(st.state === 'area-ready', 'after the re-grant click the area shows');
++    await p.page.close();
++  }
++  // G. HUD + metrics reconciliation, free-fly camera, resize.
++  {
++    const p = await open(base + '?hud=1&area=levt/test');
++    await waitState(p.page, ['area-ready'], 60000);
++    await waitFrames(p.page, 120);
++    const m = await p.page.evaluate(() => window.__lomn.metrics);
++    const hudText = await p.page.locator('#hud').innerText();
++    const f = m.fps;
++    check(f.dt_samples === f.frames_in_window - 1 && f.dt_samples >= 119, 'HUD reconciliation: dt samples == frames in window - 1',
++          `${f.frames_in_window} frames, ${f.dt_samples} dt samples, window ${f.window_ms} ms, expected ${f.expected_intervals} intervals at ${f.nominal_hz} Hz`);
++    check(/fps \d/.test(hudText) && /expected/.test(hudText) && /replay p50/.test(hudText) && /heap: wasm/.test(hudText), 'HUD overlay shows fps, reconciliation, breakdown, heap', hudText.split('\n')[0]);
++    summary.hud = m;
++    await p.page.screenshot({ path: path.join(shots, 'hud.png') });
++    // M3: keys reach the camera only while the canvas has focus (or pointer lock): W with the page body focused does nothing.
++    await section('M3 key scope', async () => {
++      await p.page.locator('header h1').click();
++      await p.page.keyboard.down('KeyW');
++      const f1 = (await p.page.evaluate(() => window.__lomn.metrics)).frames;
++      await p.page.waitForFunction((k) => window.__lomn.metrics.frames > k + 20, f1, { timeout: 10000 });
++      await p.page.keyboard.up('KeyW');
++      const cam = (await p.page.evaluate(() => window.__lomn.metrics)).area.camera;
++      check(!cam.moved, 'M3: W without canvas focus leaves the camera alone', `moved ${cam.moved}`);
++      await p.page.click('#reset-camera');
++    });
++    // Free-fly: W moves the eye, a drag turns the camera, reset restores the default view.
++    const before = (await p.page.evaluate(() => window.__lomn.metrics)).area.camera;
++    await p.page.locator('#canvas').focus();
++    await p.page.keyboard.down('KeyW');
++    await p.page.waitForFunction((z) => window.__lomn.metrics.area.camera.moved && window.__lomn.metrics.area.camera.eye[2] < z - 0.5, before.eye[2], { timeout: 10000 });
++    await p.page.keyboard.up('KeyW');
++    const box = await p.page.locator('#canvas').boundingBox();
++    await p.page.mouse.move(box.x + 100, box.y + 100);
++    await p.page.mouse.down();
++    await p.page.mouse.move(box.x + 300, box.y + 100, { steps: 5 });
++    await p.page.mouse.up();
++    await p.page.waitForFunction((y) => Math.abs(window.__lomn.metrics.area.camera.yaw_deg - y) > 5, before.yaw_deg, { timeout: 10000 });
++    const after = (await p.page.evaluate(() => window.__lomn.metrics)).area.camera;
++    check(after.moved && after.eye[2] < before.eye[2] && after.yaw_deg !== before.yaw_deg, 'free-fly: W moves forward, drag turns',
++          `eye z ${before.eye[2]} -> ${after.eye[2]}, yaw ${before.yaw_deg} -> ${after.yaw_deg}`);
++    await p.page.click('#reset-camera');
++    await p.page.waitForFunction(() => !window.__lomn.metrics.area.camera.moved, null, { timeout: 10000 });
++    check(true, 'reset camera returns to the POS-start view');
++    // Resize: the canvas follows its element (ResizeObserver -> lomn_resize: surface + depth recreated).
++    const s0 = (await p.page.evaluate(() => window.__lomn.metrics)).surface;
++    await p.page.setViewportSize({ width: 900, height: 700 });
++    await p.page.waitForFunction((w) => window.__lomn.metrics.surface.width !== w, s0.width, { timeout: 10000 });
++    const f0 = (await p.page.evaluate(() => window.__lomn.metrics)).frames;
++    await p.page.waitForFunction((k) => window.__lomn.metrics.frames > k + 10, f0, { timeout: 10000 });
++    const m2 = await p.page.evaluate(() => ({ m: window.__lomn.metrics, cw: document.getElementById('canvas').width, ch: document.getElementById('canvas').height }));
++    check(m2.m.surface.width === m2.cw && m2.m.surface.height === m2.ch && m2.m.rejected_last_frame === 0 && m2.m.draws > 0,
++          'resize: surface follows the canvas, frames keep drawing', `${s0.width}x${s0.height} -> ${m2.cw}x${m2.ch}, draws ${m2.m.draws}`);
++    await p.page.screenshot({ path: path.join(shots, 'resized.png') });
++    netOk(p, 'HUD page');
++    await p.page.close();
++  }
++  // H. Responsive sweep 360..1920 px (40 px steps): the BYO page and the viewer (HUD on). No horizontal scroll, no
++  // overlap, minimum clearance reported; after every resize the surface + depth buffer follow the canvas with no WebGPU
++  // message, 0 rejected calls and all draws; at three widths the canvas equals a native render of that size.
++  {
++    const widths = [];
++    for (let w = 360; w <= 1920; w += 40) widths.push(w);
++    const layout = (sels) => {
++      const boxes = [];
++      for (const sel of sels)
++        for (const e of document.querySelectorAll(sel)) {
++          const r = e.getBoundingClientRect();
++          if (r.width > 0 && r.height > 0 && getComputedStyle(e).visibility !== 'hidden') boxes.push({ id: sel + '#' + boxes.length, l: r.left, r: r.right, t: r.top, b: r.bottom });
++        }
++      let min = Infinity;
++      const overlaps = [];
++      for (let i = 0; i < boxes.length; ++i)
++        for (let j = i + 1; j < boxes.length; ++j) {
++          const a = boxes[i], b = boxes[j];
++          const sep = Math.max(Math.max(b.l - a.r, a.l - b.r), Math.max(b.t - a.b, a.t - b.b));
++          if (sep < 0) overlaps.push(`${a.id}/${b.id}`);
++          min = Math.min(min, sep);
++        }
++      const doc = document.documentElement;
++      return { hscroll: doc.scrollWidth > doc.clientWidth, offRight: boxes.filter((x) => x.r > doc.clientWidth + 0.5).map((x) => x.id), min, overlaps };
++    };
++    const sweep = { byo: { min: Infinity, fails: [] }, viewer: { min: Infinity, fails: [] }, pixels: [] };
++    const pb = await open(base + '?pick=1');
++    await waitState(pb.page, ['need-files']);
++    for (const w of widths) {
++      await pb.page.setViewportSize({ width: w, height: 900 });
++      const r = await pb.page.evaluate(layout, ['header h1', '#status', '#byo > p:not(.pick)', '#byo .pick > *:not([hidden])', '#message']);
++      sweep.byo.min = Math.min(sweep.byo.min, r.min);
++      if (r.hscroll || r.offRight.length || r.overlaps.length) sweep.byo.fails.push({ w, ...r });
++    }
++    check(sweep.byo.fails.length === 0, `responsive sweep, BYO page (${widths.length} widths 360..1920): no horizontal scroll, no overlap`,
++          `min clearance ${sweep.byo.min.toFixed(1)} px` + (sweep.byo.fails.length ? ' ' + JSON.stringify(sweep.byo.fails.slice(0, 3)) : ''));
++    await pb.page.close();
++    const pv = await open(base + '?hud=1&area=levt/stat');
++    await waitState(pv.page, ['area-ready'], 60000);
++    const msgs0 = pv.w.console.length;
++    const pixelWidths = new Set([360, 1000, 1920]);
++    for (const w of widths) {
++      await pv.page.setViewportSize({ width: w, height: 1000 });
++      const f0 = (await pv.page.evaluate(() => window.__lomn.metrics)).frames;
++      await pv.page.waitForFunction((k) => {
++        const m = window.__lomn.metrics, c = document.getElementById('canvas');
++        return m.frames > k + 3 && m.surface.width === c.width && m.surface.height === c.height && c.width === Math.round(c.parentElement.clientWidth);
++      }, f0, { timeout: 15000 });
++      const m = await pv.page.evaluate(() => window.__lomn.metrics);
++      const r = await pv.page.evaluate(layout, ['header h1', '#status', '#message', '#viewer .bar > *', '#canvas']);
++      const hudInside = await pv.page.evaluate(() => {
++        const h = document.getElementById('hud').getBoundingClientRect(), c = document.getElementById('canvas').getBoundingClientRect();
++        return h.left >= c.left && h.right <= c.right && h.top >= c.top && h.bottom <= c.bottom;
++      });
++      sweep.viewer.min = Math.min(sweep.viewer.min, r.min);
++      if (r.hscroll || r.offRight.length || r.overlaps.length || !hudInside || m.rejected_last_frame || m.draws !== m.area.draws_expected)
++        sweep.viewer.fails.push({ w, ...r, hudInside, rejected: m.rejected_last_frame, draws: m.draws });
++      if (pixelWidths.has(w)) {
++        await pv.page.evaluate(() => { document.getElementById('hud').hidden = true; });
++        const f1 = m.frames;
++        await pv.page.waitForFunction((k) => window.__lomn.metrics.frames > k + 2, f1, { timeout: 10000 });
++        const img = await canvasPng(pv.page, `sweep_${w}.png`);
++        const out = path.join(work, `native_stat_${m.surface.width}x${m.surface.height}.png`);
++        execFileSync(lomnView, ['--install', inst, '--level', 'levt', '--area', 'stat', '--frames', '3', '--width', String(m.surface.width),
++                                '--height', String(m.surface.height), '--out', out], { timeout: 60000 });
++        const d = diffRgb(img, decodePng(fs.readFileSync(out)));
++        sweep.pixels.push({ viewport: w, canvas: `${m.surface.width}x${m.surface.height}`, differing: d.differing, max: d.max });
++        check(d.sameSize && d.over(tolerance) === 0, `resize to ${m.surface.width}x${m.surface.height} (viewport ${w}): pixels == native render of that size (depth valid)`,
++              `${d.differing} differ, max delta ${d.max}`);
++        await pv.page.evaluate(() => { document.getElementById('hud').hidden = false; });
++      }
++    }
++    const gpuMsgs = pv.w.console.slice(msgs0).filter((t) => t.includes('[webgpu]'));
++    check(sweep.viewer.fails.length === 0 && gpuMsgs.length === 0,
++          `responsive sweep, viewer (${widths.length} widths): no h-scroll/overlap, HUD inside the canvas, every resize draws all draws, 0 rejected, no WebGPU message`,
++          `min clearance ${sweep.viewer.min.toFixed(1)} px` + (sweep.viewer.fails.length ? ' ' + JSON.stringify(sweep.viewer.fails.slice(0, 3)) : '') + (gpuMsgs.length ? ' ' + gpuMsgs.slice(0, 3) : ''));
++    summary.responsive = { widths: widths.length, byo_min_clearance_px: sweep.byo.min, viewer_min_clearance_px: sweep.viewer.min, pixels: sweep.pixels };
++    await pv.page.close();
++  }
++  // I2: the display rate is measured once before the first area; a frame-time spin that halves the frame rate must be
++  // reported as DROPPING, where the old expectation (p50 snapped to a refresh rate) reconciles the same run as clean.
++  await section('I2 dropping', async () => {
++    // The display rate the page gets depends on the host (a loaded machine runs headless Chromium's compositor at 30 Hz),
++    // so the spin is sized from the rate measured first: 1.5 display periods per frame always halves the frame rate.
++    const r = await open(base + '?hud=1&area=levt/test');
++    await waitState(r.page, ['area-ready'], 60000);
++    await waitFrames(r.page, 90, 20000);
++    const h = (await r.page.evaluate(() => window.__lomn.metrics)).fps;
++    check(h.display_hz > 0 && h.dropping === false, 'I2: the display rate is measured before the first area; the unspun run is not DROPPING',
++          `display ${h.display_hz} Hz (p10 interval ${h.display_p10_ms} ms), fps ${h.fps}`);
++    await r.page.close();
++    const spin = Math.round((1.5 * 1000) / h.display_hz);
++    summary.i2_spin_ms = spin;
++    const p = await open(base + '?hud=1&area=levt/test', `
++      // ${spin} ms of main-thread work on every animation frame (independent of the page's code).
++      const spin = () => { const t = performance.now(); if (window.__lomn?.state === 'area-ready') while (performance.now() - t < ${spin}) {} requestAnimationFrame(spin); };
++      requestAnimationFrame(spin);`);
++    await waitState(p.page, ['area-ready'], 60000);
++    await waitFrames(p.page, 60, 30000);
++    const m = await p.page.evaluate(() => window.__lomn.metrics);
++    const f = m.fps;
++    const rates = [24, 30, 48, 50, 60, 72, 75, 90, 100, 120, 144, 165, 240];
++    const snapped = rates.reduce((b, x) => (Math.abs(x - 1000 / f.p50_ms) < Math.abs(b - 1000 / f.p50_ms) ? x : b), rates[0]);
++    const oldExpected = (f.window_ms * snapped) / 1000;
++    summary.i2 = { fps: f, old_snapped_hz: snapped, old_expected_intervals: oldExpected, counted_intervals: f.dt_samples, loadavg: loadavg() };
++    // The old rule took its rate from these very frames (snapped p50): with steady drops it reconciles clean (seen at 60 Hz:
++    // "p50 20.6 ms -> 48 Hz -> expected 90.1 vs counted 90"); under irregular load it at least compares against a rate
++    // below the display's, so it understates the drop. Either way the defect shows; both numbers are recorded.
++    const oldRatio = f.dt_samples / oldExpected, newRatio = f.dt_samples / f.expected_intervals;
++    summary.i2.old_ratio = oldRatio;
++    summary.i2.new_ratio = newRatio;
++    check((oldRatio >= 0.95 || snapped < f.display_hz) && newRatio < oldRatio, 'I2: the old circular expectation hides (or understates) the drop',
++          `old: p50 ${f.p50_ms} ms -> snapped ${snapped} Hz -> expected ${oldExpected.toFixed(1)} vs counted ${f.dt_samples} (ratio ${oldRatio.toFixed(2)}); ` +
++          `new: display ${f.display_hz} Hz -> expected ${f.expected_intervals.toFixed(1)} (ratio ${newRatio.toFixed(2)})`);
++    const hud = await p.page.locator('#hud').innerText();
++    check(f.display_hz === h.display_hz && f.dropping === true && /DROPPING/.test(hud), `I2: a ${spin} ms spin per frame -> measured fps vs the display rate -> DROPPING`,
++          `display ${f.display_hz} Hz, fps ${f.fps}, expected ${f.expected_intervals} intervals, dropping ${f.dropping}`);
++    await p.page.close();
++    const q = await open(base + `?hud=1&area=levt/test&debug=1&debug_spin=${spin}`);
++    await waitState(q.page, ['area-ready'], 60000);
++    await waitFrames(q.page, 60, 30000);
++    const g = (await q.page.evaluate(() => window.__lomn.metrics)).fps;
++    check(g.dropping === true && g.spin_ms === spin, `I2: ?debug=1&debug_spin=${spin} makes DROPPING fire`, `fps ${g.fps} vs display ${g.display_hz} Hz, spin ${g.spin_ms}`);
++    await q.page.close();
++  });
++  // I1: textures and buffers are destroyed explicitly (not left to garbage collection): live GPUTexture/GPUBuffer counts
++  // stay flat over 30 area switches (pre-fix they grow by the area's objects on every switch).
++  await section('I1 explicit destroy', async () => {
++    const p = await open(base + '?area=levt/test', gpuLiveHook);
++    await waitState(p.page, ['area-ready'], 60000);
++    const seen = [];
++    for (let i = 0; i < 30; ++i) {
++      const name = i % 2 ? 'levt/test' : 'levt/stat';
++      await p.page.evaluate((n) => window.__lomn.showArea(n), name);
++      await waitFrames(p.page, 2);
++      if (name === 'levt/test') seen.push(await p.page.evaluate(() => ({ ...window.__gpuLive })));
++    }
++    summary.i1_gpu_live = seen;
++    const flat = seen.every((x) => x.textures === seen[0].textures && x.buffers === seen[0].buffers);
++    check(flat, 'I1: live GPUTexture/GPUBuffer counts flat over 30 switches', `first ${JSON.stringify(seen[0])}, last ${JSON.stringify(seen[seen.length - 1])}`);
++    await p.page.close();
++  });
++  // M2: on boot, cached prefetch sets of other wasm builds are pruned.
++  await section('M2 prune', async () => {
++    const p = await open(base + '?pick=1');
++    await waitState(p.page, ['need-files']);
++    await p.page.evaluate(() => new Promise((res) => {
++      const r = indexedDB.open('lomn-web', 1);
++      r.onsuccess = () => { const t = r.result.transaction('kv', 'readwrite'); t.objectStore('kv').put('root/x\t0\t1\n', 'prefetch|fp|0000stale0000|area:levt/test'); t.oncomplete = () => { r.result.close(); res(); }; };
++    }));
++    await p.page.close();
++    const q = await open(base + '?area=levt/test');
++    await waitState(q.page, ['area-ready'], 60000);
++    const left = await q.page.evaluate(() => new Promise((res) => {
++      const r = indexedDB.open('lomn-web', 1);
++      r.onsuccess = () => { const g = r.result.transaction('kv').objectStore('kv').getAllKeys(); g.onsuccess = () => { r.result.close(); res(g.result.filter((k) => String(k).includes('0000stale0000'))); }; };
++    }));
++    check(left.length === 0, 'M2: a stale build\'s cached prefetch sets are pruned at boot', JSON.stringify(left));
++    await q.page.close();
++  });
++  // M4: two picks in a row start one engine, not two on one canvas.
++  await section('M4 single engine', async () => {
++    const p = await open(base + '?area=levt/test&pick=1');
++    await waitState(p.page, ['need-files']);
++    const r0 = srv.responses.length;
++    const res = await p.page.evaluate(async () => {
++      const d = await (await navigator.storage.getDirectory()).getDirectoryHandle('lomn-install');
++      return Promise.all([window.__lomn.useDirectoryHandle(d), window.__lomn.useDirectoryHandle(d)]);
++    });
++    await waitState(p.page, ['area-ready'], 60000);
++    const wasmFetches = srv.responses.slice(r0).filter((r) => /lomn_web\.[0-9a-f]+\.wasm$/.test(r.path)).length;
++    check(wasmFetches === 1 && res.filter(Boolean).length === 1, 'M4: concurrent picks start exactly one engine', `wasm fetches ${wasmFetches}, results ${JSON.stringify(res)}`);
++    await p.page.close();
++  });
++  // I3: a remembered folder that was moved or deleted leads back to the picker with a message (pre-fix: dead 'error').
++  await section('I3 moved folder', async () => {
++    const p = await open(base + '?area=levt/test&pick=1');
++    await waitState(p.page, ['need-files']);
++    await p.page.evaluate(async () => {
++      const root = await navigator.storage.getDirectory();
++      const cp = async (a, b) => {
++        for await (const [n, h] of a.entries()) {
++          if (h.kind === 'directory') await cp(h, await b.getDirectoryHandle(n, { create: true }));
++          else { const w = await (await b.getFileHandle(n, { create: true })).createWritable(); await w.write(await (await h.getFile()).arrayBuffer()); await w.close(); }
++        }
++      };
++      await cp(await root.getDirectoryHandle('lomn-install'), await root.getDirectoryHandle('lomn-moved', { create: true }));
++      await window.__lomn.useDirectoryHandle(await root.getDirectoryHandle('lomn-moved'));
++    });
++    await waitState(p.page, ['area-ready'], 60000);
++    await p.page.close();
++    const q = await open(base + '?pick=1');
++    await waitState(q.page, ['need-files']);
++    await q.page.evaluate(async () => (await navigator.storage.getDirectory()).removeEntry('lomn-moved', { recursive: true }));
++    await q.page.close();
++    const r = await open(base + '?area=levt/test');
++    const st = await waitState(r.page, ['need-files', 'area-ready'], 30000);
++    const picker = await r.page.locator('#pick-dir').isVisible();
++    check(st.state === 'need-files' && /could not be read/.test(st.message) && picker, 'I3: a moved remembered folder -> need-files with a message and the picker',
++          `${st.state}: ${st.message}; picker visible ${picker}`);
++    await idbDeleteHandle(r.page);
++    await r.page.close();
++  });
++  // I7: a copy without its completion manifest (interrupted) is removed at start, with a message.
++  await section('I7 partial copy', async () => {
++    const p = await open(base + '?pick=1');
++    await waitState(p.page, ['need-files']);
++    await idbDeleteHandle(p.page);
++    await p.page.evaluate(async () => (await (await navigator.storage.getDirectory()).getDirectoryHandle('lomn-install')).removeEntry('lomn-copy-complete.json'));
++    await p.page.close();
++    const q = await open(base);
++    const st = await waitState(q.page, ['need-files'], 30000);
++    const left = await opfsHas(q.page, 'lomn-install');
++    check(!left && /incomplete copy/.test(st.message), 'I7: an interrupted copy is cleared at start', `dir left ${left}; ${st.message}`);
++    await q.page.close();
++  });
++  // C2 (decision D13): accepted exe + unknown .blk tables is soft-accepted with a visible warning and a named reason.
++  await section('C2 soft accept', async () => {
++    const p = await open(base + '?size=1280x720&area=levt/test&pick=1');
++    await waitState(p.page, ['need-files']);
++    await p.page.setInputFiles('#byo-input', foreignDataDir);
++    const st = await waitState(p.page, ['area-ready', 'rejected'], 120000);
++    const warn = await p.page.locator('#warning').isVisible().catch(() => false) ? await p.page.locator('#warning').innerText() : '';
++    const m = await p.page.evaluate(() => window.__lomn.metrics);
++    check(st.state === 'area-ready' && /game data differs from the known build — rendering may differ/i.test(warn) && m?.validation?.data === 'unknown' && /fingerprint/.test(m?.validation?.warning ?? ''),
++          'C2: accepted exe + unknown tables -> shown with a warning; the reason is in metrics', `${st.state}; warning "${warn}"; metrics ${JSON.stringify(m?.validation)}`);
++    await p.page.close();
++  });
++  // C1: a lost GPU device reaches the page: state 'error', a Reload button, the loop stopped (pre-fix: stays area-ready).
++  await section('C1 device lost', async () => {
++    // A source of its own (copy through the input), so the step does not depend on what earlier steps left behind.
++    const p = await open(base + '?area=levt/test&pick=1');
++    await waitState(p.page, ['need-files']);
++    await p.page.setInputFiles('#byo-input', inst);
++    await waitState(p.page, ['area-ready'], 120000);
++    await waitFrames(p.page, 3);
++    const cdp = await p.page.context().newCDPSession(p.page);
++    await cdp.send('Browser.crashGpuProcess').catch(() => {});
++    const st = await waitState(p.page, ['error'], 15000).catch(() => p.page.evaluate(() => ({ state: window.__lomn.state, message: window.__lomn.message })));
++    const reload = await p.page.locator('#reload').isVisible().catch(() => false);
++    const f0 = await p.page.evaluate(() => window.__lomn.metrics?.frames ?? -1).catch(() => -1);
++    p.w.expectGpuLoss = true;  // this page's [webgpu] messages are the point of the test
++    check(st.state === 'error' && /device lost|GPU/i.test(st.message) && reload, 'C1: GPU process crash -> state error with the reason and a Reload button',
++          `${st.state}: ${st.message}; reload visible ${reload}; frames ${f0}`);
++    summary.c1 = { state: st.state, message: st.message };
++    await p.page.close();
++  });
++  summary.loadavg = { start: loadavgStart, end: loadavg() };
++  for (const w of pageWatchers.filter((x) => !x.expectGpuLoss)) {
++    const gpu = w.console.filter((t) => t.includes('[webgpu]') || t.includes('[area]'));
++    if (gpu.length || w.errors.length) check(false, 'no WebGPU errors or page exceptions', JSON.stringify({ gpu, errors: w.errors }));
++  }
++  check(pageWatchers.filter((x) => !x.expectGpuLoss).every((w) => !w.errors.length), 'no page exceptions on any page');
++} catch (e) {
++  check(false, 'test run', e.stack || String(e));
++} finally {
++  await ctx.close();
++  srv.close();
++}
++fs.writeFileSync(path.join(work, 'results.json'), JSON.stringify({ results, summary }, null, 1));
++const failed = results.filter((r) => !r.ok);
++console.log(`byo_synthetic: ${results.length - failed.length}/${results.length} checks passed`);
++process.exitCode = failed.length ? 1 : 0;
+diff -ruN -x node_modules base/web/tests/lib.mjs ref/web/tests/lib.mjs
+--- base/web/tests/lib.mjs	1970-01-01 01:00:00
++++ ref/web/tests/lib.mjs	2026-10-07 15:51:05
+@@ -0,0 +1,114 @@
++// Shared helpers of the M1b browser tests: one persistent Chromium context per test file (real GPU: channel 'chromium'
++// + --enable-unsafe-webgpu; the headless shell's SwiftShader paints blank canvases, so pixels are always checked),
++// console capture, state waits (never fixed sleeps), PNG decode + pixel diff, and the network-discipline check.
++import { chromium } from 'playwright';
++import fs from 'node:fs';
++import path from 'node:path';
++import zlib from 'node:zlib';
++
++export async function launch(profileDir) {
++  return chromium.launchPersistentContext(path.resolve(profileDir), {
++    channel: 'chromium', args: ['--enable-unsafe-webgpu'], timeout: 30000, viewport: { width: 1400, height: 1000 },
++  });
++}
++
++// Console errors/warnings, page exceptions and every request URL the page makes (any origin).
++export function watch(page) {
++  const w = { console: [], errors: [], urls: [] };
++  page.on('console', (m) => {
++    if (!['error', 'warning'].includes(m.type())) return;
++    if (m.location().url.endsWith('/favicon.ico')) return;  // the test server answers 404 for the favicon
++    w.console.push(`${m.type()}: ${m.text()}`);
++  });
++  page.on('pageerror', (e) => w.errors.push(e.message));
++  page.on('request', (r) => w.urls.push(r.url()));
++  return w;
++}
++
++// Waits until window.__lomn.state is one of `states` (or 'error'); returns the state. Never a fixed sleep.
++export async function waitState(page, states, timeout = 60000) {
++  const want = [...states, 'error'];
++  await page.waitForFunction((w) => w.includes(window.__lomn?.state), want, { timeout });
++  return page.evaluate(() => ({ state: window.__lomn.state, message: window.__lomn.message, error: window.__lomn.error }));
++}
++
++export async function waitFrames(page, n, timeout = 30000) {
++  await page.waitForFunction((k) => (window.__lomn?.metrics?.frames_since_show ?? 0) >= k, n, { timeout });
++}
++
++// ---- PNG (8-bit RGB/RGBA, non-interlaced: what stb_image_write and Chromium screenshots produce) ----
++export function decodePng(buf) {
++  if (buf.readUInt32BE(0) !== 0x89504e47) throw new Error('not a PNG');
++  let off = 8, w = 0, h = 0, ct = 0;
++  const idat = [];
++  while (off < buf.length) {
++    const len = buf.readUInt32BE(off), type = buf.toString('ascii', off + 4, off + 8);
++    const data = buf.subarray(off + 8, off + 8 + len);
++    if (type === 'IHDR') {
++      w = data.readUInt32BE(0);
++      h = data.readUInt32BE(4);
++      if (data[8] !== 8 || data[12] !== 0) throw new Error('PNG: only 8-bit non-interlaced');
++      ct = data[9];
++    } else if (type === 'IDAT') idat.push(data);
++    else if (type === 'IEND') break;
++    off += 12 + len;
++  }
++  const bpp = ct === 6 ? 4 : ct === 2 ? 3 : 0;
++  if (!bpp) throw new Error('PNG: colour type ' + ct);
++  const raw = zlib.inflateSync(Buffer.concat(idat));
++  const stride = w * bpp, out = Buffer.alloc(w * h * 4), prev = Buffer.alloc(stride), cur = Buffer.alloc(stride);
++  for (let y = 0; y < h; ++y) {
++    const f = raw[y * (stride + 1)];
++    raw.copy(cur, 0, y * (stride + 1) + 1, (y + 1) * (stride + 1));
++    for (let i = 0; i < stride; ++i) {
++      const a = i >= bpp ? cur[i - bpp] : 0, b = prev[i], c = i >= bpp ? prev[i - bpp] : 0;
++      let v = cur[i];
++      if (f === 1) v += a;
++      else if (f === 2) v += b;
++      else if (f === 3) v += (a + b) >> 1;
++      else if (f === 4) {
++        const p = a + b - c, pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c);
++        v += pa <= pb && pa <= pc ? a : pb <= pc ? b : c;
++      }
++      cur[i] = v & 255;
++    }
++    for (let x = 0; x < w; ++x) {
++      out[(y * w + x) * 4] = cur[x * bpp];
++      out[(y * w + x) * 4 + 1] = cur[x * bpp + 1];
++      out[(y * w + x) * 4 + 2] = cur[x * bpp + 2];
++      out[(y * w + x) * 4 + 3] = bpp === 4 ? cur[x * bpp + 3] : 255;
++    }
++    cur.copy(prev);
++  }
++  return { width: w, height: h, rgba: out };
++}
++
++// RGB difference (alpha ignored: the D3D8 back buffer is X8R8G8B8). Histogram of the per-pixel max channel delta.
++export function diffRgb(a, b) {
++  if (a.width !== b.width || a.height !== b.height) return { sameSize: false };
++  const hist = new Array(256).fill(0);
++  let differing = 0, max = 0;
++  for (let i = 0; i < a.width * a.height; ++i) {
++    const d = Math.max(Math.abs(a.rgba[i * 4] - b.rgba[i * 4]), Math.abs(a.rgba[i * 4 + 1] - b.rgba[i * 4 + 1]),
++                       Math.abs(a.rgba[i * 4 + 2] - b.rgba[i * 4 + 2]));
++    hist[d]++;
++    if (d) differing++;
++    if (d > max) max = d;
++  }
++  const over = (t) => hist.slice(t + 1).reduce((n, x) => n + x, 0);
++  return { sameSize: true, pixels: a.width * a.height, differing, max, over, hist };
++}
++
++// Network discipline (M1b 1.7): every response since `from` is a built asset (asset-manifest.json lists them), every
++// request URL is on the test server's origin, and the bytes downloaded are at most the site's size.
++export function networkCheck(srv, site, watcher, fromResponse = 0, fromUrl = 0) {
++  const manifest = JSON.parse(fs.readFileSync(path.join(site, 'asset-manifest.json'), 'utf8'));
++  const allowed = new Set(manifest.files.map((f) => '/' + f.path).concat(['/', '/asset-manifest.json', '/favicon.ico']));
++  const buildBytes = manifest.total_bytes + fs.statSync(path.join(site, 'asset-manifest.json')).size;
++  const resp = srv.responses.slice(fromResponse);
++  const foreignPaths = resp.filter((r) => !allowed.has(r.path)).map((r) => r.path);
++  const origin = new URL(srv.url).origin;
++  const foreignUrls = watcher.urls.slice(fromUrl).filter((u) => !u.startsWith(origin + '/') && !u.startsWith('blob:') && !u.startsWith('data:'));
++  const bytes = resp.reduce((n, r) => n + r.bytes, 0);
++  return { ok: !foreignPaths.length && !foreignUrls.length && bytes <= buildBytes, foreignPaths, foreignUrls, bytes, buildBytes, responses: resp.length };
++}
+diff -ruN -x node_modules base/web/tests/measure_arms.mjs ref/web/tests/measure_arms.mjs
+--- base/web/tests/measure_arms.mjs	1970-01-01 01:00:00
++++ ref/web/tests/measure_arms.mjs	2026-10-07 17:20:29
+@@ -0,0 +1,88 @@
++// A/B measurement harness (REF4 r2: M10 -O2+wasm-opt vs -O3, M1 fetch concurrency). Needs LOMN_DATA.
++// Usage: node tests/measure_arms.mjs <root_dir> <work_dir> '<arms json>' <reps>
++//   <root_dir> holds one built site per arm in a subdirectory (same origin, so they share the OPFS copy and IndexedDB);
++//   arms = [{"name": "o3", "dir": "site-o3", "query": "fetch_concurrency=1"}, ...].
++// One persistent Chromium, the real install copied into OPFS once; then reps x arms interleaved (ABAB...). Each run opens
++// a fresh page with ?debug=1&nocache=1 (every area discovered, nothing cached), shows lev1/vllg, lev2/ghut, lev4/crss and
++// lev0/frnt, and reads 300 frames on lev4/crss. Records load ms per area, the engine's probe/decode/upload ms, frame CPU
++// p50/p95 with the reconciled fps window, wasm bytes, and the host loadavg before and after every run.
++// Decision rule (TEST-003): a difference counts only if the arms' medians differ by more than the larger within-arm
++// spread (max - min over the reps).
++import fs from 'node:fs';
++import os from 'node:os';
++import path from 'node:path';
++import { serve } from './serve.mjs';
++import { launch, waitFrames, waitState } from './lib.mjs';
++
++const [rootArg, workArg, armsJson, repsArg] = process.argv.slice(2);
++if (!rootArg || !workArg || !armsJson) {
++  console.error("usage: measure_arms.mjs <root_dir> <work_dir> '<arms json>' [reps]");
++  process.exit(2);
++}
++if (!process.env.LOMN_DATA) {
++  console.log('SKIPPED (no LOMN_DATA)');
++  process.exit(77);
++}
++const root = path.resolve(rootArg), work = path.resolve(workArg);
++const arms = JSON.parse(armsJson);
++const reps = Number(repsArg || 4);
++const AREAS = ['lev1/vllg', 'lev2/ghut', 'lev4/crss', 'lev0/frnt'];
++const loadavg = () => os.loadavg().map((x) => x.toFixed(2)).join(' ');
++fs.rmSync(work, { recursive: true, force: true });
++fs.mkdirSync(work, { recursive: true });
++const srv = await serve(root);
++const ctx = await launch(path.join(work, 'profile'));
++const runs = [];
++try {
++  // One OPFS copy of the install, through the first arm's page.
++  {
++    const page = await ctx.newPage();
++    await page.goto(`${srv.url}${arms[0].dir}/index.html?pick=1`);
++    await waitState(page, ['need-files']);
++    await page.setInputFiles('#byo-input', path.join(process.env.LOMN_DATA, 'install'));
++    await page.waitForFunction(() => ['ready', 'area-ready', 'loading-area', 'rejected', 'error'].includes(window.__lomn?.state), null, { timeout: 600000 });
++    await page.close();
++  }
++  for (let rep = 0; rep < reps; ++rep) {
++    for (let i = 0; i < arms.length; ++i) {
++      const arm = arms[(rep % 2 === 0) ? i : arms.length - 1 - i];  // ABBA order per pair of reps
++      const la0 = loadavg();
++      const page = await ctx.newPage();
++      const wasmBytes = fs.statSync(path.join(root, arm.dir, fs.readdirSync(path.join(root, arm.dir)).find((f) => f.endsWith('.wasm')))).size;
++      await page.goto(`${srv.url}${arm.dir}/index.html?debug=1&nocache=1&size=1280x720&area=${AREAS[0]}&${arm.query || ''}`);
++      await waitState(page, ['area-ready'], 120000);
++      const per = {};
++      for (const a of AREAS) {
++        if (a !== AREAS[0]) await page.evaluate((n) => window.__lomn.showArea(n), a);
++        const m = await page.evaluate(() => ({ load: window.__lomn.load, area: window.__lomn.metrics.area }));
++        per[a] = { load_total_ms: m.load.load_total_ms, rounds: m.load.rounds, fetch_ms: m.load.fetch_ms, probe_ms: m.area.probe_ms,
++                   decode_ms: m.area.decode_ms, upload_ms: m.area.upload_ms, cached: m.load.cached };
++      }
++      await page.evaluate(() => window.__lomn.showArea('lev4/crss'));
++      await waitFrames(page, 301, 60000);
++      const m = await page.evaluate(() => window.__lomn.metrics);
++      runs.push({ rep, arm: arm.name, wasm_bytes: wasmBytes, build: m.build, per, frame_cpu_p50: m.breakdown_ms.frame_cpu_p50,
++                  frame_cpu_p95: m.breakdown_ms.frame_cpu_p95, replay_p50: m.breakdown_ms.replay_p50,
++                  fps: { frames: m.fps.frames_in_window, dt_samples: m.fps.dt_samples, window_ms: m.fps.window_ms, expected: m.fps.expected_intervals, display_hz: m.fps.display_hz, dropping: m.fps.dropping },
++                  loadavg_before: la0, loadavg_after: loadavg() });
++      console.log(`rep ${rep} ${arm.name}: wasm ${wasmBytes} B, loads ${AREAS.map((a) => per[a].load_total_ms.toFixed(0)).join('/')} ms, cpu p50 ${m.breakdown_ms.frame_cpu_p50} ms, loadavg ${la0}`);
++      await page.close();
++    }
++  }
++} finally {
++  await ctx.close();
++  srv.close();
++  fs.rmSync(path.join(work, 'profile'), { recursive: true, force: true });
++}
++// Summary: per arm, median and spread of the total load over the 4 areas and of frame CPU p50.
++const med = (v) => { const s = [...v].sort((a, b) => a - b); return s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2; };
++const summary = {};
++for (const arm of arms) {
++  const rs = runs.filter((r) => r.arm === arm.name);
++  const load = rs.map((r) => AREAS.reduce((n, a) => n + r.per[a].load_total_ms, 0));
++  const cpu = rs.map((r) => r.frame_cpu_p50);
++  summary[arm.name] = { reps: rs.length, wasm_bytes: rs[0]?.wasm_bytes, load_total_ms: { median: med(load), spread: Math.max(...load) - Math.min(...load), values: load },
++                        frame_cpu_p50_ms: { median: med(cpu), spread: Math.max(...cpu) - Math.min(...cpu), values: cpu } };
++}
++fs.writeFileSync(path.join(work, 'results.json'), JSON.stringify({ arms, runs, summary }, null, 1));
++console.log(JSON.stringify(summary, null, 1));
+diff -ruN -x node_modules base/web/tests/serve.mjs ref/web/tests/serve.mjs
+--- base/web/tests/serve.mjs	2026-10-07 15:21:46
++++ ref/web/tests/serve.mjs	2026-10-07 15:50:37
+@@ -1,23 +1,31 @@
+-// Minimal static server for tests: serves one directory, records every requested path.
++// Minimal static server for tests: serves one directory, records every requested path and (M1b) every response's
++// status and body bytes, so the network-discipline check can sum what the page downloaded.
+ import http from 'node:http';
+ import fs from 'node:fs';
+ import path from 'node:path';
+-const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.wasm': 'application/wasm', '.json': 'application/json' };
++const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.wasm': 'application/wasm', '.json': 'application/json' };
+ export function serve(rootArg) {
+   const root = path.resolve(rootArg);
+   const requests = [];
++  const responses = [];  // {path, status, bytes}
+   const server = http.createServer((req, res) => {
+     let rel;
+     try { rel = decodeURIComponent(new URL(req.url, 'http://x').pathname); }
+-    catch { res.writeHead(400); return res.end(); }   // malformed %-escape: answer 400, never throw
++    catch { responses.push({ path: req.url, status: 400, bytes: 0 }); res.writeHead(400); return res.end(); }   // malformed %-escape: answer 400, never throw
+     requests.push(rel);
+     if (rel === '/') rel = '/index.html';
+     const file = path.resolve(root, '.' + rel);
+     const inside = file === root || file.startsWith(root + path.sep);   // `root + sep`: "site-secret" is not inside "site"
+-    if (!inside || !fs.existsSync(file) || fs.statSync(file).isDirectory()) { res.writeHead(404); return res.end(); }
+-    res.writeHead(200, { 'content-type': TYPES[path.extname(file)] || 'application/octet-stream' });
++    if (!inside || !fs.existsSync(file) || fs.statSync(file).isDirectory()) {
++      responses.push({ path: rel, status: 404, bytes: 0 });
++      res.writeHead(404);
++      return res.end();
++    }
++    const bytes = fs.statSync(file).size;
++    responses.push({ path: rel, status: 200, bytes });
++    res.writeHead(200, { 'content-type': TYPES[path.extname(file)] || 'application/octet-stream', 'content-length': bytes, 'cache-control': 'no-store' });
+     fs.createReadStream(file).pipe(res);
+   });
+   return new Promise((resolve) => server.listen(0, '127.0.0.1', () =>
+-    resolve({ url: `http://127.0.0.1:${server.address().port}/`, requests, close: () => { server.close(); server.closeAllConnections(); } })));
++    resolve({ url: `http://127.0.0.1:${server.address().port}/`, requests, responses, close: () => { server.close(); server.closeAllConnections(); } })));
+ }
+diff -ruN -x node_modules base/web/tests/smoke.mjs ref/web/tests/smoke.mjs
+--- base/web/tests/smoke.mjs	2026-10-07 15:21:46
++++ ref/web/tests/smoke.mjs	2026-10-07 15:51:20
+@@ -1,4 +1,5 @@
+-// L3 browser smoke test for the M0 build. Usage: node tests/smoke.mjs <site_dir> <profile_dir>
++// L3 browser smoke test for the M0 build (M1b: the M0 triangle scene is index.html?scene=triangle; the viewer is covered by
++// byo_synthetic.mjs and a13_real.mjs). Usage: node tests/smoke.mjs <site_dir> <profile_dir>
+ // Real GPU: Chromium channel "chromium" (new headless) + --enable-unsafe-webgpu. The headless shell falls back to
+ // SwiftShader whose canvas screenshots come out blank, so pixels (not just state) are always checked.
+ // Exit 0 pass, 1 fail. Prints adapter, frame count, dt reconciliation, requests.
+@@ -9,7 +10,8 @@
+ 
+ const [siteDir, profileDir] = process.argv.slice(2);
+ const site = path.resolve(siteDir);
+-const allowed = new Set(fs.readdirSync(site).map((f) => '/' + f).concat(['/', '/favicon.ico']));
++const manifest = JSON.parse(fs.readFileSync(path.join(site, 'asset-manifest.json'), 'utf8'));
++const allowed = new Set(manifest.files.map((f) => '/' + f.path).concat(['/', '/favicon.ico', '/asset-manifest.json']));
+ const srv = await serve(site);
+ const fail = (msg) => { console.error('FAIL:', msg); process.exitCode = 1; };
+ const ctx = await chromium.launchPersistentContext(path.resolve(profileDir), {
+@@ -23,19 +25,18 @@
+     consoleMsgs.push(`${msg.type()}: ${msg.text()}`);
+   });
+   page.on('pageerror', (err) => pageErrors.push(err.message));
+-  await page.goto(srv.url + 'index.html', { timeout: 30000 });
++  await page.goto(srv.url + 'index.html?scene=triangle', { timeout: 30000 });
+   await page.waitForFunction(() => ['running', 'error'].includes(window.__lomn?.state), null, { timeout: 20000 });
+   const st = await page.evaluate(() => window.__lomn);
+   if (st.state !== 'running') throw new Error('engine state ' + st.state + ': ' + st.error);
+   const adapter = await page.evaluate(async () => { const a = await navigator.gpu.requestAdapter();
+     return `${a.info.vendor}/${a.info.architecture}`; });
+-  await page.waitForFunction(() => window.__lomn.frames >= 120, null, { timeout: 20000 });
+-  const m = await page.evaluate(() => ({ frames: window.__lomn.frames, dts: window.__lomn.metrics.dts }));
+-  const windowMs = m.dts.reduce((a, b) => a + b, 0);
+-  const p50 = [...m.dts].sort((a, b) => a - b)[Math.floor(m.dts.length / 2)];
+-  console.log(`adapter=${adapter} frames=${m.frames} dt_samples=${m.dts.length} window_ms=${windowMs.toFixed(0)} ` +
+-              `p50_dt_ms=${p50.toFixed(2)} expected_at_60hz=${(windowMs / 16.667).toFixed(0)}`);
+-  if (m.dts.length !== m.frames - 1) fail(`dt samples ${m.dts.length} != frames-1 ${m.frames - 1}`);
++  await page.waitForFunction(() => window.__lomn.metrics?.frames >= 120, null, { timeout: 20000 });
++  // One metrics snapshot (frames and dt samples from the same instant).
++  const m = await page.evaluate(() => window.__lomn.metrics);
++  console.log(`adapter=${adapter} frames=${m.frames} dt_samples=${m.fps.dt_samples} window_ms=${m.fps.window_ms.toFixed(0)} ` +
++              `p50_dt_ms=${m.fps.p50_ms.toFixed(2)} expected_intervals=${m.fps.expected_intervals.toFixed(0)} at ${m.fps.nominal_hz} Hz`);
++  if (m.fps.dt_samples !== m.frames - 1) fail(`dt samples ${m.fps.dt_samples} != frames-1 ${m.frames - 1}`);
+   const png = await page.locator('#canvas').screenshot();
+   fs.writeFileSync(path.join(path.resolve(profileDir), '..', 'smoke.png'), png);
+   const px = await page.evaluate(async (b64) => {
+diff -ruN -x node_modules base/web/tests/unit_r2_test.mjs ref/web/tests/unit_r2_test.mjs
+--- base/web/tests/unit_r2_test.mjs	1970-01-01 01:00:00
++++ ref/web/tests/unit_r2_test.mjs	2026-10-07 17:10:26
+@@ -0,0 +1,54 @@
++// REF4 revision 2: unit tests of the new untrusted-input helpers (each imports its module itself, so on code without a
++// helper only that test fails). Run: cd web && timeout 60 node --test tests/unit_r2_test.mjs
++import { test } from 'node:test';
++import assert from 'node:assert/strict';
++
++const mkFile = (rel, n) => {
++  const f = new File([new Uint8Array(n)], rel.split('/').pop());
++  Object.defineProperty(f, 'webkitRelativePath', { value: rel });
++  return f;
++};
++
++test('M12 checkRelPath: no empty, ".", ".." or over-long segments; byte length counted in UTF-8', async () => {
++  const { checkRelPath, MAX_PATH_BYTES } = await import('../app/paths.js');
++  assert.equal(checkRelPath('data/Base.osi'), '');
++  for (const bad of ['', '/data/x', 'data//x', 'data/./x', 'data/../x', '..', 'data/x/']) assert.notEqual(checkRelPath(bad), '', bad);
++  assert.equal(MAX_PATH_BYTES, 1024);
++  const nonAscii = 'data/' + 'é'.repeat(600);  // 605 UTF-16 units, 1205 UTF-8 bytes
++  assert.ok(nonAscii.length < 1024);
++  assert.match(checkRelPath(nonAscii), /bytes/);
++});
++
++test('M11 filesSource: over-long (UTF-8) paths and case duplicates are skipped with a warning, never fatal', async () => {
++  const { filesSource } = await import('../app/byo.js');
++  const s = filesSource([mkFile('inst/LEGOBionicle.exe', 4), mkFile('inst/data/Base.osi', 2), mkFile('inst/data/base.OSI', 3),
++                         mkFile('inst/data/' + 'é'.repeat(600) + '.blk', 1)]);
++  assert.deepEqual(s.entries.map((e) => e.path), ['LEGOBionicle.exe', 'data/Base.osi']);
++  assert.equal(s.warnings.length, 2);
++  assert.match(s.warnings.join('\n'), /same name/);
++  assert.match(s.warnings.join('\n'), /bytes/);
++});
++
++test('I6 checkCopyManifest / sameFiles: the completion manifest is shape-checked and compared with the copy', async () => {
++  const { checkCopyManifest, sameFiles } = await import('../app/byo.js');
++  const ok = { format: 'lomn-opfs-copy', version: 1, files: [{ path: 'LEGOBionicle.exe', size: 4 }, { path: 'data/Base.osi', size: 2 }] };
++  assert.equal(checkCopyManifest(ok), '');
++  assert.match(checkCopyManifest({ ...ok, files: [{ path: 5, size: 1 }] }), /entry/);
++  assert.match(checkCopyManifest({ ...ok, files: [{ path: 'a', size: -1 }] }), /entry/);
++  assert.match(checkCopyManifest({ ...ok, files: [{ path: 'data/../x', size: 1 }] }), /entry/);
++  assert.match(checkCopyManifest({ ...ok, files: new Array(70000).fill({ path: 'a', size: 1 }) }), /files/);
++  assert.match(checkCopyManifest({ ...ok, version: 2 }), /format/);
++  const entries = [{ path: 'LEGOBionicle.exe', size: 4 }, { path: 'data/Base.osi', size: 2 }];
++  assert.equal(sameFiles(entries, ok.files), '');
++  assert.match(sameFiles(entries.slice(0, 1), ok.files), /missing.*data\/Base\.osi/);
++  assert.match(sameFiles([{ path: 'LEGOBionicle.exe', size: 4 }, { path: 'data/Base.osi', size: 3 }], ok.files), /size/);
++});
++
++test('M2 filterCached: a cached prefetch set over the byte cap is dropped (discovery runs instead)', async () => {
++  const { filterCached, MAX_CACHED_BYTES } = await import('../app/engine.js');
++  const byNorm = new Map([['root/a', { size: 1 << 30 }]]);
++  assert.equal(MAX_CACHED_BYTES, 64 * 1024 * 1024);
++  assert.equal(filterCached([{ path: 'root/a', offset: 0, length: 100 }, { path: 'root/zz', offset: 0, length: 1 }], byNorm).length, 1);
++  assert.deepEqual(filterCached([{ path: 'root/a', offset: 0, length: MAX_CACHED_BYTES + 1 }], byNorm), []);
++  assert.deepEqual(filterCached([{ path: 'root/a', offset: 2 ** 30 - 5, length: 10 }], byNorm), []);
++});
+diff -ruN -x node_modules base/web/tests/unit_test.mjs ref/web/tests/unit_test.mjs
+--- base/web/tests/unit_test.mjs	1970-01-01 01:00:00
++++ ref/web/tests/unit_test.mjs	2026-10-07 17:10:26
+@@ -0,0 +1,99 @@
++// Node unit tests of the page's untrusted-input code (no browser): build identification, builds.json shape checks, the
++// copy/index file rule, <input webkitdirectory> path handling and the engine's range-list parser.
++// Run: cd web && timeout 60 node --test tests/unit_test.mjs
++import { test } from 'node:test';
++import assert from 'node:assert/strict';
++import { blkTablesFingerprint, checkBuilds, classify, MAX_BLK_ENTRIES } from '../app/fingerprint.js';
++import { filesSource, wanted } from '../app/byo.js';
++import { parseRanges } from '../app/engine.js';
++
++const H = (n) => n.toString(16).padStart(2, '0').repeat(32);
++const builds = checkBuilds({
++  accepted: [{ id: 'good', exe_sha256: H(1) }],
++  data: [{ id: 'gooddata', blk_tables_sha256: H(2) }],
++  rejected: [{ id: 'rb', exe_sha256: H(3), name: 'REBUILT', reason: 'needs LOMNHook' }],
++});
++
++function blk(count, extra = 0) {
++  const b = new Uint8Array(12 + count * 56 + extra);
++  b.set([0x42, 0x4c, 0x4b, 0x46]);
++  new DataView(b.buffer).setUint32(8, count, true);
++  return b;
++}
++const fromBytes = (files) => ({
++  entries: Object.entries(files).map(([path, bytes]) => ({ path, size: bytes.length, bytes })),
++  read: async (e, o, l) => e.bytes.subarray(o, o + l),
++});
++
++test('classify: accepted, rejected-list (named), unknown exe, unknown data', () => {
++  assert.equal(classify(builds, H(1), H(2)).ok, true);
++  assert.match(classify(builds, H(3), H(2)).message, /^This is REBUILT \(LEGOBionicle\.exe SHA-256 030303030303…\), which is not supported: needs LOMNHook$/);
++  assert.match(classify(builds, H(9), H(2)).message, /^Unknown build: LEGOBionicle\.exe SHA-256 090909090909…/);
++  // C2 / D13: accepted exe + unknown tables is soft-accepted with a warning naming the fingerprint (no hard rejection).
++  const soft = classify(builds, H(1), H(8));
++  assert.equal(soft.ok, true);
++  assert.equal(soft.data, 'unknown');
++  assert.match(soft.warning, /^Game data differs from the known build — rendering may differ \(\.blk table fingerprint 080808080808…/);
++});
++
++test('checkBuilds rejects malformed lists', () => {
++  assert.throws(() => checkBuilds({ accepted: [{ id: 'x', exe_sha256: 'nothex' }] }), /bad accepted entry/);
++  assert.throws(() => checkBuilds({ accepted: [], data: [{ id: '', blk_tables_sha256: H(1) }] }), /bad data entry/);
++  assert.throws(() => checkBuilds({ accepted: [], rejected: [{ id: 'r', exe_sha256: H(1) }] }), /bad rejected entry/);
++  assert.throws(() => checkBuilds({ accepted: new Array(65).fill({ id: 'a', exe_sha256: H(1) }) }), /bad accepted list/);
++  assert.throws(() => checkBuilds(null), /bad accepted list/);
++});
++
++test('blkTablesFingerprint: order-independent, path-case-insensitive, bounded', async () => {
++  const a = fromBytes({ 'data/A.blk': blk(2, 100), 'data/levels/x.blk': blk(0), 'data/b.txt': new Uint8Array(3) });
++  const b = fromBytes({ 'data/levels/X.BLK': blk(0), 'DATA/a.blk': blk(2, 100) });
++  const fa = await blkTablesFingerprint(a.entries, a.read);
++  const fb = await blkTablesFingerprint(b.entries, b.read);
++  assert.equal(fa.fingerprint, fb.fingerprint);
++  assert.equal(fa.blkFiles, 2);
++  assert.equal(fa.tableBytes, 12 + 2 * 56 + 12);
++  // The entry bytes after the table do not count; the table does.
++  const c = fromBytes({ 'data/A.blk': (() => { const x = blk(2, 100); x[12 + 2 * 56 + 5] = 7; return x; })(), 'data/levels/x.blk': blk(0) });
++  assert.equal((await blkTablesFingerprint(c.entries, c.read)).fingerprint, fa.fingerprint);
++  const d = fromBytes({ 'data/A.blk': (() => { const x = blk(2, 100); x[20] = 7; return x; })(), 'data/levels/x.blk': blk(0) });
++  assert.notEqual((await blkTablesFingerprint(d.entries, d.read)).fingerprint, fa.fingerprint);
++  const bad = async (files, re) => { const s = fromBytes(files); await assert.rejects(blkTablesFingerprint(s.entries, s.read), re); };
++  await bad({ 'data/a.blk': new Uint8Array(20) }, /no BLKF magic/);
++  await bad({ 'data/a.blk': new Uint8Array(5) }, /too small/);
++  await bad({ 'data/a.blk': blk(3).subarray(0, 12 + 2 * 56) }, /entry table larger than the file/);
++  const huge = blk(0);
++  new DataView(huge.buffer).setUint32(8, MAX_BLK_ENTRIES + 1, true);
++  await bad({ 'data/a.blk': huge }, /cap/);
++  await bad({ 'other/a.blk': blk(0) }, /not a LOMN install/);
++});
++
++test('wanted(): the exe at the top and data/ except dot files, exes and DLLs', () => {
++  assert.equal(wanted('LEGOBionicle.exe'), true);
++  assert.equal(wanted('data/levels/lev1/vllg.blk'), true);
++  assert.equal(wanted('Data/Base.osi'), true);
++  assert.equal(wanted('data/Cinematics/Binkplay.exe'), false);
++  assert.equal(wanted('data/Cinematics/binkw32.DLL'), false);  // a DLL inside data/ (mutation 17 of mutate4.py)
++  assert.equal(wanted('mods/BetterSaver.dll'), false);
++  assert.equal(wanted('data/.DS_Store'), false);
++  assert.equal(wanted('binkw32.dll'), false);
++  assert.equal(wanted('sub/LEGOBionicle.exe'), false);
++});
++
++test('filesSource: strips the picked folder, keeps only wanted files', () => {
++  const mk = (rel, n) => {
++    const f = new File([new Uint8Array(n)], rel.split('/').pop());
++    Object.defineProperty(f, 'webkitRelativePath', { value: rel });
++    return f;
++  };
++  const s = filesSource([mk('install/LEGOBionicle.exe', 4), mk('install/data/Base.osi', 2), mk('install/mods/x.dll', 1), mk('install/data/.DS_Store', 1)]);
++  assert.equal(s.name, 'install');
++  assert.deepEqual(s.entries.map((e) => [e.path, e.size]), [['LEGOBionicle.exe', 4], ['data/Base.osi', 2]]);
++});
++
++test('parseRanges: integers only, malformed lines rejected', () => {
++  assert.deepEqual(parseRanges('root/a\t0\t12\nroot/b\t12\t560\n'), [{ path: 'root/a', offset: 0, length: 12 }, { path: 'root/b', offset: 12, length: 560 }]);
++  assert.throws(() => parseRanges('root/a\t-1\t12\n'), /malformed/);
++  assert.throws(() => parseRanges('root/a\t1.5\t12\n'), /malformed/);
++  assert.throws(() => parseRanges('root/a\t1\n'), /malformed/);
++  assert.throws(() => parseRanges('\t1\t2\n'), /malformed/);
++});
+diff -ruN -x node_modules base/web/tools/build_site.mjs ref/web/tools/build_site.mjs
+--- base/web/tools/build_site.mjs	1970-01-01 01:00:00
++++ ref/web/tools/build_site.mjs	2026-10-07 17:18:38
+@@ -0,0 +1,89 @@
++// Assembles the static site: web/index.html, web/app/*.js, the wasm build and builds.json, plus asset-manifest.json
++// (every file with its byte size and SHA-256; the network-discipline test allows exactly these URLs).
++// Content hashing (for a later deploy, parent spec §4.6): every JS and wasm file is published as <name>.<10 hex of the
++// SHA-256 of its published bytes>.<ext>, and the references to it (quoted relative specifiers in the JS, the script src in
++// index.html) are rewritten first, leaves before importers, so a hash covers its dependencies' names. index.html,
++// builds.json and asset-manifest.json keep stable names (they must be revalidated). There is no CSS file: the page's CSS
++// is inline in index.html. Deploy headers (immutable for hashed names) are not written here: deploy is out of scope.
++// Usage: node web/tools/build_site.mjs <wasm_build_dir> <out_dir> [--extra-builds file.json]
++//   --extra-builds: merges test-only accepted/data/rejected entries (synthetic fixtures) into builds.json. Never used
++//   for the real site (make site).
++import crypto from 'node:crypto';
++import fs from 'node:fs';
++import path from 'node:path';
++import { fileURLToPath } from 'node:url';
++
++const here = path.dirname(fileURLToPath(import.meta.url));
++const web = path.resolve(here, '..');
++const repo = path.resolve(web, '..');
++const args = process.argv.slice(2);
++const [wasmDir, outDir] = args;
++if (!wasmDir || !outDir) {
++  console.error('usage: build_site.mjs <wasm_build_dir> <out_dir> [--extra-builds file.json]');
++  process.exit(2);
++}
++const extraAt = args.indexOf('--extra-builds');
++const extra = extraAt > 0 ? JSON.parse(fs.readFileSync(args[extraAt + 1], 'utf8')) : null;
++
++fs.rmSync(outDir, { recursive: true, force: true });
++fs.mkdirSync(path.join(outDir, 'app'), { recursive: true });
++// Sources, in hashing order: a file comes after every file it references.
++const ORDER = ['app/fingerprint.js', 'app/idb.js', 'app/paths.js', 'app/opfs_worker.js', 'lomn_web.wasm', 'lomn_web.js', 'app/byo.js', 'app/engine.js', 'app/main.js'];
++const srcOf = (rel) => (rel.startsWith('app/') ? path.join(web, rel) : path.join(wasmDir, rel));
++const appFiles = fs.readdirSync(path.join(web, 'app')).filter((f) => f.endsWith('.js')).map((f) => 'app/' + f).sort();
++const unknown = appFiles.filter((f) => !ORDER.includes(f));
++if (unknown.length) throw new Error('build_site: add these to ORDER (after what they import): ' + unknown.join(', '));
++const hashed = new Map();  // rel -> published rel
++const relSpec = (fromRel, toRel) => {
++  const r = path.posix.relative(path.posix.dirname(fromRel), toRel);
++  return r.startsWith('.') ? r : './' + r;
++};
++const rewrite = (fromRel, text) => {
++  for (const [orig, pub] of hashed) {
++    const a = relSpec(fromRel, orig), b = relSpec(fromRel, pub);
++    for (const q of ["'", '"']) text = text.split(q + a + q).join(q + b + q);
++  }
++  return text;
++};
++for (const rel of ORDER) {
++  let bytes = fs.readFileSync(srcOf(rel));
++  if (rel.endsWith('.js')) bytes = Buffer.from(rewrite(rel, bytes.toString('utf8')));
++  const h = crypto.createHash('sha256').update(bytes).digest('hex').slice(0, 10);
++  const ext = path.extname(rel);
++  const pub = rel.slice(0, -ext.length) + '.' + h + ext;
++  fs.writeFileSync(path.join(outDir, pub), bytes);
++  hashed.set(rel, pub);
++}
++let html = fs.readFileSync(path.join(web, 'index.html'), 'utf8');
++for (const [orig, pub] of hashed) html = html.split(`src="${orig}"`).join(`src="${pub}"`);
++fs.writeFileSync(path.join(outDir, 'index.html'), html);
++// Every reference must have been rewritten: no published file may still name an unhashed source.
++for (const pub of [...hashed.values(), 'index.html']) {
++  if (!pub.endsWith('.js') && pub !== 'index.html') continue;
++  const text = fs.readFileSync(path.join(outDir, pub), 'utf8');
++  for (const orig of hashed.keys()) {
++    const spec = pub === 'index.html' ? `"${orig}"` : `'${relSpec(pub, orig)}'`;
++    if (text.includes(spec)) throw new Error(`build_site: ${pub} still references ${spec}`);
++  }
++}
++const builds = JSON.parse(fs.readFileSync(path.join(repo, 'tools', 'builds.json'), 'utf8'));
++if (extra) for (const k of ['accepted', 'data', 'rejected']) builds[k] = [...(builds[k] || []), ...(extra[k] || [])];
++fs.writeFileSync(path.join(outDir, 'builds.json'), JSON.stringify(builds, null, 1) + '\n');
++
++const files = [];
++const walk = (dir, prefix) => {
++  for (const f of fs.readdirSync(dir).sort()) {
++    const p = path.join(dir, f);
++    if (fs.statSync(p).isDirectory()) walk(p, prefix + f + '/');
++    else {
++      const rel = prefix + f;
++      const source = [...hashed].find(([, pub]) => pub === rel)?.[0];
++      files.push({ path: rel, bytes: fs.statSync(p).size, sha256: crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex'), ...(source ? { source } : {}) });
++    }
++  }
++};
++walk(outDir, '');
++const manifest = { format: 'lomn-asset-manifest', version: 1, files, total_bytes: files.reduce((n, f) => n + f.bytes, 0) };
++const text = JSON.stringify(manifest, null, 1) + '\n';
++fs.writeFileSync(path.join(outDir, 'asset-manifest.json'), text);
++console.log(`site: ${files.length + 1} files, ${manifest.total_bytes + Buffer.byteLength(text)} bytes -> ${outDir}`);
+diff -ruN -x node_modules base/web/tools/fingerprint_cli.mjs ref/web/tools/fingerprint_cli.mjs
+--- base/web/tools/fingerprint_cli.mjs	1970-01-01 01:00:00
++++ ref/web/tools/fingerprint_cli.mjs	2026-10-07 15:49:55
+@@ -0,0 +1,41 @@
++// Node front end of web/app/fingerprint.js (the code the page runs): prints the exe SHA-256 and the blockfile-table
++// fingerprint of an install folder as JSON. Walks the folder like the page (dot files skipped; data/ and the exe only).
++// Usage: node web/tools/fingerprint_cli.mjs <install_dir>
++import fs from 'node:fs';
++import path from 'node:path';
++import { blkTablesFingerprint, lowerAscii, sha256hex } from '../app/fingerprint.js';
++
++const root = process.argv[2];
++if (!root) {
++  console.error('usage: fingerprint_cli.mjs <install_dir>');
++  process.exit(2);
++}
++const entries = [];
++const walk = (dir, prefix) => {
++  for (const f of fs.readdirSync(dir)) {
++    if (f.startsWith('.')) continue;
++    const p = path.join(dir, f);
++    const st = fs.statSync(p);
++    if (st.isDirectory()) walk(p, prefix + f + '/');
++    else entries.push({ path: prefix + f, size: st.size, abs: p });
++  }
++};
++walk(root, '');
++const readRange = async (e, off, len) => {
++  const fd = fs.openSync(e.abs, 'r');
++  try {
++    const b = Buffer.alloc(len);
++    const n = fs.readSync(fd, b, 0, len, off);
++    return new Uint8Array(b.buffer, b.byteOffset, n);
++  } finally {
++    fs.closeSync(fd);
++  }
++};
++const exe = entries.find((e) => lowerAscii(e.path) === 'legobionicle.exe');
++const fp = await blkTablesFingerprint(entries, readRange);
++console.log(JSON.stringify({
++  exe_sha256: exe ? await sha256hex(fs.readFileSync(exe.abs)) : null,
++  blk_tables_sha256: fp.fingerprint,
++  blk_files: fp.blkFiles,
++  table_bytes: fp.tableBytes,
++}, null, 1));

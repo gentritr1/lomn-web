@@ -1,0 +1,187 @@
+timeout 600 cmake -S engine -B build/native -G Ninja -DCMAKE_BUILD_TYPE=Release && timeout 1800 cmake --build build/native
+-- Configuring done (0.1s)
+-- Generating done (0.0s)
+-- Build files have been written to: $W/chain/build/native
+[1/35] Building CXX object CMakeFiles/lomn_core.dir/src/fs/memory_fs.cpp.o
+[2/35] Building CXX object CMakeFiles/lomn_sage.dir/src/sage/blockchain.cpp.o
+[3/35] Building CXX object CMakeFiles/lomn_core.dir/src/fs/disk_fs.cpp.o
+[4/35] Building CXX object CMakeFiles/lomn_core.dir/src/fs/prefetch_fs.cpp.o
+[5/35] Linking CXX static library liblomn_core.a
+[6/35] Linking CXX static library liblomn_sage.a
+[7/35] Building CXX object CMakeFiles/lomn_area.dir/src/view/sage_frame.cpp.o
+[8/35] Building CXX object CMakeFiles/lomn_area.dir/src/view/synthetic.cpp.o
+[9/35] Building CXX object CMakeFiles/lomn_area.dir/src/view/prefetch.cpp.o
+[10/35] Building CXX object CMakeFiles/lomn_area.dir/src/view/area.cpp.o
+[11/35] Linking CXX static library liblomn_area.a
+[12/35] Building CXX object CMakeFiles/lomn_gpu_area_test.dir/tests/test_gpu_area.cpp.o
+[13/35] Building CXX object CMakeFiles/lomn_datacheck.dir/tools/lomn_datacheck.cpp.o
+[14/35] Building CXX object CMakeFiles/lomn_gpu_destroy_test.dir/tests/test_gpu_destroy.cpp.o
+[15/35] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_fs.cpp.o
+[16/35] Building CXX object CMakeFiles/lomn_view.dir/tools/lomn_view.cpp.o
+[17/35] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_sage_blockchain.cpp.o
+[18/35] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_rhi_destroy.cpp.o
+[19/35] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_sage_frame.cpp.o
+[20/35] Linking CXX executable lomn_native
+[21/35] Linking CXX executable lomn_datacheck
+[22/35] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_view_area.cpp.o
+[23/35] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_area_states.cpp.o
+[24/35] Linking CXX executable lomn_view
+[25/35] Linking CXX executable lomn_osi_dump
+[26/35] Linking CXX executable lomn_ffp_cases
+[27/35] Linking CXX executable lomn_gpu_test
+[28/35] Linking CXX executable lomn_gpu_mesh_test
+[29/35] Linking CXX executable lomn_gpu_area_test
+[30/35] Linking CXX executable lomn_osi_probe
+[31/35] Linking CXX executable lomn_gpu_ffp_test
+[32/35] Linking CXX executable lomn_slb_probe
+[33/35] Linking CXX executable lomn_gpu_destroy_test
+[34/35] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_prefetch_fs.cpp.o
+[35/35] Linking CXX executable lomn_tests
+ctest --test-dir build/native --output-on-failure --timeout 300
+Test project $W/chain/build/native
+      Start  1: determinism_null
+ 1/30 Test  #1: determinism_null .................   Passed    0.79 sec
+      Start  2: ffp_oracle
+ 2/30 Test  #2: ffp_oracle .......................   Passed    0.56 sec
+      Start  3: a7_null_calls
+ 3/30 Test  #3: a7_null_calls ....................   Passed    1.13 sec
+      Start  4: a9_state_log
+ 4/30 Test  #4: a9_state_log .....................   Passed    0.12 sec
+      Start  5: a9_oracle_synthetic
+ 5/30 Test  #5: a9_oracle_synthetic ..............   Passed    0.42 sec
+      Start  6: a9_oracle_real
+ 6/30 Test  #6: a9_oracle_real ...................   Passed    2.48 sec
+      Start  7: osi_all_methods
+ 7/30 Test  #7: osi_all_methods ..................   Passed    1.02 sec
+      Start  8: view_cli_dangling_flag
+ 8/30 Test  #8: view_cli_dangling_flag ...........   Passed    0.02 sec
+      Start  9: view_cli_missing_install
+ 9/30 Test  #9: view_cli_missing_install .........   Passed    0.02 sec
+      Start 10: view_cli_nonfinite
+10/30 Test #10: view_cli_nonfinite ...............   Passed    0.33 sec
+      Start 11: view_cli_modes
+11/30 Test #11: view_cli_modes ...................   Passed    0.09 sec
+      Start 12: view_cli_ints
+12/30 Test #12: view_cli_ints ....................   Passed    0.13 sec
+      Start 13: view_cli_stale_outputs
+13/30 Test #13: view_cli_stale_outputs ...........   Passed    0.09 sec
+      Start 14: view_cli_null_frames
+14/30 Test #14: view_cli_null_frames .............   Passed    0.05 sec
+      Start 15: view_cli_paths
+15/30 Test #15: view_cli_paths ...................   Passed    0.14 sec
+      Start 16: datacheck_no_tmpdir
+16/30 Test #16: datacheck_no_tmpdir ..............   Passed    0.37 sec
+      Start 17: view_cli_manifest_addressable
+17/30 Test #17: view_cli_manifest_addressable ....   Passed    0.07 sec
+      Start 18: view_cli_survey_empty
+18/30 Test #18: view_cli_survey_empty ............   Passed    0.03 sec
+      Start 19: view_cli_camera_json
+19/30 Test #19: view_cli_camera_json .............   Passed    0.29 sec
+      Start 20: cli_dangling_flag
+20/30 Test #20: cli_dangling_flag ................   Passed    0.02 sec
+      Start 21: gpu_triangle
+21/30 Test #21: gpu_triangle .....................   Passed    0.50 sec
+      Start 22: gpu_no_adapter
+22/30 Test #22: gpu_no_adapter ...................   Passed    0.03 sec
+      Start 23: a7_gpu_pixels
+23/30 Test #23: a7_gpu_pixels ....................   Passed    1.78 sec
+      Start 24: gpu_mesh
+24/30 Test #24: gpu_mesh .........................   Passed    0.43 sec
+      Start 25: gpu_ffp
+25/30 Test #25: gpu_ffp ..........................   Passed    0.40 sec
+      Start 26: gpu_destroy
+26/30 Test #26: gpu_destroy ......................   Passed    0.58 sec
+      Start 27: a7_gpu_no_adapter
+27/30 Test #27: a7_gpu_no_adapter ................   Passed    0.02 sec
+      Start 28: unit
+28/30 Test #28: unit .............................   Passed    0.83 sec
+      Start 29: osi_probe
+29/30 Test #29: osi_probe ........................   Passed    0.27 sec
+      Start 30: slb_probe
+30/30 Test #30: slb_probe ........................   Passed    0.22 sec
+
+100% tests passed, 0 tests failed out of 30
+
+Label Time Summary:
+gpu    =   3.74 sec*proc (7 tests)
+
+Total Test time (real) =  13.26 sec
+source .toolchain/emsdk/emsdk_env.sh >/dev/null 2>&1 && timeout 600 emcmake cmake -S engine -B build/wasm -G Ninja -DCMAKE_BUILD_TYPE=Release && timeout 1800 cmake --build build/wasm
+emcmake: cmake -S engine -B build/wasm -G Ninja -DCMAKE_BUILD_TYPE=Release <ws>/lomn-web/.toolchain/emsdk/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake' <ws>/lomn-web/.toolchain/emsdk/node/24.19.0_64bit/bin/node' in directory $W/chain
+-- Configuring done (0.8s)
+-- Generating done (0.0s)
+-- Build files have been written to: $W/chain/build/wasm
+[1/28] Building CXX object CMakeFiles/lomn_sage.dir/src/sage/blockchain.cpp.o
+[2/28] Building CXX object CMakeFiles/lomn_core.dir/src/fs/memory_fs.cpp.o
+[3/28] Building CXX object CMakeFiles/lomn_core.dir/src/fs/prefetch_fs.cpp.o
+[4/28] Linking CXX static library liblomn_core.a
+[5/28] Building CXX object CMakeFiles/lomn_area.dir/src/view/area.cpp.o
+[6/28] Linking CXX static library liblomn_sage.a
+[7/28] Building CXX object CMakeFiles/lomn_area.dir/src/view/sage_frame.cpp.o
+[8/28] Building CXX object CMakeFiles/lomn_area.dir/src/view/synthetic.cpp.o
+[9/28] Building CXX object CMakeFiles/lomn_area.dir/src/view/prefetch.cpp.o
+[10/28] Linking CXX static library liblomn_area.a
+[11/28] Building CXX object CMakeFiles/lomn_view.dir/src/fs/disk_fs.cpp.o
+[12/28] Building CXX object CMakeFiles/lomn_view.dir/tools/lomn_view.cpp.o
+[13/28] Building CXX object CMakeFiles/lomn_datacheck.dir/src/fs/disk_fs.cpp.o
+[14/28] Building CXX object CMakeFiles/lomn_datacheck.dir/tools/lomn_datacheck.cpp.o
+[15/28] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_fs.cpp.o
+[16/28] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_sage_blockchain.cpp.o
+[17/28] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_rhi_destroy.cpp.o
+[18/28] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_sage_frame.cpp.o
+[19/28] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_area_states.cpp.o
+[20/28] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_view_area.cpp.o
+[21/28] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_prefetch_fs.cpp.o
+[22/28] Linking CXX executable lomn_native.js
+[23/28] Linking CXX executable lomn_web.js
+[24/28] Linking CXX executable lomn_osi_probe.js
+[25/28] Linking CXX executable lomn_slb_probe.js
+[26/28] Linking CXX executable lomn_datacheck.js
+[27/28] Linking CXX executable lomn_view.js
+[28/28] Linking CXX executable lomn_tests.js
+source .toolchain/emsdk/emsdk_env.sh >/dev/null 2>&1 && ctest --test-dir build/wasm --output-on-failure --timeout 300
+Test project $W/chain/build/wasm
+    Start 1: determinism_null
+1/7 Test #1: determinism_null .................   Passed    0.34 sec
+    Start 2: a7_null_calls
+2/7 Test #2: a7_null_calls ....................   Passed    0.22 sec
+    Start 3: a9_state_log
+3/7 Test #3: a9_state_log .....................   Passed    0.33 sec
+    Start 4: view_cli_write_install_wasm
+4/7 Test #4: view_cli_write_install_wasm ......   Passed    0.07 sec
+    Start 5: unit
+5/7 Test #5: unit .............................   Passed    0.81 sec
+    Start 6: osi_probe
+6/7 Test #6: osi_probe ........................   Passed    0.21 sec
+    Start 7: slb_probe
+7/7 Test #7: slb_probe ........................   Passed    0.16 sec
+
+100% tests passed, 0 tests failed out of 7
+
+Total Test time (real) =   2.15 sec
+timeout 120 .venv/bin/python tools/harness/compare.py trace build/native/determinism/a/trace.jsonl build/wasm/determinism/a/trace.jsonl
+traces identical
+cmp build/native/determinism/a/calls.txt build/wasm/determinism/a/calls.txt
+cmp build/native/a7/a/calls.txt build/wasm/a7/a/calls.txt
+cmp build/native/a9/a/state.txt build/wasm/a9/a/state.txt
+cmp build/native/a9/a/calls.txt build/wasm/a9/a/calls.txt
+cmp build/native/a9/f2/state.txt build/wasm/a9/f2/state.txt
+rm -rf build/site && mkdir -p build/site && cp web/index.html build/wasm/lomn_web.js build/wasm/lomn_web.wasm build/site/
+cd web && timeout 60 node --test tests/serve_test.mjs
+✔ serves index.html for / and by name (35.284375ms)
+✔ sibling directory sharing the root prefix is not reachable (..%2f) (1.669125ms)
+✔ sibling directory is not reachable (%2e%2e%2f) (1.506833ms)
+✔ malformed percent escape answers 400 and the server keeps serving (4.646291ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 4
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 234.565125
+cd web && timeout 180 node tests/smoke.mjs ../build/site ../build/pw-profile
+adapter=apple/metal-3 frames=120 dt_samples=119 window_ms=1973 p50_dt_ms=16.70 expected_at_60hz=118
+pixels {"centre":[255,128,0,255],"corner":[0,0,64,255]}
+requests ["/index.html","/lomn_web.js","/lomn_web.wasm","/favicon.ico"]
+console_errors [] page_errors []

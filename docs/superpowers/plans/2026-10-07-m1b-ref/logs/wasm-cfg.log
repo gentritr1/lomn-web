@@ -1,0 +1,4 @@
+emcmake: cmake -S engine -B build/wasm -G Ninja -DCMAKE_BUILD_TYPE=Release <ws>/lomn-web/.toolchain/emsdk/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake' <ws>/lomn-web/.toolchain/emsdk/node/24.19.0_64bit/bin/node' in directory $R
+-- Configuring done (0.9s)
+-- Generating done (0.0s)
+-- Build files have been written to: $R/build/wasm

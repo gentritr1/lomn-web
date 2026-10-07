@@ -1,0 +1,40 @@
+start 17:52:33 loadavg { 110.66 68.60 43.79 }
+emcmake: cmake -S engine -B build/wasm -G Ninja -DCMAKE_BUILD_TYPE=Release <ws>/lomn-web/.toolchain/emsdk/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake' <ws>/lomn-web/.toolchain/emsdk/node/24.19.0_64bit/bin/node' in directory $W/mut
+builds ok 17:54:12
+[1] CAUGHT prefetch: containment rejects a read ending at the range end :: unit rc=1 (1 s): b8b750bad-scratch-2026-10-06-5e2f6d/<uuid>/scratchpad/ref4-work/mut/engine/tests/test_prefetch_fs.cpp:193: ERROR: CHECK( rounds >= 2 ) is NOT correct! | $TMP/...
+[2] CAUGHT prefetch: a hit does not stamp the touch generation :: unit rc=1 (1 s): 4881-8605-b50b189e7417/scratchpad/ref4-work/mut/engine/tests/test_prefetch_fs.cpp:208: ERROR: CHECK( p.is_resident(r.path, r.offset, r.length) ) is NOT correct! | $TMP/...
+[3] CAUGHT prefetch: release_untouched frees pinned (boot) ranges :: unit rc=1 (1 s): 400c-b044-1feb8b750bad-scratch-2026-10-06-5e2f6d/<uuid>/scratchpad/ref4-work/mut/engine/tests/test_prefetch_fs.cpp:171: ERROR: CHECK( p.pinned_bytes() == 100 ) is NOT correct! | $TMP/...
+[4] CAUGHT prefetch: misses are not deduplicated :: unit rc=1 (1 s): b8b750bad-scratch-2026-10-06-5e2f6d/<uuid>/scratchpad/ref4-work/mut/engine/tests/test_prefetch_fs.cpp:193: ERROR: CHECK( rounds >= 2 ) is NOT correct! | $TMP/...
+[5] CAUGHT prefetch: reserve accepts a range past the end of the file :: unit rc=1 (1 s): -400c-b044-1feb8b750bad-scratch-2026-10-06-5e2f6d/<uuid>/scratchpad/ref4-work/mut/engine/tests/test_prefetch_fs.cpp:114: ERROR: CHECK( p.pending_bytes() == 10 ) is NOT correct! | $TMP/...
+[6] CAUGHT prefetch: an empty read is a miss :: unit rc=1 (1 s): 10-06-5e2f6d/<uuid>/scratchpad/ref4-work/mut/engine/tests/test_prefetch_fs.cpp:95: ERROR: CHECK( p.read_range("root/a.bin", 1000, 0, out) == Error::None ) is NOT correct! | $TMP/...
+[7] CAUGHT rhi registry: a texture used by a live bind group may be destroyed :: unit rc=1 (1 s): [doctest] Status: FAILURE!
+[8] CAUGHT rhi null: destroy does not remove the object :: unit rc=1 (1 s): 2f6d/<uuid>/scratchpad/ref4-work/mut/engine/tests/test_rhi_destroy.cpp:218: ERROR: CHECK( d->live_objects() == counts(0, 0, 0, 0, 0) ) is NOT correct! | $TMP/...
+[9] CAUGHT rhi webgpu: destroy_bind_group leaves the registry entry :: gpu rc=1 (1 s): 
+[10] CAUGHT area: release destroys textures/samplers before the bind groups :: unit rc=1 (1 s): 5-b50b189e7417/scratchpad/ref4-work/mut/engine/tests/test_rhi_destroy.cpp:199: ERROR: CHECK( l.find("rejected") == std::string::npos ) is NOT correct! | $TMP/...
+[11] CAUGHT area: upload does not record created textures (release leaks them) :: unit rc=1 (1 s): 2f6d/<uuid>/scratchpad/ref4-work/mut/engine/tests/test_rhi_destroy.cpp:218: ERROR: CHECK( d->live_objects() == counts(0, 0, 0, 0, 0) ) is NOT correct! | $TMP/...
+[12] CAUGHT fly camera: forward moves backwards :: unit rc=1 (1 s): $W/mut/engine/tests/test_fly_camera.cpp:94: ERROR:
+[13] CAUGHT list_areas: the level blockfile is listed as an area :: unit rc=1 (1 s): $W/mut/engine/tests/test_prefetch_fs.cpp:221: FATA
+[14] CAUGHT js fingerprint: blockfiles not sorted :: node rc=1 (1 s): 
+[15] CAUGHT js fingerprint: table length without the 12-byte header :: node rc=1 (0 s): 
+[16] CAUGHT js classify: accepted list checked before the rejected list :: node rc=1 (0 s): 
+[17] CAUGHT js byo: DLLs are copied / indexed :: node rc=1 (0 s): 
+[18] CAUGHT js engine: negative range offsets accepted :: node rc=1 (0 s): 
+[19] CAUGHT js engine: chunk written one byte late :: browser rc=1 (69 s): FAIL OPFS path: copied, validated and showing levt/test :: area levt/test: area: blk: bad magic (want BLKF) | FAIL test run :: page.waitForFunction: Timeout 30000ms exceeded.
+[20] CAUGHT js byo: quota check always passes :: browser rc=1 (59 s): 
+[21] CAUGHT webgpu: the surface depth buffer is never attached :: browser rc=1 (54 s): 
+[22] CAUGHT main_web: area switch never releases the previous area's ranges :: browser rc=1 (57 s): 
+[23] CAUGHT C1 main_web: a lost device does not reach the page state :: browser rc=1 (70 s): FAIL C1: GPU process crash -> state error with the reason and a Reload button :: area-ready: levt/test; reload visible false; frames 105
+[24] CAUGHT C1 webgpu: the first uncaptured error is not forwarded :: gpu rc=1 (1 s): FAIL 6. the first uncaptured GPU error reaches the lost handler once
+[25] CAUGHT C2 classify: accepted exe + unknown tables hard-rejected again :: node rc=1 (0 s): 
+[26] CAUGHT C2 page: the soft-accept warning is not shown :: browser rc=1 (68 s): FAIL C2: accepted exe + unknown tables -> shown with a warning; the reason is in metrics :: area-ready; warning ""; metrics {"build":"synthetic-test","data":"unknown","warning":"Game data differs from the known build — rendering may differ (.blk table fingerprint 980c3068aa7a… is not in builds.json 
+[27] CAUGHT I1 webgpu: textures released but never destroyed (left to GC) :: browser rc=1 (54 s): 
+[28] CAUGHT I1 webgpu: Destroy not deferred inside an open frame :: gpu rc=1 (1 s): 
+[29] CAUGHT I2 main_web: expectation from the snapped p50 again (circular) :: browser rc=1 (57 s): 
+[30] CAUGHT I3 page: a moved remembered folder is not caught :: browser rc=1 (87 s): FAIL I3 moved folder (threw) :: page.waitForFunction: Timeout 30000ms exceeded. | FAIL no WebGPU errors or page exceptions :: {"gpu":[],"errors":["A requested file or directory could not be found at the time an operation was processed."]} | FAIL no page exceptions on any page
+[31] CAUGHT I4 page: no Content-Security-Policy :: browser rc=1 (55 s): 
+[32] CAUGHT I6 byo: the copy is never compared with its manifest :: browser rc=1 (56 s): 
+[33] CAUGHT M3 page: keys move the camera without canvas focus :: browser rc=1 (55 s): 
+[34] MISSED no-op control (comment only; must be MISSED)
+restored: native build rc=0, wasm build rc=0, lomn_tests rc=0
+mutations: 33 CAUGHT, 1 MISSED (the no-op control must be among the MISSED)
+rc=0 end 18:08:24 loadavg { 7.80 14.12 26.28 }

@@ -1,0 +1,55 @@
+[1/54] Building CXX object CMakeFiles/lomn_core.dir/src/fs/memory_fs.cpp.o
+[2/54] Building CXX object CMakeFiles/lomn_sage.dir/src/sage/blockfile.cpp.o
+[3/54] Building CXX object CMakeFiles/lomn_core.dir/src/rhi/null_device.cpp.o
+[4/54] Building CXX object CMakeFiles/lomn_core.dir/src/app/loop.cpp.o
+[5/54] Linking CXX static library liblomn_core.a
+[6/54] Building CXX object CMakeFiles/lomn_sage.dir/src/sage/blockchain.cpp.o
+[7/54] Building CXX object CMakeFiles/lomn_sage.dir/src/sage/slb.cpp.o
+[8/54] Building CXX object CMakeFiles/lomn_d3d.dir/src/view/math.cpp.o
+[9/54] Building CXX object CMakeFiles/lomn_sage.dir/src/sage/image.cpp.o
+[10/54] Building CXX object CMakeFiles/lomn_sage.dir/src/sage/xfile.cpp.o
+[11/54] Building CXX object CMakeFiles/lomn_d3d.dir/src/d3d/device8.cpp.o
+[12/54] Building CXX object CMakeFiles/lomn_sage.dir/src/sage/osi.cpp.o
+[13/54] Building CXX object CMakeFiles/lomn_d3d.dir/src/d3d/ffp.cpp.o
+[14/54] Building CXX object CMakeFiles/lomn_area.dir/src/view/mips.cpp.o
+[15/54] Linking CXX static library liblomn_sage.a
+[16/54] Linking CXX static library liblomn_d3d.a
+[17/54] Building CXX object CMakeFiles/lomn_area.dir/src/view/sage_frame.cpp.o
+[18/54] Building CXX object CMakeFiles/lomn_area.dir/src/view/synthetic.cpp.o
+[19/54] Building CXX object CMakeFiles/lomn_webgpu.dir/src/rhi/webgpu_device.cpp.o
+[20/54] Building CXX object CMakeFiles/lomn_area.dir/src/view/area.cpp.o
+[21/54] Building CXX object CMakeFiles/lomn_web.dir/src/app/main_web.cpp.o
+[22/54] Linking CXX static library liblomn_webgpu.a
+[23/54] Linking CXX static library liblomn_area.a
+[24/54] Building CXX object CMakeFiles/lomn_native.dir/src/app/main_native.cpp.o
+[25/54] Building CXX object CMakeFiles/lomn_view.dir/src/fs/disk_fs.cpp.o
+[26/54] Building CXX object CMakeFiles/lomn_view.dir/tools/lomn_view.cpp.o
+[27/54] Building CXX object CMakeFiles/lomn_datacheck.dir/src/fs/disk_fs.cpp.o
+[28/54] Building CXX object CMakeFiles/lomn_datacheck.dir/tools/lomn_datacheck.cpp.o
+[29/54] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_fs.cpp.o
+[30/54] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_rhi_null.cpp.o
+[31/54] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_loop.cpp.o
+[32/54] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_main.cpp.o
+[33/54] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_sage_blockchain.cpp.o
+[34/54] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_sage_blockfile.cpp.o
+[35/54] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_sage_slb.cpp.o
+[36/54] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_sage_xfile.cpp.o
+[37/54] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_sage_image.cpp.o
+[38/54] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_view_mips.cpp.o
+[39/54] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_rhi_mesh.cpp.o
+[40/54] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_d3d.cpp.o
+[41/54] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_sage_osi.cpp.o
+[42/54] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_area_states.cpp.o
+[43/54] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_view_area.cpp.o
+[44/54] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_sage_frame.cpp.o
+[45/54] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_json_escape.cpp.o
+[46/54] Building CXX object CMakeFiles/lomn_osi_probe.dir/tests/probe_osi.cpp.o
+[47/54] Building CXX object CMakeFiles/lomn_slb_probe.dir/tests/probe_slb.cpp.o
+[48/54] Linking CXX executable lomn_native.js
+[49/54] Linking CXX executable lomn_web.js
+[50/54] Linking CXX executable lomn_osi_probe.js
+[51/54] Linking CXX executable lomn_datacheck.js
+[52/54] Linking CXX executable lomn_view.js
+[53/54] Linking CXX executable lomn_tests.js
+[54/54] Linking CXX executable lomn_slb_probe.js
+rc=0

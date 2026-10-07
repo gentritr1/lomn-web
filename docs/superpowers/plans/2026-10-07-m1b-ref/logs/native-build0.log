@@ -1,0 +1,65 @@
+[1/64] Building CXX object CMakeFiles/lomn_core.dir/src/fs/memory_fs.cpp.o
+[2/64] Building CXX object CMakeFiles/lomn_core.dir/src/rhi/null_device.cpp.o
+[3/64] Building CXX object CMakeFiles/lomn_core.dir/src/app/loop.cpp.o
+[4/64] Building CXX object CMakeFiles/lomn_core.dir/src/fs/disk_fs.cpp.o
+[5/64] Building CXX object CMakeFiles/lomn_core.dir/third_party/stb_impl.cpp.o
+[6/64] Linking CXX static library liblomn_core.a
+[7/64] Building CXX object CMakeFiles/lomn_sage.dir/src/sage/blockchain.cpp.o
+[8/64] Building CXX object CMakeFiles/lomn_sage.dir/src/sage/blockfile.cpp.o
+[9/64] Building CXX object CMakeFiles/lomn_sage.dir/src/sage/slb.cpp.o
+[10/64] Building CXX object CMakeFiles/lomn_d3d.dir/src/view/math.cpp.o
+[11/64] Building CXX object CMakeFiles/lomn_sage.dir/src/sage/image.cpp.o
+[12/64] Building CXX object CMakeFiles/lomn_d3d.dir/src/d3d/device8.cpp.o
+[13/64] Building CXX object CMakeFiles/lomn_sage.dir/src/sage/osi.cpp.o
+[14/64] Building CXX object CMakeFiles/lomn_sage.dir/src/sage/xfile.cpp.o
+[15/64] Linking CXX static library liblomn_sage.a
+[16/64] Building CXX object CMakeFiles/lomn_d3d.dir/src/d3d/ffp.cpp.o
+[17/64] Linking CXX static library liblomn_d3d.a
+[18/64] Building CXX object CMakeFiles/lomn_area.dir/src/view/mips.cpp.o
+[19/64] Building CXX object CMakeFiles/lomn_area.dir/src/view/sage_frame.cpp.o
+[20/64] Building CXX object CMakeFiles/lomn_area.dir/src/view/synthetic.cpp.o
+[21/64] Building CXX object CMakeFiles/lomn_webgpu.dir/src/rhi/webgpu_device.cpp.o
+[22/64] Building CXX object CMakeFiles/lomn_area.dir/src/view/area.cpp.o
+[23/64] Linking CXX static library liblomn_webgpu.a
+[24/64] Linking CXX static library liblomn_area.a
+[25/64] Building CXX object CMakeFiles/lomn_native.dir/src/app/main_native.cpp.o
+[26/64] Building CXX object CMakeFiles/lomn_osi_dump.dir/tools/lomn_osi_dump.cpp.o
+[27/64] Building CXX object CMakeFiles/lomn_ffp_cases.dir/tests/ffp_cases.cpp.o
+[28/64] Building CXX object CMakeFiles/lomn_gpu_test.dir/tests/test_gpu.cpp.o
+[29/64] Building CXX object CMakeFiles/lomn_datacheck.dir/tools/lomn_datacheck.cpp.o
+[30/64] Building CXX object CMakeFiles/lomn_gpu_area_test.dir/tests/test_gpu_area.cpp.o
+[31/64] Building CXX object CMakeFiles/lomn_view.dir/tools/lomn_view.cpp.o
+[32/64] Building CXX object CMakeFiles/lomn_gpu_mesh_test.dir/tests/test_gpu_mesh.cpp.o
+[33/64] Building CXX object CMakeFiles/lomn_gpu_ffp_test.dir/tests/test_gpu_ffp.cpp.o
+[34/64] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_rhi_null.cpp.o
+[35/64] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_fs.cpp.o
+[36/64] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_loop.cpp.o
+[37/64] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_main.cpp.o
+[38/64] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_sage_blockchain.cpp.o
+[39/64] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_sage_blockfile.cpp.o
+[40/64] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_sage_slb.cpp.o
+[41/64] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_sage_image.cpp.o
+[42/64] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_sage_xfile.cpp.o
+[43/64] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_view_mips.cpp.o
+[44/64] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_rhi_mesh.cpp.o
+[45/64] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_d3d.cpp.o
+[46/64] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_sage_osi.cpp.o
+[47/64] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_sage_frame.cpp.o
+[48/64] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_area_states.cpp.o
+[49/64] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_json_escape.cpp.o
+[50/64] Linking CXX executable lomn_native
+[51/64] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_view_area.cpp.o
+[52/64] Linking CXX executable lomn_datacheck
+[53/64] Linking CXX executable lomn_ffp_cases
+[54/64] Linking CXX executable lomn_view
+[55/64] Linking CXX executable lomn_osi_dump
+[56/64] Building CXX object CMakeFiles/lomn_slb_probe.dir/tests/probe_slb.cpp.o
+[57/64] Linking CXX executable lomn_gpu_test
+[58/64] Linking CXX executable lomn_gpu_area_test
+[59/64] Linking CXX executable lomn_gpu_mesh_test
+[60/64] Linking CXX executable lomn_tests
+[61/64] Building CXX object CMakeFiles/lomn_osi_probe.dir/tests/probe_osi.cpp.o
+[62/64] Linking CXX executable lomn_slb_probe
+[63/64] Linking CXX executable lomn_gpu_ffp_test
+[64/64] Linking CXX executable lomn_osi_probe
+rc=0

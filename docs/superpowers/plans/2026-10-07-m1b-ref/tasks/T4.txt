@@ -1,0 +1,5 @@
+T4: free-fly camera
+  full     engine/include/lomn/view/fly_camera.h
+  full     engine/src/view/fly_camera.cpp
+  full     engine/tests/test_fly_camera.cpp
+  partial  engine/CMakeLists.txt  (+ fly_camera.cpp, test_fly_camera.cpp)

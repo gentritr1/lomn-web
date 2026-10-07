@@ -1,0 +1,8 @@
+T1: rhi: destroy_* (dependency rule; r2 I1: explicit Destroy, deferred to end_frame inside a frame), live_objects, surface depth + resize, r2 C1 set_lost_handler; null logs + Dawn probes 1-4 and 6
+  full     engine/include/lomn/rhi.h
+  full     engine/src/rhi/registry.h
+  full     engine/src/rhi/null_device.cpp
+  full     engine/src/rhi/webgpu_device.cpp
+  partial  engine/tests/test_rhi_destroy.cpp  (without the AreaRenderer::release cases (T2))
+  partial  engine/tests/test_gpu_destroy.cpp  (probes 1-4 and 6 (probe 5 = AreaRenderer, T2))
+  partial  engine/CMakeLists.txt  (lomn_tests += test_rhi_destroy.cpp; gpu_destroy ctest (no lomn_web r2 flags, no M6 ctest))

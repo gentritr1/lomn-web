@@ -1,0 +1,19 @@
+Test project $R/build/wasm
+    Start 1: determinism_null
+1/7 Test #1: determinism_null .................   Passed    0.27 sec
+    Start 2: a7_null_calls
+2/7 Test #2: a7_null_calls ....................   Passed    0.23 sec
+    Start 3: a9_state_log
+3/7 Test #3: a9_state_log .....................   Passed    0.33 sec
+    Start 4: view_cli_write_install_wasm
+4/7 Test #4: view_cli_write_install_wasm ......   Passed    0.08 sec
+    Start 5: unit
+5/7 Test #5: unit .............................   Passed    1.01 sec
+    Start 6: osi_probe
+6/7 Test #6: osi_probe ........................   Passed    0.21 sec
+    Start 7: slb_probe
+7/7 Test #7: slb_probe ........................   Passed    0.14 sec
+
+100% tests passed, 0 tests failed out of 7
+
+Total Test time (real) =   2.28 sec

@@ -1,0 +1,57 @@
+--- base/Makefile	2026-10-07 15:21:46
++++ ref/Makefile	2026-10-07 17:19:05
+@@ -5,7 +5,7 @@
+ VENV := .venv
+ PY := $(VENV)/bin/python
+ EMSDK_ENV := source .toolchain/emsdk/emsdk_env.sh >/dev/null 2>&1
+-.PHONY: setup check-data decomp worklist native wasm site test-tools test-native test-wasm test-web check perf datacheck datacheck-wasm fuzz-osi a9-sweep
++.PHONY: setup check-data decomp worklist native wasm site test-tools test-native test-wasm test-web check perf datacheck datacheck-wasm fuzz-osi a9-sweep a13-real manifest
+ 
+ setup: $(VENV)/.ok
+ 	timeout 3600 tools/toolchain.sh
+@@ -33,8 +33,9 @@
+ wasm:
+ 	$(EMSDK_ENV) && timeout 600 emcmake cmake -S engine -B build/wasm -G Ninja -DCMAKE_BUILD_TYPE=Release && timeout 1800 cmake --build build/wasm
+ 
++# M1b: index.html + web/app/*.js + the wasm build + builds.json, and asset-manifest.json (the network-discipline list).
+ site: wasm
+-	rm -rf build/site && mkdir -p build/site && cp web/index.html build/wasm/lomn_web.js build/wasm/lomn_web.wasm build/site/
++	timeout 120 node web/tools/build_site.mjs build/wasm build/site
+ 
+ test-tools: $(VENV)/.ok
+ 	$(EMSDK_ENV); timeout 1800 $(VENV)/bin/pytest -q -rs tools
+@@ -51,10 +52,24 @@
+ 	cmp build/native/a9/a/calls.txt build/wasm/a9/a/calls.txt
+ 	cmp build/native/a9/f2/state.txt build/wasm/a9/f2/state.txt
+ 
+-test-web: site
+-	cd web && timeout 60 node --test tests/serve_test.mjs
++# M1b: + the data-free BYO/viewer test on a synthetic install (needs the native lomn_view for the fixture and the
++# reference renders) and the fingerprint/JS unit tests.
++test-web: site native
++	cd web && timeout 60 node --test tests/serve_test.mjs tests/unit_test.mjs tests/unit_r2_test.mjs
+ 	cd web && timeout 180 node tests/smoke.mjs ../build/site ../build/pw-profile
++	cd web && timeout 600 node tests/byo_synthetic.mjs ../build/wasm ../build/byo-syn ../build/native/lomn_view
+ 
++# M1b A13 on the real install (LOMN_DATA; skipped otherwise): OPFS copy of the install into a throwaway Playwright
++# profile (removed afterwards), lev1/vllg, lev2/ghut, lev4/crss vs native renders, switches, revisit, handle path, fps.
++a13-real: site native
++	@if [ -z "$(LOMN_DATA)" ]; then echo "a13-real SKIPPED (no LOMN_DATA)"; exit 0; fi
++	cd web && timeout 1800 node tests/a13_real.mjs ../build/site ../build/a13-real ../build/native/lomn_view ../build/wasm
++
++# M1b: the per-area prefetch manifest of the install (build/m1b/manifest.json; derived data: never committed).
++manifest: native
++	@if [ -z "$(LOMN_DATA)" ]; then echo "manifest: LOMN_DATA is not set"; exit 2; fi
++	mkdir -p build/m1b && timeout 300 build/native/lomn_view --install "$(LOMN_DATA)/install" --manifest 1 --out build/m1b/manifest.json
++
+ perf: native $(VENV)/.ok
+ 	timeout 300 build/native/lomn_native --backend webgpu --frames 600 --out build/perf
+ 	timeout 120 $(PY) tools/harness/perf_history.py check build/perf/metrics.json --scene m0-triangle
+@@ -94,6 +109,6 @@
+ 	$(EMSDK_ENV) && timeout 1800 node build/fuzz/fuzz_osi.js $(FUZZ_OSI_N_WASM) 3
+ 
+ check: test-tools test-native test-wasm test-web
+-	@if [ -n "$(LOMN_DATA)" ]; then $(MAKE) datacheck datacheck-wasm; else echo "datacheck SKIPPED (no LOMN_DATA)"; fi
++	@if [ -n "$(LOMN_DATA)" ]; then $(MAKE) datacheck datacheck-wasm a13-real; else echo "datacheck, a13-real SKIPPED (no LOMN_DATA)"; fi
+ 	@if [ -d gen/decomp ]; then $(MAKE) worklist; else echo "worklist SKIPPED (run make decomp first)"; fi
+ 	@echo "make check: all layers green"
