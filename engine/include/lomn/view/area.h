@@ -144,6 +144,8 @@ bool load_area(const fs::FileSystem& fs, std::string_view level, std::string_vie
 
 // Camera (spec M1 §2.3). Only the eye position comes from data (first POS record with flag 0x1000); orientation, FOV
 // and clip planes are a DOCUMENTED FALLBACK until M1a-3 mines the Base.osi camera literals. Defaults below.
+// lomn_view's metrics JSON flags it: camera.fallback is true while ANY of eye/yaw/pitch/fov/near/far is a fallback,
+// with per-field eye_source, yaw_source, pitch_source, fov_source, clip_source ("cli" or "fallback"; M1a-3 adds "osi").
 struct CameraSettings {
   float fov_deg = 60.0f;      // vertical, D3DXMatrixPerspectiveFovRH fovy
   float near_z = 0.5f;

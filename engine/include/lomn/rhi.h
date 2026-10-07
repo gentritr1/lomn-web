@@ -133,8 +133,12 @@ class Device {
   virtual std::string adapter() const = 0;   // adapter description, or "none"
   virtual TextureId create_render_target(uint32_t width, uint32_t height) = 0;  // RGBA8, readable
   // Capacity = bytes rounded up to kUniformAlign. Over 256 MiB (M1a-2): the id is returned but has no storage (counted as
-  // a rejection); every later write, bind group or draw using it is rejected.
+  // a rejection); every later write, bind group or draw using it is rejected. A 0-byte uniform buffer has no storage
+  // either, exactly like one over kMaxBufferBytes: every write, bind or draw using it is rejected.
   virtual BufferId create_uniform_buffer(uint32_t bytes) = 0;
+  // Within one frame a uniform range may be written at most once: queue writes land before the frame's command buffer
+  // executes (WebGPU), so rewriting the same range between two draws feeds the last value to both. Give each draw its
+  // own dynamic offset.
   virtual void write_buffer(BufferId buffer, uint32_t offset, const void* data, uint32_t size) = 0;
   virtual PipelineId create_pipeline(const PipelineDesc& desc) = 0;
   // target: a render target, or 0 = the presentation surface. An unknown id, a sampled texture, or 0 on a headless
@@ -163,6 +167,9 @@ class Device {
   // Group 0 of a mesh pipeline (see BindGroupDesc). 0 if invalid.
   virtual BindGroupId create_bind_group(const BindGroupDesc&) { return 0; }
   // Indexed triangle-list draw inside begin_frame/end_frame. Invalid draws are rejected and not counted.
+  // Within one frame a uniform range may be written at most once: queue writes land before the frame's command buffer
+  // executes (WebGPU), so rewriting the same range between two draws feeds the last value to both. Give each draw its
+  // own dynamic offset.
   virtual void draw_indexed(const DrawIndexedDesc&) {}
 };
 

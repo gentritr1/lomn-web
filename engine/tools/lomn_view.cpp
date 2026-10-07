@@ -160,6 +160,12 @@ float normalise_yaw(float deg) {
 // Removes a stale output file; a missing file is fine. False (with errno) when it exists but cannot be removed (e.g. a
 // directory), which the caller reports as a write failure.
 bool remove_stale(const std::string& path) { return ::unlink(path.c_str()) == 0 || errno == ENOENT; }
+// 0 on success, else the exit code (4) after reporting which output could not be removed.
+int remove_stale_outputs(const std::string& out) {
+  for (const std::string& p : {out, out + ".json"})
+    if (!remove_stale(p)) return std::fprintf(stderr, "cannot remove stale output %s: %s\n", p.c_str(), std::strerror(errno)), 4;
+  return 0;
+}
 // Bytes outside printable ASCII (e.g. a 4CC model id from the file) as \xHH, so the JSON stays ASCII.
 std::string ascii(const std::string& s) {
   std::string o;
@@ -354,9 +360,6 @@ int main(int argc, char** argv) {
   auto has = [&](const char* k) { return a.count(k) != 0; };
   const std::string out = has("--out") ? a["--out"] : "";
   if (out.empty()) return usage("--out is required");
-  // Up front, before any validation: whatever happens next, no stale output from an earlier run survives.
-  for (const std::string& p : {out, out + ".json"})
-    if (!remove_stale(p)) return std::fprintf(stderr, "cannot remove stale output %s: %s\n", p.c_str(), std::strerror(errno)), 4;
   if (has("--synthetic") && a["--synthetic"] != "1") return usage("--synthetic takes exactly 1");
   if (has("--survey") && a["--survey"] != "1") return usage("--survey takes exactly 1");
   const bool synthetic = has("--synthetic");
@@ -368,6 +371,7 @@ int main(int argc, char** argv) {
     return usage("--survey needs the native disk file system");
 #else
     if (!has("--install")) return usage("--survey needs --install");
+    if (int rc = remove_stale_outputs(out)) return rc;
     return survey(a["--install"], out);
 #endif
   }
@@ -379,6 +383,9 @@ int main(int argc, char** argv) {
   uint32_t width = 1280, height = 720, frames = 1;
   if (synthetic) width = height = 64;
   view::CameraSettings cs = synthetic ? view::synthetic_camera() : view::CameraSettings();
+  // Per-field camera sources (spec M1 §2.3): "cli" when the flag was given, else the documented fallback (the synthetic
+  // scene's own values count as fallback too: they are not data). M1a-3 adds "osi". clip = near AND far both given.
+  const bool pitch_cli = has("--pitch"), fov_cli = has("--fov"), clip_cli = has("--near") && has("--far");
   view::RenderOptions ro;
   view::AreaOptions ao;
   if (has("--width") && !parse_u32(a["--width"], 1, rhi::kMaxRenderTargetSize, width)) return usage("bad --width");
@@ -423,6 +430,10 @@ int main(int argc, char** argv) {
       else return usage(("bad --routes entry " + r).c_str());
     }
   }
+
+  // Arguments are valid: only now drop whatever an earlier run left, so a usage error (exit 2) leaves existing outputs
+  // untouched while any later failure (install, device, load, render) can never leave a stale one behind.
+  if (int rc = remove_stale_outputs(out)) return rc;
 
   // File system: the synthetic scene in memory, or the install on disk (case-insensitive VFS).
   std::unique_ptr<fs::FileSystem> fsp;
@@ -513,6 +524,11 @@ int main(int argc, char** argv) {
   std::vector<double> sorted = frame_ms;
   std::sort(sorted.begin(), sorted.end());
   const double p50 = sorted[sorted.size() / 2];
+  const char* const pitch_src = pitch_cli ? "cli" : "fallback";
+  const char* const fov_src = fov_cli ? "cli" : "fallback";
+  const char* const clip_src = clip_cli ? "cli" : "fallback";
+  const bool camera_fallback = cam.eye_source == "bounds_centre" || cam.eye_source == "origin" ||
+                               (cam.yaw_source != "cli") || !pitch_cli || !fov_cli || !clip_cli;
   std::ofstream m(out + ".json");
   m << "{\n\"tool\":\"lomn_view\",\"level\":" << js(data.level) << ",\"area\":" << js(data.area) << ",\"synthetic\":"
     << (synthetic ? "true" : "false") << ",\n\"backend\":" << js(dev->backend()) << ",\"adapter\":" << js(dev->adapter())
@@ -527,12 +543,15 @@ int main(int argc, char** argv) {
     << ",\n\"draws_last_frame\":" << fstats.draws << ",\"indices_last_frame\":" << fstats.indices << ",\"pipelines\":" << fstats.pipelines_total
     << ",\"gpu_textures\":" << renderer.textures_created() << ",\"texture_bytes_uploaded\":" << renderer.uploaded_texture_bytes() << ",\n"
     << area_counts_json(data) << ",\n\"model_ids\":" << models_json(data)
-    // fallback: the eye is neither the POS start (data) nor --eye (user): the bounds centre or the origin.
-    << ",\n\"camera\":{\"fallback\":" << (cam.eye_source == "bounds_centre" || cam.eye_source == "origin" ? "true" : "false")
+    // fallback: true while ANY of eye/yaw/pitch/fov/near/far is a documented fallback. The POS start is data (not a
+    // fallback); a scene-set or --yaw is "cli"; the per-field *_source keys say which.
+    << ",\n\"camera\":{\"fallback\":" << (camera_fallback ? "true" : "false")
     << ",\"eye\":" << vec3(cam.eye) << ",\"at\":" << vec3(cam.at)
     << ",\"eye_source\":" << js(cam.eye_source) << ",\"yaw_deg\":" << num(cam.yaw_deg) << ",\"yaw_source\":" << js(cam.yaw_source)
-    << ",\"pitch_deg\":" << num(cam.pitch_deg) << ",\"fov_deg\":" << num(cam.fov_deg) << ",\"near\":" << num(cam.near_z) << ",\"far\":"
-    << num(cam.far_z) << ",\"aspect\":" << num(cam.aspect) << "},\n\"render\":{\"vertex_colors\":" << (ro.vertex_colors ? "true" : "false")
+    << ",\"pitch_deg\":" << num(cam.pitch_deg) << ",\"pitch_source\":" << js(pitch_src)
+    << ",\"fov_deg\":" << num(cam.fov_deg) << ",\"fov_source\":" << js(fov_src) << ",\"near\":" << num(cam.near_z) << ",\"far\":"
+    << num(cam.far_z) << ",\"clip_source\":" << js(clip_src) << ",\"aspect\":" << num(cam.aspect)
+    << "},\n\"render\":{\"vertex_colors\":" << (ro.vertex_colors ? "true" : "false")
     << ",\"alpha_ref\":" << num(ro.alpha_ref) << "},\n\"warnings_dropped\":" << data.warnings_dropped
     << ",\"warnings\":" << warnings_json(data.warnings) << "\n}\n";
   m.close();
