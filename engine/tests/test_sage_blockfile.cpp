@@ -261,6 +261,36 @@ TEST_CASE("blockfile: an entry larger than kMaxEntrySize is refused before any a
   }
 }
 
+TEST_CASE("blockfile: a failed open leaves the object empty, not partially filled") {
+  BlockFile bf = open_ok(make_blk({stored("a.dds", "1")}));
+  REQUIRE(bf.find("a.dds") == 0);
+  Bytes b;  // entry 0 is fine, entry 1 is an unterminated name whose run exceeds the cap
+  putstr(b, "BLKF");
+  put32(b, 1);
+  put32(b, 12);
+  b.resize(12 + 12 * 56, 'A');
+  std::memset(b.data() + 12, 0, 40);
+  std::memcpy(b.data() + 12, "b.dds", 5);
+  std::string err;
+  CHECK_FALSE(bf.open_bytes(std::move(b), &err));
+  CHECK_FALSE(bf.is_open());
+  CHECK(bf.entries().empty());
+  CHECK(bf.find("b.dds") == -1);
+  CHECK(bf.find("a.dds") == -1);
+}
+
+TEST_CASE("blockfile: a compressed entry's stored_size is capped too") {
+  Bytes c = make_blk({stored("a", "12345678")});
+  set32(c, 12 + 48, 3);                                          // compressed
+  set32(c, 12 + 40, static_cast<uint32_t>(kMaxEntrySize + 1));   // huge stored_size, small full_size
+  set32(c, 12 + 44, 8);
+  BlockFile bf = open_ok(c);
+  std::vector<uint8_t> out(2, 7);
+  std::string err;
+  CHECK_FALSE(bf.read(0, out, &err));
+  CHECK(err.find("entry too large") != std::string::npos);
+}
+
 TEST_CASE("lzss: hand-built streams decode per SrDecodeLZSS") {
   std::vector<uint8_t> out;
   std::string err;

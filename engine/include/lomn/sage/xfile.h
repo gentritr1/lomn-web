@@ -20,6 +20,11 @@ constexpr int kXMaxDepth = 64;
 // Cap on data objects per file (the parser keeps an arena entry per object). Measured over all 2,653 .x entries of
 // the Beta install: at most 5,489 objects (vllg.blk main1.x). 16 x 5,489 = 87,824, rounded up to a power of two.
 constexpr uint32_t kXMaxObjects = 131072;
+// Caps on what a MeshMaterialList may amplify (each reference copies a material, texture name included, so memory
+// is references x name length). Measured over the same 2,653 .x entries: at most 3,110 materials per mesh and a
+// longest TextureFilename of 36 bytes. 16 x 3,110 = 49,760 -> 65,536; 16 x 36 = 576 (> the 260-byte path limit).
+constexpr uint32_t kXMaxMaterials = 65536;
+constexpr size_t kXMaxTextureName = 576;
 
 struct XMaterial {
   float diffuse[4] = {};   // faceColor RGBA

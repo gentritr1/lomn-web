@@ -250,6 +250,7 @@ bool decode_mesh(const std::vector<Obj>& objs, const Obj& m, XMesh& out, std::st
     const auto& ci = ml->ints;
     if (ci.size() < 2) return fail(err, "x: MeshMaterialList header truncated");
     uint32_t nmat = ci[0], nfi = ci[1];
+    if (nmat > kXMaxMaterials) return fail(err, "x: too many materials");
     if (nfi > ci.size() - 2) return fail(err, "x: MeshMaterialList face indices truncated");
     if (nf > 0 && nfi == 0) return fail(err, "x: MeshMaterialList has no face indices");
     for (uint32_t f = 0; f < nf; ++f) {
@@ -285,6 +286,7 @@ bool decode_mesh(const std::vector<Obj>& objs, const Obj& m, XMesh& out, std::st
       std::copy(mo->floats.begin() + 8, mo->floats.begin() + 11, mat.emissive);
       if (const Obj* tf = last_child(objs, *mo, "TextureFilename")) {
         if (!tf->strings.empty()) {
+          if (tf->strings.front().size() > kXMaxTextureName) return fail(err, "x: texture name too long");
           mat.has_texture = true;
           mat.texture = tf->strings.front();
         }

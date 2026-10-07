@@ -100,7 +100,8 @@ bool BlockFile::open(uint64_t file_size, RangeReader reader, std::string* err) {
   std::vector<uint8_t> table;
   uint64_t table_bytes = static_cast<uint64_t>(count) * kBlockEntrySize;
   if (!reader(kBlockHeaderSize, table_bytes, table) || table.size() != table_bytes) return fail(err, "blk: table read failed");
-  entries_.reserve(count);
+  std::vector<BlockEntry> entries;  // assigned to entries_ only when the whole table is good
+  entries.reserve(count);
   for (uint32_t i = 0; i < count; ++i) {
     const uint8_t* e = table.data() + static_cast<size_t>(i) * kBlockEntrySize;
     BlockEntry be;
@@ -115,8 +116,9 @@ bool BlockFile::open(uint64_t file_size, RangeReader reader, std::string* err) {
     be.full_size = le32(e + 44);
     be.flags = le32(e + 48);
     be.offset = le32(e + 52);
-    entries_.push_back(std::move(be));
+    entries.push_back(std::move(be));
   }
+  entries_ = std::move(entries);
   version_ = version;
   file_size_ = file_size;
   reader_ = std::move(reader);
@@ -162,8 +164,9 @@ bool BlockFile::read(size_t index, std::vector<uint8_t>& out, std::string* err) 
   if (!open_) return fail(err, "blk: not open");
   if (index >= entries_.size()) return fail(err, "blk: entry index out of range");
   const BlockEntry& e = entries_[index];
-  if (e.full_size > kMaxEntrySize) return fail(err, "blk: entry too large");
   bool compressed = (e.flags & 1) != 0;
+  // stored_size is only meaningful (and only read) for compressed entries; a stored one never uses it.
+  if (e.full_size > kMaxEntrySize || (compressed && e.stored_size > kMaxEntrySize)) return fail(err, "blk: entry too large");
   uint64_t span = compressed ? e.stored_size : e.full_size;
   if (!in_range(file_size_, e.offset, span)) return fail(err, "blk: entry '" + e.name + "' offset+size outside the file");
   if (compressed && static_cast<uint64_t>(e.full_size) > static_cast<uint64_t>(e.stored_size) * kLzssMaxRatio)

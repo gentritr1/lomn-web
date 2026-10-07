@@ -316,3 +316,49 @@ TEST_CASE("x: the object arena is capped at kXMaxObjects") {
     if (!ok) CHECK(err.find("too many objects") != std::string::npos);
   }
 }
+
+namespace {
+
+// Material "M" with one TextureFilename of `len` bytes, and a MeshMaterialList of `refs` references to it.
+Bytes tex_refs(uint32_t refs, size_t len, uint32_t nmat) {
+  X x;
+  x.obj("Mesh").ints({3}).floats({0, 0, 0, 1, 0, 0, 1, 1, 0}).ints({1, 3, 0, 1, 2});
+  x.name("Material").name("M").open().floats({1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0});
+  x.obj("TextureFilename").str(std::string(len, 't')).close();
+  x.close();
+  x.obj("MeshMaterialList").ints({nmat, 1, 0});
+  for (uint32_t i = 0; i < refs; ++i) x.ref("M");
+  x.close();
+  x.close();
+  return x.b;
+}
+
+}  // namespace
+
+TEST_CASE("x: texture name x reference amplification is capped (both caps)") {
+  XFile xf;
+  std::string err;
+  {  // 35000 refs of a 70 KB name: 2.4 GB of copies before the caps (wasm32 aborted at a 460 KB file)
+    Bytes b = tex_refs(35000, 70000, 35000);
+    auto t0 = std::chrono::steady_clock::now();
+    CHECK_FALSE(parse_x(b.data(), b.size(), xf, &err));
+    CHECK(err.find("texture name too long") != std::string::npos);
+    CHECK(seconds_since(t0) < 1.0);
+  }
+  {  // texture name boundary: exactly the cap passes, +1 fails
+    Bytes ok = tex_refs(1, kXMaxTextureName, 1);
+    REQUIRE(parse_x(ok.data(), ok.size(), xf, &err));
+    CHECK(xf.mesh.materials[0].texture.size() == kXMaxTextureName);
+    Bytes bad = tex_refs(1, kXMaxTextureName + 1, 1);
+    CHECK_FALSE(parse_x(bad.data(), bad.size(), xf, &err));
+    CHECK(err.find("texture name too long") != std::string::npos);
+  }
+  {  // material count boundary: nMaterials == cap (with that many references) passes, +1 fails
+    Bytes ok = many_refs(kXMaxMaterials, kXMaxMaterials);
+    REQUIRE(parse_x(ok.data(), ok.size(), xf, &err));
+    CHECK(xf.mesh.materials.size() == kXMaxMaterials);
+    Bytes bad = many_refs(1, kXMaxMaterials + 1);
+    CHECK_FALSE(parse_x(bad.data(), bad.size(), xf, &err));
+    CHECK(err.find("too many materials") != std::string::npos);
+  }
+}
