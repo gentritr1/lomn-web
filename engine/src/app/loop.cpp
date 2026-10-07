@@ -109,7 +109,7 @@ bool run_deterministic(rhi::Device& dev, const LoopOptions& opts, std::vector<Fr
   }
   std::ofstream m(fs::path(opts.out_dir) / "metrics.json");
   m << "{\n \"frames\": " << frame_ms.size() << ",\n \"expected_frames\": " << opts.frames
-    << ",\n \"backend\": \"" << json_escape(dev.backend()) << "\",\n \"adapter\": \"" << dev.adapter()
+    << ",\n \"backend\": \"" << json_escape(dev.backend()) << "\",\n \"adapter\": \"" << json_escape(dev.adapter())
     << "\",\n \"wall_ms\": " << wall << ",\n \"frame_ms_p50\": " << percentile(frame_ms, 0.5)
     << ",\n \"frame_ms_p95\": " << percentile(frame_ms, 0.95) << ",\n \"draws_per_frame\": "
     << (opts.frames ? double(draws) / opts.frames : 0.0) << ",\n \"pipelines\": " << dev.last_frame_stats().pipelines_total
