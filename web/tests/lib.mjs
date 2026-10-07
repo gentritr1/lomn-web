@@ -12,16 +12,21 @@ export async function launch(profileDir) {
   });
 }
 
-// Console errors/warnings, page exceptions and every request URL the page makes (any origin).
+// Console errors/warnings, page exceptions and every request the page makes (any origin): URL, method and request-body bytes.
 export function watch(page) {
-  const w = { console: [], errors: [], urls: [] };
+  const w = { console: [], errors: [], urls: [], reqs: [] };
   page.on('console', (m) => {
     if (!['error', 'warning'].includes(m.type())) return;
     if (m.location().url.endsWith('/favicon.ico')) return;  // the test server answers 404 for the favicon
     w.console.push(`${m.type()}: ${m.text()}`);
   });
   page.on('pageerror', (e) => w.errors.push(e.message));
-  page.on('request', (r) => w.urls.push(r.url()));
+  page.on('request', (r) => {
+    w.urls.push(r.url());
+    let body = 0;
+    try { body = r.postDataBuffer()?.length ?? 0; } catch { /* no body */ }
+    w.reqs.push({ url: r.url(), method: r.method(), bytes: body });
+  });
   return w;
 }
 
@@ -100,7 +105,9 @@ export function diffRgb(a, b) {
 }
 
 // Network discipline (M1b 1.7): every response since `from` is a built asset (asset-manifest.json lists them), every
-// request URL is on the test server's origin, and the bytes downloaded are at most the site's size.
+// request URL is on the test server's origin, and the bytes downloaded are at most the site's size. Review fix 3: nothing
+// is uploaded: every request is a GET or HEAD with no body, seen by the browser (method, postData) AND by the server
+// (method, bytes read), so an upload to a path that is in the manifest fails too ("nothing is uploaded" is a product promise).
 export function networkCheck(srv, site, watcher, fromResponse = 0, fromUrl = 0) {
   const manifest = JSON.parse(fs.readFileSync(path.join(site, 'asset-manifest.json'), 'utf8'));
   const allowed = new Set(manifest.files.map((f) => '/' + f.path).concat(['/', '/asset-manifest.json', '/favicon.ico']));
@@ -110,5 +117,10 @@ export function networkCheck(srv, site, watcher, fromResponse = 0, fromUrl = 0) 
   const origin = new URL(srv.url).origin;
   const foreignUrls = watcher.urls.slice(fromUrl).filter((u) => !u.startsWith(origin + '/') && !u.startsWith('blob:') && !u.startsWith('data:'));
   const bytes = resp.reduce((n, r) => n + r.bytes, 0);
-  return { ok: !foreignPaths.length && !foreignUrls.length && bytes <= buildBytes, foreignPaths, foreignUrls, bytes, buildBytes, responses: resp.length };
+  const isUpload = (x) => !['GET', 'HEAD'].includes(x.method) || x.bytes > 0;
+  const uploads = [
+    ...watcher.reqs.slice(fromUrl).filter(isUpload).map((x) => ({ side: 'browser', method: x.method, url: x.url, bytes: x.bytes })),
+    ...resp.filter((r) => isUpload({ method: r.method, bytes: r.req_bytes })).map((r) => ({ side: 'server', method: r.method, url: r.path, bytes: r.req_bytes })),
+  ];
+  return { ok: !foreignPaths.length && !foreignUrls.length && !uploads.length && bytes <= buildBytes, foreignPaths, foreignUrls, uploads, bytes, buildBytes, responses: resp.length };
 }

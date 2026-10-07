@@ -155,14 +155,36 @@ const canvasPng = async (page, name) => {
   return decodePng(png);
 };
 const pageWatchers = [];
-const open = async (url, init) => {
+// Review fix 2: every unspun page that showed an area is checked, just before it closes, against the display rate measured
+// on that same page: the engine's DROPPING flag must be false and must agree with fps < 0.95 x display_hz. Pages that resize,
+// crash or spin on purpose opt out ({drop: false}; the spin pages are recognised by their URL / init script).
+const dropSamples = [];
+const open = async (url, init, { drop = true } = {}) => {
   const page = await ctx.newPage();
   if (init) await page.addInitScript(typeof init === 'string' ? { content: init } : init);
   const w = watch(page);
   pageWatchers.push(w);
   const r0 = srv.responses.length;
+  const spun = /debug_spin/.test(url) || (typeof init === 'string' && /spin/.test(init));
+  if (drop && !spun) {
+    const close = page.close.bind(page);
+    page.close = async (...args) => {
+      try {
+        await waitFrames(page, 40, 15000);  // >= 30 dt samples in the window
+        const m = await page.evaluate(() => (window.__lomn?.state === 'area-ready' ? window.__lomn.metrics?.fps ?? null : null));
+        if (m && m.display_hz > 0 && m.dt_samples >= 30) dropSamples.push({ url: url.replace(srv.url, ''), dropping: m.dropping, fps: m.fps, hz: m.display_hz, snapped: m.display_snapped });
+      } catch { /* page already gone or not showing an area: nothing to sample */ }
+      return close(...args);
+    };
+  }
   await page.goto(url, { timeout: 30000 });
   return { page, w, r0 };
+};
+// Waits for a condition on the node side (a deadline, never a fixed sleep).
+const until = async (cond, ms = 10000) => {
+  const t0 = Date.now();
+  while (!cond() && Date.now() - t0 < ms) await new Promise((r) => setTimeout(r, 20));
+  return cond();
 };
 const netOk = (p, label) => {
   const n = networkCheck(srv, site, p.w, p.r0, 0);
@@ -363,6 +385,26 @@ try {
     check(!n.ok && n.foreignPaths.includes('/not-in-manifest.bin') && foreignFlagged,
           'network positive control: a non-manifest path and a foreign origin are flagged', `foreign paths ${n.foreignPaths}, urls ${n.foreignUrls}, CSP-blocked ${blocked}`);
     check(blocked.some((u) => u.includes('127.0.0.1:9')), 'I4: the CSP blocks the foreign-origin request itself', `blocked ${JSON.stringify(blocked)}`);
+    // Review fix 3: an upload to a path that IS in the manifest (the reviewer's probe: POST bytes to builds.json) is flagged
+    // by method and request-body size. Control: the same path fetched with GET is clean.
+    await section('upload probes', async () => {
+      const probe = async (fn, arg) => {
+        const r1 = srv.responses.length, u1 = p.w.urls.length;
+        const wait = arg === 'beacon' ? p.page.waitForRequest((q) => q.method() === 'POST', { timeout: 10000 }) : Promise.resolve();
+        await p.page.evaluate(fn, arg);
+        await wait;
+        await until(() => srv.responses.length > r1);
+        return networkCheck(srv, site, p.w, r1, u1);
+      };
+      const get = await probe(async () => { await (await fetch('/builds.json')).arrayBuffer(); });
+      check(get.ok && (get.uploads ?? []).length === 0, 'upload probe control: GET of /builds.json is clean', `${get.responses} responses`);
+      const post = await probe(async () => { await (await fetch('/builds.json', { method: 'POST', body: new Uint8Array(4096).fill(7) })).arrayBuffer(); });
+      check(!post.ok && post.foreignPaths.length === 0 && post.foreignUrls.length === 0 && (post.uploads ?? []).some((u) => u.method === 'POST' && u.bytes === 4096),
+            'upload positive control: POSTing 4096 bytes to /builds.json (a manifest path) fails the network check', JSON.stringify(post.uploads ?? 'no upload record'));
+      const beacon = await probe((kind) => navigator.sendBeacon('/builds.json', new Blob([new Uint8Array(512)])), 'beacon');
+      check(!beacon.ok && (beacon.uploads ?? []).some((u) => u.method === 'POST' && u.bytes === 512),
+            'upload positive control: navigator.sendBeacon to a manifest path fails the network check', JSON.stringify(beacon.uploads ?? 'no upload record'));
+    });
     // Leak-detector positive control: one deliberately leaked texture changes the per-area live-object key.
     const before = (await p.page.evaluate(() => window.__lomn.metrics)).live_objects;
     await p.page.evaluate(() => window.__lomn.engine.M._lomn_debug_leak_texture());
@@ -397,7 +439,7 @@ try {
   }
   // G. HUD + metrics reconciliation, free-fly camera, resize.
   {
-    const p = await open(base + '?hud=1&area=levt/test');
+    const p = await open(base + '?hud=1&area=levt/test', undefined, { drop: false });  // resizes below
     await waitState(p.page, ['area-ready'], 60000);
     await waitFrames(p.page, 120);
     const m = await p.page.evaluate(() => window.__lomn.metrics);
@@ -405,6 +447,8 @@ try {
     const f = m.fps;
     check(f.dt_samples === f.frames_in_window - 1 && f.dt_samples >= 119, 'HUD reconciliation: dt samples == frames in window - 1',
           `${f.frames_in_window} frames, ${f.dt_samples} dt samples, window ${f.window_ms} ms, expected ${f.expected_intervals} intervals at ${f.nominal_hz} Hz`);
+    check(f.display_hz > 0 && f.dropping === false && f.fps >= 0.95 * f.display_hz, 'I2: the HUD page (unspun) is not DROPPING against its own display rate',
+          `fps ${f.fps} vs display ${f.display_hz} Hz`);
     check(/fps \d/.test(hudText) && /expected/.test(hudText) && /replay p50/.test(hudText) && /heap: wasm/.test(hudText), 'HUD overlay shows fps, reconciliation, breakdown, heap', hudText.split('\n')[0]);
     summary.hud = m;
     await p.page.screenshot({ path: path.join(shots, 'hud.png') });
@@ -476,7 +520,7 @@ try {
       return { hscroll: doc.scrollWidth > doc.clientWidth, offRight: boxes.filter((x) => x.r > doc.clientWidth + 0.5).map((x) => x.id), min, overlaps };
     };
     const sweep = { byo: { min: Infinity, fails: [] }, viewer: { min: Infinity, fails: [] }, pixels: [] };
-    const pb = await open(base + '?pick=1');
+    const pb = await open(base + '?pick=1', undefined, { drop: false });
     await waitState(pb.page, ['need-files']);
     for (const w of widths) {
       await pb.page.setViewportSize({ width: w, height: 900 });
@@ -487,7 +531,7 @@ try {
     check(sweep.byo.fails.length === 0, `responsive sweep, BYO page (${widths.length} widths 360..1920): no horizontal scroll, no overlap`,
           `min clearance ${sweep.byo.min.toFixed(1)} px` + (sweep.byo.fails.length ? ' ' + JSON.stringify(sweep.byo.fails.slice(0, 3)) : ''));
     await pb.page.close();
-    const pv = await open(base + '?hud=1&area=levt/stat');
+    const pv = await open(base + '?hud=1&area=levt/stat', undefined, { drop: false });
     await waitState(pv.page, ['area-ready'], 60000);
     const msgs0 = pv.w.console.length;
     const pixelWidths = new Set([360, 1000, 1920]);
@@ -531,15 +575,50 @@ try {
   }
   // I2: the display rate is measured once before the first area; a frame-time spin that halves the frame rate must be
   // reported as DROPPING, where the old expectation (p50 snapped to a refresh rate) reconciles the same run as clean.
+  // Review fix 2: the measurement itself must not wander (median of >= 120 empty frames, snapped only within +-3 %).
   await section('I2 dropping', async () => {
     // The display rate the page gets depends on the host (a loaded machine runs headless Chromium's compositor at 30 Hz),
     // so the spin is sized from the rate measured first: 1.5 display periods per frame always halves the frame rate.
-    const r = await open(base + '?hud=1&area=levt/test');
+    const r = await open(base + '?hud=1&area=levt/test', undefined, { drop: false });
     await waitState(r.page, ['area-ready'], 60000);
     await waitFrames(r.page, 90, 20000);
     const h = (await r.page.evaluate(() => window.__lomn.metrics)).fps;
+    const how = (f) => `${f.display_snapped === true ? 'snapped' : f.display_snapped === false ? 'UNSNAPPED' : 'snap flag absent'} from median ${f.display_median_ms ?? f.display_p10_ms} ms, ${f.display_samples} samples`;
     check(h.display_hz > 0 && h.dropping === false, 'I2: the display rate is measured before the first area; the unspun run is not DROPPING',
-          `display ${h.display_hz} Hz (p10 interval ${h.display_p10_ms} ms), fps ${h.fps}`);
+          `display ${h.display_hz} Hz (${how(h)}), fps ${h.fps}`);
+    // The snap rule, deterministically (the pure function behind the measurement): standard rates only within +-3 %, otherwise
+    // the raw rate, marked unsnapped; and no median in 58..62 Hz ever reads as 72 Hz (the old 66 Hz boundary).
+    const classify = (ms) => r.page.evaluate((x) => { const M = window.__lomn.engine.M; return JSON.parse(M.UTF8ToString(M._lomn_debug_classify_display(x))); }, ms);
+    const rule = [[1000 / 60, 60, true], [16.2, 60, true], [1000 / 59.4, 60, true], [16.1, 62.112, false], [1000 / 66, 66, false],
+                  [1000 / 72, 72, true], [1000 / 30, 30, true], [1000 / 140, 144, true], [1000 / 300, 300, false]];
+    const bad = [];
+    for (const [ms, hz, snapped] of rule) {
+      const c = await classify(ms);
+      if (c.snapped !== snapped || Math.abs(c.hz - hz) > 0.01) bad.push(`${ms.toFixed(2)} ms -> ${JSON.stringify(c)} (want ${hz} ${snapped ? 'snapped' : 'unsnapped'})`);
+    }
+    const flips = await r.page.evaluate(() => {
+      const M = window.__lomn.engine.M, out = [];
+      for (let ms = 14.4; ms <= 17.6; ms += 0.01) {
+        const c = JSON.parse(M.UTF8ToString(M._lomn_debug_classify_display(ms)));
+        if (c.hz === 72 || (ms >= 16.2 && ms <= 17.1 && c.hz !== 60)) out.push(`${ms.toFixed(2)} ms -> ${c.hz} Hz`);
+      }
+      return out;
+    });
+    check(bad.length === 0 && flips.length === 0, 'I2: snap rule: standard rates only within +-3 %, raw and unsnapped otherwise; 58..62 Hz never reads as 72',
+          bad.concat(flips.slice(0, 5)).join('; ') || `${rule.length} cases + a 14.4..17.6 ms sweep (16.2..17.1 ms always 60 Hz, never 72)`);
+    // Repeatability: the measurement run 10 more times on this one page gives one rate (and it equals the boot measurement).
+    const runs = [], runs0 = h.display_runs;
+    for (let i = 0; i < 10; ++i) {
+      await r.page.evaluate(() => window.__lomn.engine.M._lomn_debug_remeasure());
+      await r.page.waitForFunction((k) => window.__lomn.metrics.fps.display_runs >= k, runs0 + i + 1, { timeout: 90000 });
+      const f = (await r.page.evaluate(() => window.__lomn.metrics)).fps;
+      runs.push({ hz: f.display_hz, snapped: f.display_snapped, ms: f.display_median_ms ?? f.display_p10_ms });
+    }
+    summary.i2_repeat = { boot: { hz: h.display_hz, ms: h.display_median_ms ?? h.display_p10_ms }, runs, loadavg: loadavg() };
+    const hzs = [h.display_hz, ...runs.map((x) => x.hz)];
+    check(new Set(hzs).size === 1 && runs.every((x) => x.snapped === true),
+          'I2: 10 repeated measurements on one page give the same snapped rate (and the boot measurement agrees)',
+          `boot ${h.display_hz}; runs ${runs.map((x) => `${x.hz}${x.snapped === true ? '' : '?'}(${Number(x.ms).toFixed(2)}ms)`).join(' ')}`);
     await r.page.close();
     const spin = Math.round((1.5 * 1000) / h.display_hz);
     summary.i2_spin_ms = spin;
@@ -565,7 +644,8 @@ try {
           `old: p50 ${f.p50_ms} ms -> snapped ${snapped} Hz -> expected ${oldExpected.toFixed(1)} vs counted ${f.dt_samples} (ratio ${oldRatio.toFixed(2)}); ` +
           `new: display ${f.display_hz} Hz -> expected ${f.expected_intervals.toFixed(1)} (ratio ${newRatio.toFixed(2)})`);
     const hud = await p.page.locator('#hud').innerText();
-    check(f.display_hz === h.display_hz && f.dropping === true && /DROPPING/.test(hud), `I2: a ${spin} ms spin per frame -> measured fps vs the display rate -> DROPPING`,
+    // The spun page measured its own display rate (before the spin starts); it is compared with that, not with another page's.
+    check(f.display_hz > 0 && f.dropping === true && f.fps < 0.95 * f.display_hz && /DROPPING/.test(hud), `I2: a ${spin} ms spin per frame -> fps below 0.95 x the display rate measured on that page -> DROPPING`,
           `display ${f.display_hz} Hz, fps ${f.fps}, expected ${f.expected_intervals} intervals, dropping ${f.dropping}`);
     await p.page.close();
     const q = await open(base + `?hud=1&area=levt/test&debug=1&debug_spin=${spin}`);
@@ -678,10 +758,64 @@ try {
           'C2: accepted exe + unknown tables -> shown with a warning; the reason is in metrics', `${st.state}; warning "${warn}"; metrics ${JSON.stringify(m?.validation)}`);
     await p.page.close();
   });
+  // Review fix 1 (T5b-I1): a failure while a REMEMBERED source starts (here: the wasm fetch fails) must reach 'error' with the
+  // Reload button, on every revisit path, with no unhandled rejection (pre-fix the page stayed at 'starting' forever).
+  await section('I1 revisit failure', async () => {
+    const failWasm = `
+      const realFetch = window.fetch;
+      window.fetch = (input, init) => (/lomn_web\\.[0-9a-f]+\\.wasm/.test(String(input?.url ?? input))
+        ? Promise.reject(new Error('TEST: injected wasm fetch failure')) : realFetch.call(window, input, init));`;
+    const outcome = async (p) => {
+      const st = await waitState(p.page, ['need-files', 'area-ready'], 15000).catch(() => p.page.evaluate(() => ({ state: window.__lomn.state, message: window.__lomn.message })));
+      const reload = await p.page.locator('#reload').isVisible().catch(() => false);
+      return { ...st, reload, errors: p.w.errors.slice() };
+    };
+    const verdict = (o) => `${o.state}: ${o.message}; reload visible ${o.reload}; page errors ${JSON.stringify(o.errors)}`;
+    const good = (o) => o.state === 'error' && /injected wasm fetch failure/.test(o.message) && o.reload && o.errors.length === 0;
+    // (a) the finished OPFS copy (what C2 left): main.js `return useSource(src, 'revisit')`.
+    {
+      const p = await open(base + '?area=levt/test', failWasm);
+      const o = await outcome(p);
+      check(good(o), 'T5b-I1: OPFS revisit + wasm fetch failure -> error, Reload button, no unhandled rejection', verdict(o));
+      await p.page.close();
+    }
+    // A remembered folder handle: picked once (OPFS directory handle = what showDirectoryPicker returns), persisted in IndexedDB.
+    {
+      const p = await open(base + '?area=levt/test&pick=1', undefined, { drop: false });
+      await waitState(p.page, ['need-files']);
+      const ok = await p.page.evaluate(async () => window.__lomn.useDirectoryHandle(await (await navigator.storage.getDirectory()).getDirectoryHandle('lomn-install')));
+      await waitState(p.page, ['area-ready'], 60000);
+      check(ok === true, 'T5b-I1 setup: a folder handle is remembered in IndexedDB');
+      await p.page.close();
+    }
+    // (b) the remembered handle, permission already granted: main.js `return revisit()`.
+    {
+      const p = await open(base + '?area=levt/test', failWasm);
+      const o = await outcome(p);
+      check(good(o), 'T5b-I1: handle revisit + wasm fetch failure -> error, Reload button, no unhandled rejection', verdict(o));
+      await p.page.close();
+    }
+    // (c) the same after the permission re-request: the #regrant onclick `revisit()`.
+    {
+      const p = await open(base + '?area=levt/test', `
+        FileSystemHandle.prototype.queryPermission = async () => 'prompt';
+        FileSystemHandle.prototype.requestPermission = async () => 'granted';
+        ${failWasm}`);
+      await waitState(p.page, ['need-permission']);
+      await p.page.click('#regrant');
+      const o = await outcome(p);
+      check(good(o), 'T5b-I1: re-grant click + wasm fetch failure -> error, Reload button, no unhandled rejection', verdict(o));
+      await p.page.close();
+    }
+    const q = await open(base + '?pick=1', undefined, { drop: false });
+    await waitState(q.page, ['need-files']);
+    await idbDeleteHandle(q.page);
+    await q.page.close();
+  });
   // C1: a lost GPU device reaches the page: state 'error', a Reload button, the loop stopped (pre-fix: stays area-ready).
   await section('C1 device lost', async () => {
     // A source of its own (copy through the input), so the step does not depend on what earlier steps left behind.
-    const p = await open(base + '?area=levt/test&pick=1');
+    const p = await open(base + '?area=levt/test&pick=1', undefined, { drop: false });  // the GPU process is crashed below
     await waitState(p.page, ['need-files']);
     await p.page.setInputFiles('#byo-input', inst);
     await waitState(p.page, ['area-ready'], 120000);
@@ -697,6 +831,16 @@ try {
     summary.c1 = { state: st.state, message: st.message };
     await p.page.close();
   });
+  // Review fix 2: every unspun page that showed an area (sampled as it closed) was NOT DROPPING against the display rate
+  // measured on that same page, and the engine's flag agrees with fps < 0.95 x that rate.
+  {
+    const wrong = dropSamples.filter((x) => x.dropping || x.fps < 0.95 * x.hz);
+    const incoherent = dropSamples.filter((x) => x.dropping !== (x.fps < 0.95 * x.hz));
+    summary.drop_samples = dropSamples;
+    check(dropSamples.length >= 8 && wrong.length === 0 && incoherent.length === 0,
+          `I2: every unspun page (${dropSamples.length} sampled) is NOT DROPPING against the display rate measured on that same page`,
+          wrong.length ? 'DROPPING: ' + JSON.stringify(wrong) : dropSamples.map((x) => `${x.fps.toFixed(1)}/${x.hz}Hz${x.snapped === false ? '?' : ''}`).join(' '));
+  }
   summary.loadavg = { start: loadavgStart, end: loadavg() };
   for (const w of pageWatchers.filter((x) => !x.expectGpuLoss)) {
     const gpu = w.console.filter((t) => t.includes('[webgpu]') || t.includes('[area]'));

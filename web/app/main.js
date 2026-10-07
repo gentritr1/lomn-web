@@ -24,8 +24,11 @@ function setState(state, message = '') {
   $('message').textContent = message;
   $('message').dataset.state = state;
 }
+// Any failure that ends the session: the state, the reason, and a Reload button (nothing else can recover the page).
 function fail(err) {
   L.error = String(err?.message ?? err);
+  $('loading').hidden = true;
+  $('reload').hidden = false;
   setState('error', L.error);
 }
 const pickerMessage = 'Choose your BIONICLE: The Legend of Mata Nui (Beta 1.5.0) folder. Nothing is uploaded: the files are read on this computer.';
@@ -75,13 +78,13 @@ async function start() {
         return useSource(src, 'revisit');
       };
       const perm = await handle.queryPermission({ mode: 'read' });
-      if (perm === 'granted') return revisit();
+      if (perm === 'granted') return await revisit();  // `await`: a rejection must reach this try/catch, not escape it
       $('regrant').hidden = false;
       $('regrant').textContent = `Allow access to "${handle.name}" again`;
       $('regrant').onclick = async () => {
         if ((await handle.requestPermission({ mode: 'read' })) === 'granted') {
           $('regrant').hidden = true;
-          revisit();
+          await revisit().catch(fail);
         } else {
           setState('need-permission', 'Permission was not granted. Choose the folder again.');
         }
@@ -98,7 +101,7 @@ async function start() {
       } catch (err) {
         why = String(err?.message ?? err);
       }
-      if (!why) return useSource(src, 'revisit');
+      if (!why) return await useSource(src, 'revisit');  // `await`, as above
       await opfsClear();
       L.copyProblem = why;
       return needFiles(`The browser copy of the game files was incomplete (${why}) and was removed.`);
@@ -257,7 +260,7 @@ function onEngineState(state, detail) {
   startInput();
   if (params.get('hud') === '1') startHud();
   const first = params.get('area') || (L.areas[0] ? `${L.areas[0].level}/${L.areas[0].area}` : '');
-  // I2: the engine measures the display rate from 100 empty frames before the first area (about 1.7 s at 60 Hz); the
+  // I2: the engine measures the display rate from 130 empty frames before the first area (about 2.2 s at 60 Hz); the
   // first area waits for it (at most 6 s; without it the HUD says the rate is not measured).
   const t0 = performance.now();
   const wait = () => {
@@ -338,7 +341,7 @@ function startHud() {
     const bd = m.build;
     hud.textContent =
       `build ${bd.type} [${bd.cxx_flags}] emscripten ${bd.emscripten} wasm ${bd.wasm_sha256.slice(0, 12)}  canvas ${m.canvas.width}x${m.canvas.height} @${m.canvas.device_pixel_ratio}x  ${m.adapter}${m.render.fog ? '' : '  FOG OFF (debug)'}\n` +
-      `measured fps ${f(p.fps)} vs display ${p.display_hz > 0 ? f(p.display_hz, 0) + ' Hz (measured before the first area)' : 'not measured'}` +
+      `measured fps ${f(p.fps)} vs display ${p.display_hz > 0 ? f(p.display_hz, p.display_snapped ? 0 : 1) + ' Hz (' + (p.display_snapped ? '' : 'unsnapped, not a standard rate; ') + 'median of ' + p.display_samples + ' frames before the first area)' : 'not measured'}` +
       `${p.dropping ? '  DROPPING' : ''}${p.spin_ms > 0 ? `  (debug spin ${p.spin_ms} ms)` : ''}\n` +
       `frames ${p.frames_in_window} in ${f(p.window_ms / 1000, 2)} s; expected ${f(p.expected_intervals + (p.dt_samples ? 1 : 0))} at ${f(p.nominal_hz, 0)} Hz` +
       `  (dt samples ${p.dt_samples} = frames - 1)  dt p50 ${f(p.p50_ms, 2)} p95 ${f(p.p95_ms, 2)} ms\n` +

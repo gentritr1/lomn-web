@@ -77,10 +77,13 @@ struct State {
   uint32_t rejected_last = 0, draws_last = 0;
   // REF4 r2 (I2): the display rate, measured once from the empty-canvas frames before the first area (the reference the
   // fps is reconciled against; deriving it from the measured frames themselves would call any steady rate "no drops").
-  static constexpr uint32_t kDisplaySkip = 10, kDisplaySamples = 90;
+  // Review fix 2: the MEDIAN of 120 intervals (after 10 skipped), snapped to a standard rate only within +-3 %.
+  static constexpr uint32_t kDisplaySkip = 10, kDisplaySamples = 120;
   double display_dt[kDisplaySamples] = {};
-  uint32_t display_seen = 0, display_n = 0;
-  double display_hz = 0, display_p10_ms = 0;
+  uint32_t display_seen = 0, display_n = 0, display_runs = 0;
+  bool remeasure = false;  // debug (lomn_debug_remeasure): measure again, with empty frames, on a page that already shows an area
+  double display_hz = 0, display_raw_hz = 0, display_median_ms = 0;
+  bool display_snapped = false;
   double spin_ms = 0;  // debug: busy-wait per frame (?debug=1&debug_spin=MS), to show the DROPPING flag fires
   // REF4 r2 (C1)
   bool lost = false;
@@ -131,6 +134,32 @@ double nominal_hz(double p50_ms) {
   return best;
 }
 
+// The display rate implied by the median frame interval of the empty frames. The median, not a percentile: a percentile
+// of ~100 samples wanders by a millisecond from run to run (the old p10 sat on the 60/72 Hz snap boundary and read 72 Hz on
+// a 60 Hz display about one run in seven under load). The result is a standard refresh rate only when the raw rate is
+// within +-3 % of one (a resolution allowance for timer jitter); otherwise the raw rate is kept and marked unsnapped,
+// never forced onto a neighbour.
+struct DisplayRate {
+  double median_ms, raw_hz, hz;
+  bool snapped;
+};
+DisplayRate classify_display(double median_ms) {
+  static const double standard[] = {30, 48, 50, 60, 72, 75, 90, 100, 120, 144, 165, 240};
+  DisplayRate r{median_ms, 0, 0, false};
+  if (!(median_ms > 0) || !std::isfinite(median_ms)) return r;
+  r.raw_hz = 1000.0 / median_ms;
+  r.hz = r.raw_hz;
+  double best = standard[0];
+  for (double c : standard)
+    if (std::fabs(c - r.raw_hz) < std::fabs(best - r.raw_hz)) best = c;
+  if (std::fabs(best - r.raw_hz) <= 0.03 * best) {
+    r.hz = best;
+    r.snapped = true;
+  }
+  return r;
+}
+DisplayRate display_rate(const double* dt, uint32_t n) { return classify_display(pct(dt, n, 0.5)); }
+
 view::Camera current_camera() {
   State& s = st();
   const float aspect = static_cast<float>(s.width) / static_cast<float>(s.height ? s.height : 1);
@@ -154,7 +183,7 @@ void frame() {
     return;
   }
   double replay = 0, submit = 0;
-  if (s.has_area) {
+  if (s.has_area && !s.remeasure) {
     s.fly.update(s.in, dt / 1000.0);
     s.in.look_dx = s.in.look_dy = 0;
     s.ren.render(*s.dev, 0, s.area, current_camera());
@@ -166,14 +195,16 @@ void frame() {
     s.dev->begin_frame(0, black);
     s.dev->end_frame();
     // I2: before the first area, the empty frames measure the display (the first kDisplaySkip are startup noise).
-    if (dt > 0 && s.areas_shown == 0 && s.display_n < State::kDisplaySamples && ++s.display_seen > State::kDisplaySkip) {
+    if (dt > 0 && (s.areas_shown == 0 || s.remeasure) && s.display_n < State::kDisplaySamples && ++s.display_seen > State::kDisplaySkip) {
       s.display_dt[s.display_n++] = dt;
       if (s.display_n == State::kDisplaySamples) {
-        // The 10th percentile, not the median: a busy page (boot work, a loaded host) drops frames, and a dropped frame
-        // only ever LENGTHENS an interval, so the short end of the distribution is the refresh period (REF4 r2: a run at
-        // loadavg 15 measured a p50 of 33 ms = "30 Hz" on a 60 Hz display; its p10 was the 16.7 ms period).
-        s.display_p10_ms = pct(s.display_dt, s.display_n, 0.1);
-        s.display_hz = nominal_hz(s.display_p10_ms);
+        const DisplayRate r = display_rate(s.display_dt, s.display_n);
+        s.display_median_ms = r.median_ms;
+        s.display_raw_hz = r.raw_hz;
+        s.display_hz = r.hz;
+        s.display_snapped = r.snapped;
+        s.remeasure = false;
+        ++s.display_runs;
       }
     }
   }
@@ -356,6 +387,19 @@ EMSCRIPTEN_KEEPALIVE const char* lomn_build_info() {
               "\",\"compiler\":" + js(__VERSION__) + "}");
 }
 // Debug (REF4 r2, I2): busy-wait this long in every frame (0..200 ms), to show that the DROPPING flag fires.
+// Debug (review fix 2): measure the display rate again with empty frames (about 130 frames), on a page that shows an area; the
+// result replaces display_hz and bumps display_runs. The tests run it 10 times on one page to show the rate does not wander.
+EMSCRIPTEN_KEEPALIVE void lomn_debug_remeasure() {
+  State& s = st();
+  s.remeasure = true;
+  s.display_seen = s.display_n = 0;
+}
+// Debug (review fix 2): the pure classification of a median frame interval, for deterministic tests of the snap rule.
+EMSCRIPTEN_KEEPALIVE const char* lomn_debug_classify_display(double interval_ms) {
+  const DisplayRate r = classify_display(interval_ms);
+  return keep("{\"interval_ms\":" + num(interval_ms) + ",\"raw_hz\":" + num(r.raw_hz) + ",\"hz\":" + num(r.hz) + ",\"snapped\":" +
+              (r.snapped ? "true" : "false") + "}");
+}
 EMSCRIPTEN_KEEPALIVE void lomn_debug_spin(double ms) { st().spin_ms = std::isfinite(ms) ? std::max(0.0, std::min(200.0, ms)) : 0; }
 EMSCRIPTEN_KEEPALIVE void lomn_camera_reset() {
   State& s = st();
@@ -388,13 +432,14 @@ EMSCRIPTEN_KEEPALIVE const char* lomn_metrics_json() {
   }
   const double p50 = pct(dts.data(), n, 0.5), p95 = pct(dts.data(), n, 0.95);
   // Reconciliation (REF4 r2, I2): a window of n intervals spans n + 1 frames; at the DISPLAY rate measured before the
-  // first area it should hold window * display_hz / 1000 intervals. counted / expected < 0.95 = DROPPING. Without a
-  // display measurement the snapped p50 is used and labelled as such (it cannot detect a steady lower rate).
+  // first area it should hold window * display_hz / 1000 intervals. DROPPING = measured fps < 0.95 x the display rate
+  // (the same as counted / expected < 0.95). Without a display measurement the snapped p50 is used and labelled as such
+  // (it cannot detect a steady lower rate), and nothing is flagged.
   const bool measured = s.display_hz > 0;
   const double hz = measured ? s.display_hz : nominal_hz(p50);
   const double expected = window * hz / 1000.0;
   const double fps = window > 0 ? n * 1000.0 / window : 0;
-  const bool dropping = measured && n >= 30 && expected > 0 && n < 0.95 * expected;
+  const bool dropping = measured && n >= 30 && window > 0 && fps < 0.95 * s.display_hz;
   const rhi::Device::LiveObjects lo = s.dev ? s.dev->live_objects() : rhi::Device::LiveObjects();
   const view::RenderStats& rs = s.ren.last_stats();
   const struct mallinfo mi = mallinfo();
@@ -402,8 +447,9 @@ EMSCRIPTEN_KEEPALIVE const char* lomn_metrics_json() {
   o += "\"frames\":" + std::to_string(s.frames) + ",\"frames_since_show\":" + std::to_string(s.frames_since_show);
   o += ",\"fps\":{\"dt_samples\":" + std::to_string(n) + ",\"frames_in_window\":" + std::to_string(n ? n + 1 : 0) +
        ",\"window_ms\":" + num(window) + ",\"p50_ms\":" + num(p50) + ",\"p95_ms\":" + num(p95) + ",\"nominal_hz\":" + num(hz) +
-       ",\"display_hz\":" + num(s.display_hz) + ",\"display_p10_ms\":" + num(s.display_p10_ms) + ",\"display_samples\":" +
-       std::to_string(s.display_n) + ",\"hz_source\":" + js(measured ? "display measured before the first area" : "snapped p50 (display not measured)") +
+       ",\"display_hz\":" + num(s.display_hz) + ",\"display_raw_hz\":" + num(s.display_raw_hz) + ",\"display_snapped\":" +
+       (s.display_snapped ? "true" : "false") + ",\"display_median_ms\":" + num(s.display_median_ms) + ",\"display_samples\":" +
+       std::to_string(s.display_n) + ",\"display_runs\":" + std::to_string(s.display_runs) + ",\"hz_source\":" + js(measured ? "display measured before the first area" : "snapped p50 (display not measured)") +
        ",\"expected_intervals\":" + num(expected) + ",\"fps\":" + num(fps) + ",\"dropping\":" + (dropping ? "true" : "false") +
        ",\"spin_ms\":" + num(s.spin_ms) + "}";
   o += ",\"breakdown_ms\":{\"script\":0,\"physics\":0,\"replay_p50\":" + num(pct(rep.data(), n, 0.5)) + ",\"replay_p95\":" +
