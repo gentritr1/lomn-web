@@ -230,6 +230,17 @@ class Device {
   // resize: reconfigures the surface to width x height (1..kMaxRenderTargetSize; in the browser this also sets the
   // canvas drawing-buffer size) and recreates the surface depth buffer at the new size when it is enabled.
   virtual bool resize(uint32_t /*width*/, uint32_t /*height*/) { return false; }
+  // T8 P5 diagnostics (additive; the null backend returns the defaults and logs nothing). gpu_destroys(): explicit GPU
+  // Destroy calls the WebGPU device has made (textures, buffers and the surface depth buffer, deferred ones when they are
+  // flushed): GPU memory must go back at destroy time, not when a handle is garbage-collected (REF4 r2 I1).
+  // debug_cycle_surface_depth / debug_undestroyed_surface_depth: a test seam for the surface depth buffer's lifecycle on
+  // a headless device (Dawn cannot make a presentation surface natively, so set_surface_depth / resize cannot run there):
+  // cycle recreates the depth buffer at w x h exactly as resize() does after reconfiguring the surface (returns false
+  // where unsupported or for a size outside 1..kMaxRenderTargetSize); undestroyed counts the surface depth textures that
+  // were created and not yet explicitly destroyed (1 after any number of cycles when nothing leaks; 0 before the first).
+  virtual uint64_t gpu_destroys() const { return 0; }
+  virtual bool debug_cycle_surface_depth(uint32_t /*width*/, uint32_t /*height*/) { return false; }
+  virtual uint32_t debug_undestroyed_surface_depth() const { return 0; }
   // REF4 r2 (C1): called at most once, with a readable reason, when the device becomes unusable: a device loss for any
   // reason other than the device's own destruction, or the first uncaptured GPU error (a validation error the shared
   // checks could not see, e.g. bad WGSL). A loss that happened before the handler was set is delivered when it is set.

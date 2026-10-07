@@ -9,6 +9,10 @@
 //     pixels byte-identical every cycle, live counts back to the baseline after every release.
 //  REF4 r2: destroy_texture/destroy_buffer now Destroy the GPU object (deferred to end_frame inside a frame): probes 2
 //  and 5 cover both paths. 6. the lost handler receives the first uncaptured GPU error once.
+//  T8 P5: 7. the surface depth buffer (release_surface_depth) really Destroys on every resize: Dawn has no native surface,
+//  so the closest observable is the device's own destroy counter (gpu_destroys) and its undestroyed-surface-depth set,
+//  driven through the headless test seam debug_cycle_surface_depth (the depth half of resize()). Runs before probe 6 so
+//  that "no GPU error" can still be asserted. The same counter pins texture/buffer destroys (2 per depth render target).
 //  T8 P4: the lost handler is installed before probe 1 and records every reason it receives, so probes 1-4 assert that
 //  no GPU error happened (none reached it, after a queue wait), and probe 6 asserts WHICH error arrived: the provoked
 //  WGSL compile error (a stale error left by an earlier probe would arrive first, and fail that check).
@@ -186,6 +190,35 @@ int main() {
   }
   check(ok, "5. 8 upload/render/release cycles: identical pixels, flat live counts, 0 rejected destroys");
   check(dev->last_frame_stats().rejected == 0, "5. no rejected call in the last frame");
+  // 7. (T8 P5) Surface depth lifecycle + destroy counters.
+  {
+    const uint64_t g0 = dev->gpu_destroys();
+    const TextureId drt = dev->create_render_target_ex(RenderTargetDesc{16, 16, true, 1.0f});  // colour + depth
+    const BufferId dbuf = dev->create_uniform_buffer(kUniformAlign);
+    const bool dd = dev->destroy_texture(drt) && dev->destroy_buffer(dbuf);
+    check(dd && dev->gpu_destroys() == g0 + 3, "7. destroy_texture of a depth render target + destroy_buffer: 3 explicit GPU Destroy calls");
+    const uint64_t g1 = dev->gpu_destroys();
+    check(dev->debug_undestroyed_surface_depth() == 0, "7. no surface depth buffer before the first cycle");
+    constexpr int kResizes = 24;
+    bool cycled = true;
+    for (int i = 0; i <= kResizes; ++i) cycled = dev->debug_cycle_surface_depth(64 + 8 * i, 48 + 4 * i) && cycled;
+    // 1 creation + 24 recreations: the first cycle destroys nothing, each later one destroys its predecessor.
+    std::printf("     surface depth: %d cycles, undestroyed=%u, gpu_destroys +%llu\n", kResizes + 1, dev->debug_undestroyed_surface_depth(),
+                static_cast<unsigned long long>(dev->gpu_destroys() - g1));
+    check(cycled && dev->debug_undestroyed_surface_depth() == 1,
+          "7. 25 surface depth create/resize cycles: exactly 1 live (undestroyed) depth texture, not 25");
+    check(dev->gpu_destroys() == g1 + kResizes, "7. each resize destroyed its predecessor (24 explicit Destroy calls)");
+    check(!dev->debug_cycle_surface_depth(0, 8) && !dev->debug_cycle_surface_depth(8, 1u << 30) && dev->debug_undestroyed_surface_depth() == 1,
+          "7. an out-of-range size is refused and leaves the depth buffer alone");
+    // Wait for the queue so an asynchronous validation error from the cycles would have been reported by now.
+    const TextureId ft = dev->create_render_target_ex(RenderTargetDesc{8, 8, true, 1.0f});
+    dev->begin_frame(ft, clear);
+    dev->end_frame();
+    std::vector<uint8_t> fpx;
+    const bool flushed = dev->read_pixels(ft, fpx) && dev->destroy_texture(ft);
+    for (const std::string& e : gpu_errors) std::printf("     unexpected GPU error: %s\n", e.c_str());
+    check(flushed && gpu_errors.empty(), "7. no GPU error from the surface depth cycles");
+  }
   // 6. (REF4 r2, C1) The lost handler: a pipeline whose WGSL does not compile passes the shared checks (rhi does not parse
   //    WGSL) and fails inside Dawn as an uncaptured validation error; that first error reaches the handler exactly once,
   //    with a readable reason.

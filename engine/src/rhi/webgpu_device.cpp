@@ -115,6 +115,7 @@ class WebGpuDevice final : public Device {
   WebGpuDevice& operator=(WebGpuDevice&&) = delete;
 
   ~WebGpuDevice() override {
+    release_surface_depth();  // before the flush: a frame left open defers it (T8 P5)
     flush_deferred_destroys();
     if (pass_) {
       wgpuRenderPassEncoderEnd(pass_);
@@ -123,7 +124,6 @@ class WebGpuDevice final : public Device {
     if (enc_) wgpuCommandEncoderRelease(enc_);
     if (frame_surface_view_) wgpuTextureViewRelease(frame_surface_view_);
     if (frame_surface_texture_) wgpuTextureRelease(frame_surface_texture_);
-    release_surface_depth();
     for (auto& kv : bind_groups_) wgpuBindGroupRelease(kv.second);
     for (auto& kv : mesh_bind_groups_) wgpuBindGroupRelease(kv.second);
     for (auto& kv : pipelines_) {
@@ -704,7 +704,7 @@ class WebGpuDevice final : public Device {
     if (!(clear_depth >= 0.0f && clear_depth <= 1.0f)) return reject("set_surface_depth", "clear_depth outside [0,1]"), false;
     release_surface_depth();
     surface_clear_depth_ = clear_depth;
-    if (on) make_surface_depth();
+    if (on) make_surface_depth(surface_w_, surface_h_);
     return true;
   }
   bool resize(uint32_t w, uint32_t h) override {
@@ -719,12 +719,17 @@ class WebGpuDevice final : public Device {
     wgpuSurfaceConfigure(surface_, &cfg);
     surface_w_ = w;
     surface_h_ = h;
-    if (surface_depth_view_) {
-      release_surface_depth();
-      make_surface_depth();
-    }
+    if (surface_depth_view_) recreate_surface_depth(w, h);
     return true;
   }
+  // T8 P5: the test seam (see Device::debug_cycle_surface_depth): the depth half of resize() on a headless device.
+  bool debug_cycle_surface_depth(uint32_t w, uint32_t h) override {
+    if (frame_open_ || w == 0 || h == 0 || w > kMaxRenderTargetSize || h > kMaxRenderTargetSize) return false;
+    recreate_surface_depth(w, h);
+    return true;
+  }
+  uint32_t debug_undestroyed_surface_depth() const override { return undestroyed_depth_; }
+  uint64_t gpu_destroys() const override { return gpu_destroys_; }
 
  private:
   // REF4 r2 (I1): GPU memory goes back at destroy time, not when a JS wrapper is garbage-collected (emdawnwebgpu) or
@@ -733,42 +738,59 @@ class WebGpuDevice final : public Device {
   // (and the handle) wait for end_frame(). Same semantics for callers: "destroy inside an open frame is allowed".
   void destroy_now_or_after_frame(WGPUTexture t) {
     if (frame_open_) return deferred_textures_.push_back(t);
-    wgpuTextureDestroy(t);
-    wgpuTextureRelease(t);
+    gpu_destroy_and_release(t);
   }
   void destroy_now_or_after_frame(WGPUBuffer b) {
     if (frame_open_) return deferred_buffers_.push_back(b);
+    gpu_destroy_and_release(b);
+  }
+  // The only places that call wgpuTextureDestroy / wgpuBufferDestroy (counted for gpu_destroys()).
+  void gpu_destroy_and_release(WGPUTexture t, bool surface_depth = false) {
+    wgpuTextureDestroy(t);
+    ++gpu_destroys_;
+    if (surface_depth) --undestroyed_depth_;
+    wgpuTextureRelease(t);
+  }
+  void gpu_destroy_and_release(WGPUBuffer b) {
     wgpuBufferDestroy(b);
+    ++gpu_destroys_;
     wgpuBufferRelease(b);
   }
   void flush_deferred_destroys() {
-    for (WGPUTexture t : deferred_textures_) {
-      wgpuTextureDestroy(t);
-      wgpuTextureRelease(t);
-    }
-    for (WGPUBuffer b : deferred_buffers_) {
-      wgpuBufferDestroy(b);
-      wgpuBufferRelease(b);
-    }
+    for (WGPUTexture t : deferred_textures_) gpu_destroy_and_release(t);
+    for (WGPUBuffer b : deferred_buffers_) gpu_destroy_and_release(b);
     deferred_textures_.clear();
     deferred_buffers_.clear();
   }
   void release_surface_depth() {
     if (surface_depth_view_) wgpuTextureViewRelease(surface_depth_view_);
-    if (surface_depth_) wgpuTextureRelease(surface_depth_);
+    // T8 P5: Destroy before Release (like every other texture, I1): without it each resize leaves the old depth buffer's
+    // memory to the garbage collector. Deferred to end_frame when a frame is open (only reachable from the destructor:
+    // set_surface_depth and resize reject inside a frame), where the destructor flushes it right after.
+    if (surface_depth_) {
+      if (frame_open_)
+        deferred_textures_.push_back(surface_depth_);
+      else
+        gpu_destroy_and_release(surface_depth_, true);
+    }
     surface_depth_view_ = nullptr;
     surface_depth_ = nullptr;
     surface_depth_w_ = surface_depth_h_ = 0;
   }
-  void make_surface_depth() {
+  void make_surface_depth(uint32_t w, uint32_t h) {
     WGPUTextureDescriptor td = WGPU_TEXTURE_DESCRIPTOR_INIT;
-    td.size = {surface_w_, surface_h_, 1};
+    td.size = {w, h, 1};
     td.format = kDepthFormat;
     td.usage = WGPUTextureUsage_RenderAttachment;
     surface_depth_ = wgpuDeviceCreateTexture(dev_, &td);
+    ++undestroyed_depth_;
     surface_depth_view_ = wgpuTextureCreateView(surface_depth_, nullptr);
-    surface_depth_w_ = surface_w_;
-    surface_depth_h_ = surface_h_;
+    surface_depth_w_ = w;
+    surface_depth_h_ = h;
+  }
+  void recreate_surface_depth(uint32_t w, uint32_t h) {
+    release_surface_depth();
+    make_surface_depth(w, h);
   }
 
   Target make_target(uint32_t w, uint32_t h) {
@@ -904,6 +926,8 @@ class WebGpuDevice final : public Device {
   WGPUTexture surface_depth_ = nullptr;
   WGPUTextureView surface_depth_view_ = nullptr;
   uint32_t surface_depth_w_ = 0, surface_depth_h_ = 0;
+  uint32_t undestroyed_depth_ = 0;  // T8 P5: surface depth textures created and not yet explicitly Destroyed
+  uint64_t gpu_destroys_ = 0;
   float surface_clear_depth_ = 1.0f;
   LostSink* lost_ = nullptr;  // REF4 r2 (C1): not owned (see LostSink)
 };
