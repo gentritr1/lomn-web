@@ -293,6 +293,30 @@ int main() {
     std::printf("%s out-of-frame draw_indexed rejected=%u draws=%u (want 1, 0)\n", fs.rejected == 1 && fs.draws == 0 ? "ok  " : "FAIL",
                 fs.rejected, fs.draws);
     ok = ok && fs.rejected == 1 && fs.draws == 0;
+    // Task 8B A1: an M0 draw() after end_frame is rejected the same way (it was only checked for draw_indexed).
+    dev->draw(tri, 3, tu, 0);
+    const FrameStats f2 = dev->last_frame_stats();
+    std::printf("%s out-of-frame M0 draw rejected=%u draws=%u (want 2, 0)\n", f2.rejected == 2 && f2.draws == 0 ? "ok  " : "FAIL",
+                f2.rejected, f2.draws);
+    ok = ok && f2.rejected == 2 && f2.draws == 0;
+  }
+  // 7. (Task 8B A1) On a fresh device, before its first begin_frame: both draw kinds are counted rejections.
+  {
+    std::unique_ptr<Device> fresh;
+    create_webgpu_device(nullptr, 0, 0, [&](std::unique_ptr<Device> d, std::string) { fresh = std::move(d); });
+    if (!fresh) return std::printf("FAIL setup (second device)\n"), 1;
+    PipelineDesc m0;
+    m0.wgsl = kM0Wgsl;
+    m0.uniform_bytes = 4;
+    const PipelineId p0 = fresh->create_pipeline(m0);
+    const BufferId u0 = fresh->create_uniform_buffer(kUniformAlign);
+    if (!p0 || !u0) return std::printf("FAIL setup (second device objects)\n"), 1;
+    fresh->draw(p0, 3, u0, 0);
+    fresh->draw_indexed(DrawIndexedDesc{});
+    const FrameStats fs = fresh->last_frame_stats();
+    std::printf("%s draws before the first begin_frame rejected=%u draws=%u (want 2, 0)\n",
+                fs.rejected == 2 && fs.draws == 0 ? "ok  " : "FAIL", fs.rejected, fs.draws);
+    ok = ok && fs.rejected == 2 && fs.draws == 0;
   }
   std::printf("adapter=%s\n", dev->adapter().c_str());
   return ok ? 0 : 1;

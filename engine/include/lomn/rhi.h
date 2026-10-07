@@ -54,6 +54,9 @@ struct FrameStats {
   uint64_t indices = 0;          // M1a-2: indices submitted by draw_indexed this frame
   // M1a-2: calls rejected by validation since the last begin_frame (any call kind, creation calls included; before the
   // first begin_frame: since the device was created). A rejected begin_frame counts 1 and resets the others.
+  // M1a-3: draws outside begin_frame/end_frame (before the first begin_frame, or after end_frame) are counted here too.
+  // The counters are NOT frozen by end_frame: last_frame_stats() read after end_frame also includes rejections of calls
+  // made since (e.g. an out-of-frame draw or a rejected create), until the next begin_frame resets them.
   uint32_t rejected = 0;
 };
 
@@ -75,14 +78,21 @@ struct VertexAttribute {
 enum class BlendMode : uint8_t { Opaque, AlphaBlend };
 // Numbered like D3DCMPFUNC - 1 (D3DCMP_NEVER = 1 ... D3DCMP_ALWAYS = 8).
 enum class CompareFunc : uint8_t { Never, Less, Equal, LessEqual, Greater, NotEqual, GreaterEqual, Always };
-// None = render mode 0x11 (D3DCULL_NONE). Front/Back follow WebGPU's front face, counter-clockwise (CCW). D3D8's default
-// front face is clockwise (D3DCULL_CCW culls counter-clockwise = back faces): M1a-3 maps D3DCULL_* onto these.
+// None = render mode 0x11 (D3DCULL_NONE). Front/Back are RELATIVE to MeshPipelineDesc::front_face (M1a-3): Front culls
+// the triangles whose screen winding equals front_face, Back the others. With the default front_face CCW this is the
+// M1a-2 behaviour. D3D8's front face is clockwise (D3DCULL_CCW culls counter-clockwise = back faces): the D3D8 shim sets
+// front_face CW and maps D3DCULL_CW -> Front, D3DCULL_CCW -> Back.
 enum class CullMode : uint8_t { None, Front, Back };
 // M1a-3: which winding is the front face (WebGPU primitive.frontFace). CCW is WebGPU's default (and M1a-2's); the
 // D3D8 shim uses CW, D3D's front face, and maps D3DCULL_CW -> Front, D3DCULL_CCW -> Back (verified on Dawn by
 // test_gpu_mesh's winding probe).
 enum class FrontFace : uint8_t { CCW, CW };
-// M1a-3: constant depth bias limit (|depth_bias| <= kMaxDepthBias, WebGPU depthBias units).
+// M1a-3: constant depth bias limit (|depth_bias| <= kMaxDepthBias, WebGPU depthBias units; one more is a rejected create).
+// Semantics (WebGPU depthBias, the constant term only): the fragment depth is offset by depth_bias * r, where r is the
+// smallest resolvable depth difference of the target's depth format. Every depth target here is Depth32Float, whose r
+// depends on the depth value (2^(exponent(z) - 23)): about 2^-24 near z = 0.5. Sign: NEGATIVE = nearer the camera
+// (passes LESS / LESSEQUAL against an equal depth), positive = farther. depthBiasSlopeScale and depthBiasClamp are always
+// 0 (not exposed): no slope-scaled bias, no clamp.
 constexpr int32_t kMaxDepthBias = 1 << 16;
 
 // Pipeline for indexed meshes. Bind group 0: @binding(0) var<uniform> (dynamic offset, bound size
@@ -106,7 +116,7 @@ struct MeshPipelineDesc {
   CullMode cull = CullMode::None;
   // ---- M1a-3 additive fields (defaults = M1a-2 behaviour; the null log prints them only when not default) ----
   FrontFace front_face = FrontFace::CCW;
-  int32_t depth_bias = 0;  // WebGPU depthBias (constant part); D3DRS_ZBIAS maps here (see lomn/d3d/ffp.h)
+  int32_t depth_bias = 0;  // WebGPU depthBias (constant part; negative = nearer, see kMaxDepthBias); D3DRS_ZBIAS maps here (lomn/d3d/ffp.h)
 };
 
 enum class FilterMode : uint8_t { Nearest, Linear };
@@ -154,6 +164,9 @@ class Device {
   // target: a render target, or 0 = the presentation surface. An unknown id, a sampled texture, or 0 on a headless
   // device is a counted rejection (M1a-2) and that frame's draws are skipped (not drawn, not counted).
   virtual void begin_frame(TextureId target, const float clear_rgba[4]) = 0;
+  // M1a-3: a draw (or draw_indexed) outside begin_frame/end_frame - before the first begin_frame or after end_frame - is
+  // a counted rejection (FrameStats::rejected) in both backends, never a silent no-op. Inside a frame whose begin_frame
+  // was rejected, draws are skipped (not drawn, not counted, not rejected again).
   virtual void draw(PipelineId pipeline, uint32_t vertex_count, BufferId uniforms, uint32_t uniform_offset) = 0;
   virtual void end_frame() = 0;
   // Synchronous readback of a render target into tightly packed RGBA8. False if unsupported (null, browser).

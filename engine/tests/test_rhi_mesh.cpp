@@ -511,3 +511,52 @@ TEST_CASE("rhi mesh: draws outside begin_frame/end_frame are counted rejections 
   CHECK(log[0] == "draw pipeline=1 vertices=3 uniforms=0+0 rejected: outside a frame");
   CHECK(log[1].find("rejected: outside a frame") != std::string::npos);
 }
+
+// Task 8B A1: the M1a-3 MeshPipelineDesc fields are pinned at their boundaries, with their exact log text.
+TEST_CASE("rhi mesh: depth_bias is accepted up to +-kMaxDepthBias, front_face past CW is rejected, both logged") {
+  std::vector<std::string> log;
+  auto d = create_null_device(&log);
+  MeshPipelineDesc pd = mesh_desc();
+  pd.depth_bias = kMaxDepthBias;
+  CHECK(d->create_mesh_pipeline(pd) == 1);
+  pd.depth_bias = -kMaxDepthBias;
+  CHECK(d->create_mesh_pipeline(pd) == 2);
+  pd.depth_bias = kMaxDepthBias + 1;
+  CHECK(d->create_mesh_pipeline(pd) == 0);
+  pd.depth_bias = -(kMaxDepthBias + 1);
+  CHECK(d->create_mesh_pipeline(pd) == 0);
+  pd.depth_bias = 0;
+  pd.front_face = static_cast<FrontFace>(2);  // one past the last enumerator
+  CHECK(d->create_mesh_pipeline(pd) == 0);
+  pd.front_face = FrontFace::CW;
+  pd.depth_bias = -16;
+  CHECK(d->create_mesh_pipeline(pd) == 3);
+  CHECK(d->last_frame_stats().rejected == 3);
+  REQUIRE(log.size() == 6);
+  CHECK(log[0].find(" cull=none depth_bias=65536 -> 1") != std::string::npos);
+  CHECK(log[1].find(" cull=none depth_bias=-65536 -> 2") != std::string::npos);
+  CHECK(log[2] == "create_mesh_pipeline rejected: depth_bias out of range -> 0");
+  CHECK(log[3] == "create_mesh_pipeline rejected: depth_bias out of range -> 0");
+  CHECK(log[4] == "create_mesh_pipeline rejected: bad front face -> 0");
+  CHECK(log[5].find(" cull=none front=cw depth_bias=-16 -> 3") != std::string::npos);
+  // Defaults (CCW, bias 0) print neither field: the M1a-2 line is unchanged.
+  log.clear();
+  CHECK(d->create_mesh_pipeline(mesh_desc()) == 4);
+  CHECK(log[0].find(" cull=none -> 4") != std::string::npos);
+}
+
+TEST_CASE("rhi mesh: draws before the first begin_frame are counted rejections too (null)") {
+  std::vector<std::string> log;
+  auto dev = create_null_device(&log);
+  PipelineDesc pd;
+  pd.wgsl = "x";
+  const PipelineId p = dev->create_pipeline(pd);
+  log.clear();
+  dev->draw(p, 3, 0, 0);  // no begin_frame has ever run on this device
+  dev->draw_indexed(DrawIndexedDesc{});
+  CHECK(dev->last_frame_stats().rejected == 2);
+  CHECK(dev->last_frame_stats().draws == 0);
+  REQUIRE(log.size() == 2);
+  CHECK(log[0] == "draw pipeline=1 vertices=3 uniforms=0+0 rejected: outside a frame");
+  CHECK(log[1] == "draw_indexed pipeline=0 vb=0 ib=0 first=0 count=0 bind_group=0+0 rejected: outside a frame");
+}
