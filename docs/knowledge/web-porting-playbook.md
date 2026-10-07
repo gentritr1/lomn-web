@@ -87,6 +87,10 @@ Probe each route cheaply first: a one-day emulation fps test, a one-week decompi
 - **Keep the public data model stable when hardening.** Bound the work (cap and reject) rather than changing a field's type that downstream tools read (`lookup_name` stayed a `std::string`).
 - **Failed operations leave no partial state.** Build into locals and commit on success. A failed `open`/`enter_area` must not leave stale results visible.
 
+- **Every new parser gets the audit, not just the first ones** (M1a-3: the OSI reader shipped in the reference without the M1a-1 caps; three reviews found an unbounded call list, per-record name copies in textures.slb (1.27 GB on wasm32 from 64 MiB) and per-method name copies). Count every attacker-controlled *accumulation*, not only loops. Evidence: `audits/2026-10-07-m1a3-osi-textures-parser-security.md`.
+- **Cross-checks: a mismatch is a defect until traced through every use, and compare everything.** "Same bits, printed differently" hid a sign bug (`cond ? int32_t : uint32_t` decays to unsigned) that only an all-8,406-methods comparison exposed.
+- **An oracle is independent only where it re-derives.** Constants it transcribes from the implementation fail together (the byte-swapped "sky1"/"watr" sort ids passed every test until the oracle was swept over all 123 areas). Cite such constants from the binary, and sweep the full corpus at least once per milestone (`make a9-sweep`).
+
 ## 7. Legal posture (INFERRED, not legal advice)
 
 The precedent is the LEGO Island decomp → `isle-portable` web port: it hosts code only, users supply their own install, and no takedown was found as of 2026-10. Hosting game assets is a different and riskier act. A copyright holder's tolerance is revocable, so publish non-commercially and stay takedown-ready.
