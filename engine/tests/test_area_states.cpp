@@ -453,6 +453,9 @@ void cave_call(std::vector<uint8_t>& c, uint8_t on) {  // GcLightDirector::SetCa
 view::AreaData cave_area(const std::vector<uint8_t>* calls) {
   // A style-0 point light (intensity 0.5), a style-1 point light (flags 0x40|2, intensity 0.5) and a directional record
   // (intensity 1.0 -> 1.2 in the ctor) with its style-0 "Shad" fill; level 3, so no default lights are added.
+  // N-2: pt0a (flags 0x40, no style flag) is style 0 by the SHIM's documented choice (area.cpp, light loop); the exe
+  // would keep the previous record's style, here uninitialised stack. No real light has this shape (1555/1555 carry a
+  // flag). Its rows below pin the shim's choice; dir1 and Shad are style 0 in the exe too (directional ctor).
   const std::vector<std::pair<std::string, Bytes>> entries = {
       {"lite_light.slb", light_slb({{"pt0a", 1, 2, 3, 0.5f, 10, 0.8f, 0.6f, 0.4f, 1, 0x40},
                                     {"pt1a", 1, 2, 3, 0.5f, 10, 1, 1, 1, 1, 0x42},
@@ -482,6 +485,7 @@ TEST_CASE("area: SetCaveLighting SETS the intensity of style-0 lights: 0.25 when
   CHECK(a.cave_lighting_set);
   CHECK_FALSE(a.cave_lighting);
   CHECK(a.lights[0].name == "pt0a");
+  CHECK(a.lights[0].style == 0);  // the shim's choice for a point light without a style flag (N-2), not the exe's
   check4(a.lights[0].light.diffuse, 0.8f, 0.6f, 0.4f, 1.0f);  // style 0: base * 1.0 (not the record's 0.5)
   check4(a.lights[0].light.specular, 0.8f, 0.6f, 0.4f, 1.0f);
   check4(a.lights[1].light.diffuse, 0.5f, 0.5f, 0.5f, 0.5f);  // style 1: untouched
@@ -489,7 +493,7 @@ TEST_CASE("area: SetCaveLighting SETS the intensity of style-0 lights: 0.25 when
   check4(a.lights[2].light.diffuse, 0.5f, 0.5f, 0.5f, 1.0f);  // the ctor's 1.2 boost is overwritten by 1.0
   CHECK(a.lights[3].name == "Shad");
   check4(a.lights[3].light.diffuse, 0.35294119f, 0.35294119f, 0.35294119f, 1.0f);
-  // Every call overwrites from the base colour: the last one wins.
+  // Every call overwrites from the base colour: the last one wins (on pt0a, the shim's style 0, and on dir1, the exe's).
   std::vector<uint8_t> on_off, off_on;
   cave_call(on_off, 1);
   cave_call(on_off, 0);
@@ -498,4 +502,6 @@ TEST_CASE("area: SetCaveLighting SETS the intensity of style-0 lights: 0.25 when
   check4(cave_area(&on_off).lights[0].light.diffuse, 0.8f, 0.6f, 0.4f, 1.0f);
   check4(cave_area(&off_on).lights[0].light.diffuse, 0.8f * 0.25f, 0.6f * 0.25f, 0.4f * 0.25f, 0.25f);
   check4(cave_area(&off_on).lights[1].light.diffuse, 0.5f, 0.5f, 0.5f, 0.5f);
+  check4(cave_area(&on_off).lights[2].light.diffuse, 0.5f, 0.5f, 0.5f, 1.0f);
+  check4(cave_area(&off_on).lights[2].light.diffuse, 0.5f * 0.25f, 0.5f * 0.25f, 0.5f * 0.25f, 0.25f);
 }

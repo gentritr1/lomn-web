@@ -355,6 +355,10 @@ class Loader {
         warn("light record " + std::to_string(ri) + ": non-finite value (skipped)");
         continue;
       }
+      // A point light with no style flag gets style 0: the shim's choice, not the exe's. Per the M1a-4 T4 re-review (N-2)
+      // the exe keeps the previous record's style for such a record (uninitialised stack for the first one), and no real
+      // light reaches this (1555 of 1555 LIGHT.slb records carry a style flag). The synthetic lmp1 (A7/A9 goldens) and
+      // the test light pt0a do, and pin this choice.
       uint8_t style = 0;
       if (r.flags & 2) style = 1;
       else if (r.flags & 4) style = 3;
