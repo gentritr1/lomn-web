@@ -25,7 +25,9 @@ export function watch(page) {
     w.urls.push(r.url());
     let body = 0;
     try { body = r.postDataBuffer()?.length ?? 0; } catch { /* no body */ }
-    w.reqs.push({ url: r.url(), method: r.method(), bytes: body });
+    let top = false;
+    try { top = r.isNavigationRequest() && r.frame().parentFrame() === null; } catch { /* a worker's request has no frame */ }
+    w.reqs.push({ url: r.url(), method: r.method(), bytes: body, top_nav: top });
   });
   return w;
 }
@@ -108,6 +110,8 @@ export function diffRgb(a, b) {
 // request URL is on the test server's origin, and the bytes downloaded are at most the site's size. Review fix 3: nothing
 // is uploaded: every request is a GET or HEAD with no body, seen by the browser (method, postData) AND by the server
 // (method, bytes read), so an upload to a path that is in the manifest fails too ("nothing is uploaded" is a product promise).
+// Review fix N2: data can also leave in the URL: any request other than the page's own top-level navigation (whose
+// ?hud=1&area=... is the page's, and which the browser marks via Sec-Fetch-*) must have no query string or fragment.
 export function networkCheck(srv, site, watcher, fromResponse = 0, fromUrl = 0) {
   const manifest = JSON.parse(fs.readFileSync(path.join(site, 'asset-manifest.json'), 'utf8'));
   const allowed = new Set(manifest.files.map((f) => '/' + f.path).concat(['/', '/asset-manifest.json', '/favicon.ico']));
@@ -122,5 +126,10 @@ export function networkCheck(srv, site, watcher, fromResponse = 0, fromUrl = 0) 
     ...watcher.reqs.slice(fromUrl).filter(isUpload).map((x) => ({ side: 'browser', method: x.method, url: x.url, bytes: x.bytes })),
     ...resp.filter((r) => isUpload({ method: r.method, bytes: r.req_bytes })).map((r) => ({ side: 'server', method: r.method, url: r.path, bytes: r.req_bytes })),
   ];
-  return { ok: !foreignPaths.length && !foreignUrls.length && !uploads.length && bytes <= buildBytes, foreignPaths, foreignUrls, uploads, bytes, buildBytes, responses: resp.length };
+  const hasData = (u) => { try { const x = new URL(u, 'http://x'); return x.search !== '' || x.hash !== ''; } catch { return true; } };
+  const queries = [
+    ...watcher.reqs.slice(fromUrl).filter((x) => !x.top_nav && hasData(x.url)).map((x) => ({ side: 'browser', url: x.url })),
+    ...resp.filter((r) => !r.top_nav && hasData(r.url ?? r.path)).map((r) => ({ side: 'server', url: r.url })),
+  ];
+  return { ok: !foreignPaths.length && !foreignUrls.length && !uploads.length && !queries.length && bytes <= buildBytes, foreignPaths, foreignUrls, uploads, queries, bytes, buildBytes, responses: resp.length };
 }

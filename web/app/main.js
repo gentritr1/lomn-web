@@ -82,7 +82,15 @@ async function start() {
       $('regrant').hidden = false;
       $('regrant').textContent = `Allow access to "${handle.name}" again`;
       $('regrant').onclick = async () => {
-        if ((await handle.requestPermission({ mode: 'read' })) === 'granted') {
+        let granted;
+        try {
+          granted = (await handle.requestPermission({ mode: 'read' })) === 'granted';
+        } catch (err) {
+          // requestPermission itself can reject (no user activation, a handle the browser no longer honours): say so, keep the button.
+          L.permissionError = String(err?.message ?? err);
+          return setState('need-permission', `Permission could not be requested (${L.permissionError}). Click the button again, or choose the folder again.`);
+        }
+        if (granted) {
           $('regrant').hidden = true;
           await revisit().catch(fail);
         } else {

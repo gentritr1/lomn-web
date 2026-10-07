@@ -401,6 +401,14 @@ try {
       const post = await probe(async () => { await (await fetch('/builds.json', { method: 'POST', body: new Uint8Array(4096).fill(7) })).arrayBuffer(); });
       check(!post.ok && post.foreignPaths.length === 0 && post.foreignUrls.length === 0 && (post.uploads ?? []).some((u) => u.method === 'POST' && u.bytes === 4096),
             'upload positive control: POSTing 4096 bytes to /builds.json (a manifest path) fails the network check', JSON.stringify(post.uploads ?? 'no upload record'));
+      // Review fix N2: data in a query string to a manifest path is an upload too (the page itself never puts a query on an asset
+      // request; only its own navigation URL, ?hud=1&area=..., carries one, and every page of this test is that).
+      const query = await probe(async () => { await (await fetch('/builds.json?d=' + 'A'.repeat(200))).arrayBuffer(); });
+      check(!query.ok && query.foreignPaths.length === 0 && query.foreignUrls.length === 0 && (query.uploads ?? []).length === 0 && (query.queries ?? []).length >= 1,
+            'query-string positive control: fetch("/builds.json?d=" + 200 bytes) fails the network check', JSON.stringify(query.queries ?? 'no query record').slice(0, 300));
+      const img = await probe(async () => { await new Promise((res) => { const i = new Image(); i.onload = i.onerror = res; i.src = '/builds.json?img=' + 'B'.repeat(120); }); });
+      check(!img.ok && (img.queries ?? []).length >= 1, 'query-string positive control: an <img> request with a query string to a manifest path fails the network check',
+            JSON.stringify(img.queries ?? 'no query record').slice(0, 300));
       const beacon = await probe((kind) => navigator.sendBeacon('/builds.json', new Blob([new Uint8Array(512)])), 'beacon');
       check(!beacon.ok && (beacon.uploads ?? []).some((u) => u.method === 'POST' && u.bytes === 512),
             'upload positive control: navigator.sendBeacon to a manifest path fails the network check', JSON.stringify(beacon.uploads ?? 'no upload record'));
@@ -805,6 +813,21 @@ try {
       await p.page.click('#regrant');
       const o = await outcome(p);
       check(good(o), 'T5b-I1: re-grant click + wasm fetch failure -> error, Reload button, no unhandled rejection', verdict(o));
+      await p.page.close();
+    }
+    // (d) review fix N3: requestPermission() itself rejects: a message, the button stays, no unhandled rejection.
+    {
+      const p = await open(base + '?area=levt/test', `
+        FileSystemHandle.prototype.queryPermission = async () => 'prompt';
+        FileSystemHandle.prototype.requestPermission = async () => { throw new Error('TEST: requestPermission rejected'); };`);
+      await waitState(p.page, ['need-permission']);
+      await p.page.click('#regrant');
+      await p.page.waitForFunction(() => /could not be requested/.test(window.__lomn.message), null, { timeout: 15000 }).catch(() => {});
+      const o = await p.page.evaluate(() => ({ state: window.__lomn.state, message: window.__lomn.message }));
+      const button = await p.page.locator('#regrant').isVisible();
+      check(o.state === 'need-permission' && /could not be requested.*TEST: requestPermission rejected/.test(o.message) && button && p.w.errors.length === 0,
+            'N3: a rejected requestPermission() shows a message, keeps the re-grant button, and leaves no unhandled rejection',
+            `${o.state}: ${o.message}; button visible ${button}; page errors ${JSON.stringify(p.w.errors)}`);
       await p.page.close();
     }
     const q = await open(base + '?pick=1', undefined, { drop: false });
