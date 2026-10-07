@@ -107,7 +107,7 @@ timeout 600 cmake -S engine -B build/native -G Ninja -DCMAKE_BUILD_TYPE=Release 
 -- Generating done (0.0s)
 -- Build files have been written to: $W/work/build/native
 ninja: no work to do.
-timeout 1200 .venv/bin/python tools/research/oracle/check_datacheck.py --exe build/native/lomn_datacheck --install "$HOME/Library/Application Support/Claude/scratch-workspaces/5646e5b3-cad6-4351-8654-c09665b19fe4/3010fd2d-0ad0-400c-b044-1feb8b750bad/scratch-2026-10-06-5e2f6d/lomn-data/install"
+timeout 1200 .venv/bin/python tools/research/oracle/check_datacheck.py --exe build/native/lomn_datacheck --install "$LOMN_DATA/install"
 PASS  lomn_datacheck exits 0
 (C++ wall 2149 ms)
 PASS  A1 all .blk found by both walkers  -- python 189, c++ 189

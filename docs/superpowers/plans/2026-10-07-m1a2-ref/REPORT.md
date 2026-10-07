@@ -251,3 +251,6 @@ To run under the sanitizers, configure `build/asan` with these flags, then run `
 ```
 
 The scripts are in `scripts/`: `evidence.sh`, `farcheck.sh`, `mutate.py`, `mutate2.py`.
+
+## Repository hygiene note (controller, 2026-10-07)
+Before commit, absolute local paths in `logs/` were replaced by `$R` / `$W` / `$LOMN_DATA` / `$HOME`, and the per-area game coordinates in `evidence-metrics/*.json` (`start`, `bounds`, `camera.eye`, `camera.at`; 290 fields) were replaced by the string "removed (game coordinates)". Counts, names, timings and memory figures are unchanged. `MANIFEST.txt` sha256 values for `logs/` and `evidence-metrics/` therefore predate this scrub; `files/` hashes are unaffected.
