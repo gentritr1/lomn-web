@@ -23,7 +23,10 @@ uint32_t id_value(const std::string& id) {  // the 4CC as the engine holds it: f
   return v;
 }
 constexpr uint32_t kIdPlnt = 0x706c6e74u, kIdTre1 = 0x74726531u;  // "plnt", "tre1" (string @0x0072a55c)
-constexpr uint32_t kIdSort1 = 0x31796b73u, kIdSort2 = 0x72746177u;  // GcTransDirector::SortIt @0x0070b060 / 0x0070b064
+// GcTransDirector::SortIt's ids: the exe bytes at 0x0070b060 / 0x0070b064 are "1yks" / "rtaw", i.e. the little-endian
+// u32s 0x736b7931 / 0x77617472 = "sky1" / "watr" in id_value's convention (the same as "tnlp" -> kIdPlnt). Task 8A E1:
+// these were the big-endian reads 0x31796b73 / 0x72746177, which no real id matches (9/123 real areas mis-ordered).
+constexpr uint32_t kIdSky1 = 0x736b7931u, kIdWatr = 0x77617472u;
 
 }  // namespace
 
@@ -364,7 +367,7 @@ void SageFrame::frame(const AreaData& a, const Camera& cam, uint32_t frame_index
     if (a.placements[i].route == sage::Route::Back) area_render(a, i);
   group("Trans", opt_.force_area_lighting ? (kModeTrans | 1u) : kModeTrans);
   // GcTransDirector::SortIt (0x00485bf0): selection by the largest horizontal distance from the camera position to
-  // the area's greatest-Y point + its position (far to near); ids "1yks" (@0x0070b060) first, "rtaw" (@0x0070b064)
+  // the area's greatest-Y point + its position (far to near); id "sky1" (@0x0070b060) first, "watr" (@0x0070b064)
   // and ids ending in 'w' only when they are the last one left.
   {
     std::vector<uint32_t> rem, sorted;
@@ -377,11 +380,11 @@ void SageFrame::frame(const AreaData& a, const Camera& cam, uint32_t frame_index
         const Placement& p = a.placements[rem[k]];
         const Model& m = a.models[p.model];
         const uint32_t id = id_value(m.id);
-        if (id == kIdSort1) {
+        if (id == kIdSky1) {
           best = k;
           break;
         }
-        if (id == kIdSort2 || (id & 0xffu) == 'w') {
+        if (id == kIdWatr || (id & 0xffu) == 'w') {
           if (rem.size() == 1) {
             best = k;
             break;

@@ -424,13 +424,19 @@ bool mount_synthetic_install(fs::MemoryFileSystem& fs) {
       {"test_pos.slb", pos_slb({{"pkup", 1, 2, 3, 0x60}, {"strt", 0, 0, 10, 0x1000}})},
   });
   // The A9 state scene: the A7 objects plus a plant ("plnt": fog toggle + DrawX context flag), "mixm" (alpha 128,
-  // "_glass" mTrans 0, textures.slb TFACTOR 0.5), a trans id ending in 'w' (sorted last), a LIGHT table and the script.
+  // "_glass" mTrans 0, textures.slb TFACTOR 0.5), the two GcTransDirector::SortIt special ids (Task 8A E1) - "sky1"
+  // (always first; placed NEAREST, so a distance sort would draw it last) and "watr" (only when last; placed FARTHEST,
+  // so a distance sort would draw it first) - a LIGHT table and the script. The 'w'-suffix rule (also "only when last")
+  // cannot share a Trans node with "watr": with two such ids left the original loop has no pick (see sage_frame.cpp),
+  // so it is covered by test_sage_frame.cpp on a copy of this area with "watr" renamed. Both new models sit behind
+  // the 'blue' quad @-2 (hidden: no pixel probe changes).
   Bytes state = make_blk({
       {"quad.x", quad_x()},
       {"blue.x", blue_x()},
       {"plnt.x", quads_x({{-9, -5, -10, -5, "half"}})},
       {"mixm.x", quads_x({{-4, 0, -10, -5, "half"}, {1, 4, -10, -5, "x_glass"}, {5, 9, -10, -5, "tfx"}})},
-      {"watw.x", blue_x()},
+      {"sky1.x", blue_x()},
+      {"watr.x", blue_x()},
       {"stat_obj.slb", obj_slb({{"quad", 0, 0, 0, 0x10},
                                 {"blue", 0, 0, -2, 0x10},
                                 {"blue", 0, 0, -50, 0x08},
@@ -439,9 +445,10 @@ bool mount_synthetic_install(fs::MemoryFileSystem& fs) {
                                 {"blue", 0, 0, -80, 0x20},
                                 {"plnt", 0, 0, 0, 0x10},
                                 {"mixm", 0, 0, 0, 0x10},
-                                {"watw", 0, 0, -90, 0x110},
+                                {"watr", 0, 0, -90, 0x110},
                                 {"blue", 0, 0, -40, 0x30},    // moveables (hidden behind the blue quad): drawn
-                                {"quad", 0, 0, -20, 0x30}})},  // nearest first -> quad @-20 before blue @-40
+                                {"quad", 0, 0, -20, 0x30},     // nearest first -> quad @-20 before blue @-40
+                                {"sky1", 0, 0, -30, 0x110}})},  // last record: earlier records keep their indices
       {"stat_pos.slb", pos_slb({{"strt", 0, 0, 10, 0x1000}})},
       {"stat_light.slb", light_slb({{"lmp1", 1, 2, 3, 1.0f, 20.0f, 1, 0.5f, 0.25f, 1, 0x40},
                                     {"sun1", 0.5f, -1, 0, 0.8f, 0, 0.9f, 0.9f, 0.8f, 1, 0x80}})},

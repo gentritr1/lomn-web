@@ -456,11 +456,14 @@ def expected(root, level, area, eye_height):
     while rem:  # GcTransDirector::SortIt 0x00485bf0
         best, bd = None, 0.0
         for k, p in enumerate(rem):
+            # The exe's ids at 0x0070b060 / 0x0070b064 are the bytes "1yks" / "rtaw": GetAreaID returns the 4CC as a
+            # little-endian u32 (OBJ record id field, the same as the "tnlp" plnt check), so they ARE the ids "sky1" /
+            # "watr" (Task 8A E1; this compared big-endian reads before). (iv & 255) is the id's LAST character.
             iv = struct.unpack('>I', p['id'].encode('latin1').ljust(4, b'\0'))[0]
-            if iv == 0x31796b73:
+            if p['id'] == 'sky1':
                 best = k
                 break
-            if iv == 0x72746177 or (iv & 255) == ord('w'):
+            if p['id'] == 'watr' or (iv & 255) == ord('w'):
                 if len(rem) == 1:
                     best = k
                     break

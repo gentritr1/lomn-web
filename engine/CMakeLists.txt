@@ -114,12 +114,13 @@ else()
   add_test(NAME a9_state_log COMMAND ${CMAKE_COMMAND} -DEXE=$<TARGET_FILE:lomn_view> -DOUT=${CMAKE_CURRENT_BINARY_DIR}/a9
            -DEXPECTED=${CMAKE_CURRENT_SOURCE_DIR}/tests/data/a9_state.txt -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/a9_state.cmake)
   # A9 against the independent Python oracle (tools/research/oracle/a9_oracle.py, written from the decompiled code):
-  # the synthetic state scene (written out as an install) always; vllg/ghut/crss when LOMN_DATA is set (else 77 = skip).
+  # the synthetic state scene (written out as an install) always; vllg/ghut/crss when LOMN_DATA is set (else 77 = skip),
+  # plus lev2/vllg and lev3/blr2 (Task 8A E1: Trans nodes with "sky1" and "watr").
   add_test(NAME a9_oracle_synthetic COMMAND sh -c
            "rm -rf \"$1\" && \"$0\" --synthetic 2 --backend null --out \"$1/c.txt\" --state-log \"$1/s.txt\" --write-install \"$1/inst\" >/dev/null && timeout 120 python3 \"$2\" --install \"$1/inst\" --level levt --area stat --eye-height 0 --compare \"$1/s.txt\""
            $<TARGET_FILE:lomn_view> ${CMAKE_CURRENT_BINARY_DIR}/a9_oracle_syn ${CMAKE_CURRENT_SOURCE_DIR}/../tools/research/oracle/a9_oracle.py)
   add_test(NAME a9_oracle_real COMMAND sh -c
-           "if [ -z \"$LOMN_DATA\" ]; then echo 'SKIPPED (no LOMN_DATA)'; exit 77; fi; mkdir -p \"$1\"; for la in lev1:vllg lev2:ghut lev4:crss; do l=\${la%%:*}; a=\${la##*:}; \"$0\" --install \"$LOMN_DATA/install\" --level $l --area $a --backend null --out \"$1/$a.txt\" --state-log \"$1/$a.state.txt\" >/dev/null || exit 1; timeout 120 python3 \"$2\" --install \"$LOMN_DATA/install\" --level $l --area $a --compare \"$1/$a.state.txt\" || exit 1; done"
+           "if [ -z \"$LOMN_DATA\" ]; then echo 'SKIPPED (no LOMN_DATA)'; exit 77; fi; mkdir -p \"$1\"; for la in lev1:vllg lev2:ghut lev4:crss lev2:vllg lev3:blr2; do l=\${la%%:*}; a=\${la##*:}; \"$0\" --install \"$LOMN_DATA/install\" --level $l --area $a --backend null --out \"$1/$l.$a.txt\" --state-log \"$1/$l.$a.state.txt\" >/dev/null || exit 1; timeout 120 python3 \"$2\" --install \"$LOMN_DATA/install\" --level $l --area $a --compare \"$1/$l.$a.state.txt\" || exit 1; done"
            $<TARGET_FILE:lomn_view> ${CMAKE_CURRENT_BINARY_DIR}/a9_oracle_real ${CMAKE_CURRENT_SOURCE_DIR}/../tools/research/oracle/a9_oracle.py)
   set_tests_properties(a9_oracle_real PROPERTIES SKIP_RETURN_CODE 77)
   # M1a-3 Task 8A C1: C++ OsiFile::eval_calls vs the independent Python evaluator (tools/research/osi.py) over EVERY

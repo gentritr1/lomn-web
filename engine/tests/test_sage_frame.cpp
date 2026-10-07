@@ -151,6 +151,49 @@ TEST_CASE("area: A10 - every drawn subset of a coloured model feeds its vertex D
   CHECK(layout);
   CHECK(std::string(view::area_wgsl()).find("@location(3) c: vec4f") != std::string::npos);
   CHECK(std::string(view::area_wgsl()).find("select(vec4f(1.0), c, u.a.y > 0.5)") != std::string::npos);
-  CHECK(r.last_stats().rhi_draws == 19);
+  CHECK(r.last_stats().rhi_draws == 20);  // Task 8A E1: + the "sky1" Trans placement
 }
 
+
+namespace {
+
+// The placements the Trans node draws, in order ("id#record", one entry per placement).
+std::vector<std::string> trans_order(const view::AreaData& a) {
+  std::vector<std::string> log;
+  Device8 d(&log);
+  view::SageFrame f(d, view::SageCaps(), view::SageFrameOptions());
+  f.frame(a, view::make_camera(a, view::synthetic_camera(), 1.0f), 0);
+  std::vector<std::string> out;
+  bool in_trans = false;
+  for (const std::string& l : log) {
+    if (l.rfind("# node ", 0) == 0) in_trans = l == "# node Trans";
+    if (l.rfind("# main view: ScRenderer::Finish", 0) == 0) in_trans = false;
+    if (!in_trans || l.rfind("DRAW ", 0) != 0) continue;
+    const std::string tag = l.substr(5, l.find(' ', 5) - 5);
+    if (out.empty() || out.back() != tag) out.push_back(tag);
+  }
+  return out;
+}
+
+}  // namespace
+
+TEST_CASE("sage: GcTransDirector::SortIt - sky1 first, watr and ids ending in 'w' only when last (Task 8A E1)") {
+  // The exe holds the two ids at 0x0070b060 / 0x0070b064 as the bytes "1yks" / "rtaw": read as the engine's
+  // little-endian u32 4CC (first character in the top byte, as the "tnlp" -> plnt check) they are "sky1" / "watr".
+  // Distances (camera at the POS start (0,0,10); greatest-Y point + position, xz): watr#8 92.3 > quad#3 82.8 >
+  // blue#4 72.4 > sky1#11 33.0. A distance-only sort (the byte-swapped ids) would draw watr first and sky1 last.
+  const view::AreaData a = synthetic_area();
+  CHECK(trans_order(a) == std::vector<std::string>{"sky1#11", "quad#3", "blue#4", "watr#8"});
+  // The 'w'-suffix rule: rename the watr model to "pdlw" -> still deferred to the end; to "pdlx" -> distance sort.
+  view::AreaData b = a;
+  for (view::Model& m : b.models)
+    if (m.id == "watr") m.id = "pdlw";
+  CHECK(trans_order(b) == std::vector<std::string>{"sky1#11", "quad#3", "blue#4", "pdlw#8"});
+  for (view::Model& m : b.models)
+    if (m.id == "pdlw") m.id = "pdlx";
+  CHECK(trans_order(b) == std::vector<std::string>{"sky1#11", "pdlx#8", "quad#3", "blue#4"});
+  // Neither special id: plain far-to-near (sky1 renamed "skyx" is the nearest).
+  for (view::Model& m : b.models)
+    if (m.id == "sky1") m.id = "skyx";
+  CHECK(trans_order(b) == std::vector<std::string>{"pdlx#8", "quad#3", "blue#4", "skyx#11"});
+}
