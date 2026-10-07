@@ -261,16 +261,16 @@ TEST_CASE("x: mesh index validation") {
 
 namespace {
 
-// Material "M" with n empty child objects, and a MeshMaterialList that references {M} n times (all faces use
-// material 0). Decoding M once per reference is n^2 work: 40000 refs took 4.8 s before the memo.
-Bytes many_refs(uint32_t n, uint32_t nmat) {
+// Material "M" with n empty child objects, and a MeshMaterialList that references {M} `refs` times (all faces use
+// material 0). Decoding M once per reference is refs x n work: 40000 x 40000 took 4.8 s before the memo.
+Bytes many_refs(uint32_t n, uint32_t nmat, uint32_t refs) {
   X x;
   x.obj("Mesh").ints({3}).floats({0, 0, 0, 1, 0, 0, 1, 1, 0}).ints({1, 3, 0, 1, 2});
   x.name("Material").name("M").open().floats({1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0});
   for (uint32_t i = 0; i < n; ++i) x.obj("A").close();
   x.close();
   x.obj("MeshMaterialList").ints({nmat, 1, 0});
-  for (uint32_t i = 0; i < n; ++i) x.ref("M");
+  for (uint32_t i = 0; i < refs; ++i) x.ref("M");
   x.close();
   x.close();
   return x.b;
@@ -293,7 +293,7 @@ TEST_CASE("x: many material references stay linear (memoised Material decode)") 
   std::string err;
   const uint32_t n = 40000;
   {
-    Bytes b = many_refs(n, n);
+    Bytes b = many_refs(n, n, n);
     auto t0 = std::chrono::steady_clock::now();
     bool ok = parse_x(b.data(), b.size(), xf, &err);
     double dt = seconds_since(t0);
@@ -302,7 +302,11 @@ TEST_CASE("x: many material references stay linear (memoised Material decode)") 
     CHECK(dt < kSlowBound);  // old code: ~4.8 s native (Release now ~0.005 s)
   }
   {
-    Bytes b = many_refs(n, 1);  // 40000 refs against nMaterials = 1: fail at the second one
+    // nMaterials = 1: the second reference fails. Sized so that decoding M once per reference (the pre-memo code:
+    // refs x n = 400,000 x 100,000 = 25x the case above, ~120 s native) blows far past kSlowBound, while the current
+    // code takes ~ms. n stays under kXMaxObjects; refs are members, not objects (file ~6 MB, under kMaxEntrySize).
+    // This guards the MEMO: removing only the early bail keeps it fast (400k cheap copies, measured ~0.05 s).
+    Bytes b = many_refs(100000, 1, 400000);
     auto t0 = std::chrono::steady_clock::now();
     bool ok = parse_x(b.data(), b.size(), xf, &err);
     double dt = seconds_since(t0);
@@ -361,10 +365,10 @@ TEST_CASE("x: texture name x reference amplification is capped (both caps)") {
     CHECK(err.find("texture name too long") != std::string::npos);
   }
   {  // material count boundary: nMaterials == cap (with that many references) passes, +1 fails
-    Bytes ok = many_refs(kXMaxMaterials, kXMaxMaterials);
+    Bytes ok = many_refs(kXMaxMaterials, kXMaxMaterials, kXMaxMaterials);
     REQUIRE(parse_x(ok.data(), ok.size(), xf, &err));
     CHECK(xf.mesh.materials.size() == kXMaxMaterials);
-    Bytes bad = many_refs(1, kXMaxMaterials + 1);
+    Bytes bad = many_refs(1, kXMaxMaterials + 1, 1);
     CHECK_FALSE(parse_x(bad.data(), bad.size(), xf, &err));
     CHECK(err.find("too many materials") != std::string::npos);
   }
