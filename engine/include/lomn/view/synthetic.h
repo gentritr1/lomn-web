@@ -14,6 +14,8 @@
 //   test_OBJ.slb  quad main @0; blue main @(0,0,-2); blue back @-50; quad trans @-60; blue trans @-70;
 //                 blue nolight @-80; "nope" flags 0x4 (ignored: never loaded); "miss" main (no such model: warning)
 //   test_POS.slb  a pickup record (0x60) then the start record (0x1000) at (0, 0, 10)
+// M1a-3 additions: levt.blk also holds half.dds (A8R8G8B8 green, alpha 128), x_glass.dds and tfx.dds (DXT1) and
+// textures.slb {tfx 0.5 0 0, red 1 0 0, cut 1 0.25 0}; Root/Data/Base.osi; Root/Data/Levels/levt/stat.blk (above).
 // Camera for the scene: eye = start (eye_height 0), yaw 0 (looking along -Z), pitch 0, fov 90, near 0.1, far 100.
 #pragma once
 #include "lomn/fs.h"
@@ -23,6 +25,10 @@ namespace lomn::view {
 
 constexpr const char* kSyntheticLevel = "levt";
 constexpr const char* kSyntheticArea = "test";
+// M1a-3 A9 state scene (same level, same camera): the A7 objects plus a plant, a mixed-material model, a trans id
+// ending in 'w', two moveables (nearest-first order), a LIGHT table, the level's textures.slb and a Base.osi class
+// "lego_area_statt" (fog + cave lighting).
+constexpr const char* kSyntheticStateArea = "stat";
 
 // Mounts the scene's blockfiles into `fs`. False if a mount fails.
 bool mount_synthetic_install(fs::MemoryFileSystem& fs);

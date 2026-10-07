@@ -95,6 +95,20 @@ Bytes cut_dds() {  // A8R8G8B8 8x8: columns 0..3 opaque green, 4..7 transparent 
   return b;
 }
 
+// M1a-3 textures.
+Bytes solid_argb(uint32_t argb) {  // A8R8G8B8 4x4, one colour (alpha on)
+  Bytes b = dds_header(4, 4, nullptr);
+  for (int i = 0; i < 16; ++i) put32(b, argb);
+  return b;
+}
+Bytes solid_dxt1(uint16_t c565) {  // DXT1 4x4, one colour (alpha off)
+  Bytes b = dds_header(4, 4, "DXT1");
+  put16(b, c565);
+  put16(b, c565);
+  put32(b, 0);
+  return b;
+}
+
 // Binary .x token writer (xof 0303bin 0032): NAME=1, STRING=2, INTEGER_LIST=6, FLOAT_LIST=7, '{'=10, '}'=11.
 struct X {
   Bytes b;
@@ -179,6 +193,32 @@ Bytes quad_x() {
   return x.b;
 }
 
+// M1a-3: a mesh of quads in the model's y = 0 plane (world z = position z), one subset per quad, each with its own
+// textured material (white diffuse), no vertex colours, no normals.
+struct QuadSpec {
+  float x0, x1, z0, z1;
+  const char* texture;
+};
+Bytes quads_x(const std::vector<QuadSpec>& qs) {
+  std::vector<float> pos, uv;
+  std::vector<uint32_t> faces;
+  for (const QuadSpec& q : qs) quad(pos, uv, faces, q.x0, q.x1, q.z0, q.z1);
+  X x;
+  const uint32_t n = static_cast<uint32_t>(qs.size());
+  x.obj("Mesh").ints({4 * n}).floats(pos);
+  std::vector<uint32_t> fi = {n};
+  fi.insert(fi.end(), faces.begin(), faces.end());
+  x.ints(fi);
+  x.obj("MeshTextureCoords").ints({4 * n}).floats(uv).close();
+  std::vector<uint32_t> ml = {n, n};
+  for (uint32_t i = 0; i < n; ++i) ml.push_back(i);
+  x.obj("MeshMaterialList").ints(ml);
+  for (const QuadSpec& q : qs) material(x, {1, 1, 1, 1}, q.texture);
+  x.close();
+  x.close();
+  return x.b;
+}
+
 Bytes blue_x() {
   std::vector<float> pos, uv;
   std::vector<uint32_t> faces;
@@ -227,6 +267,122 @@ Bytes obj_slb(const std::vector<Rec>& recs) {
   return b;
 }
 
+// <area>_LIGHT.slb {slot, n, ptr=12} + 44-byte records {id, pos/dir, intensity, range, rgba, flags}.
+struct LightSpec {
+  const char* id;
+  float x, y, z, intensity, range, r, g, b, a;
+  uint32_t flags;
+};
+Bytes light_slb(const std::vector<LightSpec>& ls) {
+  Bytes b;
+  put32(b, 0);
+  put32(b, static_cast<uint32_t>(ls.size()));
+  put32(b, 12);
+  for (const LightSpec& l : ls) {
+    put32(b, id4(l.id));
+    for (float v : {l.x, l.y, l.z, l.intensity, l.range, l.r, l.g, l.b, l.a}) putf(b, v);
+    put32(b, l.flags);
+  }
+  put32(b, 8);
+  put32(b, 1);
+  put32(b, 0x00C0FFEEu);
+  return b;
+}
+
+// <lev>/textures.slb {n, n, ptr=12} + 20-byte records {ptr name, trans, u, v, frames} + length-prefixed names.
+struct SpecSpec {
+  const char* name;
+  float trans, u, v;
+};
+Bytes textures_slb(const std::vector<SpecSpec>& ss) {
+  Bytes b;
+  put32(b, static_cast<uint32_t>(ss.size()));
+  put32(b, static_cast<uint32_t>(ss.size()));
+  put32(b, 12);
+  uint32_t str = static_cast<uint32_t>(12 + 20 * ss.size());
+  std::vector<uint32_t> slots = {8};
+  for (const SpecSpec& s : ss) {
+    slots.push_back(static_cast<uint32_t>(b.size()));
+    put32(b, str);
+    putf(b, s.trans);
+    putf(b, s.u);
+    putf(b, s.v);
+    put32(b, 0);
+    str += static_cast<uint32_t>(std::strlen(s.name)) + 2;
+  }
+  for (const SpecSpec& s : ss) {
+    b.push_back(static_cast<uint8_t>(std::strlen(s.name)));
+    putstr(b, s.name);
+    b.push_back(0);
+  }
+  while (b.size() % 4) b.push_back(0);
+  for (size_t i = slots.size(); i-- > 0;) put32(b, slots[i]);
+  put32(b, static_cast<uint32_t>(slots.size()));
+  put32(b, 0x00C0FFEEu);
+  return b;
+}
+
+// data/Base.osi (version 4.1): one class "lego_area_statt" (area "stat" of level "levt": suffix = the level name's 4th
+// character, as for lev2..lev6) whose InitFull calls GcAreaDirector::SetFog(0xff808080, 0 - 5, 0 - 50, 0.1) and
+// GcLightDirector::SetCaveLighting(1), compiled the way Base.osi's area scripts are.
+Bytes base_osi() {
+  Bytes b;
+  putstr(b, std::string("OSI\0", 4));
+  put16(b, 4);
+  put16(b, 1);
+  auto strings = [&](const std::vector<std::string>& v) {
+    put16(b, static_cast<uint16_t>(v.size()));
+    for (const std::string& s : v) {
+      b.push_back(static_cast<uint8_t>(s.size()));
+      putstr(b, s);
+      b.push_back(0);
+    }
+  };
+  strings({"gcareadirector", "setfog", "gclightdirector", "setcavelighting"});
+  strings({});      // globals
+  put16(b, 0);      // functions
+  put16(b, 1);      // classes
+  b.push_back(0);   // properties
+  b.push_back(1);   // methods
+  put16(b, 0);      // symbol 0 = "initfull"
+  const size_t off_at = b.size();
+  put32(b, 0);      // bytecode offset (patched)
+  b.push_back(15);
+  putstr(b, "lego_area_statt");
+  b.push_back(0);
+  strings({"initfull"});
+  strings({});      // sources
+  const uint32_t code = static_cast<uint32_t>(b.size());
+  for (int i = 0; i < 4; ++i) b[off_at + i] = static_cast<uint8_t>(code >> (8 * i));
+  b.push_back(0x40);
+  put32(b, 0xff808080u);  // PushConstanti32 (-8355712)
+  b.push_back(0x45);      // PushConstant0
+  b.push_back(0x44);
+  putf(b, 5.0f);
+  b.push_back(0x71);      // Subtract -> -5
+  b.push_back(0x45);
+  b.push_back(0x44);
+  putf(b, 50.0f);
+  b.push_back(0x71);      // -> -50
+  b.push_back(0x44);
+  putf(b, 0.1f);
+  b.push_back(0x82);      // CallGameFunction gcareadirector.setfog/4
+  put16(b, 0);
+  put16(b, 1);
+  b.push_back(4);
+  b.push_back(0x30);      // Pop
+  b.push_back(0x43);
+  b.push_back(1);         // PushConstanti8 1
+  b.push_back(0x82);      // CallGameFunction gclightdirector.setcavelighting/1
+  put16(b, 2);
+  put16(b, 3);
+  b.push_back(1);
+  b.push_back(0x30);
+  b.push_back(0x47);      // PushNothing
+  b.push_back(0x52);      // Return
+  return b;
+}
+
 Bytes pos_slb(const std::vector<Rec>& recs) {  // {slot, n, ptr=12} + 20-byte records
   Bytes b;
   put32(b, 0);
@@ -248,7 +404,12 @@ Bytes pos_slb(const std::vector<Rec>& recs) {  // {slot, n, ptr=12} + 20-byte re
 }  // namespace
 
 bool mount_synthetic_install(fs::MemoryFileSystem& fs) {
-  Bytes level = make_blk({{"red.dds", red_dds()}, {"cut.dds", cut_dds()}});
+  Bytes level = make_blk({{"red.dds", red_dds()},
+                          {"cut.dds", cut_dds()},
+                          {"half.dds", solid_argb(0x8000ff00u)},  // green, alpha 128
+                          {"x_glass.dds", solid_dxt1(0xFFE0)},     // yellow; "_glass" -> mTrans 0
+                          {"tfx.dds", solid_dxt1(0x001F)},         // blue; textures.slb trans 0.5
+                          {"textures.slb", textures_slb({{"tfx", 0.5f, 0, 0}, {"red", 1, 0, 0}, {"cut", 1, 0.25f, 0}})}});
   Bytes area = make_blk({
       {"quad.x", quad_x()},
       {"blue.x", blue_x()},
@@ -262,7 +423,31 @@ bool mount_synthetic_install(fs::MemoryFileSystem& fs) {
                                 {"miss", 0, 0, 0, 0x10}})},
       {"test_pos.slb", pos_slb({{"pkup", 1, 2, 3, 0x60}, {"strt", 0, 0, 10, 0x1000}})},
   });
-  return fs.mount("Root/Data/Levels/levt/levt.blk", std::move(level)) && fs.mount("Root/Data/Levels/levt/test.blk", std::move(area));
+  // The A9 state scene: the A7 objects plus a plant ("plnt": fog toggle + DrawX context flag), "mixm" (alpha 128,
+  // "_glass" mTrans 0, textures.slb TFACTOR 0.5), a trans id ending in 'w' (sorted last), a LIGHT table and the script.
+  Bytes state = make_blk({
+      {"quad.x", quad_x()},
+      {"blue.x", blue_x()},
+      {"plnt.x", quads_x({{-9, -5, -10, -5, "half"}})},
+      {"mixm.x", quads_x({{-4, 0, -10, -5, "half"}, {1, 4, -10, -5, "x_glass"}, {5, 9, -10, -5, "tfx"}})},
+      {"watw.x", blue_x()},
+      {"stat_obj.slb", obj_slb({{"quad", 0, 0, 0, 0x10},
+                                {"blue", 0, 0, -2, 0x10},
+                                {"blue", 0, 0, -50, 0x08},
+                                {"quad", 0, 0, -60, 0x110},
+                                {"blue", 0, 0, -70, 0x110},
+                                {"blue", 0, 0, -80, 0x20},
+                                {"plnt", 0, 0, 0, 0x10},
+                                {"mixm", 0, 0, 0, 0x10},
+                                {"watw", 0, 0, -90, 0x110},
+                                {"blue", 0, 0, -40, 0x30},    // moveables (hidden behind the blue quad): drawn
+                                {"quad", 0, 0, -20, 0x30}})},  // nearest first -> quad @-20 before blue @-40
+      {"stat_pos.slb", pos_slb({{"strt", 0, 0, 10, 0x1000}})},
+      {"stat_light.slb", light_slb({{"lmp1", 1, 2, 3, 1.0f, 20.0f, 1, 0.5f, 0.25f, 1, 0x40},
+                                    {"sun1", 0.5f, -1, 0, 0.8f, 0, 0.9f, 0.9f, 0.8f, 1, 0x80}})},
+  });
+  return fs.mount("Root/Data/Levels/levt/levt.blk", std::move(level)) && fs.mount("Root/Data/Levels/levt/test.blk", std::move(area)) &&
+         fs.mount("Root/Data/Levels/levt/stat.blk", std::move(state)) && fs.mount("Root/Data/Base.osi", base_osi());
 }
 
 CameraSettings synthetic_camera() {

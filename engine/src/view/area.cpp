@@ -9,8 +9,10 @@
 #include <map>
 #include <set>
 
+#include "lomn/d3d/device8.h"
 #include "lomn/sage/blockchain.h"
 #include "lomn/sage/image.h"
+#include "lomn/sage/osi.h"
 #include "lomn/sage/xfile.h"
 
 namespace lomn::view {
@@ -85,6 +87,9 @@ class Loader {
     }
     kind_ = LoadError::Data;  // every later failure is a cap or a data error
     prefix_ = "Root/Data/Levels/" + out_.level + "/" + out_.area;  // "%.4s/%.4s" area prefix (GcAreaLoader::LoadArea)
+    // levelType: LoadArea pushes (uint8)(levelName[3] - '0') (0x004ffd0d: movzx byte [edi+3]; add -0x30).
+    out_.level_type = static_cast<uint8_t>(static_cast<uint8_t>(out_.level.size() > 3 ? out_.level[3] : 0) - '0');
+    load_spec_textures();
 
     std::vector<sage::ObjRecord> recs;
     if (load_table("_obj.slb", e)) {
@@ -161,6 +166,9 @@ class Loader {
       if (rt != sage::Route::Back) grow_bounds(out_.models[model], p.world);
       out_.placements.push_back(p);
     }
+    apply_spec_textures();
+    load_lights();
+    load_script();
     st.placements = static_cast<uint32_t>(out_.placements.size());
     st.models = static_cast<uint32_t>(out_.models.size());
     st.textures = static_cast<uint32_t>(out_.textures.size());
@@ -189,6 +197,191 @@ class Loader {
   bool load_table(const char* suffix, std::string& e) {
     // "Root/Data/Levels/%.4s/%.4s/%.4s_obj.slb" through SrBlockFileLoad (current -> second -> Art).
     return chain_.load(prefix_ + "/" + out_.area + suffix, bytes_, nullptr, &e);
+  }
+
+  // SetCurrentLevel loads Root/Data/Levels/<lev>/textures.slb into GcSpecTextureLoader (the level blockfile is current).
+  void load_spec_textures() {
+    std::string e;
+    if (!chain_.load("Root/Data/Levels/" + out_.level + "/textures.slb", bytes_, nullptr, &e)) {
+      warn("no textures.slb: " + e);
+      return;
+    }
+    sage::Slb slb;
+    if (!slb.parse(std::move(bytes_), &e) || !sage::parse_spec_textures(slb, spec_, &e)) {
+      warn("textures.slb rejected: " + e);
+      spec_.clear();
+    }
+    out_.special_textures = static_cast<uint32_t>(spec_.size());
+  }
+  // GcSpecTextureLoader::LoadTextures for every placed model (GcArea / moveable creation): a record applies to the
+  // materials of used attributes whose texture path equals "<lev>/textures/<name>" (strcmp: case-sensitive), unless it
+  // is (1, 0, 0) (GcArea::SetSpecialTexture 0x00505710). trans < 1 -> SetTransparency; (u, v) != 0 -> SetUVOffset
+  // (ScDrawableModel::SetSpecialTexture 0x00553da0). Animated textures (frames != 0) are out of scope.
+  void apply_spec_textures() {
+    for (Model& m : out_.models)
+      for (SubsetDraw& sd : m.subsets) {
+        if (!sd.textured) continue;
+        for (const sage::SpecTextureRecord& r : spec_) {
+          if (r.trans == 1.0f && r.u == 0.0f && r.v == 0.0f) continue;
+          if (r.name != sd.texture_name) continue;
+          if (r.trans < 1.0f) sd.trans = r.trans;
+          if (r.u != 0.0f || r.v != 0.0f) {
+            sd.uv_offset[0] = r.u;
+            sd.uv_offset[1] = r.v;
+          }
+          if (!sd.special) ++out_.special_matches;
+          sd.special = true;
+        }
+      }
+  }
+  // GcLightLoader::LoadLights (0x00470010) + GrSetDefaultLighting (0x00470560); lights as GcLight builds them
+  // (GcFastLight::SetPointLight 0x0058d6a0 / SetDirectionalLight 0x0058d770 / SetAmbientLight 0x0058d8c0 / SetIntensity
+  // 0x0058ddf0). A missing or rejected table throws in the game and LoadArea calls GrSetDefaultLighting.
+  static d3d::Color4 col(float r, float g, float b, float a) { return d3d::Color4{r, g, b, a}; }
+  static void intensity(SceneLight& s, const d3d::Color4& c, float v) {
+    if (v > 0.9f) v *= 1.2f;  // GcLight ctors: intensity above 0.9 is scaled by 1.2 (@0x0070c16c / 0x0070c170)
+    s.base = c;
+    s.light.diffuse = s.light.specular = col(c.r * v, c.g * v, c.b * v, c.a * v);
+  }
+  void add_directional(const std::string& name, const d3d::Color4& c, float v, float x, float y, float z) {
+    SceneLight s;
+    s.name = name;
+    s.light.type = d3d::kLightDirectional;
+    s.light.direction[0] = x;
+    s.light.direction[1] = y;
+    s.light.direction[2] = z;
+    intensity(s, c, v);
+    out_.lights.push_back(s);
+  }
+  void default_lighting(uint8_t type) {
+    if (type < 3) {  // "LmbA": a directional light with only an ambient colour (0.4706 grey @0x00709364)
+      SceneLight s;
+      s.name = "LmbA";
+      s.light.type = d3d::kLightDirectional;
+      s.light.ambient = s.base = col(0.47058824f, 0.47058824f, 0.47058824f, 1.0f);
+      s.light.attenuation0 = 1.0f;  // @0x0073e938
+      s.light.range = 10000.0f;     // kMaxLightRange @0x0073e8f4
+      out_.lights.push_back(s);
+      return;
+    }
+    d3d::Color4 sun = col(1, 1, 1, 1);
+    if (type == 3) sun = col(1.0f, 0.98039216f, 0.83529413f, 1);
+    else if (type == 5) sun = col(0.95686275f, 1.0f, 0.86666667f, 1);
+    add_directional("SunL", sun, 1.0f, 0.85570401f, -0.51642299f, 0.0328423f);
+    const d3d::Color4 shad = type == 4 ? col(0.35294119f, 0.47058824f, 0.54901963f, 1) : col(0.35294119f, 0.35294119f, 0.35294119f, 1);
+    add_directional("Shad", shad, 1.0f, -0.85570401f, 0.51642299f, -0.0328423f);
+  }
+  void load_lights() {
+    std::vector<sage::LightRecord> recs;
+    std::string e;
+    bool table = load_table("_light.slb", e);
+    if (table) {
+      sage::Slb slb;
+      if (!slb.parse(std::move(bytes_), &e) || !sage::parse_light(slb, recs, &e)) {
+        warn("light table rejected: " + e);
+        table = false;
+      }
+    }
+    if (!table) {
+      default_lighting(out_.level_type);
+      out_.lights_source = "default";
+      return;
+    }
+    bool directional = false, shad = false;
+    for (const sage::LightRecord& r : recs) {  // bounded by parse_light (n * 44 <= table bytes)
+      if (out_.lights.size() >= kMaxAreaLights) break;
+      uint8_t style = 0;
+      if (r.flags & 2) style = 1;
+      else if (r.flags & 4) style = 3;
+      else if (r.flags & 8) style = 4;
+      else if (r.flags & 0x10) style = 5;
+      else if (r.flags & 0x20) style = 2;
+      const d3d::Color4 c = col(r.color[0], r.color[1], r.color[2], r.color[3]);
+      if (r.flags & 0x40) {
+        SceneLight s;
+        s.name = sage::fourcc(r.id);
+        s.style = style;
+        d3d::Light8& l = s.light;
+        l.type = d3d::kLightPoint;
+        for (int k = 0; k < 3; ++k) l.position[k] = r.pos[k];
+        if (r.param > 0.0f) {  // SetPointLight: range > 0 (@0x0073e908)
+          l.attenuation0 = 0.0f;
+          l.attenuation1 = 1.0f / (0.15f * r.param);  // 1.0 / (kFarIntensity 0.15 * range)
+          l.range = r.param;
+        } else {
+          l.attenuation0 = 1.0f;
+          l.attenuation1 = 0.0f;
+          l.range = 10000.0f;
+        }
+        intensity(s, c, r.range);
+        out_.lights.push_back(s);
+      } else if (r.flags & 0x80) {
+        directional = true;
+        add_directional(sage::fourcc(r.id), out_.level_type == 4 ? col(1, 1, 1, 1) : c, r.range, r.pos[0], r.pos[1], r.pos[2]);
+        if (!shad) {  // one opposite fill light "Shad" for the first directional record
+          shad = true;
+          const d3d::Color4 sc = out_.level_type == 4 ? col(0.35294119f, 0.47058824f, 0.54901963f, 1) : col(0.35294119f, 0.35294119f, 0.35294119f, 1);
+          add_directional("Shad", sc, r.range, -r.pos[0], -r.pos[1], -r.pos[2]);
+        }
+      }
+    }
+    out_.lights_source = "light_slb";
+    if (!directional) {  // LoadLights calls GrSetDefaultLighting when no 0x80 record was found
+      default_lighting(out_.level_type);
+      out_.lights_source = "light_slb+default";
+    }
+  }
+  // The area script's literals (lomn/sage/osi.h): class "lego_area_<area>" (level 1) or "lego_area_<area><level[3]>",
+  // method InitFull: GcAreaDirector::SetFog(color, start, end, density) stores (color, -start, -end, density)
+  // (0x0048a7a0); GcLightDirector::SetCaveLighting(b). INFERRED class naming: 91 of the 112 lego_area_* classes in Base.osi
+  // map to an existing area this way (tools/research/osi.py).
+  void load_script() {
+    std::vector<uint8_t> bytes;
+    if (fs_.read("Root/Data/Base.osi", bytes) != fs::Error::None) {
+      warn("osi: Root/Data/Base.osi not readable (fog/cave lighting from defaults)");
+      return;
+    }
+    sage::OsiFile osi;
+    std::string e;
+    if (!osi.parse(std::move(bytes), &e)) {
+      warn(e);
+      return;
+    }
+    std::string cls = "lego_area_" + out_.area;
+    if (out_.level_type != 1 && out_.level.size() > 3) cls += out_.level[3];  // lev2 -> "...2" (the level digit)
+    if (!osi.find_class(cls)) return;
+    out_.script_class = cls;
+    std::vector<sage::OsiCall> calls;
+    if (!osi.eval_calls(cls, "initfull", calls, &e)) {
+      warn(e);
+      return;
+    }
+    bool fog = false;
+    for (const sage::OsiCall& c : calls) {
+      const std::string key = lower(c.cls) + "." + lower(c.fn);
+      double v[4];
+      // Literal colours come from an untrusted file: only integers in the 32-bit range (signed or unsigned) are kept,
+      // so the conversion below is always defined; floats must be finite.
+      auto colour_ok = [](const sage::OsiValue& x) { return x.kind == sage::OsiValue::Int && x.i >= INT32_MIN && x.i <= int64_t(UINT32_MAX); };
+      if (key == "gcareadirector.setfog" && !fog && c.args.size() == 4 && colour_ok(c.args[0]) && c.args[0].number(v[0]) &&
+          c.args[1].number(v[1]) && c.args[2].number(v[2]) && c.args[3].number(v[3]) && std::isfinite(v[1]) && std::isfinite(v[2]) &&
+          std::isfinite(v[3])) {
+        fog = true;
+        out_.fog.color = static_cast<uint32_t>(c.args[0].i);
+        out_.fog.start = -static_cast<float>(v[1]);
+        out_.fog.end = -static_cast<float>(v[2]);
+        out_.fog.density = static_cast<float>(v[3]);
+        out_.fog.source = "osi";
+      } else if (key == "gclightdirector.setcavelighting" && c.args.size() == 1 && c.args[0].number(v[0])) {
+        out_.cave_lighting = v[0] != 0.0;
+      }
+    }
+    if (out_.cave_lighting)  // SetCaveLighting(1) 0x0048e670: active style-0 lights get SetIntensity(0.25) (@0x0070bd68)
+      for (SceneLight& l : out_.lights)
+        if (l.style == 0) {
+          const d3d::Color4& b = l.base;  // GcFastLight +0x78: the colour before any intensity
+          l.light.diffuse = l.light.specular = col(b.r * 0.25f, b.g * 0.25f, b.b * 0.25f, b.a * 0.25f);
+        }
   }
 
   // Model by 4CC id, cached per area (ScDrawableModel::Create keeps a map keyed by the full path; Find ignores case).
@@ -253,6 +446,7 @@ class Loader {
       o[6] = has_uv ? x.uvs[v * 2] : 0.0f;
       o[7] = has_uv ? x.uvs[v * 2 + 1] : 0.0f;
       for (int c = 0; c < 4; ++c) o[8 + c] = m.has_colors ? x.colors[v * 4 + c] : 1.0f;
+      if (v == 0 || p[1] >= m.greatest_y[1]) std::memcpy(m.greatest_y, p, sizeof m.greatest_y);  // GetGreatestZ: last max
       for (int k = 0; k < 3; ++k) {
         if (v == 0 || p[k] < m.bounds_min[k]) m.bounds_min[k] = p[k];
         if (v == 0 || p[k] > m.bounds_max[k]) m.bounds_max[k] = p[k];
@@ -268,9 +462,18 @@ class Loader {
       SubsetDraw d;
       d.first_index = s.face_start * 3;
       d.index_count = s.face_count * 3;
+      d.attrib = s.attrib_id;
       // XMesh invariant: materials may be empty (then attrib_id is 0 and there is no material): default material.
       const sage::XMaterial* mat = s.attrib_id < x.materials.size() ? &x.materials[s.attrib_id] : nullptr;
       if (mat) std::memcpy(d.diffuse, mat->diffuse, sizeof d.diffuse);
+      d.has_material = mat != nullptr;
+      // LoadX (0x00553800) creates an ScDrawableMaterial only for a material with a TextureFilename; DrawX would then
+      // call IsAlphaOn on a NULL material (a fault in the original). Such subsets draw untextured here (warned).
+      if (mat && !mat->has_texture) {
+        warn("model " + id + ": a used material has no texture (the original would fault)");
+        ++st.untextured_materials;
+      }
+      if (mat) build_material(*mat, d);
       if (mat && mat->has_texture) {
         uint32_t t = kNoTexture;
         if (!texture_for(mat->texture, t) && !fatal_.empty()) return false;
@@ -286,6 +489,37 @@ class Loader {
     st.triangles += static_cast<uint32_t>(tris);
     if (!m.has_colors) ++st.models_without_colors;
     return true;
+  }
+
+  // ScDrawableMaterial::LoadIndexed (0x00550060) on the path LoadX builds ("<lev>/textures/<TextureFilename>").
+  void build_material(const sage::XMaterial& x, SubsetDraw& d) {
+    d.textured = x.has_texture;
+    d.texture_name = x.texture;
+    const std::string path = "Root/Data/Levels/" + out_.level + "/textures/" + x.texture;
+    auto has = [&](const char* sub) { return path.find(sub) != std::string::npos; };
+    d3d::Material8& m = d.material;
+    m.ambient = {0.7f, 0.7f, 0.7f, 1.0f};  // forced (@0x007365ec)
+    if (has("_glass")) {
+      m.diffuse = {0, 0, 0, 0};  // (@0x007365fc)
+      d.trans = 0.0f;            // mTrans (@0x0073660c)
+    } else {
+      m.diffuse = {x.diffuse[0], x.diffuse[1], x.diffuse[2], x.diffuse[3]};
+      d.trans = 1.0f;
+    }
+    // D3DX fills the .x specular/emissive RGB; their alpha is INFERRED 1 (it reaches no pixel: lighting is off).
+    m.specular = {x.specular[0], x.specular[1], x.specular[2], 1.0f};
+    m.power = x.power;
+    m.emissive = {x.emissive[0], x.emissive[1], x.emissive[2], 1.0f};
+    if (has("eye")) {  // eye textures glow by tribe prefix (constants @0x00736614..0x00736680), diffuse black
+      if (has("on_")) m.emissive = {0, 1, 0, 1};
+      else if (has("ga_")) m.emissive = {1, 0.86666667f, 0.0039215689f, 1};
+      else if (has("po_")) m.emissive = {1, 0.50196081f, 0.0039215689f, 1};
+      else if (has("ko_")) m.emissive = {0.28235295f, 0.65882355f, 1, 1};
+      else if (has("le_")) m.emissive = {0.66274512f, 1, 0.0039215689f, 1};
+      else if (has("ta_")) m.emissive = {1, 0.0039215689f, 0.14509805f, 1};
+      else if (!has("wh_")) m.emissive = {0, 0, 1, 1};
+      m.diffuse = {0, 0, 0, 1};
+    }
   }
 
   // ScDrawableTexture::Load: resolve "<lev>/textures/<name>" (.dds then .tga), cached per area by resolved request.
@@ -399,6 +633,7 @@ class Loader {
   std::set<std::string> warnings_;
   uint32_t warnings_dropped_ = 0;
   std::string fatal_;  // set when a cap is exceeded: the whole load fails
+  std::vector<sage::SpecTextureRecord> spec_;  // the level's textures.slb
   uint32_t max_placements_ = kMaxPlacements, max_draws_ = kMaxDraws, max_textures_ = kMaxAreaTextures;
   uint64_t max_texture_bytes_ = kMaxAreaTextureBytes, max_geometry_bytes_ = kMaxAreaGeometryBytes;
 };

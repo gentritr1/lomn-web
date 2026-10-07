@@ -7,6 +7,10 @@
 // material's texture (only materials a subset uses) -> resolve_texture (ScDrawableTexture::Load rule) -> load ->
 // decode_dds / decode_tga -> CPU box-filter mip chain (cached per area by resolved request). <area>_POS.slb gives the
 // start position (first record with flag 0x1000).
+// M1a-3 additions to the load: per-subset D3DMATERIAL8 (ScDrawableMaterial::LoadIndexed 0x00550060), the level's
+// textures.slb (GcSpecTextureLoader::LoadTextures 0x0046f270), <area>_LIGHT.slb or the default lights
+// (GcLightLoader::LoadLights 0x00470010, GrSetDefaultLighting 0x00470560), and the area script's fog / cave-lighting
+// literals from data/Base.osi (lomn/sage/osi.h).
 // Upload + render (rhi): one vertex and index buffer per model, one RGBA8 texture per resolved name (+ a 1x1 white
 // texture for untextured or missing ones), 2 mesh pipelines (opaque; alpha = blend + alpha test), one bind group per
 // texture, one 256-byte uniform slot per draw. See REPORT.md (M1a-2 reference bundle) for every decision.
@@ -16,6 +20,7 @@
 #include <string_view>
 #include <vector>
 
+#include "lomn/d3d/device8.h"
 #include "lomn/fs.h"
 #include "lomn/rhi.h"
 #include "lomn/sage/slb.h"
@@ -50,6 +55,7 @@ constexpr uint64_t kMaxAreaGeometryBytes = 64ull << 20;  // vertex + index bytes
 //   model lookups. Real maximum: 55 records (lev6/ta03). Ignored/disabled records cost nothing and stay bounded only by
 //   parse_obj (n * 60 <= table bytes).
 constexpr uint32_t kMaxStoredWarnings = 1024;
+constexpr uint32_t kMaxAreaLights = 1024;  // lights kept per area (LIGHT records beyond it are ignored with no effect)
 constexpr uint32_t kMaxDrawableRecords = kMaxPlacements * 64;
 constexpr float kMaxPitchDeg = 89.9f;  // make_camera clamps the pitch to +-kMaxPitchDeg (LookAtRH degenerates at +-90)
 
@@ -68,6 +74,15 @@ struct SubsetDraw {
   uint32_t texture = kNoTexture;              // index into AreaData::textures
   bool alpha = false;                         // texture IsAlphaOn (DXT3 / A8R8G8B8 / TGA with alpha bits): 2nd pass
   float diffuse[4] = {1, 1, 1, 1};            // material faceColor (white without a material)
+  // ---- M1a-3 ----
+  uint32_t attrib = 0;           // D3DX attribute id (the DrawSubset argument; subsets are sorted by it)
+  bool has_material = false;     // the subset's attribute indexes a Material (else the game has no ScDrawableMaterial)
+  bool textured = false;         // the material names a texture (ScDrawableMaterial::SetTexture is a no-op otherwise)
+  std::string texture_name;      // TextureFilename as in the .x (textures.slb matches it with strcmp)
+  d3d::Material8 material;       // LoadIndexed: .x diffuse/specular/power/emissive, ambient forced 0.7, name overrides
+  float trans = 1.0f;            // StTextureData::mTrans: 0 for "_glass" names, a textures.slb value < 1, else 1
+  float uv_offset[2] = {0, 0};   // textures.slb U/V scroll speeds (SetUVOffset); TTF COUNT2 when non-zero
+  bool special = false;          // matched a textures.slb record
 };
 
 struct Model {
@@ -78,6 +93,9 @@ struct Model {
   std::vector<uint32_t> indices;  // triangle list, sorted by attribute id (parse_x)
   std::vector<SubsetDraw> subsets;
   float bounds_min[3] = {0, 0, 0}, bounds_max[3] = {0, 0, 0};  // model space
+  // ScDrawableModel::GetGreatestZ (0x00554c20): the LAST vertex (buffer order) with the greatest model-space Y. The
+  // trans sort adds the placement position to it (GcArea::GetGreatestZ 0x00506bc0) without rotating it.
+  float greatest_y[3] = {0, 0, 0};
 };
 // 48-byte stride: position @0 (@location(0)), normal @12 (@location(1); parse_x's per-split-vertex normal, zero
 // without MeshNormals; unused by the unlit shader, there for M1a-3 lighting), uv @24 (@location(2)), colour rgba @32
@@ -109,14 +127,38 @@ struct AreaStats {
   uint32_t models = 0, subsets = 0, alpha_subsets = 0, untextured_subsets = 0, vertices = 0, triangles = 0;
   uint32_t models_without_colors = 0, placements_with_orientation = 0;
   uint32_t nonfinite_records = 0;  // drawable records skipped for a NaN/Inf position or orientation (with a warning)
+  uint32_t untextured_materials = 0;  // M1a-3: used subsets whose material has no TextureFilename (the original faults)
   uint32_t textures = 0, textures_missing = 0, textures_failed = 0, textures_alpha = 0;
   uint64_t texture_bytes = 0;   // RGBA8 incl. full mip chains (what is uploaded)
   uint64_t geometry_bytes = 0;  // vertex + index bytes
   uint32_t draws = 0;           // placements x subsets (one indexed draw each)
 };
 
+// A light the area adds to GcLightDirector, already turned into the D3DLIGHT8 GcLight::Render hands to SetLight.
+struct SceneLight {
+  std::string name;  // 4CC (LIGHT record id, or "LmbA" / "SunL" / "Shad")
+  d3d::Light8 light;
+  d3d::Color4 base;   // the colour before intensity (GcFastLight +0x78; SetCaveLighting rescales from it)
+  uint8_t style = 0;  // GeLightStyle from the record flags (0 = constant)
+};
+// GcGraphicsOptions fog statics after the area script ran (GcAreaDirector::SetFog 0x0048a7a0 negates start/end).
+struct FogSettings {
+  uint32_t color = 0xffffffffu;
+  float start = 4701.0f, end = 4702.0f, density = 0.001f;  // defaults @0x0074a338..0x0074a344
+  std::string source = "default";                          // "default" | "osi"
+};
+
 struct AreaData {
   std::string level, area;
+  // ---- M1a-3 ----
+  uint8_t level_type = 0;            // GcAreaLoader::LoadArea: (uint8)(level[3] - '0') -> LoadLights / GrSetDefaultLighting
+  std::vector<SceneLight> lights;    // in GcLightDirector add order
+  std::string lights_source;         // "light_slb" | "light_slb+default" | "default"
+  FogSettings fog;
+  bool cave_lighting = false;        // the area script called GcLightDirector::SetCaveLighting(1)
+  std::string script_class;          // the Base.osi class whose InitFull was read ("" when none)
+  uint32_t special_textures = 0;     // textures.slb records
+  uint32_t special_matches = 0;      // subsets a textures.slb record applied to
   bool cpu_released = false;  // release_cpu_copies() ran: models' vertices/indices and textures' mips are empty
   bool art_blk = false;  // Art.blk opened (optional: without it only the area and level blockfiles are searched)
   std::vector<Model> models;
