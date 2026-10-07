@@ -73,6 +73,20 @@ Probe each route cheaply first: a one-day emulation fps test, a one-week decompi
   - streaming
   - threads (needs COOP/COEP)
 
+## 8. Parsing untrusted game files (from M1a-1; evidence in `audits/2026-10-07-m1a1-parser-security.md`)
+
+- **Fidelity and robustness are different properties, and they need different tests.** Independent oracles over the real install proved the readers byte-faithful (39/39), and ASan over the whole install was clean. Neither could see that a 672 KB crafted blockfile aborts the browser: every real file is benign.
+- **Attack every loop that an attacker-controlled count drives.**
+  - Write a crafted time/memory probe for each such loop.
+  - Run a sanitizer mutation fuzz natively **and** as wasm32 (32-bit `size_t`, exceptions off, 2 GB heap cap).
+  - Quadratic copies and repeated decodes are the typical findings, not out-of-bounds reads.
+- **Caps come from measured maxima, never from guesses.**
+  - First measure the real maximum (e.g. the longest unterminated-name run, 2 bytes; the most `.x` objects in a file, 5,489).
+  - Then set the cap with stated headroom and put the measurement in a comment next to the constant.
+  - Re-run the oracles afterwards, so a cap can never silently reject real data.
+- **Keep the public data model stable when hardening.** Bound the work (cap and reject) rather than changing a field's type that downstream tools read (`lookup_name` stayed a `std::string`).
+- **Failed operations leave no partial state.** Build into locals and commit on success. A failed `open`/`enter_area` must not leave stale results visible.
+
 ## 7. Legal posture (INFERRED, not legal advice)
 
 The precedent is the LEGO Island decomp → `isle-portable` web port: it hosts code only, users supply their own install, and no takedown was found as of 2026-10. Hosting game assets is a different and riskier act. A copyright holder's tolerance is revocable, so publish non-commercially and stay takedown-ready.
