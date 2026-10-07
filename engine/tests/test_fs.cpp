@@ -74,6 +74,14 @@ TEST_CASE("disk fs: case-insensitive Root lookup and User writes") {
   std::vector<uint8_t> out;
   CHECK(fs->read("Root\\DATA\\levels\\LEV1\\NUJU.blk", out) == Error::None);
   CHECK(out.size() == 3);
+  uint64_t size = 0;  // M1a-1 additive range API: real seek+read on disk, bounds-checked
+  CHECK(fs->size("root/data/levels/lev1/nuju.blk", size) == Error::None);
+  CHECK(size == 3);
+  CHECK(fs->read_range("Root/data/levels/lev1/NUJU.BLK", 1, 2, out) == Error::None);
+  CHECK(out == std::vector<uint8_t>{'b', 'c'});
+  CHECK(fs->read_range("Root/data/levels/lev1/nuju.blk", 2, 2, out) == Error::Io);
+  CHECK(fs->read_range("Root/data/levels/lev1/nuju.blk", ~0ull, 2, out) == Error::Io);
+  CHECK(fs->read_range("Root/data/levels/lev1/missing.blk", 0, 1, out) == Error::NotFound);
   const uint8_t b[1] = {7};
   CHECK(fs->write("Root/data/new", b, 1) == Error::ReadOnly);
   CHECK(fs->write("User/saves/s0.sav", b, 1) == Error::None);
@@ -94,6 +102,17 @@ TEST_CASE("disk fs: User path colliding with a file returns Io, never throws") {
   std::vector<uint8_t> out;
   CHECK(fs->read("User/a", out) == Error::None);
   CHECK(out == std::vector<uint8_t>{1});
+  sfs::remove_all(base);
+}
+
+TEST_CASE("disk fs: open_disk rejects a missing install dir and a regular file") {
+  namespace sfs = std::filesystem;
+  sfs::path base = sfs::temp_directory_path() / ("lomn_disk_fs_missing_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+  sfs::remove_all(base);
+  sfs::create_directories(base);
+  CHECK(open_disk((base / "does-not-exist").string(), (base / "user").string()) == nullptr);
+  std::ofstream(base / "a_file") << "x";
+  CHECK(open_disk((base / "a_file").string(), (base / "user").string()) == nullptr);
   sfs::remove_all(base);
 }
 #endif

@@ -12,7 +12,11 @@ class DiskFileSystem final : public FileSystem {
   DiskFileSystem(std::filesystem::path install, std::filesystem::path user) : install_(std::move(install)), user_(std::move(user)) {
     std::error_code ec;
     for (auto it = std::filesystem::recursive_directory_iterator(install_, ec); !ec && it != std::filesystem::recursive_directory_iterator(); it.increment(ec)) {
-      if (it->is_regular_file()) index_["root/" + normalize(std::filesystem::relative(it->path(), install_).generic_string())] = it->path();
+      std::error_code ec2;
+      if (!it->is_regular_file(ec2) || ec2) continue;
+      const std::filesystem::path rel = std::filesystem::relative(it->path(), install_, ec2);
+      if (ec2) continue;
+      index_["root/" + normalize(rel.generic_string())] = it->path();
     }
   }
   bool exists(std::string_view path) const override { return !resolve(normalize(path)).empty(); }
@@ -33,6 +37,34 @@ class DiskFileSystem final : public FileSystem {
       if (f.bad() || static_cast<std::uintmax_t>(f.gcount()) != size) return Error::Io;  // truncated read
     }
     out = std::move(buf);
+    log_access(n);
+    return Error::None;
+  }
+  Error size(std::string_view path, uint64_t& out) const override {
+    std::string n = normalize(path);
+    if (n.rfind("root/", 0) != 0 && n.rfind("user/", 0) != 0) return Error::BadMount;
+    std::filesystem::path p = resolve(n);
+    if (p.empty()) return Error::NotFound;
+    std::error_code ec;
+    uint64_t s = std::filesystem::file_size(p, ec);
+    if (ec) return Error::Io;
+    out = s;
+    return Error::None;
+  }
+  Error read_range(std::string_view path, uint64_t offset, uint64_t size, std::vector<uint8_t>& out) const override {
+    std::string n = normalize(path);
+    if (n.rfind("root/", 0) != 0 && n.rfind("user/", 0) != 0) return Error::BadMount;
+    std::filesystem::path p = resolve(n);
+    if (p.empty()) return Error::NotFound;
+    std::error_code ec;
+    uint64_t total = std::filesystem::file_size(p, ec);
+    if (ec || offset > total || size > total - offset) return Error::Io;
+    std::ifstream f(p, std::ios::binary);
+    if (!f) return Error::Io;
+    out.resize(static_cast<size_t>(size));
+    f.seekg(static_cast<std::streamoff>(offset));
+    if (size) f.read(reinterpret_cast<char*>(out.data()), static_cast<std::streamsize>(size));
+    if (!f) return Error::Io;
     log_access(n);
     return Error::None;
   }
@@ -72,6 +104,8 @@ class DiskFileSystem final : public FileSystem {
 }  // namespace
 
 std::unique_ptr<FileSystem> open_disk(const std::string& install_dir, const std::string& user_dir) {
+  std::error_code ec;
+  if (!std::filesystem::is_directory(install_dir, ec) || ec) return nullptr;
   return std::make_unique<DiskFileSystem>(install_dir, user_dir);
 }
 

@@ -25,6 +25,11 @@ class FileSystem {
   virtual bool exists(std::string_view path) const = 0;
   virtual Error read(std::string_view path, std::vector<uint8_t>& out) const = 0;
   virtual Error write(std::string_view path, const uint8_t* data, size_t size) = 0;
+  // Additive (M1a-1): size query and byte-range read, so blockfile entries are read on demand like the original
+  // ScBlockFile::LoadDiskBlock (fopen/fseek/fread of one entry). The defaults go through read() (whole file);
+  // backends override them. read_range fails with Io if [offset, offset+size) is not inside the file.
+  virtual Error size(std::string_view path, uint64_t& out) const;
+  virtual Error read_range(std::string_view path, uint64_t offset, uint64_t size, std::vector<uint8_t>& out) const;
   // Called with the normalised path on every successful read (drives the per-area prefetch manifest).
   void set_access_logger(std::function<void(const std::string&)> logger) { logger_ = std::move(logger); }
 
@@ -49,6 +54,8 @@ class MemoryFileSystem final : public FileSystem {
   bool exists(std::string_view path) const override;
   Error read(std::string_view path, std::vector<uint8_t>& out) const override;
   Error write(std::string_view path, const uint8_t* data, size_t size) override;
+  Error size(std::string_view path, uint64_t& out) const override;
+  Error read_range(std::string_view path, uint64_t offset, uint64_t size, std::vector<uint8_t>& out) const override;
 
  private:
   std::map<std::string, std::vector<uint8_t>> files_;
@@ -56,6 +63,7 @@ class MemoryFileSystem final : public FileSystem {
 
 #ifndef __EMSCRIPTEN__
 // Native: "root/..." resolves case-insensitively inside install_dir, "user/..." inside user_dir (created on write).
+// Returns nullptr if install_dir is not a readable directory.
 std::unique_ptr<FileSystem> open_disk(const std::string& install_dir, const std::string& user_dir);
 #endif
 
