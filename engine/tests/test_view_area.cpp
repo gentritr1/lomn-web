@@ -873,3 +873,31 @@ TEST_CASE("area: warnings escape file bytes (non-printable, >= 0x80) as \\xHH (B
   for (const std::string& w : a.warnings)
     for (char ch : w) CHECK((ch >= 0x20 && ch < 0x7f));
 }
+
+TEST_CASE("area: load_area reports a typed error kind, Environment (a blockfile is missing) vs Data (C7)") {
+  fs::MemoryFileSystem mfs;
+  REQUIRE(mount_synthetic_install(mfs));
+  const sage_test::Bytes junk(64, 0x58);  // not a BLKF blockfile
+  REQUIRE(mfs.mount("Root/Data/Levels/levt/bad1.blk", sage_test::Bytes(junk)));
+  REQUIRE(mfs.mount("Root/Data/Levels/levj/levj.blk", sage_test::Bytes(junk)));
+  REQUIRE(mfs.mount("Root/Data/Levels/levj/test.blk", sage_test::make_blk({sage_test::stored("readme.txt", "x")})));
+  AreaData a;
+  std::string err;
+  LoadError kind = LoadError::Data;
+  CHECK(load_area(mfs, "levt", "test", AreaOptions(), a, &err, &kind));
+  CHECK(kind == LoadError::None);
+  CHECK_FALSE(load_area(mfs, "levt", "none", AreaOptions(), a, &err, &kind));  // area blockfile missing
+  CHECK(kind == LoadError::Environment);
+  CHECK_FALSE(load_area(mfs, "levz", "test", AreaOptions(), a, &err, &kind));  // level blockfile missing
+  CHECK(kind == LoadError::Environment);
+  CHECK_FALSE(load_area(mfs, "levt", "bad1", AreaOptions(), a, &err, &kind));  // area blockfile present but corrupt
+  CHECK(kind == LoadError::Data);
+  CHECK_FALSE(load_area(mfs, "levj", "test", AreaOptions(), a, &err, &kind));  // level blockfile present but corrupt
+  CHECK(kind == LoadError::Data);
+  AreaOptions o;
+  o.max_placements = 0;
+  CHECK_FALSE(load_area(mfs, "levt", "test", o, a, &err, &kind));  // a cap
+  CHECK(kind == LoadError::Data);
+  CHECK(is_default(a));
+  CHECK_FALSE(load_area(mfs, "levt", "none", AreaOptions(), a, &err));  // the kind is optional
+}

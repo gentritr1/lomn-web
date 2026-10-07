@@ -62,7 +62,8 @@ bool route_enabled(sage::Route r, const AreaOptions& o) {
 
 class Loader {
  public:
-  Loader(const fs::FileSystem& fs, AreaData& out) : chain_(fs), out_(out) {}
+  Loader(const fs::FileSystem& fs, AreaData& out) : fs_(fs), chain_(fs), out_(out) {}
+  LoadError kind() const { return kind_; }
 
   bool run(std::string_view level, std::string_view area, const AreaOptions& opt, std::string* err) {
     const auto t0 = Clock::now();
@@ -78,7 +79,11 @@ class Loader {
     // GcGame::LoadArtBlockHeader: Art.blk is the global fallback of both lookup orders. Optional here.
     out_.art_blk = chain_.open_art("Root/Data/Art/Art.blk", &e);
     if (!out_.art_blk) warn("art.blk not opened: " + e);
-    if (!chain_.enter_area(out_.level, out_.area, &e)) return fail(err, "area: " + e);
+    if (!chain_.enter_area(out_.level, out_.area, &e)) {
+      kind_ = enter_failure_kind();
+      return fail(err, "area: " + e);
+    }
+    kind_ = LoadError::Data;  // every later failure is a cap or a data error
     prefix_ = "Root/Data/Levels/" + out_.level + "/" + out_.area;  // "%.4s/%.4s" area prefix (GcAreaLoader::LoadArea)
 
     std::vector<sage::ObjRecord> recs;
@@ -357,6 +362,19 @@ class Loader {
     return true;
   }
 
+  // enter_area opens <lev>.blk then <area>.blk and fails on the first that cannot be opened (fs size() fails:
+  // Environment) or parsed (Data). Replays that order on the failure path only.
+  LoadError enter_failure_kind() const {
+    const std::string lp = "Root/Data/Levels/" + out_.level + "/" + out_.level + ".blk";
+    const std::string ap = "Root/Data/Levels/" + out_.level + "/" + out_.area + ".blk";
+    uint64_t size = 0;
+    if (fs_.size(lp, size) != fs::Error::None) return LoadError::Environment;
+    sage::BlockChain probe(fs_);
+    if (!probe.open_second(lp, nullptr)) return LoadError::Data;
+    if (fs_.size(ap, size) != fs::Error::None) return LoadError::Environment;
+    return LoadError::Data;
+  }
+
   void grow_bounds(const Model& m, const Mat4& world) {
     for (int c = 0; c < 8; ++c) {
       const float p[3] = {(c & 1) ? m.bounds_max[0] : m.bounds_min[0], (c & 2) ? m.bounds_max[1] : m.bounds_min[1],
@@ -371,8 +389,10 @@ class Loader {
     }
   }
 
+  const fs::FileSystem& fs_;
   sage::BlockChain chain_;
   AreaData& out_;
+  LoadError kind_ = LoadError::Data;
   std::string prefix_;
   std::vector<uint8_t> bytes_;
   std::map<std::string, int64_t> model_cache_, texture_cache_;  // ordered maps: deterministic, no pointer keys
@@ -430,12 +450,16 @@ fn shade(i: VOut) -> vec4f {
 const char* area_wgsl() { return kWgsl; }
 
 bool load_area(const fs::FileSystem& fs, std::string_view level, std::string_view area, const AreaOptions& opt, AreaData& out,
-               std::string* err) {
+               std::string* err, LoadError* kind) {
   out = AreaData();
   AreaData tmp;
   Loader l(fs, tmp);
   if (err) err->clear();
-  if (!l.run(level, area, opt, err)) return false;  // no partial state on failure
+  if (kind) *kind = LoadError::None;
+  if (!l.run(level, area, opt, err)) {  // no partial state on failure
+    if (kind) *kind = l.kind();
+    return false;
+  }
   out = std::move(tmp);
   return true;
 }

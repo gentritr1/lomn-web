@@ -136,8 +136,11 @@ struct AreaData {
 // False only when the area cannot be entered (no level/area blockfile) or a cap is exceeded; missing models or
 // textures are warnings (counted in stats) like the game's skip-and-continue loaders. Records with a NaN/Inf position
 // or orientation are skipped with a warning (stats.nonfinite_records). On false, `out` is a default AreaData.
+// `kind` (optional) classifies the failure: Environment = the level or area blockfile does not exist / cannot be opened
+// (lomn_view exit 3); Data = everything else: a corrupt blockfile or an exceeded cap (exit 4). None on success.
+enum class LoadError { None, Environment, Data };
 bool load_area(const fs::FileSystem& fs, std::string_view level, std::string_view area, const AreaOptions& opt, AreaData& out,
-               std::string* err);
+               std::string* err, LoadError* kind = nullptr);
 
 // Camera (spec M1 §2.3). Only the eye position comes from data (first POS record with flag 0x1000); orientation, FOV
 // and clip planes are a DOCUMENTED FALLBACK until M1a-3 mines the Base.osi camera literals. Defaults below.
