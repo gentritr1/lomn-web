@@ -439,3 +439,54 @@ TEST_CASE("x: input larger than kMaxEntrySize is rejected before any parsing") {
   CHECK(err == "x: not a .x file");
 }
 #endif
+
+// M1a-4 fix round 1 (review I-2): count/length checks in decode_mesh that the fuzzer cannot reach (each needs two
+// coordinated field changes: a count raised past its list AND an index that uses the extra range). Without the check
+// each of these files decodes by reading past the float list (ASan: heap-buffer-overflow / BUS in memmove).
+TEST_CASE("x: MeshNormals with fewer normal floats than nNormals is rejected (xfile.cpp 'MeshNormals floats short')") {
+  X x;  // nNormals 5, but 2 normals of floats; face normal index 4 lies in the missing range
+  x.obj("Mesh").ints({3}).floats({0, 0, 0, 1, 0, 0, 0, 1, 0}).ints({1, 3, 0, 1, 2});
+  x.obj("MeshNormals").ints({5}).floats({0, 0, 1, 0, 1, 0}).ints({1, 3, 0, 1, 4}).close();
+  x.close();
+  XFile xf;
+  std::string err;
+  CHECK_FALSE(parse_x(x.b.data(), x.b.size(), xf, &err));
+  CHECK(err.find("MeshNormals floats short") != std::string::npos);
+  CHECK(xf.mesh.positions.empty());
+}
+
+TEST_CASE("x: MeshTextureCoords with fewer UV floats than nVertices is rejected ('MeshTextureCoords floats short')") {
+  X x;  // 3 vertices, 2 UVs of floats
+  x.obj("Mesh").ints({3}).floats({0, 0, 0, 1, 0, 0, 0, 1, 0}).ints({1, 3, 0, 1, 2});
+  x.obj("MeshTextureCoords").ints({3}).floats({0, 0, 1, 0}).close();
+  x.close();
+  XFile xf;
+  std::string err;
+  CHECK_FALSE(parse_x(x.b.data(), x.b.size(), xf, &err));
+  CHECK(err.find("MeshTextureCoords floats short") != std::string::npos);
+  CHECK(xf.mesh.uvs.empty());
+}
+
+TEST_CASE("x: MeshVertexColors with fewer entries than nColors is rejected ('MeshVertexColors truncated')") {
+  {
+    X x;  // nColors 3 with 3 vertex indices but one colour of floats
+    x.obj("Mesh").ints({3}).floats({0, 0, 0, 1, 0, 0, 0, 1, 0}).ints({1, 3, 0, 1, 2});
+    x.obj("MeshVertexColors").ints({3}).ints({0}).floats({0.1f, 0.2f, 0.3f, 1}).ints({1}).ints({2}).close();
+    x.close();
+    XFile xf;
+    std::string err;
+    CHECK_FALSE(parse_x(x.b.data(), x.b.size(), xf, &err));
+    CHECK(err.find("MeshVertexColors truncated") != std::string::npos);
+    CHECK_FALSE(xf.mesh.has_colors);
+  }
+  {
+    X x;  // nColors 3 with one vertex index (and one colour)
+    x.obj("Mesh").ints({3}).floats({0, 0, 0, 1, 0, 0, 0, 1, 0}).ints({1, 3, 0, 1, 2});
+    x.obj("MeshVertexColors").ints({3}).ints({0}).floats({0.1f, 0.2f, 0.3f, 1}).close();
+    x.close();
+    XFile xf;
+    std::string err;
+    CHECK_FALSE(parse_x(x.b.data(), x.b.size(), xf, &err));
+    CHECK(err.find("MeshVertexColors truncated") != std::string::npos);
+  }
+}
