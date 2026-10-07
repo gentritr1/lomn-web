@@ -12,7 +12,7 @@ Measured by walking every `.blk` under `$LOMN_DATA/install/data` with a ~40-line
 | Type | Count | Notes |
 |---|---|---|
 | `.dds` | 3,247 | 267.2 MB; DXT5 2,871 · DXT3 362 · DXT1 2 · uncompressed 6; sizes mostly 256² (1,513) and 128² (818), max 1024×512 |
-| `.x` | 2,653 | **all binary DirectX `.x` with 32-bit floats** (`xof 0302bin 0032`); 194.6 MB; median 25 KB, max 2.1 MB |
+| `.x` | 2,653 | **all binary DirectX `.x` with 32-bit floats** (`xof 0303bin 0032`); 194.6 MB; median 25 KB, max 2.1 MB |
 | `.tga` | 2,566 | |
 | `.slb` | 1,177 | SAGE data tables (AI info, anim events, cinematics …) |
 | `.bkd` | 747 | animation (BKD) |
@@ -27,3 +27,10 @@ Measured by walking every `.blk` under `$LOMN_DATA/install/data` with a ~40-line
 - **Texture policy:** BC2/BC3 are uploaded directly where `texture-compression-bc` exists. Elsewhere, CPU-decode to RGBA8. The textures are small, so the cost is bounded: 267 MB of DXT expands to roughly 4× as RGBA, but only the textures one area references, not all of them.
 - **Mesh loader:** only the **binary** `.x` path is needed for Beta data. The text `.x` path stays optional (and gets tests if implemented).
 - **Prefetch:** areas are slices of `levels/<lev>/<area>.blk` plus the level's common blk (largest area 35.0 MB, from census) — there is no decompression step to budget for.
+
+## Binary `.x` meshes (independent parser `tools/research/xbin.py`, 2026-10-07)
+- **All 2,653 parse** (0 failures; Python, 11 s). Every file declares its templates inline (`XSkinMeshHeader`, …), so a parser must consume `TEMPLATE` → NAME *token* → `{ GUID members }` before the data objects.
+- **2,652 files hold exactly 1 mesh; 1 file (not in any level blk) holds 3.** The game's `LoadFrames` keeps the **last** mesh, so the viewer does the same.
+- Triangles only: 1,379,484 faces, 1,965,073 vertices. Every mesh has UVs and normals. **1,990 meshes carry `MeshVertexColors`**, which affects the vertex format and shading. 159 files carry skin weights (characters).
+- Each file has one `Frame` + `FrameTransformMatrix`, which the game ignores (research §6).
+- **Draw subsets (measured over 2,481 level meshes):** used material subsets per mesh median 1, p95 9, max 68; 6,353 in total. Distinct (texture, diffuse, emissive) combos total 6,318, so **merging identical subsets would save only 0.6%: not worth building**. Most of the 326,003 `Material` objects are unused list entries, and the game loads only the materials a subset uses.
