@@ -8,7 +8,7 @@ set(LOMN_TOOLCHAIN_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../.toolchain" CACHE PATH "p
 option(LOMN_WEBGPU "build the WebGPU backend" ON)
 enable_testing()
 
-add_library(lomn_core STATIC src/fs/memory_fs.cpp src/rhi/null_device.cpp src/app/loop.cpp)
+add_library(lomn_core STATIC src/fs/memory_fs.cpp src/fs/prefetch_fs.cpp src/rhi/null_device.cpp src/app/loop.cpp)
 target_include_directories(lomn_core PUBLIC include PRIVATE "${LOMN_TOOLCHAIN_DIR}/include")
 target_compile_options(lomn_core PRIVATE -Wall -Wextra)
 # Native clang fuses a*b+c into FMA by default and wasm never does; forbid it so native == wasm32 bit for bit.
@@ -28,7 +28,8 @@ target_link_libraries(lomn_d3d PUBLIC lomn_core)
 target_compile_options(lomn_d3d PRIVATE -Wall -Wextra)
 
 # M1a-2 first pixels + M1a-3: CPU mips, area loader, the SAGE frame replay on the shim, the A7/A9 synthetic scene.
-add_library(lomn_area STATIC src/view/mips.cpp src/view/area.cpp src/view/sage_frame.cpp src/view/synthetic.cpp)
+add_library(lomn_area STATIC src/view/mips.cpp src/view/area.cpp src/view/sage_frame.cpp src/view/synthetic.cpp
+            src/view/prefetch.cpp)  # M1b: prefetch helpers
 target_link_libraries(lomn_area PUBLIC lomn_sage lomn_d3d)
 target_compile_options(lomn_area PRIVATE -Wall -Wextra)
 
@@ -180,6 +181,11 @@ else()
   add_test(NAME datacheck_no_tmpdir COMMAND sh -c
            "rm -rf \"$2\"; \"$1\" --synthetic 2 --backend null --out \"$2.txt\" --write-install \"$2\" >/dev/null 2>&1 || exit 1; TMPDIR=/nonexistent/lomn-tmp \"$0\" \"$2\" --areas levt/stat > \"$2.json\" 2>\"$2.err\"; rc=$?; [ $rc -eq 0 ] || { echo \"rc=$rc\"; cat \"$2.err\"; exit 1; }; grep -q '\"blk\"' \"$2.json\" || { echo 'no JSON'; exit 1; }"
            $<TARGET_FILE:lomn_datacheck> $<TARGET_FILE:lomn_view> ${CMAKE_CURRENT_BINARY_DIR}/datacheck_tmpdir)
+  # REF4 r2 M6: --manifest lists only the areas the game can address (view::list_areas: ids of 1..4 characters, the level
+  # blockfile excluded), like the browser; a longer stem (lev4c on Beta 1.5.0) is reported under not_addressable.
+  add_test(NAME view_cli_manifest_addressable COMMAND sh -c
+           "rm -rf \"$1\"; \"$0\" --synthetic 2 --backend null --out \"$1.txt\" --write-install \"$1\" >/dev/null 2>&1 || exit 1; cp \"$1/data/levels/levt/stat.blk\" \"$1/data/levels/levt/statx.blk\" || exit 1; \"$0\" --install \"$1\" --manifest 1 --out \"$1.json\" >/dev/null 2>&1 || { echo 'manifest failed'; exit 1; }; grep -q 'levt/statx\"' \"$1.json\" || { echo 'statx not reported'; exit 1; }; grep -q '\"area\":\"levt/statx\"' \"$1.json\" && { echo 'levt/statx listed as an area'; exit 1; }; grep -q '\"not_addressable\":\\[\"levt/statx\"\\]' \"$1.json\" || { echo 'not_addressable missing'; exit 1; }; grep -q '\"areas\":2,' \"$1.json\" || { echo 'area count != 2'; exit 1; }"
+           $<TARGET_FILE:lomn_view> ${CMAKE_CURRENT_BINARY_DIR}/view_manifest_addr)
   # C8: a survey that finds no area is an environment error (exit 3), not an empty success.
   add_test(NAME view_cli_survey_empty COMMAND sh -c
            "rm -rf \"$1\"; mkdir -p \"$1/Data/Levels/lev1\" || exit 1; \"$0\" --install \"$1\" --survey 1 --out \"$1/s.json\" >/dev/null 2>&1; rc=$?; [ $rc -eq 3 ] || { echo \"rc=$rc (want 3)\"; exit 1; }"
@@ -239,7 +245,7 @@ endif()
 add_executable(lomn_tests tests/test_main.cpp tests/test_fs.cpp tests/test_rhi_null.cpp tests/test_loop.cpp tests/test_sage_blockfile.cpp tests/test_sage_blockchain.cpp tests/test_sage_slb.cpp tests/test_sage_xfile.cpp tests/test_sage_image.cpp
                tests/test_rhi_mesh.cpp tests/test_view_mips.cpp tests/test_view_area.cpp tests/test_d3d.cpp tests/test_sage_osi.cpp
                tests/test_area_states.cpp tests/test_sage_frame.cpp
-               tests/test_rhi_destroy.cpp)  # M1b
+               tests/test_rhi_destroy.cpp tests/test_prefetch_fs.cpp)  # M1b
 target_link_libraries(lomn_tests PRIVATE lomn_area)
 target_include_directories(lomn_tests PRIVATE "${LOMN_TOOLCHAIN_DIR}/include")
 if(EMSCRIPTEN)

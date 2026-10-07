@@ -34,6 +34,10 @@ namespace lomn::view {
 // World transform (spec M1 §2.1): RotX(kWorldRotX) then the OBJ record position in _41.._43 (GcArea::GcArea 0x00504220
 // + GcObjectLoader::LoadObjects 0x0053fc60). Constant read from LEGOBionicle.exe .data @0x72a444.
 constexpr float kWorldRotX = -1.5707982f;
+// M1b: the two files every area load reads first (GcGame::LoadArtBlockHeader's Art.blk table, the script file whose
+// area class supplies fog): one definition, shared by load_area and the browser's boot prefetch (lomn/view/prefetch.h).
+constexpr const char* kArtBlkPath = "Root/Data/Art/Art.blk";
+constexpr const char* kBaseOsiPath = "Root/Data/Base.osi";
 constexpr uint32_t kPosStartFlag = 0x1000;
 
 // Caps on what one area may make the renderer allocate (untrusted input, spec §5). Measured over all 123 area

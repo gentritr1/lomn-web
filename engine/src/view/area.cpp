@@ -90,7 +90,7 @@ class Loader {
     out_.area = std::string(area.substr(0, 4));
     std::string e;
     // GcGame::LoadArtBlockHeader: Art.blk is the global fallback of both lookup orders. Optional here.
-    out_.art_blk = chain_.open_art("Root/Data/Art/Art.blk", &e);
+    out_.art_blk = chain_.open_art(kArtBlkPath, &e);
     if (!out_.art_blk) warn("art.blk not opened: " + e);
     if (!chain_.enter_area(out_.level, out_.area, &e)) {
       kind_ = enter_failure_kind();
@@ -393,7 +393,7 @@ class Loader {
   // map to an existing area this way (tools/research/osi.py).
   void load_script() {
     std::vector<uint8_t> bytes;
-    if (fs_.read("Root/Data/Base.osi", bytes) != fs::Error::None) {
+    if (fs_.read(kBaseOsiPath, bytes) != fs::Error::None) {
       warn("osi: Root/Data/Base.osi not readable (fog/cave lighting from defaults)");
       return;
     }

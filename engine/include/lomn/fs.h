@@ -32,14 +32,25 @@ class FileSystem {
   virtual Error read_range(std::string_view path, uint64_t offset, uint64_t size, std::vector<uint8_t>& out) const;
   // Called with the normalised path on every successful read (drives the per-area prefetch manifest).
   void set_access_logger(std::function<void(const std::string&)> logger) { logger_ = std::move(logger); }
+  // Additive (M1b): (normalised path, offset, length) of every successful read -> the per-area prefetch manifest at
+  // byte-range granularity. read() reports [0, file size); read_range() its own range. size() and exists() are not
+  // reads (they never move bytes) and are not reported.
+  using RangeLogger = std::function<void(const std::string&, uint64_t offset, uint64_t length)>;
+  void set_range_logger(RangeLogger logger) { range_logger_ = std::move(logger); }
 
  protected:
   void log_access(const std::string& normalised) const {
     if (logger_) logger_(normalised);
   }
+  // M1b: one successful read of [offset, offset + length): both loggers.
+  void log_read(const std::string& normalised, uint64_t offset, uint64_t length) const {
+    log_access(normalised);
+    if (range_logger_) range_logger_(normalised, offset, length);
+  }
 
  private:
   std::function<void(const std::string&)> logger_;
+  RangeLogger range_logger_;
 };
 
 // In-memory file system used by the browser build (bytes prefetched from OPFS / the player's folder) and tests.

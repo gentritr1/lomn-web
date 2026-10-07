@@ -5,7 +5,7 @@ export LOMN_DATA LOMN_CACHE
 VENV := .venv
 PY := $(VENV)/bin/python
 EMSDK_ENV := source .toolchain/emsdk/emsdk_env.sh >/dev/null 2>&1
-.PHONY: setup check-data decomp worklist native wasm site test-tools test-native test-wasm test-web check perf datacheck datacheck-wasm fuzz-osi a9-sweep
+.PHONY: setup check-data decomp worklist native wasm site test-tools test-native test-wasm test-web check perf datacheck datacheck-wasm fuzz-osi a9-sweep manifest
 
 setup: $(VENV)/.ok
 	timeout 3600 tools/toolchain.sh
@@ -54,6 +54,11 @@ test-wasm: wasm test-native $(VENV)/.ok
 test-web: site
 	cd web && timeout 60 node --test tests/serve_test.mjs
 	cd web && timeout 180 node tests/smoke.mjs ../build/site ../build/pw-profile
+
+# M1b: the per-area prefetch manifest of the install (build/m1b/manifest.json; derived data: never committed).
+manifest: native
+	@if [ -z "$(LOMN_DATA)" ]; then echo "manifest: LOMN_DATA is not set"; exit 2; fi
+	mkdir -p build/m1b && timeout 300 build/native/lomn_view --install "$(LOMN_DATA)/install" --manifest 1 --out build/m1b/manifest.json
 
 perf: native $(VENV)/.ok
 	timeout 300 build/native/lomn_native --backend webgpu --frames 600 --out build/perf

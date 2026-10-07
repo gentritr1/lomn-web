@@ -2,6 +2,8 @@
 //   lomn_view --install <dir> --level lev1 --area vllg --out <file.png> [options]
 //   lomn_view --synthetic 1|2 --out <file> [options]        the A7 contract scene / the A9 state scene (no game data)
 //   lomn_view --install <dir> --survey 1 --out <file.json>  CPU-load every area (no GPU), per-area counts + maxima
+//   lomn_view --install <dir> --manifest 1 --out <file.json>  M1b: every area's reads at (path, offset, length)
+//                           granularity + the boot set (format: docs/knowledge/web-porting-playbook.md "Prefetch manifest")
 // Options (every option takes a value):
 //   --backend webgpu|null   webgpu (default) writes <out> as PNG; null writes the rhi call log to <out>
 //   --width 1280 --height 720 --frames 1
@@ -32,7 +34,9 @@
 #include <cstring>
 #include <fstream>
 #include <map>
+#include <iterator>
 #include <memory>
+#include <set>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -41,6 +45,7 @@
 #include "lomn/fs.h"
 #include "lomn/rhi.h"
 #include "lomn/view/area.h"
+#include "lomn/view/prefetch.h"
 #include "lomn/view/synthetic.h"
 
 #include <unistd.h>
@@ -282,11 +287,11 @@ bool is_dir(const std::filesystem::directory_entry& d) {
   std::error_code ec;
   return d.is_directory(ec);
 }
-int survey(const std::string& install, const std::string& out_path) {
+// Every <lev>/<area>.blk under data/levels (sorted, lower-case), the level blockfile itself excluded. Empty `levels`
+// when the install has no data/levels directory.
+std::vector<std::pair<std::string, std::string>> list_install_areas(const std::string& install, std::filesystem::path& levels) {
   namespace sfs = std::filesystem;
-  auto fsp = fs::open_disk(install, disk_user_dir());
-  if (!fsp) return std::fprintf(stderr, "cannot open install %s\n", install.c_str()), 3;
-  sfs::path levels;
+  levels.clear();
   for (const auto& d : list_dir(install))
     if (is_dir(d)) {
       std::string n = d.path().filename().string();
@@ -298,8 +303,8 @@ int survey(const std::string& install, const std::string& out_path) {
           if (ln == "levels") levels = l.path();
         }
     }
-  if (levels.empty()) return std::fprintf(stderr, "no data/levels in %s\n", install.c_str()), 3;
   std::vector<std::pair<std::string, std::string>> areas;
+  if (levels.empty()) return areas;
   for (const auto& l : list_dir(levels)) {
     if (!is_dir(l)) continue;
     std::string lev = l.path().filename().string();
@@ -316,7 +321,25 @@ int survey(const std::string& install, const std::string& out_path) {
     }
   }
   std::sort(areas.begin(), areas.end());
+  return areas;
+}
+int survey(const std::string& install, const std::string& out_path) {
+  namespace sfs = std::filesystem;
+  auto fsp = fs::open_disk(install, disk_user_dir());
+  if (!fsp) return std::fprintf(stderr, "cannot open install %s\n", install.c_str()), 3;
+  sfs::path levels;
+  const std::vector<std::pair<std::string, std::string>> areas = list_install_areas(install, levels);
+  if (levels.empty()) return std::fprintf(stderr, "no data/levels in %s\n", install.c_str()), 3;
   if (areas.empty()) return std::fprintf(stderr, "survey: no area blockfile under %s\n", levels.string().c_str()), 3;
+  // REF4 r2 (M6): the survey keeps every <lev>/<x>.blk (123 on Beta 1.5.0, the M1a counts) and marks the ones the game
+  // cannot address (view::list_areas rule, the browser's list: 122).
+  std::vector<view::AreaRef> addressable;
+  {
+    std::vector<std::string> paths;
+    for (const auto& la : areas) paths.push_back("root/data/levels/" + la.first + "/" + la.second + ".blk");
+    addressable = view::list_areas(paths);
+  }
+  uint64_t n_addressable = 0;
   std::string rows;
   uint64_t max_place = 0, max_draws = 0, max_tex = 0, max_tex_bytes = 0, max_geo = 0, max_records = 0, failures = 0;
   double total_ms = 0;
@@ -338,7 +361,10 @@ int survey(const std::string& install, const std::string& out_path) {
     const double ms = ms_since(t0);
     total_ms += ms;
     const std::string where = la.first + "/" + la.second;
-    rows += std::string(rows.empty() ? "" : ",\n") + "{\"area\":" + js(where) + ",\"ok\":" + (ok ? "true" : "false");
+    const bool addr = std::find(addressable.begin(), addressable.end(), view::AreaRef{la.first, la.second}) != addressable.end();
+    n_addressable += addr;
+    rows += std::string(rows.empty() ? "" : ",\n") + "{\"area\":" + js(where) + ",\"addressable\":" + (addr ? "true" : "false") +
+            ",\"ok\":" + (ok ? "true" : "false");
     if (!ok) {
       ++failures;
       rows += ",\"error\":" + js(err) + "}";
@@ -385,7 +411,7 @@ int survey(const std::string& install, const std::string& out_path) {
     track(a.stats.geometry_bytes, max_geo, max_geo_at, where);
   }
   std::ofstream o(out_path);
-  o << "{\n\"areas_total\":" << areas.size() << ",\"failures\":" << failures << ",\"total_load_ms\":" << num(total_ms) << ",\n\"max\":{\"obj_records\":" << max_records
+  o << "{\n\"areas_total\":" << areas.size() << ",\"areas_addressable\":" << n_addressable << ",\"failures\":" << failures << ",\"total_load_ms\":" << num(total_ms) << ",\n\"max\":{\"obj_records\":" << max_records
     << ",\"placements\":" << max_place << ",\"placements_at\":" << js(max_place_at) << ",\"draws\":" << max_draws << ",\"draws_at\":"
     << js(max_draws_at) << ",\"textures\":" << max_tex << ",\"textures_at\":" << js(max_tex_at) << ",\"texture_bytes_with_mips\":"
     << max_tex_bytes << ",\"texture_bytes_at\":" << js(max_tex_bytes_at) << ",\"geometry_bytes\":" << max_geo << ",\"geometry_bytes_at\":"
@@ -400,6 +426,146 @@ int survey(const std::string& install, const std::string& out_path) {
   std::printf("survey: %zu areas, %llu failures -> %s\n", areas.size(), static_cast<unsigned long long>(failures), out_path.c_str());
   return failures || frame_failures || frame_rejects ? 4 : 0;
 }
+
+// M1b prefetch manifest (REF4 item 2). Format "lomn-prefetch-manifest" version 1, one JSON object:
+//   files: [{path, size}]            every file any range below reads (normalised path, size in bytes)
+//   boot:  {ranges: [[file, offset, length], ...], bytes}   view::boot_reads (Art.blk header+table, Base.osi)
+//   areas: [{area: "lev1/vllg", ok, reads, bytes, bytes_beyond_boot, files, ranges: [[file, offset, length], ...]}]
+//   summary: area count, failures, max bytes (+ where), union bytes, the ranges common to every area vs the boot set,
+//            and the census boot set (whole files) for comparison.
+// `file` indexes `files`; ranges are distinct and sorted. Derived from the install's structure (names, offsets, sizes):
+// written under build/ only, never committed and never shipped (REF4 decision D2: the browser derives the same sets
+// itself from the engine's own reads).
+int manifest(const std::string& install, const std::string& out_path) {
+  namespace sfs = std::filesystem;
+  auto fsp = fs::open_disk(install, disk_user_dir());
+  if (!fsp) return std::fprintf(stderr, "cannot open install %s\n", install.c_str()), 3;
+  sfs::path levels;
+  // REF4 r2 (M6): the rows are the areas the game can address, by the browser's own rule (view::list_areas: ids of 1..4
+  // characters, the level blockfile excluded), so both list 122 on Beta 1.5.0; any other <lev>/<x>.blk (lev4c) is
+  // reported under not_addressable instead of being "loaded" as its truncated id (the level blockfile).
+  std::vector<std::pair<std::string, std::string>> areas;
+  std::vector<std::string> not_addressable;
+  {
+    const std::vector<std::pair<std::string, std::string>> all = list_install_areas(install, levels);
+    std::vector<std::string> paths;
+    for (const auto& la : all) paths.push_back("root/data/levels/" + la.first + "/" + la.second + ".blk");
+    const std::vector<view::AreaRef> ok = view::list_areas(paths);
+    for (const auto& la : all) {
+      if (std::find(ok.begin(), ok.end(), view::AreaRef{la.first, la.second}) != ok.end()) areas.push_back(la);
+      else not_addressable.push_back(la.first + "/" + la.second);
+    }
+  }
+  if (areas.empty()) return std::fprintf(stderr, "manifest: no area blockfile under %s\n", install.c_str()), 3;
+  std::map<std::string, uint32_t> file_ids;
+  std::vector<std::string> files;
+  auto fid = [&](const std::string& p) {
+    auto it = file_ids.find(p);
+    if (it != file_ids.end()) return it->second;
+    const uint32_t id = static_cast<uint32_t>(files.size());
+    file_ids[p] = id;
+    files.push_back(p);
+    return id;
+  };
+  auto bytes_of = [](const std::vector<fs::ByteRange>& v) {
+    uint64_t n = 0;
+    for (const auto& r : v) n += r.length;
+    return n;
+  };
+  auto ranges_json = [&](const std::vector<fs::ByteRange>& v) {
+    std::string o = "[";
+    for (size_t i = 0; i < v.size(); ++i)
+      o += std::string(i ? "," : "") + "[" + std::to_string(fid(v[i].path)) + "," + std::to_string(v[i].offset) + "," +
+           std::to_string(v[i].length) + "]";
+    return o + "]";
+  };
+  const std::vector<fs::ByteRange> boot = view::record_reads(*fsp, [&] { view::boot_reads(*fsp); });
+  const std::set<fs::ByteRange> boot_set(boot.begin(), boot.end());
+  std::string rows;
+  uint64_t failures = 0, max_bytes = 0, max_beyond = 0, max_reads = 0, sum_beyond = 0;
+  std::string max_at, max_beyond_at, max_reads_at;
+  std::set<fs::ByteRange> uni;
+  std::set<fs::ByteRange> common;
+  bool first = true;
+  const auto t0 = Clock::now();
+  for (const auto& la : areas) {
+    view::AreaData a;
+    std::string err;
+    bool ok = false;
+    const std::vector<fs::ByteRange> r =
+        view::record_reads(*fsp, [&] { ok = view::load_area(*fsp, la.first, la.second, view::AreaOptions(), a, &err); });
+    const std::string where = la.first + "/" + la.second;
+    if (!ok) ++failures;
+    std::set<std::string> fset;
+    uint64_t beyond = 0;
+    for (const auto& x : r) {
+      fset.insert(x.path);
+      uni.insert(x);
+      if (!boot_set.count(x)) beyond += x.length;
+    }
+    const std::set<fs::ByteRange> rs(r.begin(), r.end());
+    if (first) {
+      common = rs;
+      first = false;
+    } else {
+      std::set<fs::ByteRange> keep;
+      std::set_intersection(common.begin(), common.end(), rs.begin(), rs.end(), std::inserter(keep, keep.begin()));
+      common.swap(keep);
+    }
+    const uint64_t b = bytes_of(r);
+    sum_beyond += beyond;
+    if (b > max_bytes) max_bytes = b, max_at = where;
+    if (beyond > max_beyond) max_beyond = beyond, max_beyond_at = where;
+    if (r.size() > max_reads) max_reads = r.size(), max_reads_at = where;
+    rows += std::string(rows.empty() ? "" : ",\n") + "{\"area\":" + js(where) + ",\"ok\":" + (ok ? "true" : "false") +
+            (ok ? std::string() : ",\"error\":" + js(err)) + ",\"reads\":" + std::to_string(r.size()) + ",\"bytes\":" +
+            std::to_string(b) + ",\"bytes_beyond_boot\":" + std::to_string(beyond) + ",\"files\":" + std::to_string(fset.size()) +
+            ",\"ranges\":" + ranges_json(r) + "}";
+  }
+  const double ms = ms_since(t0);
+  const std::vector<fs::ByteRange> common_v(common.begin(), common.end()), uni_v(uni.begin(), uni.end());
+  // The census boot set (docs/census.md, M0a 0.6): whole files.
+  std::string census;
+  uint64_t census_bytes = 0;
+  for (const char* p : {"Root/Data/Main.blk", "Root/Data/Base.osi", "Root/Data/Languages/lang_eng.blk", "Root/Data/Art/Art.blk"}) {
+    uint64_t sz = 0;
+    const bool there = fsp->size(p, sz) == fs::Error::None;
+    const std::string n = fs::normalize(p);
+    uint64_t read_by_boot = 0;
+    for (const auto& x : boot)
+      if (x.path == n) read_by_boot += x.length;
+    census_bytes += there ? sz : 0;
+    census += std::string(census.empty() ? "" : ",") + "{\"path\":" + js(n) + ",\"present\":" + (there ? "true" : "false") +
+              ",\"size\":" + std::to_string(sz) + ",\"boot_bytes_read\":" + std::to_string(read_by_boot) + "}";
+  }
+  const std::string boot_json = ranges_json(boot), common_json = ranges_json(common_v);
+  std::string files_json;  // complete only after every ranges_json call (each may add a file id)
+  for (size_t i = 0; i < files.size(); ++i) {
+    uint64_t sz = 0;
+    fsp->size(files[i], sz);
+    files_json += std::string(i ? "," : "") + "{\"path\":" + js(files[i]) + ",\"size\":" + std::to_string(sz) + "}";
+  }
+  std::ofstream o(out_path);
+  o << "{\n\"format\":\"lomn-prefetch-manifest\",\"version\":1,\n\"files\":[" << files_json << "],\n\"boot\":{\"ranges\":" << boot_json
+    << ",\"reads\":" << boot.size() << ",\"bytes\":" << bytes_of(boot) << "},\n\"summary\":{\"areas\":" << areas.size()
+    << ",\"failures\":" << failures << ",\"wall_ms\":" << num(ms) << ",\"max_bytes\":" << max_bytes << ",\"max_bytes_at\":" << js(max_at)
+    << ",\"max_bytes_beyond_boot\":" << max_beyond << ",\"max_bytes_beyond_boot_at\":" << js(max_beyond_at) << ",\"max_reads\":" << max_reads
+    << ",\"max_reads_at\":" << js(max_reads_at) << ",\"mean_bytes_beyond_boot\":" << (areas.empty() ? 0 : sum_beyond / areas.size())
+    << ",\"union_ranges\":" << uni_v.size() << ",\"union_bytes\":" << bytes_of(uni_v) << ",\"files_read\":" << files.size()
+    << ",\"common_ranges\":" << common_json << ",\"common_bytes\":" << bytes_of(common_v)
+    << ",\"boot_equals_common\":" << (common == boot_set ? "true" : "false") << ",\"not_addressable\":[" << [&] {
+         std::string o;
+         for (size_t i = 0; i < not_addressable.size(); ++i) o += std::string(i ? "," : "") + js(not_addressable[i]);
+         return o;
+       }() << "],\"census_boot\":[" << census
+    << "],\"census_boot_bytes\":" << census_bytes << "},\n\"areas\":[\n" << rows << "]}\n";
+  o.close();
+  if (o.fail()) return std::fprintf(stderr, "cannot write %s\n", out_path.c_str()), 4;
+  std::printf("manifest: %zu areas, %llu failures, boot %llu bytes, max %llu bytes (%s) -> %s\n", areas.size(),
+              static_cast<unsigned long long>(failures), static_cast<unsigned long long>(bytes_of(boot)),
+              static_cast<unsigned long long>(max_bytes), max_at.c_str(), out_path.c_str());
+  return failures ? 4 : 0;
+}
 #endif
 
 }  // namespace
@@ -409,7 +575,7 @@ int main(int argc, char** argv) {
   std::map<std::string, std::string> a;
   static const char* known[] = {"--install", "--level", "--area", "--out", "--backend", "--width", "--height", "--frames", "--fov", "--near",
                                 "--far", "--eye", "--yaw", "--pitch", "--eye-height", "--vertex-colors", "--routes",
-                                "--synthetic", "--survey", "--keep-cpu", "--state-log", "--lighting", "--fog", "--write-install"};
+                                "--synthetic", "--survey", "--keep-cpu", "--state-log", "--lighting", "--fog", "--write-install", "--manifest"};
   for (int i = 1; i + 1 < argc; i += 2) {
     std::string k = argv[i];
     if (std::find_if(std::begin(known), std::end(known), [&](const char* x) { return k == x; }) == std::end(known))
@@ -425,6 +591,17 @@ int main(int argc, char** argv) {
   if (synthetic && (has("--install") || has("--level") || has("--area") || has("--survey")))
     return usage("--synthetic cannot be combined with --install, --level, --area or --survey");
   if (has("--survey") && (has("--level") || has("--area"))) return usage("--survey cannot be combined with --level or --area");
+  if (has("--manifest")) {  // M1b
+    if (a["--manifest"] != "1") return usage("--manifest takes exactly 1");
+    if (synthetic || has("--survey") || has("--level") || has("--area")) return usage("--manifest takes only --install and --out");
+#if defined(__EMSCRIPTEN__)
+    return usage("--manifest needs the native disk file system");
+#else
+    if (!has("--install")) return usage("--manifest needs --install");
+    if (int rc = remove_stale_outputs(out)) return rc;
+    return manifest(a["--install"], out);
+#endif
+  }
   if (has("--survey")) {
 #if defined(__EMSCRIPTEN__)
     return usage("--survey needs the native disk file system");
