@@ -4,7 +4,8 @@
 //
 // exe:  SHA-256 of LEGOBionicle.exe at the top of the chosen folder (whole file, <= MAX_EXE_BYTES).
 // data: the blockfile-table fingerprint. For every file data/**/*.blk (path relative to the install root, '/'-separated,
-//       ASCII lower-case, sorted by that path in UTF-16 code-unit order = byte order for ASCII):
+//       ASCII lower-case, sorted by the UTF-8 bytes of that path, as the Python oracle does; for ASCII names this is also
+//       the plain string order):
 //         header = bytes [0, 12): "BLKF", u32 version, u32 count (little-endian)
 //         table  = bytes [0, 12 + count * 56)           (the ScBlock entry table: names, sizes, flags, offsets)
 //         line   = `${path} ${fileSize} ${sha256hex(table)}`
@@ -27,6 +28,15 @@ export function lowerAscii(s) {
   return s.replace(/[A-Z]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 32));
 }
 
+const utf8 = new TextEncoder();
+// Byte-wise order (a prefix sorts first). JS string comparison is by UTF-16 code unit, which disagrees with UTF-8 byte order
+// for names with characters above U+FFFF against ones in U+E000..U+FFFF.
+function compareBytes(a, b) {
+  const n = Math.min(a.length, b.length);
+  for (let i = 0; i < n; ++i) if (a[i] !== b[i]) return a[i] < b[i] ? -1 : 1;
+  return a.length - b.length;
+}
+
 // entries: [{path, size}] relative to the install root ('/' separators, any case). readRange(entry, offset, length)
 // resolves to a Uint8Array of exactly `length` bytes. Returns {fingerprint, blkFiles, tableBytes}; throws Error with a
 // message naming the file on malformed input.
@@ -34,7 +44,8 @@ export async function blkTablesFingerprint(entries, readRange) {
   const blks = entries
     .map((e) => ({ e, key: lowerAscii(e.path) }))
     .filter((x) => x.key.startsWith('data/') && x.key.endsWith('.blk'))
-    .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+    .map((x) => ({ ...x, bytes: utf8.encode(x.key) }))
+    .sort((a, b) => compareBytes(a.bytes, b.bytes));
   if (blks.length === 0) throw new Error('no data/**/*.blk files: this is not a LOMN install');
   if (blks.length > MAX_BLK_FILES) throw new Error(`more than ${MAX_BLK_FILES} .blk files`);
   const lines = [];
@@ -54,7 +65,7 @@ export async function blkTablesFingerprint(entries, readRange) {
     if (table.length !== len) throw new Error(`${e.path}: short read`);
     lines.push(`${key} ${e.size} ${await sha256hex(table)}`);
   }
-  const text = new TextEncoder().encode(lines.join('\n') + '\n');
+  const text = utf8.encode(lines.join('\n') + '\n');
   return { fingerprint: await sha256hex(text), blkFiles: blks.length, tableBytes: total };
 }
 

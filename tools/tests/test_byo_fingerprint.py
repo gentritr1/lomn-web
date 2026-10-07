@@ -55,6 +55,26 @@ def test_js_equals_python_on_crafted_installs(tmp_path: Path) -> None:
     assert changed == js_fingerprint(root)
 
 
+# Review fix 6: names sort by their UTF-8 bytes in both implementations. U+FF21 (UTF-8 EF BC A1) sorts before U+1F600
+# (F0 9F 98 80) by bytes but after it by UTF-16 code unit (D83D vs FF21), which is what the JS sort used to do.
+# NON_ASCII_FP is the oracle's value for exactly this install (the JS test in web/tests/unit_test.mjs builds the same one).
+NON_ASCII_FP = "1d3c18ccade5d471383564557ea58b48b0231674b0ff062047d8e0a50bd5175a"
+NON_ASCII_FILES = [("\uff21.blk", 1, b"a"), ("\U0001F600.blk", 1, b"bb"), ("\u00e9.blk", 0, b"ccc"), ("Zed.blk", 2, b"")]
+
+
+@pytest.mark.skipif(NODE is None, reason="node not found")
+def test_non_ascii_names_sort_by_utf8_bytes_in_js_and_python(tmp_path: Path) -> None:
+    root = tmp_path / "inst"
+    (root / "data").mkdir(parents=True)
+    (root / "LEGOBionicle.exe").write_bytes(b"x")
+    for name, count, tail in NON_ASCII_FILES:
+        (root / "data" / name).write_bytes(blk(count, tail))
+    py = byo_fingerprint.fingerprint(root)
+    assert py["blk_tables_sha256"] == NON_ASCII_FP
+    assert py["blk_files"] == 4
+    assert js_fingerprint(root) == py
+
+
 @pytest.mark.skipif(NODE is None or not os.environ.get("LOMN_DATA"), reason="needs node and LOMN_DATA")
 def test_real_install_is_the_accepted_build() -> None:
     root = Path(os.environ["LOMN_DATA"]) / "install"

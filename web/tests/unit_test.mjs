@@ -3,7 +3,7 @@
 // Run: cd web && timeout 60 node --test tests/unit_test.mjs
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { blkTablesFingerprint, checkBuilds, classify, MAX_BLK_ENTRIES } from '../app/fingerprint.js';
+import { blkTablesFingerprint, checkBuilds, classify, MAX_BLK_ENTRIES, MAX_TOTAL_TABLE_BYTES } from '../app/fingerprint.js';
 import { filesSource, wanted } from '../app/byo.js';
 import { parseRanges } from '../app/engine.js';
 
@@ -65,6 +65,41 @@ test('blkTablesFingerprint: order-independent, path-case-insensitive, bounded', 
   new DataView(huge.buffer).setUint32(8, MAX_BLK_ENTRIES + 1, true);
   await bad({ 'data/a.blk': huge }, /cap/);
   await bad({ 'other/a.blk': blk(0) }, /not a LOMN install/);
+});
+
+test('blkTablesFingerprint: the total table byte cap (review fix 4: a mutant without it survived)', async () => {
+  // Each file declares the largest legal table (MAX_BLK_ENTRIES entries = 3,670,028 bytes); the bytes are made up on read, so
+  // nothing big is held. 64 MiB holds 18 such tables and not 19.
+  const per = 12 + MAX_BLK_ENTRIES * 56;
+  assert.equal(Math.floor(MAX_TOTAL_TABLE_BYTES / per), 18);
+  const files = (n) => Array.from({ length: n }, (_, i) => ({ path: `data/t${String(i).padStart(2, '0')}.blk`, size: per }));
+  const read = async (e, o, l) => {
+    const b = new Uint8Array(l);
+    b.set([0x42, 0x4c, 0x4b, 0x46]);
+    new DataView(b.buffer).setUint32(8, MAX_BLK_ENTRIES, true);
+    return b;
+  };
+  const ok = await blkTablesFingerprint(files(18), read);
+  assert.equal(ok.tableBytes, 18 * per);
+  await assert.rejects(blkTablesFingerprint(files(19), read), /blockfile tables over the size cap/);
+});
+
+test('blkTablesFingerprint: names sort by UTF-8 bytes, as the Python oracle does (review fix 6)', async () => {
+  // Same install as tools/tests/test_byo_fingerprint.py::test_non_ascii_names_sort_by_utf8_bytes_in_js_and_python: tables are
+  // "BLKF", u32 7, u32 count, bytes 0..55 per entry; the oracle's fingerprint for it is hard-coded there and here.
+  // U+FF21 (UTF-8 EF BC A1) sorts before U+1F600 (F0 9F 98 80) by bytes, after it by UTF-16 code unit.
+  const mk = (count, tail) => {
+    const b = new Uint8Array(12 + count * 56 + tail);
+    b.set([0x42, 0x4c, 0x4b, 0x46]);
+    new DataView(b.buffer).setUint32(4, 7, true);
+    new DataView(b.buffer).setUint32(8, count, true);
+    for (let i = 0; i < count; ++i) for (let j = 0; j < 56; ++j) b[12 + i * 56 + j] = j;
+    return b;
+  };
+  const f = fromBytes({ 'data/\u{1F600}.blk': mk(1, 2), 'data/\u00e9.blk': mk(0, 3), 'data/Zed.blk': mk(2, 0), 'data/\uff21.blk': mk(1, 1) });
+  const r = await blkTablesFingerprint(f.entries, f.read);
+  assert.equal(r.blkFiles, 4);
+  assert.equal(r.fingerprint, '1d3c18ccade5d471383564557ea58b48b0231674b0ff062047d8e0a50bd5175a');
 });
 
 test('wanted(): the exe at the top and data/ except dot files, exes and DLLs', () => {

@@ -9,6 +9,10 @@ const utf8 = new TextEncoder();
 // '' when the path is acceptable, else a short reason.
 export function checkRelPath(path) {
   if (typeof path !== 'string' || path.length === 0) return 'empty path';
+  // The engine's fs::normalize reads a backslash as a separator (so "a\..\b" is "b") and a NUL ends a C string: a name with either
+  // would map to a different engine path than the one the page checked (duplicate or outside-root errors that fail the install).
+  if (path.includes('\\')) return 'backslash in the name (the engine treats it as a path separator)';
+  if (path.includes('\0')) return 'NUL character in the name';
   const bytes = utf8.encode(path).length + ENGINE_PREFIX_BYTES;
   if (bytes > MAX_PATH_BYTES) return `path longer than ${MAX_PATH_BYTES} bytes (${bytes} as UTF-8)`;
   const segs = path.split('/');

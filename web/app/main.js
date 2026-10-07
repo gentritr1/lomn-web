@@ -3,7 +3,7 @@
 // States: boot | need-files | need-permission | validating | rejected | quota-short | copying | starting | ready |
 //         loading-area | area-ready | error. Tests wait on these (never on time).
 import { checkBuilds } from './fingerprint.js';
-import { copyToOpfs, filesSource, handleSource, opfsClear, opfsCopy, opfsDirExists, quotaCheck, sameFiles, totalBytes, validate } from './byo.js';
+import { copyToOpfs, describeWalkFailure, filesSource, handleSource, opfsClear, opfsCopy, opfsDirExists, quotaCheck, sameFiles, totalBytes, validate, WalkError } from './byo.js';
 import { createEngine } from './engine.js';
 import { idbDelete, idbGet, idbSet } from './idb.js';
 
@@ -70,7 +70,7 @@ async function start() {
         } catch (err) {
           await idbDelete('install-handle').catch(() => {});
           L.forgottenHandle = String(err?.message ?? err);
-          return needFiles(`The remembered folder "${handle.name}" could not be read (moved or deleted).`);
+          return needFiles(describeWalkFailure(handle.name, err));
         }
         return useSource(src, 'revisit');
       };
@@ -119,7 +119,8 @@ async function onPickDir() {
     const handle = await window.showDirectoryPicker({ id: 'lomn-install', mode: 'read' });
     await adoptHandle(handle);
   } catch (err) {
-    if (err?.name !== 'AbortError') fail(err);
+    if (err instanceof WalkError) setState('rejected', `This folder is not a usable game folder: ${err.message}.`);  // a cap, not a crash
+    else if (err?.name !== 'AbortError') fail(err);
   }
 }
 // The Chromium path: the handle is read in place (no copy) and persisted for the next visit.
@@ -162,7 +163,8 @@ async function onInput(ev) {
     if (!copy) throw new Error('the copy finished but its completion manifest is missing');
     await useSource(await handleSource(copy.dir, 'opfs'), 'copied');
   } catch (err) {
-    fail(err);
+    if (err instanceof WalkError) setState('rejected', `This folder is not a usable game folder: ${err.message}.`);
+    else fail(err);
   } finally {
     busy = false;
     ev.target.value = '';

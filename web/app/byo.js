@@ -48,20 +48,39 @@ function admit(path, seen, warnings) {
   return true;
 }
 
+// A walk that hit a cap on what a picked folder may hold: its own error type, so a caller never mistakes it for "the folder is
+// gone" (a moved or deleted folder makes entries() throw a DOMException instead).
+export class WalkError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'WalkError';
+  }
+}
+// The sentence the page shows for a remembered folder that could not be walked.
+export function describeWalkFailure(name, err) {
+  if (err instanceof WalkError) return `The remembered folder "${name}" is not a usable game folder: ${err.message}.`;
+  return `The remembered folder "${name}" could not be read (moved or deleted).`;
+}
+
+// Walks a picked folder like filesSource walks an <input>: only what wanted() takes is looked at. Folders beside data/ (a
+// player may pick a big or deep parent folder) are never opened; names that break paths.js's rules, case duplicates and
+// subtrees deeper than MAX_DEPTH are skipped with a warning; only the entry cap (MAX_FILES) is fatal, as a WalkError.
 export async function walkHandle(dir) {
   const entries = [];
   const handles = new Map();
   const seen = new Map(), warnings = [];
+  const warn = (m) => { if (warnings.length < 100) warnings.push(m); };
   let visited = 0;
   async function walk(d, prefix, depth) {
-    if (depth > MAX_DEPTH) throw new Error(`folder nested deeper than ${MAX_DEPTH} levels`);
     for await (const [name, h] of d.entries()) {
-      if (++visited > MAX_FILES) throw new Error(`more than ${MAX_FILES} entries in the folder`);
+      if (++visited > MAX_FILES) throw new WalkError(`more than ${MAX_FILES} entries in the folder`);
       if (isHidden(name)) continue;
       const path = prefix + name;
       if (h.kind === 'directory') {
-        if (!checkRelPath(path)) await walk(h, path + '/', depth + 1);
-        else if (warnings.length < 100) warnings.push(`skipped folder ${path.slice(0, 80)}: ${checkRelPath(path)}`);
+        if (depth === 0 && lowerAscii(name) !== 'data') continue;  // wanted() takes nothing outside data/
+        const why = checkRelPath(path) || (depth + 1 > MAX_DEPTH ? `nested deeper than ${MAX_DEPTH} levels` : '');
+        if (why) warn(`skipped folder ${path.slice(0, 80)}: ${why}`);
+        else await walk(h, path + '/', depth + 1);
       } else {
         if (!wanted(path) || !admit(path, seen, warnings)) continue;
         const f = await h.getFile();
@@ -95,7 +114,7 @@ export function filesSource(fileList) {
   const files = new Map();
   const seen = new Map(), warnings = [];
   let name = '';
-  if (fileList.length > MAX_FILES) throw new Error(`more than ${MAX_FILES} files`);
+  if (fileList.length > MAX_FILES) throw new WalkError(`more than ${MAX_FILES} files`);
   for (const f of fileList) {
     const rel = f.webkitRelativePath || f.name;
     const slash = rel.indexOf('/');
