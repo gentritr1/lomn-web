@@ -1,9 +1,19 @@
-# local-only: game data, original binaries, test fixtures, build outputs
+# Game data and anything derived from LEGO's binary: never committed
 /fixtures/
-/build*/
+/gen/
 *.exe
 *.dll
 *.blk
 *.bik
 *.mov
+# Local config, toolchain, builds
+.env.local
+/.toolchain/
+/build/
+/.venv/
+web/node_modules/
+__pycache__/
+.pytest_cache/
 .DS_Store
+# controller workspace
+.superpowers/
