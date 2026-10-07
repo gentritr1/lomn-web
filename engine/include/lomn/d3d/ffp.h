@@ -22,7 +22,9 @@
 //  Fog (table or vertex mode, evaluated per pixel on the eye depth w = clip w, i.e. W-fog):
 //    LINEAR f = clamp((end - w) / (end - start), 0, 1); EXP f = exp(-density w); EXP2 f = exp(-(density w)^2);
 //    rgb = f * rgb + (1 - f) * FOGCOLOR; alpha untouched.
-//  Texture transform: TEXTURETRANSFORMFLAGS COUNT2 -> uv' = ((u, v, 1, 1) * TEXTURE0).xy.
+//  Texture transform: TEXTURETRANSFORMFLAGS COUNT2 on 2-D coordinates -> uv' = ((u, v, 1, 0) * TEXTURE0).xy: D3D8 pads a
+//    2-D coordinate with 1 then 0, so the translation sits in _31/_32 and row 4 (_41/_42) is ignored (Wine's
+//    compute_texture_matrix encodes the same; Task 8A B1 - this padded (u, v, 1, 1) before, adding _41/_42).
 #pragma once
 #include <cstdint>
 #include <string>
@@ -73,6 +75,8 @@ const char* ffp_wgsl();
 
 // CPU reference of the same formulas (tests, GPU probe expectations). p, n in model space; vcol the vertex colour.
 Color4 reference_vertex_color(const State& s, bool has_vcol, const Color4& vcol, const float p[3], const float n[3]);
+// Stage 0 texture coordinate after the texture transform (TEXTURETRANSFORMFLAGS / TEXTURE0; see the formulas above).
+void reference_texcoord(const State& s, const float uv[2], float out[2]);
 // Stage 0 + alpha test + fog on a vertex colour and texel; returns false when the alpha test discards. eye_w = clip w.
 bool reference_fragment(const State& s, const Color4& diffuse, const Color4& texel, bool texture_bound, float eye_w, Color4& out);
 

@@ -41,18 +41,20 @@ int main() {
   const uint8_t white[4] = {255, 255, 255, 255};
   rhi::TextureId tex = dev->create_texture(1, 1, 1);
   dev->write_texture(tex, 0, white, 4);
+  rhi::TextureId tex2 = dev->create_texture(2, 2, 1);  // texture-transform cases (Task 8A B1)
+  dev->write_texture(tex2, 0, test::kFfpTex2x2, sizeof test::kFfpTex2x2);
   rhi::TextureId rt = dev->create_render_target_ex(rhi::RenderTargetDesc{8, 8, true, 1.0f});
-  if (!vb || !ib || !tex || !rt) return std::printf("FAIL setup\n"), 1;
+  if (!vb || !ib || !tex || !tex2 || !rt) return std::printf("FAIL setup\n"), 1;
   const float clear[4] = {0.0f, 0.25f, 0.0f, 1.0f};
 
   bool ok = true;
-  auto run = [&](const char* what, const State& s, bool has_vcol) {
+  auto run = [&](const char* what, const State& s, bool has_vcol, bool tex2x2) {
     uint32_t unsup = 0;
     const PipelineKey key = pipeline_key(s, &unsup);
     rhi::PipelineId p = dev->create_mesh_pipeline(pipeline_desc(key));
     rhi::SamplerId sm = dev->create_sampler(sampler_desc(s, &unsup));
     rhi::BufferId ub = dev->create_uniform_buffer(kFfpUniformBytes);
-    rhi::BindGroupId bg = dev->create_bind_group({ub, kFfpUniformBytes, tex, sm});
+    rhi::BindGroupId bg = dev->create_bind_group({ub, kFfpUniformBytes, tex2x2 ? tex2 : tex, sm});
     float u[kFfpUniformBytes / 4];
     DrawInputs in;
     in.vertex_has_diffuse = has_vcol;
@@ -71,9 +73,14 @@ int main() {
     // Reference: lit colour at a vertex (all equal), then stage 0 / test / fog at the centre (w = 1), then blend.
     const float pos[3] = {verts[0][0], verts[0][1], verts[0][2]}, nrm[3] = {0, 0, -1};
     const Color4 d = reference_vertex_color(s, has_vcol, Color4{vc[0], vc[1], vc[2], vc[3]}, pos, nrm);
+    // Texel: the white 1x1, or kFfpTex2x2 point-sampled at the transformed uv (every vertex has uv (0.5, 0.5)).
+    const float uv[2] = {verts[0][6], verts[0][7]};
+    float tuv[2];
+    reference_texcoord(s, uv, tuv);
+    const Color4 texel = tex2x2 ? test::ffp_tex2x2_texel(tuv) : Color4{1, 1, 1, 1};
     Color4 f;
     float want[3] = {clear[0], clear[1], clear[2]};
-    if (reference_fragment(s, d, Color4{1, 1, 1, 1}, true, 1.0f, f)) {
+    if (reference_fragment(s, d, texel, true, 1.0f, f)) {
       const float a = s.rs[rs::ALPHABLENDENABLE] ? f.a : 1.0f;
       want[0] = f.r * a + clear[0] * (1 - a);
       want[1] = f.g * a + clear[1] * (1 - a);
@@ -90,7 +97,7 @@ int main() {
     ok = ok && hit;
   };
 
-  for (const test::FfpCase& c : test::gpu_ffp_cases()) run(c.what, c.s, c.has_vcol);
+  for (const test::FfpCase& c : test::gpu_ffp_cases()) run(c.what, c.s, c.has_vcol, c.tex2x2);
   std::printf("adapter=%s\n", dev->adapter().c_str());
   return ok ? 0 : 1;
 }

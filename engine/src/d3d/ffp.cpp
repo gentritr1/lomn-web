@@ -90,7 +90,7 @@ fn lit(p: vec3f, n: vec3f, vd: vec4f) -> vec4f {
   var o: VOut;
   o.pos = u.wvp * vec4f(p, 1.0);
   o.eye_w = o.pos.w;
-  o.uv = select(uv, (u.tex0 * vec4f(uv, 1.0, 1.0)).xy, u.a.w > 0.5);
+  o.uv = select(uv, (u.tex0 * vec4f(uv, 1.0, 0.0)).xy, u.a.w > 0.5);
   let vd = select(u.mat_diffuse, c, u.a.z > 0.5);
   if (u.a.x > 0.5) {
     o.color = lit(p, n, vd);
@@ -370,6 +370,17 @@ Color4 reference_vertex_color(const State& s, bool has_vcol, const Color4& vcol,
   float out[3];
   for (int k = 0; k < 3; ++k) out[k] = std::min(1.0f, std::max(0.0f, ce[k] + ca[k] * amb[k] + cd[k] * dif[k]));
   return Color4{out[0], out[1], out[2], vd.a};
+}
+
+void reference_texcoord(const State& s, const float uv[2], float out[2]) {
+  if ((s.tss[0][tss::TEXTURETRANSFORMFLAGS] & 0xff) != kTtfCount2) {
+    out[0] = uv[0];
+    out[1] = uv[1];
+    return;
+  }
+  // (u, v, 1, 0) * TEXTURE0, row-vector convention (_ij = m[(i-1)*4 + (j-1)]): _41/_42 never contribute.
+  const float* m = s.tex[0].m;
+  for (int j = 0; j < 2; ++j) out[j] = uv[0] * m[j] + uv[1] * m[4 + j] + m[8 + j];
 }
 
 bool reference_fragment(const State& s, const Color4& d, const Color4& texel, bool bound, float w, Color4& out) {

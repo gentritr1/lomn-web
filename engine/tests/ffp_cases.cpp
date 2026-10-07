@@ -31,8 +31,10 @@ std::string f(float x) {
 std::string c4(const Color4& c) { return "[" + f(c.r) + "," + f(c.g) + "," + f(c.b) + "," + f(c.a) + "]"; }
 
 void emit(const char* what, const State& s, bool has_vcol, const Color4& vcol, const float p[3], const float n[3],
-          const Color4& d, const Color4& texel, bool bound, float w) {
+          const Color4& d, const Color4& texel, bool bound, float w, const float uv[2], bool tex2x2) {
   const Color4 v = reference_vertex_color(s, has_vcol, vcol, p, n);
+  float tuv[2];
+  reference_texcoord(s, uv, tuv);
   Color4 o;
   const bool kept = reference_fragment(s, d, texel, bound, w, o);
   std::string j = std::string("{\"what\":\"") + what + "\",\"rs\":{";
@@ -44,7 +46,10 @@ void emit(const char* what, const State& s, bool has_vcol, const Color4& vcol, c
   j += "},\"tss0\":{";
   const uint32_t tl[] = {tss::COLOROP, tss::COLORARG1, tss::COLORARG2, tss::ALPHAOP, tss::ALPHAARG1, tss::ALPHAARG2};
   for (size_t i = 0; i < 6; ++i) j += (i ? ",\"" : "\"") + tss_name(tl[i]) + "\":" + std::to_string(s.tss[0][tl[i]]);
-  j += "},\"world\":[";
+  j += "},\"ttff\":" + std::to_string(s.tss[0][tss::TEXTURETRANSFORMFLAGS]) + ",\"tex0\":[";
+  for (int i = 0; i < 16; ++i) j += (i ? "," : "") + f(s.tex[0].m[i]);
+  j += "],\"uv\":[" + f(uv[0]) + "," + f(uv[1]) + "],\"out_uv\":[" + f(tuv[0]) + "," + f(tuv[1]) + "],\"tex2x2\":" +
+       (tex2x2 ? "true" : "false") + ",\"world\":[";
   for (int i = 0; i < 16; ++i) j += (i ? "," : "") + f(s.world.m[i]);
   j += "],\"material\":{\"diffuse\":" + c4(s.material.diffuse) + ",\"ambient\":" + c4(s.material.ambient) +
        ",\"emissive\":" + c4(s.material.emissive) + "},\"lights\":[";
@@ -77,7 +82,11 @@ int main(int argc, char** argv) {
   const Color4 vc{test::kFfpVcol[0], test::kFfpVcol[1], test::kFfpVcol[2], test::kFfpVcol[3]};
   for (const test::FfpCase& c : test::gpu_ffp_cases()) {
     const Color4 d = reference_vertex_color(c.s, c.has_vcol, vc, verts[0], nrm);
-    emit(c.what, c.s, c.has_vcol, vc, verts[0], nrm, d, Color4{1, 1, 1, 1}, true, 1.0f);
+    const float uv[2] = {verts[0][6], verts[0][7]};
+    float tuv[2];
+    reference_texcoord(c.s, uv, tuv);  // the texel gpu_ffp expects: kFfpTex2x2 point-sampled at the transformed uv
+    emit(c.what, c.s, c.has_vcol, vc, verts[0], nrm, d, c.tex2x2 ? test::ffp_tex2x2_texel(tuv) : Color4{1, 1, 1, 1}, true,
+         1.0f, uv, c.tex2x2);
   }
   // 2. Seeded random samples over every state the reference reads. World matrices are rigid (rotation about a random
   //    axis + translation): the area path only builds RotX * translation.
@@ -152,7 +161,15 @@ int main(int argc, char** argv) {
       d.a = static_cast<float>(rnd(256)) / 255.0f;
       texel.a = static_cast<float>(rnd(256)) / 255.0f;
     }
-    emit("random", s, rnd(2) != 0, vcol, p, nn, d, texel, rnd(4) != 0, uni(0, 3000));
+    // Texture transform (Task 8A B1): COUNT2 half the time, every matrix element random (rows 4 included: they must not
+    // matter), uv anywhere.
+    s.tss[0][tss::TEXTURETRANSFORMFLAGS] = rnd(2) ? kTtfCount2 : kTtfDisable;
+    for (float& m : s.tex[0].m) m = uni(-4, 4);
+    const float uv[2] = {uni(-2, 2), uni(-2, 2)};
+    const bool has_vcol = rnd(2) != 0;  // argument evaluation order is unspecified: draw the random values in sequence
+    const bool bound = rnd(4) != 0;
+    const float w = uni(0, 3000);
+    emit("random", s, has_vcol, vcol, p, nn, d, texel, bound, w, uv, false);
   }
   return 0;
 }

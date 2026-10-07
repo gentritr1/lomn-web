@@ -2,7 +2,9 @@
 // them - plus seeded random samples - with the CPU reference's results for the independent Python check
 // tools/research/oracle/ffp_oracle.py (REF3 revision 2, item 3).
 #pragma once
+#include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <vector>
 
 #include "lomn/d3d/device8.h"
@@ -13,7 +15,18 @@ struct FfpCase {
   const char* what;
   d3d::State s;
   bool has_vcol;
+  bool tex2x2 = false;  // sample kFfpTex2x2 (point) instead of the 1x1 white texture (texture-transform cases)
 };
+
+// 2x2 RGBA8 texture, row 0 = v in [0, 0.5): red, green; row 1: blue, white. Texel centres at u, v = 0.25 / 0.75.
+constexpr uint8_t kFfpTex2x2[16] = {255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255};
+// Point sample of kFfpTex2x2 at uv (wrap addressing, the D3D8 default; nearest texel = floor(frac(uv) * 2)).
+inline d3d::Color4 ffp_tex2x2_texel(const float uv[2]) {
+  int t[2];
+  for (int k = 0; k < 2; ++k) t[k] = std::min(1, static_cast<int>(std::floor((uv[k] - std::floor(uv[k])) * 2.0f)));
+  const uint8_t* p = &kFfpTex2x2[(t[1] * 2 + t[0]) * 4];
+  return d3d::Color4{p[0] / 255.0f, p[1] / 255.0f, p[2] / 255.0f, p[3] / 255.0f};
+}
 
 // One triangle (circumradius 3) around the origin in the z = 0.5 plane, normal (0,0,-1), vertex colour kFfpVcol.
 constexpr float kFfpVcol[4] = {0.8f, 0.6f, 0.4f, 0.5f};
@@ -107,6 +120,28 @@ inline std::vector<FfpCase> gpu_ffp_cases() {
   mod.tss[0][tss::ALPHAARG2] = kTaTexture;
   mod.rs[rs::TEXTUREFACTOR] = 0x80000000u;
   out.push_back({"ALPHAOP MODULATE(TFACTOR 128, TEXTURE 255)", mod, true});
+  // Task 8A B1: TEXTURETRANSFORMFLAGS COUNT2 on the vertices' 2-D uv (0.5, 0.5), 2x2 point-sampled texture. D3D8 computes
+  // (u, v, 1, 0) * TEXTURE0: scale 0.5 -> (0.25, 0.25) = red; a translation in _31/_32 moves the texel, the same value in
+  // _41/_42 (row 4) must not (a (u, v, 1, 1) pad would move it).
+  State tt = unlit;
+  tt.tss[0][tss::MAGFILTER] = tt.tss[0][tss::MINFILTER] = kTexfPoint;
+  tt.tss[0][tss::MIPFILTER] = kTexfPoint;  // one level: no mip effect (MIPFILTER NONE is flagged unsupported)
+  tt.tss[0][tss::TEXTURETRANSFORMFLAGS] = kTtfCount2;
+  tt.tex[0] = view::mat_identity();
+  tt.tex[0].m[0] = tt.tex[0].m[5] = 0.5f;
+  out.push_back({"COUNT2 scale 0.5: uv (0.25, 0.25) -> red", tt, false, true});
+  State t31 = tt;
+  t31.tex[0].m[8] = 0.5f;  // _31
+  out.push_back({"COUNT2 + _31 0.5: u 0.75 -> green", t31, false, true});
+  State t32 = tt;
+  t32.tex[0].m[9] = 0.5f;  // _32
+  out.push_back({"COUNT2 + _32 0.5: v 0.75 -> blue", t32, false, true});
+  State t41 = tt;
+  t41.tex[0].m[12] = 0.5f;  // _41: ignored for 2-D coordinates
+  out.push_back({"COUNT2 + _41 0.5: ignored -> red", t41, false, true});
+  State t42 = tt;
+  t42.tex[0].m[13] = 0.5f;  // _42: ignored
+  out.push_back({"COUNT2 + _42 0.5: ignored -> red", t42, false, true});
   return out;
 }
 

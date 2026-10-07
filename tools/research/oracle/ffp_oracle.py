@@ -11,6 +11,11 @@ not D3D8 facts): an unbound texture samples opaque white (deviation V3); with bl
 Cases outside the formulas modelled here are SKIPPED and counted, never silently passed:
   FOGENABLE with both FOGTABLEMODE and FOGVERTEXMODE = NONE (D3D8 then takes the fog factor from the vertex specular
   alpha; the area path never does this: AppMain sets FOGTABLEMODE LINEAR).
+Texture coordinates (Task 8A B1): D3DTSS_TEXTURETRANSFORMFLAGS = D3DTTFF_COUNT2 transforms the stage's coordinates by
+D3DTS_TEXTURE0 and passes the first two results to the rasterizer. A 2-D coordinate (u, v) enters the 4x4 multiply as
+(u, v, 1, 0): the documentation's "texture coordinate translation" for 2-D coordinates is the matrix's third row
+(_31, _32), and the fourth row never applies (Wine's compute_texture_matrix moves the same rows). Cases flagged tex2x2
+also check the texel the GPU probe expects: the 2x2 texture below point-sampled (wrap) at that coordinate.
 Usage: ffp_oracle.py CASES.jsonl   (exit 0 when every non-skipped case agrees within TOL; prints a summary)
 """
 import json, math, sys
@@ -21,6 +26,18 @@ D3DTA_DIFFUSE, D3DTA_CURRENT, D3DTA_TEXTURE, D3DTA_TFACTOR = 0, 1, 2, 3
 D3DLIGHT_POINT, D3DLIGHT_DIRECTIONAL = 1, 3
 D3DMCS_COLOR1 = 1
 D3DFOG_NONE, D3DFOG_EXP, D3DFOG_EXP2, D3DFOG_LINEAR = 0, 1, 2, 3
+D3DTTFF_COUNT2 = 2
+TEX2X2 = [[(1.0, 0.0, 0.0, 1.0), (0.0, 1.0, 0.0, 1.0)], [(0.0, 0.0, 1.0, 1.0), (1.0, 1.0, 1.0, 1.0)]]  # [row v][column u]
+
+
+def texcoord(c):
+    """The stage-0 texture coordinate after D3DTS_TEXTURE0 (see the module docstring)."""
+    u, v = c['uv']
+    if c['ttff'] & 0xff != D3DTTFF_COUNT2:
+        return [u, v]
+    M = c['tex0']  # row-major _11.._44
+    vec = (u, v, 1.0, 0.0)
+    return [sum(vec[i] * M[i * 4 + j] for i in range(4)) for j in range(2)]
 
 
 def argb(v):
@@ -135,10 +152,26 @@ def fragment(c):
 def main():
     n = skipped = bad = 0
     worst_v = worst_f = 0.0
-    kept_cases = discards = 0
+    kept_cases = discards = texcases = 0
+    worst_uv = 0.0
     for line in open(sys.argv[1]):
         c = json.loads(line)
         n += 1
+        tuv = texcoord(c)
+        duv = max(abs(tuv[k] - c['out_uv'][k]) for k in range(2))
+        worst_uv = max(worst_uv, duv)
+        if duv > TOL * max(1.0, max(abs(x) for x in tuv)):
+            bad += 1
+            if bad <= 10:
+                print('MISMATCH texcoord %s: oracle %s shim %s' % (c['what'], tuv, c['out_uv']))
+        if c['tex2x2']:
+            tx = [min(1, int(math.floor((x - math.floor(x)) * 2))) for x in tuv]
+            want = TEX2X2[tx[1]][tx[0]]
+            if any(abs(want[k] - c['texel'][k]) > TOL for k in range(4)):
+                bad += 1
+                if bad <= 10:
+                    print('MISMATCH texel %s: oracle %s probe expectation %s' % (c['what'], want, c['texel']))
+            texcases += 1
         v = lit_vertex(c)
         dv = max(abs(v[k] - c['out_vertex'][k]) for k in range(4))
         worst_v = max(worst_v, dv)
@@ -168,8 +201,8 @@ def main():
             if bad <= 10:
                 print('MISMATCH case %d (%s): %s' % (n, c['what'], msg))
     print('ffp_oracle: %d cases (%d fragments kept, %d discarded by the alpha test, %d fragment checks skipped: fog with '
-          'no fog mode), max |vertex diff| %.2e, max |fragment diff| %.2e, %d mismatches (tolerance %g)'
-          % (n, kept_cases, discards, skipped, worst_v, worst_f, bad, TOL))
+          'no fog mode), max |vertex diff| %.2e, max |fragment diff| %.2e, max |texcoord diff| %.2e, %d texel probes, '
+          '%d mismatches (tolerance %g)' % (n, kept_cases, discards, skipped, worst_v, worst_f, worst_uv, texcases, bad, TOL))
     sys.exit(1 if bad or n == 0 else 0)
 
 
