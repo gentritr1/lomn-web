@@ -5,9 +5,18 @@ xbin.py (.x), our own SLB/DDS/TGA header reads below and osi.py (Base.osi litera
   a9_oracle.py --install DIR --level lev1 --area vllg [--eye-height 3] --out expected.txt
   a9_oracle.py --install DIR --level lev1 --area vllg --compare state_log.txt     (exit 1 on a difference)
 
+  Camera inputs (lomn_view's run settings, not game data; defaults = lomn_view's for an install): [--fov 72 --near 0.01
+  --far 4700] (the exe's camera: FOV @0x00704e00, near @0x00704e1c, far = GetDrawDistance mDrawDistance @0x0074a328,
+  read through the GcViewPort ctor 0x004479f0) [--pitch -10] [--yaw DEG: set; default towards the bounds centre]
+  [--width 1280 --height 720] (the aspect). The synthetic state scene (--synthetic 2) is rendered with
+  --fov 90 --near 0.1 --far 100 --pitch 0 --yaw 0 --width 64 --height 64 --eye-height 0 (its CameraSettings).
+
 Covered lines (the C++ log is filtered the same way, init + the FIRST frame): RS, TSS, TEXTURE, DRAW, LIGHTENABLE,
-CLEAR, BEGINSCENE/ENDSCENE, "# node", "# SrPushRenderMode", "MATERIAL" (values), "XFORM <type>" (the matrix checksum
-is dropped) and "LIGHT <i> type=<t>" (values dropped: float32 products are not recomputed here).
+CLEAR, BEGINSCENE/ENDSCENE, "# node", "# SrPushRenderMode", "MATERIAL" (values), and since M1a-4 (b) the whole
+"XFORM <type> sum=<checksum>" line (world, view, projection and texture matrices recomputed in float32 below) and the
+whole "LIGHT <i> type=<t> d=.. s=.. a=.. pos=.. dir=.. range=.. att=.." line (the D3DLIGHT8 the game builds, from
+LIGHT.slb, GrSetDefaultLighting and SetCaveLighting). Only "#" notes other than "# node" / "# SrPushRenderMode" are
+dropped.
 Rules and addresses: see lomn/view/sage_frame.h; every function below names its source.
 """
 import argparse, math, os, struct, sys
@@ -51,6 +60,108 @@ def tfactor_alpha(t):
     the x87 in single precision (Task 8A E2a; spec M1 section 7.1 R23, INFERRED). In float64 255 * f32(0.9) is
     229.49999... -> 229; in float32 it is 229.5 -> 230 (26 real areas)."""
     return round(f32(255.0 * f32(t))) & 255
+
+
+# ---- float32 matrices (M1a-4 b) ----
+# D3D / D3DX convention: row-major m[row*4 + col], row vectors (v' = v * M), translation in _41.._43 (m[12..14]). Every
+# step is one float32 operation (f32 of the exact float64 result: correctly rounded for + - * / and sqrt, since float64
+# has more than 2 * 24 + 2 bits); trig and sqrt are evaluated in float64 and rounded once, as lomn_view evaluates them
+# (its camera is the viewer's, not a replay of the game's, so its operation order is part of the contract).
+KDEG = math.pi / 180.0
+FLT_MIN, FLT_MAX = 1.1754943508222875e-38, 3.4028234663852886e+38
+
+
+def mat_identity():
+    return [1.0 if i % 5 == 0 else 0.0 for i in range(16)]
+
+
+def mat_mul(a, b):
+    """a * b: r[i][j] = sum_k a[i][k] * b[k][j], accumulated left to right from +0 in float32."""
+    r = [0.0] * 16
+    for i in range(4):
+        for j in range(4):
+            acc = 0.0
+            for k in range(4):
+                acc = f32(acc + f32(a[i * 4 + k] * b[k * 4 + j]))
+            r[i * 4 + j] = acc
+    return r
+
+
+def mat_rotation_x(rad):
+    """D3DUtil_SetRotateXMatrix (DirectX 8.1 SDK d3dutil.cpp): _22 = cos, _23 = sin, _32 = -sin, _33 = cos."""
+    c, s = f32(math.cos(rad)), f32(math.sin(rad))
+    m = mat_identity()
+    m[5], m[6], m[9], m[10] = c, s, -s, c
+    return m
+
+
+def mat_translation(x, y, z):
+    m = mat_identity()
+    m[12], m[13], m[14] = x, y, z
+    return m
+
+
+def perspective_fov_rh(fovy, aspect, zn, zf):
+    """D3DXMatrixPerspectiveFovRH (DirectX 8.1 SDK documentation): yScale = cot(fovY / 2), xScale = yScale / aspect;
+    [xScale 0 0 0; 0 yScale 0 0; 0 0 zf/(zn-zf) -1; 0 0 zn*zf/(zn-zf) 0]."""
+    ys = f32(1.0 / math.tan(fovy / 2.0))
+    m = [0.0] * 16
+    m[0] = f32(ys / aspect)
+    m[5] = ys
+    m[10] = f32(zf / f32(zn - zf))
+    m[11] = -1.0
+    m[14] = f32(f32(zn * zf) / f32(zn - zf))
+    return m
+
+
+def _dot3(a, b):
+    return f32(f32(f32(a[0] * b[0]) + f32(a[1] * b[1])) + f32(a[2] * b[2]))
+
+
+def _cross3(a, b):
+    return [f32(f32(a[1] * b[2]) - f32(a[2] * b[1])), f32(f32(a[2] * b[0]) - f32(a[0] * b[2])),
+            f32(f32(a[0] * b[1]) - f32(a[1] * b[0]))]
+
+
+def _normalize3(v):
+    n = f32(math.sqrt(_dot3(v, v)))
+    return [f32(x / n) for x in v] if n > 0.0 else list(v)
+
+
+def look_at_rh(eye, at, up):
+    """D3DXMatrixLookAtRH (DirectX 8.1 SDK documentation): zaxis = normal(Eye - At), xaxis = normal(cross(Up, zaxis)),
+    yaxis = cross(zaxis, xaxis); [xaxis.x yaxis.x zaxis.x 0; xaxis.y yaxis.y zaxis.y 0; xaxis.z yaxis.z zaxis.z 0;
+    -dot(xaxis, eye) -dot(yaxis, eye) -dot(zaxis, eye) 1]."""
+    z = _normalize3([f32(eye[k] - at[k]) for k in range(3)])
+    x = _normalize3(_cross3(up, z))
+    y = _cross3(z, x)
+    m = [0.0] * 16
+    for i in range(3):
+        m[i * 4 + 0], m[i * 4 + 1], m[i * 4 + 2] = x[i], y[i], z[i]
+    m[12], m[13], m[14], m[15] = -_dot3(x, eye), -_dot3(y, eye), -_dot3(z, eye), 1.0
+    return m
+
+
+def transform_point(m, p):
+    """(p, 1) * M: out[j] = ((p0 m[j] + p1 m[4+j]) + p2 m[8+j]) + m[12+j]."""
+    return [f32(f32(f32(f32(p[0] * m[j]) + f32(p[1] * m[4 + j])) + f32(p[2] * m[8 + j])) + m[12 + j]) for j in range(4)]
+
+
+def mat_sum(m):
+    """The state log's matrix checksum: sum = sum * 31 + byte over the 64 little-endian float32 bytes, mod 2^32."""
+    acc = 0
+    for byte in struct.pack('<16f', *m):
+        acc = (acc * 31 + byte) & 0xffffffff
+    return acc
+
+
+def g6(x):
+    """A float as the state log prints it: %.6g, with NaN/inf spelled "nan" / "inf" / "-inf"."""
+    if math.isnan(x):
+        return 'nan'
+    if math.isinf(x):
+        return 'inf' if x > 0 else '-inf'
+    return '%.6g' % x
 
 
 class Device:
@@ -161,7 +272,7 @@ def texture_alpha(b, tga):
     return bits == 32 and amask != 0  # A8R8G8B8
 
 
-def load_area(ins, eye_height):
+def load_area(ins):
     lv = ins.level
     objb = ins.entry(ins.area + '_obj.slb')
     recs = []
@@ -206,38 +317,55 @@ def load_area(ins, eye_height):
         m = models[mid.lower()]
         if m is None or not all(math.isfinite(c) for c in pos):
             continue
-        places.append({'rec': i, 'id': mid, 'pos': pos, 'route': rt, 'm': m})
-    return places, eye_position(places, start, eye_height)
+        # World matrix (GcArea::GcArea 0x00504220): RotX(kWorldRotX = -1.5707982, the float the exe passes to
+        # D3DUtil_SetRotateXMatrix) then the record position in _41.._43, i.e. RotX * Translation(pos).
+        world = mat_mul(mat_rotation_x(f32(-1.5707982)), mat_translation(*pos))
+        places.append({'rec': i, 'id': mid, 'pos': pos, 'route': rt, 'm': m, 'world': world})
+    return places, start
 
 
-def eye_position(places, start, eye_height):
-    """The viewer's eye (lomn_view's make_camera; not the game's camera, which M1 does not replay): the POS start + eye
-    height; without a POS start the centre of the world bounds of every placed model except Back placements, + eye height
-    (Task 8A E2b: fren/frnt has no POS table); without any bounds the origin. World point = RotX(kWorldRotX) then the
-    record position (GcArea::GcArea 0x00504220): (x + px, y*c - z*s + py, y*s + z*c + pz), evaluated in float32 in the
-    same operation order as the C++ transform_point over the 8 corners of each model's model-space AABB."""
-    if start:
-        return (start[0], f32(start[1] + eye_height), start[2])
-    rx = f32(-1.5707982)
-    c, s = f32(math.cos(rx)), f32(math.sin(rx))
+def camera(places, start, cam):
+    """The viewer's camera (lomn_view's make_camera; not the game's camera, which M1 does not replay) -> (eye, view
+    matrix, projection matrix). Eye: the POS start + eye height; without a POS start the centre of the world bounds of
+    every placed model except Back placements, + eye height (Task 8A E2b: fren/frnt has no POS table); without any bounds
+    the origin. The bounds are the 8 corners of each model's model-space AABB through its world matrix. Yaw: --yaw when
+    given, else towards the bounds centre in xz (0 = -Z, 90 = +X; 0 when the centre is within 1e-3 of the eye or there
+    are no bounds). at = eye + (sin(yaw) cos(pitch), sin(pitch), -cos(yaw) cos(pitch)); up = +Y."""
     lo = hi = None
     for p in places:
         if p['route'] == 'back':
             continue
         bmin, bmax = p['m']['bmin'], p['m']['bmax']
-        px, py, pz = p['pos']
         for k in range(8):
-            x, y, z = (bmax[0] if k & 1 else bmin[0]), (bmax[1] if k & 2 else bmin[1]), (bmax[2] if k & 4 else bmin[2])
-            # out[j] = ((p0*m[j] + p1*m[4+j]) + p2*m[8+j]) + m[12+j], rows (1,0,0,0) (0,c,s,0) (0,-s,c,0) (px,py,pz,1)
-            w = (f32(f32(f32(f32(x * 1.0) + f32(y * 0.0)) + f32(z * 0.0)) + px),
-                 f32(f32(f32(f32(x * 0.0) + f32(y * c)) + f32(z * -s)) + py),
-                 f32(f32(f32(f32(x * 0.0) + f32(y * s)) + f32(z * c)) + pz))
-            lo = list(w) if lo is None else [min(a, b) for a, b in zip(lo, w)]
-            hi = list(w) if hi is None else [max(a, b) for a, b in zip(hi, w)]
-    if lo is None:
-        return (0.0, 0.0, 0.0)  # make_camera "origin": no eye height
-    ctr = [f32(f32(a + b) * 0.5) for a, b in zip(lo, hi)]
-    return (ctr[0], f32(ctr[1] + eye_height), ctr[2])
+            w = transform_point(p['world'], ((bmax[0] if k & 1 else bmin[0]), (bmax[1] if k & 2 else bmin[1]),
+                                             (bmax[2] if k & 4 else bmin[2])))
+            lo = w[:3] if lo is None else [w[j] if w[j] < lo[j] else lo[j] for j in range(3)]
+            hi = w[:3] if hi is None else [w[j] if w[j] > hi[j] else hi[j] for j in range(3)]
+    ctr = [f32(f32(a + b) * 0.5) for a, b in zip(lo, hi)] if lo is not None else [0.0, 0.0, 0.0]
+    eh = f32(cam['eye_height'])
+    if start:
+        eye = [start[0], f32(start[1] + eh), start[2]]
+    elif lo is not None:
+        eye = [ctr[0], f32(ctr[1] + eh), ctr[2]]
+    else:
+        eye = [0.0, 0.0, 0.0]  # make_camera "origin": no eye height
+    if cam['yaw'] is not None:
+        y = math.fmod(f32(cam['yaw']), 360.0)  # lomn_view normalises --yaw to (-180, 180]
+        y = y - 360.0 if y > 180.0 else y + 360.0 if y <= -180.0 else y
+        yaw = f32(y)
+    else:
+        dx, dz = f32(ctr[0] - eye[0]), f32(ctr[2] - eye[2])
+        if lo is not None and f32(f32(dx * dx) + f32(dz * dz)) > f32(1e-6):
+            yaw = f32(math.atan2(dx, -dz) / KDEG)
+        else:
+            yaw = 0.0
+    yr, pr = yaw * KDEG, f32(cam['pitch']) * KDEG
+    fwd = [f32(math.sin(yr) * math.cos(pr)), f32(math.sin(pr)), f32(-math.cos(yr) * math.cos(pr))]
+    at = [f32(eye[k] + fwd[k]) for k in range(3)]
+    view = look_at_rh(eye, at, [0.0, 1.0, 0.0])
+    aspect = f32(f32(cam['width']) / f32(cam['height']))
+    proj = perspective_fov_rh(f32(f32(cam['fov']) * KDEG), aspect, f32(cam['near']), f32(cam['far']))
+    return tuple(eye), view, proj
 
 
 def load_model(ins, xb, spec):
@@ -361,7 +489,10 @@ class Frame:
             d.dx_tss(0, 24, 0)
         else:
             d.dx_tss(0, 24, 2)
-            d.raw('XFORM TEXTURE0')
+            # The scroll matrix: _31/_32 = (now - mStartTime) * speed; the first SetTexture of a material starts its
+            # clock (mStartTime == -1), so the first frame's offset is 0: the identity (and the viewer's clock never
+            # advances, spec M1: static offset only).
+            d.raw('XFORM TEXTURE0 sum=%08x' % mat_sum(mat_identity()))
         if not sub['textured']:
             return
         if transparency == 1.0 and sub['trans'] < 1.0:
@@ -372,7 +503,7 @@ class Frame:
 
     def draw_x(self, pl, transparency=1.0):  # ScDrawableModel::DrawX 0x005528c0
         d, subs = self.d, pl['m']['subs']
-        d.raw('XFORM WORLD')
+        d.raw('XFORM WORLD sum=%08x' % mat_sum(pl['world']))  # SetTransform(WORLD): no hierarchy, one matrix
         d.dx_rs(153, 0)
         if transparency < 1.0:
             d.dx_rs(47, 16); d.dx_rs(27, 1); d.dx_tss(0, 4, 4); d.dx_tss(0, 5, 3); d.dx_tss(0, 6, 2)
@@ -424,34 +555,134 @@ class Frame:
             self.ctx = False
 
 
+# Light constants, read from the exe's .rdata at the addresses the decompiled code loads them from (float32).
+LIGHT_INTENSITY_KNEE, LIGHT_INTENSITY_BOOST = 0.9, 1.2  # GcLight ctors 0x00490480 (@0x0070c16c / 0x0070c170) and
+#                                                         0x004906b0 (@0x0070c19c / 0x0070c1a0): v > 0.9 -> v * 1.2
+FAR_INTENSITY, MAX_LIGHT_RANGE = 0.15, 10000.0  # kFarIntensity @0x0073e8f0, kMaxLightRange @0x0073e8f4
+CAVE_INTENSITY = 0.25  # GcLightDirector::SetCaveLighting 0x0048e670: SetIntensity(@0x0070bd68) when on
+DEFAULT_INTENSITY = 1.0  # GrSetDefaultLighting 0x00470560: @0x00709300
+LMBA_AMBIENT = (0.47058824, 0.47058824, 0.47058824, 1.0)  # @0x00709364..70
+SUN_DIR = (0.85570401, -0.51642299, 0.0328423)  # "SunL" @0x0070931c..24; "Shad" uses @0x00709348..50 = -SUN_DIR
+SUN_RGB = {3: (1.0, 0.98039216, 0.83529413), 5: (0.95686275, 1.0, 0.86666667)}  # @0x00709304.. / 0x00709310..
+SHAD_COL_LEV4 = (0.35294119, 0.47058824, 0.54901963, 1.0)  # @0x00709328.. (default) / @0x007092e0.. (LoadLights)
+SHAD_COL = (0.35294119, 0.35294119, 0.35294119, 1.0)  # @0x00709338.. (default) / @0x007092f0.. (LoadLights)
+WHITE = (1.0, 1.0, 1.0, 1.0)  # kWhiteRGBAFloats (INFERRED from the name: initialised at run time)
+
+
+def new_light(ltype):
+    """A GcFastLight after its memset(+4, 0, 0x68): every D3DLIGHT8 member 0 but the type."""
+    z4 = (0.0, 0.0, 0.0, 0.0)
+    return {'type': ltype, 'd': z4, 's': z4, 'a': z4, 'pos': (0.0, 0.0, 0.0), 'dir': (0.0, 0.0, 0.0), 'range': 0.0,
+            'att': (0.0, 0.0, 0.0), 'base': z4, 'style': 0}
+
+
+def set_intensity(l, v):
+    """GcFastLight::SetIntensity 0x0058ddf0: Diffuse = Specular = base colour (+0x78) * v, per component in float32."""
+    l['d'] = l['s'] = tuple(f32(c * v) for c in l['base'])
+
+
+def ctor_intensity(l, v):
+    v = f32(v)
+    if f32(LIGHT_INTENSITY_KNEE) < v:
+        v = f32(v * f32(LIGHT_INTENSITY_BOOST))
+    set_intensity(l, v)
+
+
+def point_light(colour, intensity, pos, rng, style):
+    """GcLight::GcLight 0x00490480 -> GcFastLight::SetPointLight 0x0058d6a0 (type 1, Diffuse = Specular = colour,
+    Position) then SetIntensity."""
+    l = new_light(1)
+    l['base'] = tuple(f32(c) for c in colour)
+    l['pos'] = tuple(f32(x) for x in pos)
+    l['style'] = style
+    if 0.0 < rng:  # @0x0073e908 = 0
+        prod = f32(f32(FAR_INTENSITY) * rng)
+        # Attenuation1 = (float)1.0 (double @0x0073e918) / (kFarIntensity * range); Attenuation0 = @0x0073e914 = 0.
+        # Task 8B D3 (the viewer's rule for a hostile denormal range): a product below FLT_MIN stores FLT_MAX.
+        l['att'] = (0.0, f32(1.0 / prod) if prod >= FLT_MIN else FLT_MAX, 0.0)
+        l['range'] = rng
+    else:  # Attenuation0 = @0x0073e90c = 1, Attenuation1 = @0x0073e910 = 0, Range = kMaxLightRange
+        l['att'] = (1.0, 0.0, 0.0)
+        l['range'] = f32(MAX_LIGHT_RANGE)
+    ctor_intensity(l, intensity)
+    return l
+
+
+def directional_light(colour, intensity, direction):
+    """GcLight::GcLight 0x004906b0 (style 0) -> GcFastLight::SetDirectionalLight 0x0058d770 (type 3, Diffuse =
+    Specular = colour, Direction) then SetIntensity."""
+    l = new_light(3)
+    l['base'] = tuple(f32(c) for c in colour)
+    l['dir'] = tuple(f32(x) for x in direction)
+    ctor_intensity(l, intensity)
+    return l
+
+
+def ambient_light(colour):
+    """GcLight::GcLight 0x00490960 (style 0, no SetIntensity) -> GcFastLight::SetAmbientLight 0x0058d8c0: type 3,
+    Ambient = colour, Attenuation0 = @0x0073e938 = 1, Attenuation1 = @0x0073e93c = 0, Range = kMaxLightRange."""
+    l = new_light(3)
+    l['base'] = l['a'] = tuple(f32(c) for c in colour)
+    l['att'] = (1.0, 0.0, 0.0)
+    l['range'] = f32(MAX_LIGHT_RANGE)
+    return l
+
+
+def default_lighting(level_type):
+    """GrSetDefaultLighting 0x00470560: "LmbA" (an ambient light) below level type 3, else "SunL" + "Shad"."""
+    if level_type < 3:
+        return [ambient_light(LMBA_AMBIENT)]
+    sun = SUN_RGB.get(level_type, WHITE[:3]) + (WHITE[3],)
+    shad = SHAD_COL_LEV4 if level_type == 4 else SHAD_COL
+    return [directional_light(sun, DEFAULT_INTENSITY, SUN_DIR),
+            directional_light(shad, DEFAULT_INTENSITY, tuple(-x for x in SUN_DIR))]
+
+
 def lights(ins, level_type):
-    """GcLightLoader::LoadLights 0x00470010 / GrSetDefaultLighting 0x00470560: the light types, in add order."""
-    def default():
-        return [3] if level_type < 3 else [3, 3]
+    """GcLightLoader::LoadLights 0x00470010: the lights in add order. <area>_LIGHT.slb {slot, n, ptr} + 44-byte records
+    {id @0, position/direction 3f @4, intensity @0x10, range @0x14, rgba 4f @0x18, flags @0x28}; style from flags 2/4/8/
+    0x10/0x20 = 1/3/4/5/2; 0x40 point light; 0x80 directional (colour white on level type 4) + for the first one the
+    opposite fill "Shad"; no 0x80 record (or no table) -> GrSetDefaultLighting. The viewer's untrusted-input rule
+    (Task 8B D3): a record with a non-finite position, intensity, range or colour is skipped."""
     b = ins.entry(ins.area + '_light.slb')
     if not b:
-        return default()
+        return default_lighting(level_type)
     n, base = slb_table(b, 4, 8)
     out, directional, shad = [], False, False
     for i in range(n):
-        flags = struct.unpack_from('<I', b, base + 44 * i + 0x28)[0]
+        r = base + 44 * i
+        pos = struct.unpack_from('<3f', b, r + 4)
+        inten, rng = struct.unpack_from('<2f', b, r + 0x10)
+        col = struct.unpack_from('<4f', b, r + 0x18)
+        flags = struct.unpack_from('<I', b, r + 0x28)[0]
+        if not all(math.isfinite(x) for x in pos + (inten, rng) + col):
+            continue
+        style = 1 if flags & 2 else 3 if flags & 4 else 4 if flags & 8 else 5 if flags & 0x10 else 2 if flags & 0x20 else 0
         if flags & 0x40:
-            out.append(1)
+            out.append(point_light(col, inten, pos, rng, style))
         elif flags & 0x80:
             directional = True
-            out.append(3)
+            out.append(directional_light(WHITE if level_type == 4 else col, inten, pos))
             if not shad:
                 shad = True
-                out.append(3)
-    return out + ([] if directional else default())
+                out.append(directional_light(SHAD_COL_LEV4 if level_type == 4 else SHAD_COL, inten, tuple(-x for x in pos)))
+    return out + ([] if directional else default_lighting(level_type))
 
 
-def expected(root, level, area, eye_height):
+def light_line(i, l):
+    c4 = lambda c: '(%s)' % ','.join(g6(x) for x in c)
+    return ('LIGHT %d type=%d d=%s s=%s a=%s pos=%s dir=%s range=%s att=%s' %
+            (i, l['type'], c4(l['d']), c4(l['s']), c4(l['a']), c4(l['pos']), c4(l['dir']), g6(l['range']), c4(l['att'])))
+
+
+def expected(root, level, area, cam):
     ins = Install(root, level, area)
-    places, eye = load_area(ins, eye_height)
+    places, start = load_area(ins)
+    eye, view, proj = camera(places, start, cam)
     level_type = (ord(ins.level[3]) - 0x30) & 0xff if len(ins.level) > 3 else 0xd0
     d = Device()
     f = Frame(d, ins.level)
+    cave = False
     # fog literals of the area script (GcAreaDirector::SetFog negates start/end)
     ob = Install.ci(os.path.join(root, 'data', 'Base.osi'))
     if ob:
@@ -464,6 +695,12 @@ def expected(root, level, area, eye_height):
                 c = args[0] & 0xffffffff
                 f.fog = (c, -args[1], -args[2], args[3])
                 break
+        # GcLightDirector::SetCaveLighting 0x0048e670 (bool): every active light of style 0 gets SetIntensity(0.25 @
+        # 0x0070bd68) when on (1.0 @0x0070bd6c when off: the ctor's value again for v <= 0.9; INFERRED never called with
+        # 0 before a frame). The last call wins.
+        for k, args in calls:
+            if k == 'gclightdirector.setcavelighting' and len(args) == 1 and isinstance(args[0], (int, float)):
+                cave = args[0] != 0
     # init: CreateDirectXWindow 0x0052e570, AppMain 0x005381f0, SetUpDatabase ambient, loading HUD
     d.set_rs(7, 2); d.set_rs(23, 4); d.set_rs(19, 5); d.set_rs(20, 6); d.set_rs(26, 0)
     d.set_tss(0, 1, 4); d.set_tss(0, 2, 2); d.set_tss(0, 3, 0); d.set_tss(0, 6, 2)
@@ -477,13 +714,18 @@ def expected(root, level, area, eye_height):
     d.raw('BEGINSCENE')
     f.push(0x10635)
     d.raw('CLEAR viewport flags=3 color=0x00000000 z=1')
-    d.raw('XFORM PROJECTION'); d.raw('XFORM VIEW'); d.raw('XFORM PROJECTION')
+    # ScPerspectiveCamera::BuildProjectionMatrix (dirty on the first frame), ScRenderer::SetViewTransform 0x00530560,
+    # ScRenderer::SetProjectionTransform 0x00530640
+    d.raw('XFORM PROJECTION sum=%08x' % mat_sum(proj)); d.raw('XFORM VIEW sum=%08x' % mat_sum(view))
+    d.raw('XFORM PROJECTION sum=%08x' % mat_sum(proj))
     d.raw('# node MovingLight')
     count = 0
-    for t in lights(ins, level_type):
-        if count == 8:
+    for l in lights(ins, level_type):
+        if cave and l['style'] == 0:
+            set_intensity(l, f32(CAVE_INTENSITY))
+        if count == 8:  # ScRenderer::GetLightID 0x005310c0: ids cycle 0..7
             count = 0
-        d.raw('LIGHT %d type=%d' % (count, t)); d.raw('LIGHTENABLE %d 1' % count)
+        d.raw(light_line(count, l)); d.raw('LIGHTENABLE %d 1' % count)
         count += 1
     d.raw('# node MainArea'); f.push(0x14634)
     for p in places:
@@ -544,11 +786,7 @@ def filtered(lines):
             out.append(l)
         elif l.startswith('#'):
             continue
-        elif l.startswith('XFORM '):
-            out.append(l.split(' sum=')[0])
-        elif l.startswith('LIGHT '):
-            out.append(' '.join(l.split()[:3]))
-        else:
+        else:  # M1a-4 (b): XFORM checksums and LIGHT values are compared too
             out.append(l)
         if l == 'ENDSCENE':
             break
@@ -561,10 +799,19 @@ def main():
     ap.add_argument('--level', required=True)
     ap.add_argument('--area', required=True)
     ap.add_argument('--eye-height', type=float, default=3.0)
+    ap.add_argument('--fov', type=float, default=72.0)  # @0x00704e00
+    ap.add_argument('--near', type=float, default=0.01)  # @0x00704e1c
+    ap.add_argument('--far', type=float, default=4700.0)  # mDrawDistance @0x0074a328
+    ap.add_argument('--pitch', type=float, default=-10.0)  # lomn_view's default
+    ap.add_argument('--yaw', type=float)  # lomn_view: towards the bounds centre unless given
+    ap.add_argument('--width', type=int, default=1280)
+    ap.add_argument('--height', type=int, default=720)
     ap.add_argument('--out')
     ap.add_argument('--compare')
     a = ap.parse_args()
-    exp = filtered(expected(a.install, a.level, a.area, a.eye_height))
+    cam = {'eye_height': a.eye_height, 'fov': a.fov, 'near': a.near, 'far': a.far, 'pitch': a.pitch, 'yaw': a.yaw,
+           'width': a.width, 'height': a.height}
+    exp = filtered(expected(a.install, a.level, a.area, cam))
     if a.out:
         open(a.out, 'w').write('\n'.join(exp) + '\n')
     if a.compare:
