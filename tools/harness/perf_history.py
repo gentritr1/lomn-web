@@ -36,7 +36,6 @@ REPO = Path(__file__).resolve().parents[2]
 HISTORY = REPO / "perf" / "history.jsonl"
 LOAD_LIMIT = 6.0     # 1-minute loadavg above which a recorded row is provisional (owner rule 2026-10-07, A12)
 AREAS = ("lev1/vllg", "lev2/ghut", "lev4/crss")
-GPU_PROCESS_RE = re.compile(r"byo_synthetic|a13_real|mutate4|lomn_view")
 
 
 def machine() -> str:
@@ -116,22 +115,55 @@ def write_row(history: Path, row: dict) -> None:
 
 # ---- make perf-areas -------------------------------------------------------------------------------------------------
 
-def other_gpu_processes() -> list[str]:
-    """Lines of `ps` for GPU/browser perf processes that are not this process, its ancestors or its descendants."""
-    r = subprocess.run(["ps", "-Ao", "pid,ppid,args"], capture_output=True, text=True, timeout=30)
-    procs: dict[int, tuple[int, str]] = {}
-    for line in r.stdout.splitlines()[1:]:
+def read_processes() -> dict[int, tuple[int, str, str]]:
+    """pid -> (ppid, comm, args). comm (the executable path, spaces allowed) and args come from two `ps` calls because
+    a path with spaces cannot be split out of one args column; a process present in only one listing is dropped."""
+    comm_out = subprocess.run(["ps", "-Ao", "pid=,ppid=,comm="], capture_output=True, text=True, timeout=30).stdout
+    args_out = subprocess.run(["ps", "-Ao", "pid=,args="], capture_output=True, text=True, timeout=30).stdout
+    args: dict[int, str] = {}
+    for line in args_out.splitlines():
+        parts = line.split(None, 1)
+        if len(parts) == 2 and parts[0].isdigit():
+            args[int(parts[0])] = parts[1]
+    procs: dict[int, tuple[int, str, str]] = {}
+    for line in comm_out.splitlines():
         parts = line.split(None, 2)
-        if len(parts) == 3 and parts[0].isdigit() and parts[1].isdigit():
-            procs[int(parts[0])] = (int(parts[1]), parts[2])
-    me = os.getpid()
+        if len(parts) == 3 and parts[0].isdigit() and parts[1].isdigit() and int(parts[0]) in args:
+            procs[int(parts[0])] = (int(parts[1]), parts[2], args[int(parts[0])])
+    return procs
+
+
+GPU_EXECUTABLES = {"lomn_view", "lomn_native"}
+GPU_SCRIPTS = {"byo_synthetic.mjs", "a13_real.mjs", "mutate4.py", "byo_synthetic_mut.mjs"}
+GPU_INTERPRETERS = re.compile(r"^(node|python[0-9.]*)$")
+# A GPU process of a Chromium that a test launches (Playwright's Chromium / headless shell, or a profile under build/).
+# The always-running ones, the Claude app and the user's own Google Chrome, are not perf contention and are excluded.
+TEST_CHROMIUM = re.compile(r"ms-playwright|chrome-headless-shell|/Chromium\.app/|pw-profile|playwright", re.I)
+
+
+def is_gpu_process(comm: str, args: str) -> bool:
+    """argv-based, not a substring grep: a compiler, a build tool, an editor or a shell whose command line merely names
+    lomn_view is not a GPU user."""
+    base = os.path.basename(comm)
+    if base in GPU_EXECUTABLES:
+        return True
+    if GPU_INTERPRETERS.match(base):
+        return any(os.path.basename(t) in GPU_SCRIPTS for t in args.split())
+    if "--type=gpu-process" in args.split():
+        return bool(TEST_CHROMIUM.search(comm) or TEST_CHROMIUM.search(args))
+    return False
+
+
+def gpu_process_matches(procs: dict[int, tuple[int, str, str]], me: int | None = None) -> list[str]:
+    """Matching processes that are not `me`, an ancestor of `me` (make, timeout, the shell) or a descendant of `me`."""
+    me = os.getpid() if me is None else me
     ancestors = set()
     p = me
-    while p in procs and p not in ancestors:    # make, timeout, the shell that started us
+    while p in procs and p not in ancestors:
         ancestors.add(p)
         p = procs[p][0]
 
-    def ours(pid: int) -> bool:                 # us, an ancestor, or a descendant (the lomn_view child)
+    def ours(pid: int) -> bool:
         if pid in ancestors:
             return True
         seen = set()
@@ -141,7 +173,12 @@ def other_gpu_processes() -> list[str]:
             seen.add(pid)
             pid = procs[pid][0]
         return False
-    return [f"{pid} {a[:120]}" for pid, (_, a) in procs.items() if GPU_PROCESS_RE.search(a) and not ours(pid)]
+    return [f"{pid} {args[:120]}" for pid, (_, comm, args) in sorted(procs.items())
+            if is_gpu_process(comm, args) and not ours(pid)]
+
+
+def other_gpu_processes() -> list[str]:
+    return gpu_process_matches(read_processes())
 
 
 def wait_gpu_idle(deadline_s: float) -> bool:
@@ -217,7 +254,10 @@ def areas_main(a: argparse.Namespace, history: Path) -> int:
                 failures += 1
                 break
             try:
-                row = entry(json.loads(Path(str(out) + ".json").read_text()), scene, a.accept)
+                tool = json.loads(Path(str(out) + ".json").read_text())
+                row = entry(tool, scene, a.accept)
+                # "expected" is what THIS runner asked for, never the tool's own report of what it did
+                row["expected_frames"] = a.frames
             except (OSError, ValueError, KeyError) as e:
                 print(f"PERF ERROR: {tag}: unreadable metrics ({e!r}); nothing recorded", file=sys.stderr)
                 failures += 1
@@ -225,6 +265,11 @@ def areas_main(a: argparse.Namespace, history: Path) -> int:
             ok, recon = reconcile(row)
             if not ok:
                 print(f"PERF ERROR: {tag}: {recon}; nothing recorded", file=sys.stderr)
+                failures += 1
+                break
+            if tool["frames"] != a.frames:   # rendered == requested, but the tool believes it was asked for something else
+                print(f"PERF ERROR: {tag}: lomn_view reports it was asked for {tool['frames']} frames, not {a.frames}; "
+                      "nothing recorded", file=sys.stderr)
                 failures += 1
                 break
             prov = is_provisional(la_start, la_end, overlap)
@@ -286,9 +331,12 @@ def main(argv: list[str], history: Path = HISTORY) -> int:
             print(f"ERROR: {a.scene}: {recon}; nothing recorded", file=sys.stderr)
             return 1
         cur["commit"] = commit()   # only an appended row records a commit; `check` never touches git
-        if a.loadavg_start is not None and a.loadavg_end is not None:
-            cur.update(loadavg_start=a.loadavg_start, loadavg_end=a.loadavg_end, gpu_overlap=a.overlap,
-                       provisional=is_provisional(a.loadavg_start, a.loadavg_end, a.overlap))
+        if a.loadavg_start is not None or a.loadavg_end is not None or "frame_dt_samples" in cur:
+            # per-area rows always carry loadavg and `provisional`; unspecified loadavg is read from the host now
+            now = os.getloadavg()[0]
+            ls = now if a.loadavg_start is None else a.loadavg_start
+            le = now if a.loadavg_end is None else a.loadavg_end
+            cur.update(loadavg_start=ls, loadavg_end=le, gpu_overlap=a.overlap, provisional=is_provisional(ls, le, a.overlap))
         write_row(history, cur)
         print("appended", cur["scene"], cur["frame_ms_p50"], f"[{recon}]")
         return 0

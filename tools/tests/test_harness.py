@@ -222,3 +222,144 @@ def test_area_provisional_threshold_is_loadavg_over_6():
     assert perf_history.is_provisional(6.01, 1.0, False) is True
     assert perf_history.is_provisional(1.0, 6.01, False) is True
     assert perf_history.is_provisional(1.0, 1.0, True) is True      # another GPU process overlapped
+
+
+# ---- M1a-4 Task 2 fix round 1 ------------------------------------------------------------------------------------------
+
+def fake_view(tmp_path, rendered, echo=None):
+    """A stand-in lomn_view that renders `rendered` frames whatever --frames asks for, and reports them consistently."""
+    py = tmp_path / "fake_view_impl.py"
+    py.write_text("import json, sys\na = sys.argv\nout = a[a.index('--out') + 1]\n"
+                  f"m = {view_metrics(frames_rendered=rendered, requested=rendered if echo is None else echo)!r}\n"
+                  "json.dump(m, open(out + '.json', 'w'))\n")
+    s = tmp_path / "fake_view"          # a shebang cannot hold the interpreter path (it has spaces): exec it from sh
+    s.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{py}" "$@"\n')
+    s.chmod(0o755)
+    return s
+
+
+def run_areas(tmp_path, monkeypatch, rendered, frames=600, echo=None):
+    import perf_history
+    monkeypatch.setattr(perf_history, "other_gpu_processes", lambda: [])
+    h = tmp_path / "areas_history.jsonl"
+    rc = perf_history.main(["areas", "--reps", "1", "--frames", str(frames), "--areas", "lev1/vllg", "--view",
+                            str(fake_view(tmp_path, rendered, echo)), "--install", str(tmp_path), "--out-dir", str(tmp_path / "o")],
+                           history=h)
+    return rc, h
+
+
+def test_areas_expected_frames_come_from_the_runner_not_the_tool(tmp_path, monkeypatch):
+    # the tool renders 100 frames though 600 were requested, and its own JSON is self-consistent (100/100, dt 99)
+    rc, h = run_areas(tmp_path, monkeypatch, rendered=100)
+    assert rc != 0 and not h.exists()
+    # sanity: a tool that renders what was asked is recorded, expected_frames being the requested count
+    rc, h = run_areas(tmp_path, monkeypatch, rendered=600)
+    assert rc == 0
+    rows = [json.loads(l) for l in h.read_text().splitlines()]
+    assert len(rows) == 1 and rows[0]["frames"] == rows[0]["expected_frames"] == 600
+
+
+def test_areas_unreconciled_message_names_requested_and_rendered(tmp_path, monkeypatch, capsys):
+    rc, _ = run_areas(tmp_path, monkeypatch, rendered=100)
+    err = capsys.readouterr().err
+    assert rc != 0 and "frames 100/600" in err
+
+
+def test_areas_rejects_a_tool_that_believes_it_was_asked_for_other_frames(tmp_path, monkeypatch, capsys):
+    rc, h = run_areas(tmp_path, monkeypatch, rendered=600, echo=500)    # renders 600 (as asked) but reports "frames": 500
+    assert rc != 0 and not h.exists() and "asked for 500 frames, not 600" in capsys.readouterr().err
+
+
+CANNED = {  # pid: (ppid, comm, args) -- what `ps -Ao pid=,ppid=,comm=` and `ps -Ao pid=,args=` print
+    399: (1, "/usr/bin/python3", "python3 tools/research/mutate4.py"),                      # an ancestor that WOULD match
+    400: (399, "/bin/zsh", "/bin/zsh -c make perf-areas ... lomn_view ..."),               # the runner's ancestor
+    500: (400, "/usr/bin/python3", "python3 tools/harness/perf_history.py areas"),       # the runner (pid 500)
+    501: (500, "/x/Application Support/y/build/native/lomn_view", "/x/Application Support/y/build/native/lomn_view --level lev1"),
+    600: (1, "/opt/homebrew/bin/cmake", "cmake --build build/native --target lomn_view"),
+    601: (600, "/opt/homebrew/bin/ninja", "ninja -C build/native lomn_view"),
+    602: (601, "/usr/bin/clang++", "clang++ -O2 -c /x/engine/tools/lomn_view.cpp -o lomn_view.cpp.o"),
+    603: (1, "/usr/bin/vim", "vim engine/tools/lomn_view.cpp"),
+    604: (1, "/usr/bin/grep", "grep -rn lomn_view engine"),
+    605: (1, "/bin/bash", "/bin/bash -c cd web && node tests/byo_synthetic.mjs ../build/wasm ../build/native/lomn_view"),
+    606: (1, "/usr/bin/timeout", "timeout 600 node tests/byo_synthetic_mut.mjs ../build/wasm"),
+    607: (1, "/x/.venv/bin/python", "python tools/other.py --note mutate4"),                # a flag value, not a script
+    608: (1, "/Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper",
+         "/Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper --type=gpu-process"),
+    609: (1, "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome Helper",
+         "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome Helper --type=gpu-process"),
+    700: (1, "/y/build/native/lomn_view", "build/native/lomn_view --install /d --level lev2 --area ghut --backend webgpu"),
+    701: (1, "/opt/homebrew/bin/node", "node tests/byo_synthetic.mjs ../build/wasm ../build/byo"),
+    702: (1, "/opt/homebrew/bin/node", "node tests/byo_synthetic_mut.mjs ../build/wasm"),
+    703: (1, "/Users/u/Library/Caches/ms-playwright/chromium-1200/chrome-mac/Chromium.app/Contents/MacOS/Chromium Helper (GPU)",
+         "Chromium Helper (GPU) --type=gpu-process --user-data-dir=/x/build/pw-profile"),
+    704: (1, "/usr/bin/python3", "python3 tools/research/mutate4.py --seed 1"),
+    705: (1, "/y/build/native/lomn_native", "build/native/lomn_native --backend webgpu --frames 600 --out build/perf"),
+    706: (1, "/opt/homebrew/bin/node", "node tests/a13_real.mjs ../build/site"),
+}
+
+
+def test_gpu_process_match_is_by_argv_not_substring():
+    import perf_history
+    got = {int(l.split()[0]) for l in perf_history.gpu_process_matches(CANNED, me=500)}
+    assert got == {700, 701, 702, 703, 704, 705, 706}
+    # not matched: cmake/ninja/clang++/vim/grep/bash -c/timeout wrapper, a flag value, the Claude app and the user's Chrome
+    for pid in (600, 601, 602, 603, 604, 605, 606, 607, 608, 609):
+        assert pid not in got
+    # not matched: the runner's ancestor (400), itself (500) and its own child (501)
+    assert not got & {399, 400, 500, 501}
+
+
+def test_other_gpu_processes_reads_both_ps_listings(monkeypatch):
+    import perf_history
+    comm = "".join(f"{p} {pp} {c}\n" for p, (pp, c, a) in CANNED.items())
+    args = "".join(f"{p} {a}\n" for p, (pp, c, a) in CANNED.items())
+
+    class R:
+        def __init__(self, out): self.stdout, self.returncode = out, 0
+
+    def fake_run(cmd, **kw):
+        spec = cmd[2]
+        if "comm" in spec:
+            return R(comm)
+        return R("  PID  PPID ARGS\n" + "".join(f"{p} {pp} {a}\n" for p, (pp, c, a) in CANNED.items())) if "ppid" in spec \
+            else R(args)
+
+    monkeypatch.setattr(perf_history.subprocess, "run", fake_run)
+    monkeypatch.setattr(perf_history.os, "getpid", lambda: 500)
+    got = {int(l.split()[0]) for l in perf_history.other_gpu_processes()}
+    assert got == {700, 701, 702, 703, 704, 705, 706}
+
+
+def test_append_of_area_metrics_always_writes_provisional(tmp_path, monkeypatch):
+    import perf_history
+    m = area_metrics_file(tmp_path)
+    for load, want in ((50.0, True), (1.5, False)):
+        h = tmp_path / f"h{want}.jsonl"
+        monkeypatch.setattr(perf_history.os, "getloadavg", lambda load=load: (load, 0.0, 0.0))
+        assert perf_history.main(["append", str(m), "--scene", "area:lev1/vllg", "--accept"], history=h) == 0
+        row = json.loads(h.read_text())
+        assert row["provisional"] is want and row["loadavg_start"] == load and row["loadavg_end"] == load
+        assert row["gpu_overlap"] is False
+
+
+# noise = max(3 x pstdev, max - min): one data set per side, so range-only, sd-only, 2 x sd and min(...) all fail a case
+def noise_rows(vals):
+    return [area_row(v, provisional=False) for v in vals]
+
+
+def test_noise_when_three_sd_exceeds_range(tmp_path):
+    # (1,1,1,1,2): range 1.0, pstdev 0.4 -> 3 sd = 1.2; median 1.0. A delta of 1.1 sits between range and 3 sd.
+    rows = noise_rows((1.0, 1.0, 1.0, 1.0, 2.0))
+    ok, msg = area_check(tmp_path, rows, 1.0 + 1.1)
+    assert ok and "noise 1.2000" in msg
+    ok, _ = area_check(tmp_path, rows, 1.0 + 1.3)
+    assert not ok
+
+
+def test_noise_when_range_exceeds_three_sd(tmp_path):
+    # (1,2,2,2,3): range 2.0, pstdev 0.632 -> 3 sd = 1.897; median 2.0. A delta of 1.95 sits between 3 sd and range.
+    rows = noise_rows((1.0, 2.0, 2.0, 2.0, 3.0))
+    ok, msg = area_check(tmp_path, rows, 2.0 + 1.95)
+    assert ok and "noise 2.0000" in msg
+    ok, _ = area_check(tmp_path, rows, 2.0 + 2.1)
+    assert not ok
