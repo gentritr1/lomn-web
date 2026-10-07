@@ -5,7 +5,7 @@ export LOMN_DATA LOMN_CACHE
 VENV := .venv
 PY := $(VENV)/bin/python
 EMSDK_ENV := source .toolchain/emsdk/emsdk_env.sh >/dev/null 2>&1
-.PHONY: setup check-data decomp worklist native wasm site test-tools test-native test-wasm test-web check perf datacheck datacheck-wasm
+.PHONY: setup check-data decomp worklist native wasm site test-tools test-native test-wasm test-web check perf datacheck datacheck-wasm fuzz-osi
 
 setup: $(VENV)/.ok
 	timeout 3600 tools/toolchain.sh
@@ -70,6 +70,19 @@ datacheck-wasm: wasm native $(VENV)/.ok
 	  timeout 300 build/native/lomn_view --install "$(LOMN_DATA)/install" --level $$l --area $$a --backend null --out build/native/$$a.calls.txt --state-log build/native/$$a.state.txt >/dev/null && \
 	  timeout 300 node build/wasm/lomn_view.js --install "$(LOMN_DATA)/install" --level $$l --area $$a --backend null --out build/wasm/$$a.calls.txt --state-log build/wasm/$$a.state.txt >/dev/null && \
 	  cmp build/native/$$a.calls.txt build/wasm/$$a.calls.txt && cmp build/native/$$a.state.txt build/wasm/$$a.state.txt || exit 1; done; echo "native == wasm32: real-area null logs"
+
+# M1a-3 REF3 r2: ASan+UBSan mutation fuzz of the OSI reader (engine/tests/fuzz_osi.cpp), natively and as wasm32 under
+# Node; seeds from tests/osi_builder.h plus, natively and when LOMN_DATA is set, the real Base.osi. On demand only.
+FUZZ_OSI_N ?= 200000
+FUZZ_OSI_N_WASM ?= 20000
+FUZZ_FLAGS := -std=c++17 -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=all -Iengine/include -Iengine/src/sage -Iengine/tests
+fuzz-osi:
+	mkdir -p build/fuzz
+	timeout 600 clang++ $(FUZZ_FLAGS) engine/tests/fuzz_osi.cpp engine/src/sage/osi.cpp -o build/fuzz/fuzz_osi
+	timeout 1800 build/fuzz/fuzz_osi $(FUZZ_OSI_N) 1
+	@if [ -n "$(LOMN_DATA)" ]; then timeout 1800 build/fuzz/fuzz_osi 2000 2 "$(LOMN_DATA)/install/data/Base.osi"; fi
+	$(EMSDK_ENV) && timeout 900 em++ $(FUZZ_FLAGS) -sNODERAWFS=1 -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=2GB engine/tests/fuzz_osi.cpp engine/src/sage/osi.cpp -o build/fuzz/fuzz_osi.js
+	$(EMSDK_ENV) && timeout 1800 node build/fuzz/fuzz_osi.js $(FUZZ_OSI_N_WASM) 3
 
 check: test-tools test-native test-wasm test-web
 	@if [ -n "$(LOMN_DATA)" ]; then $(MAKE) datacheck datacheck-wasm; else echo "datacheck SKIPPED (no LOMN_DATA)"; fi
