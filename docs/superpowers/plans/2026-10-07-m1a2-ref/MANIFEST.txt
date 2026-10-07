@@ -1,0 +1,48 @@
+# M1a-2 reference bundle manifest (BASE 443bd37). Status: M = modified vs BASE, A = added. sha256 of the bundled copy.
+# Repo files (copies under files/<path>; engine.diff + makefile.diff reproduce them from BASE: patch -p1 < engine.diff; patch -p0 Makefile < makefile.diff)
+M 4439610d38028a2e356fbf2ff9dc2ccb3b0151eb1833d9c1cb1e6af253e9afe7 Makefile
+M 6d2be301434f2d14bf40f95d54390ab13824b676837f109200aeda56078751f8 engine/CMakeLists.txt
+M cb7396710f3faca50c29cc381ce90d06c544c8cd7d8b1248e49b4096646c8b2f engine/include/lomn/rhi.h
+A 761cff31317a720d4f4b97c8dbe670d26dd1e524b825876f04d7697e3bdeb9b8 engine/include/lomn/view/area.h
+A 5451868bce7aae2926eb0ca7a3f0b5d1d0c24e5c240bfe7c4ea171c85f1d88e1 engine/include/lomn/view/math.h
+A 4e1e07337806b82ce202a52fc7ce00d55018489fe5be31630fc0d181bb881926 engine/include/lomn/view/mips.h
+A ae17c9f2af1e6db7cf90268ee3330a5bb938f111530ad5cc98b12424826b2b64 engine/include/lomn/view/synthetic.h
+M 049b24398c89debbf2fb0237a370888e1665a31006703d9f7140235c4293571d engine/src/rhi/null_device.cpp
+A 74c820410ef09a98202588c6edd7da932f33295850b45ad1977c03ca4a6ea096 engine/src/rhi/registry.h
+M a64a8a71ae77b0503e6bfe97af8bcab6304719f65d58a1d40d756f59836a014b engine/src/rhi/webgpu_device.cpp
+A ceff51d5e1f9b8b7e31322ae664d5cb6b745d48c24f1e84557f66dbfa323361f engine/src/view/area.cpp
+A f4b46fc30b4dec012e5bf0241bbd0525f01b0ed6f072b38be757d2cc7661331d engine/src/view/math.cpp
+A 376b747e1510ce3fda707226a164b45cdaed6f969c8dfc81ab7e464ba930b421 engine/src/view/mips.cpp
+A eeec1d8f5ce20966eb71782a02d78cb6c1fc783122bd3e5c797b84b69b95380e engine/src/view/synthetic.cpp
+A 1b6fdfa151082111a7ba0b3407606fa57ca845d8431eb66133023adaae5e16ef engine/tests/a7_calls.cmake
+A 193c191306bb11ac862749cdc5c9fee387f886d9cadbe1c910861222d4df2d42 engine/tests/data/a7_calls.txt
+A c6a7257e9c1cdbd43de121b22da301e58ebfade6cd55c7b7ab5e812e316f38de engine/tests/test_gpu_area.cpp
+A d44ae5348a2fbc04aba146d1ab74080770c23cea96328a8f48cae0de731cc6c5 engine/tests/test_rhi_mesh.cpp
+A 753f459739d7703e52308e90dd55e7235eec8a0133a57e981814ea2bac83061f engine/tests/test_view_area.cpp
+A 8657ecd6a404a0a62a86b237b4ba93d555f267c648cc4ed7e1fc265ee0910b61 engine/tests/test_view_mips.cpp
+A 68b2ee55e7f6d7a1b5c232c0e2a39ca89f41b34678da648d3762c05790e041f7 engine/tools/lomn_view.cpp
+# Bundle support (not repo files)
+S 3e03ab1a4076f3bc03d81ea328bd93ad9be9d2797fe744fa0e3737f91bd10760 engine.diff
+S 3f4f519d64986c4596e502175c5bd89fae693db4622aa93f26c2e79b51d0170f makefile.diff
+S ca8226d0e44f2c276d39ab73efe56a400a73295b384e1a83e2938477fd80f074 evidence-metrics/a7_synthetic.metrics.json
+S 8192e3f96b748a597aa428be140fcbe9ed8a8d87ab2063ba00764a39b522d0e5 evidence-metrics/crss.metrics.json
+S 3880e3b016844cbd222349e3c9da69a222900cee368b58520d76771a7a93fbed evidence-metrics/ghut.metrics.json
+S f259dd322cd73b6a65b595c2c9192f68538f4e801b05253c9bdc832ff2761ab7 evidence-metrics/survey.json
+S 27fbcd13ac727b6587755a8ac1bf186502014a40a9b8790a7831968d16fb2028 evidence-metrics/vllg.metrics.json
+S f8f3766afa9d7d803e868c9df6e4db3a145faf3fc916c592e988df7f123fb3e9 logs/asan-ctest-unit.log
+S e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 logs/asan-survey.stderr
+S 63e0af5f79f8b7b94915518f75cba97d996df20e4fab08f03cb53867e983c52d logs/make-check.log
+S bcf41dad6ac9a88fa80b74c41eb57299280bbcdfc8ff056ab45ca60bd968ad32 logs/mutations.log
+S 948d9b4b076baf3554bec8b969a4b5055325c7a8dd32eafa308365f8321d1b29 scripts/bundle.sh
+S bed660611f3e5f0ed6ac751e415aaebbed3a024c01b6b73b07da6dabf6db28a5 scripts/evidence.sh
+S 1012210bc205298f7e3aecddd8706ae4315fa05fd927279185de80d69fbdc062 scripts/farcheck.sh
+S a695faf9e0a0e591ad09e217e39147008865880fc5d6641b2ffcbbc9691e9f57 scripts/mutate.py
+S e299dcc66ee2d4c46fe27adad08b1eb754de402c395264054d819c7dca0424dc scripts/mutate2.py
+S 80643966c2ee1fe1106023b4cf443d75194fc904e8c7969cc007a4de0d98fde0 scripts/pngtool.py
+# Evidence PNGs (game-derived, NOT bundled; scratch paths):
+E ../evidence/vllg.png
+E ../evidence/ghut.png
+E ../evidence/crss.png
+E ../evidence/crss_yaw67.png
+E ../evidence/vllg_novc.png
+E ../evidence/ghut_novc.png

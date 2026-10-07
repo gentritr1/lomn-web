@@ -1,0 +1,161 @@
+source .toolchain/emsdk/emsdk_env.sh >/dev/null 2>&1; timeout 1800 .venv/bin/pytest -q -rs tools
+...................................................................      [100%]
+67 passed in 23.28s
+timeout 600 cmake -S engine -B build/native -G Ninja -DCMAKE_BUILD_TYPE=Release && timeout 1800 cmake --build build/native
+-- Configuring done (0.1s)
+-- Generating done (0.0s)
+-- Build files have been written to: $W/work/build/native
+[1/5] Building CXX object CMakeFiles/lomn_area.dir/src/view/area.cpp.o
+[2/5] Linking CXX static library liblomn_area.a
+[3/5] Linking CXX executable lomn_tests
+[4/5] Linking CXX executable lomn_gpu_area_test
+[5/5] Linking CXX executable lomn_view
+ctest --test-dir build/native --output-on-failure --timeout 300
+Test project $W/work/build/native
+      Start  1: determinism_null
+ 1/10 Test  #1: determinism_null .................   Passed    0.09 sec
+      Start  2: a7_null_calls
+ 2/10 Test  #2: a7_null_calls ....................   Passed    0.43 sec
+      Start  3: view_cli_dangling_flag
+ 3/10 Test  #3: view_cli_dangling_flag ...........   Passed    0.02 sec
+      Start  4: view_cli_missing_install
+ 4/10 Test  #4: view_cli_missing_install .........   Passed    0.02 sec
+      Start  5: cli_dangling_flag
+ 5/10 Test  #5: cli_dangling_flag ................   Passed    0.02 sec
+      Start  6: gpu_triangle
+ 6/10 Test  #6: gpu_triangle .....................   Passed    0.10 sec
+      Start  7: gpu_no_adapter
+ 7/10 Test  #7: gpu_no_adapter ...................   Passed    0.03 sec
+      Start  8: a7_gpu_pixels
+ 8/10 Test  #8: a7_gpu_pixels ....................   Passed    0.41 sec
+      Start  9: a7_gpu_no_adapter
+ 9/10 Test  #9: a7_gpu_no_adapter ................   Passed    0.02 sec
+      Start 10: unit
+10/10 Test #10: unit .............................   Passed    0.45 sec
+
+100% tests passed, 0 tests failed out of 10
+
+Label Time Summary:
+gpu    =   0.56 sec*proc (4 tests)
+
+Total Test time (real) =   1.60 sec
+source .toolchain/emsdk/emsdk_env.sh >/dev/null 2>&1 && timeout 600 emcmake cmake -S engine -B build/wasm -G Ninja -DCMAKE_BUILD_TYPE=Release && timeout 1800 cmake --build build/wasm
+emcmake: cmake -S engine -B build/wasm -G Ninja -DCMAKE_BUILD_TYPE=Release '-DCMAKE_TOOLCHAIN_FILE=$R/.toolchain/emsdk/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake' '-DCMAKE_CROSSCOMPILING_EMULATOR=$R/.toolchain/emsdk/node/24.19.0_64bit/bin/node' in directory $W/work
+-- Configuring done (0.7s)
+-- Generating done (0.0s)
+-- Build files have been written to: $W/work/build/wasm
+[1/4] Building CXX object CMakeFiles/lomn_area.dir/src/view/area.cpp.o
+[2/4] Linking CXX static library liblomn_area.a
+[3/4] Linking CXX executable lomn_tests.js
+[4/4] Linking CXX executable lomn_view.js
+source .toolchain/emsdk/emsdk_env.sh >/dev/null 2>&1 && ctest --test-dir build/wasm --output-on-failure --timeout 300
+Test project $W/work/build/wasm
+    Start 1: determinism_null
+1/3 Test #1: determinism_null .................   Passed    0.24 sec
+    Start 2: a7_null_calls
+2/3 Test #2: a7_null_calls ....................   Passed    0.13 sec
+    Start 3: unit
+3/3 Test #3: unit .............................   Passed    0.25 sec
+
+100% tests passed, 0 tests failed out of 3
+
+Total Test time (real) =   0.63 sec
+timeout 120 .venv/bin/python tools/harness/compare.py trace build/native/determinism/a/trace.jsonl build/wasm/determinism/a/trace.jsonl
+traces identical
+cmp build/native/determinism/a/calls.txt build/wasm/determinism/a/calls.txt
+cmp build/native/a7/a/calls.txt build/wasm/a7/a/calls.txt
+rm -rf build/site && mkdir -p build/site && cp web/index.html build/wasm/lomn_web.js build/wasm/lomn_web.wasm build/site/
+cd web && timeout 60 node --test tests/serve_test.mjs
+TAP version 13
+# Subtest: serves index.html for / and by name
+ok 1 - serves index.html for / and by name
+  ---
+  duration_ms: 46.018042
+  ...
+# Subtest: sibling directory sharing the root prefix is not reachable (..%2f)
+ok 2 - sibling directory sharing the root prefix is not reachable (..%2f)
+  ---
+  duration_ms: 2.031542
+  ...
+# Subtest: sibling directory is not reachable (%2e%2e%2f)
+ok 3 - sibling directory is not reachable (%2e%2e%2f)
+  ---
+  duration_ms: 1.189375
+  ...
+# Subtest: malformed percent escape answers 400 and the server keeps serving
+ok 4 - malformed percent escape answers 400 and the server keeps serving
+  ---
+  duration_ms: 2.303791
+  ...
+1..4
+# tests 4
+# suites 0
+# pass 4
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 153.530917
+cd web && timeout 180 node tests/smoke.mjs ../build/site ../build/pw-profile
+adapter=apple/metal-3 frames=120 dt_samples=119 window_ms=1982 p50_dt_ms=16.70 expected_at_60hz=119
+pixels {"centre":[255,128,0,255],"corner":[0,0,64,255]}
+requests ["/index.html","/lomn_web.js","/lomn_web.wasm","/favicon.ico"]
+console_errors [] page_errors []
+timeout 600 cmake -S engine -B build/native -G Ninja -DCMAKE_BUILD_TYPE=Release && timeout 1800 cmake --build build/native
+-- Configuring done (0.1s)
+-- Generating done (0.0s)
+-- Build files have been written to: $W/work/build/native
+ninja: no work to do.
+timeout 1200 .venv/bin/python tools/research/oracle/check_datacheck.py --exe build/native/lomn_datacheck --install "$HOME/Library/Application Support/Claude/scratch-workspaces/5646e5b3-cad6-4351-8654-c09665b19fe4/3010fd2d-0ad0-400c-b044-1feb8b750bad/scratch-2026-10-06-5e2f6d/lomn-data/install"
+PASS  lomn_datacheck exits 0
+(C++ wall 2163 ms)
+PASS  A1 all .blk found by both walkers  -- python 189, c++ 189
+PASS  A1 per-file entry names and order equal blk.py  -- mismatches []
+PASS  A1 every table sorted (blk.py sortedci == c++ sorted)  -- python-unsorted []
+      entries 11455, unterminated 40-byte names 2, entries unreachable by their own name (StrCmp runs past mName) 2
+PASS  A3 117 area OBJ tables, 11 cin*_obj.slb skipped  -- python files 117 cin 11; c++ 117 / 11
+PASS  A3 routing totals 183 main / 136 trans / 35 back / 943 moveable (python)  -- {'main': 183, 'trans': 136, 'back': 35, 'moveable': 943}
+PASS  A3 routing totals equal in c++  -- {'back': 35, 'main': 183, 'moveable': 943, 'trans': 136}
+PASS  A3 34 records 0x131/0x132 routed to moveable  -- python 34
+PASS  A3/A6 per-file routes and drawn-id lists equal  -- differ []
+PASS  A6 vllg draws only OBJ-routed models (not main1/tre1/rock/drll)  -- drawn ['dor2', 'dr00', 'ham1', 'ham2', 'ham3', 'main', 'pic1', 'pic2', 'plnt', 'vllw']; blk has 18 .x
+PASS  A6 every drawn id has <id>.x in its area blk
+PASS  A4 2,653 .x files; xbin.py failed == []  -- 2653 files, fails []
+PASS  A4 meshes per file = 1 except characters/bull.blk/mklf.x = 3  -- [('data/characters/bull.blk', 'mklf.x', 3)]
+PASS  A4 per-file meshes/vertices/faces/subsets/has_colors/out_vertices equal xbin.py  -- 0 differ, e.g. []
+      with vertex colours 1990, file vertices 1950451, after normal split 1962024
+PASS  A2 lev1/vllg: per-name chosen/load/exists equal texres_ext.py  -- 188 names, 142 resolved, missing 46
+PASS  A2 lev1/vllg: Load and Exists pick the same blockfile for every resolved name
+PASS  A2 lev2/ghut: per-name chosen/load/exists equal texres_ext.py  -- 207 names, 206 resolved, missing 1
+PASS  A2 lev2/ghut: Load and Exists pick the same blockfile for every resolved name
+PASS  A2 lev1/l1a7: per-name chosen/load/exists equal texres_ext.py  -- 143 names, 143 resolved, missing 0
+PASS  A2 lev1/l1a7: Load and Exists pick the same blockfile for every resolved name
+PASS  A2 lev3/boss: per-name chosen/load/exists equal texres_ext.py  -- 151 names, 144 resolved, missing 7
+PASS  A2 lev3/boss: Load and Exists pick the same blockfile for every resolved name
+PASS  A2 lev4/crss: per-name chosen/load/exists equal texres_ext.py  -- 129 names, 129 resolved, missing 0
+PASS  A2 lev4/crss: Load and Exists pick the same blockfile for every resolved name
+PASS  A2 lev5/le08: per-name chosen/load/exists equal texres_ext.py  -- 146 names, 146 resolved, missing 0
+PASS  A2 lev5/le08: Load and Exists pick the same blockfile for every resolved name
+PASS  A2 lev6/ta11: per-name chosen/load/exists equal texres_ext.py  -- 155 names, 154 resolved, missing 1
+PASS  A2 lev6/ta11: Load and Exists pick the same blockfile for every resolved name
+PASS  A2 lev7/kpka: per-name chosen/load/exists equal texres_ext.py  -- 34 names, 34 resolved, missing 0
+PASS  A2 lev7/kpka: Load and Exists pick the same blockfile for every resolved name
+PASS  A2 lev0/frnt: per-name chosen/load/exists equal texres_ext.py  -- 160 names, 160 resolved, missing 0
+PASS  A2 lev0/frnt: Load and Exists pick the same blockfile for every resolved name
+      lev3/boss po_lev_10xx_rockwall4eground01_trans -> {'chosen': '', 'load': '', 'exists': ''}
+PASS  A5 3,247 .dds entries; c++ decodes every one that is a DDS  -- 3247 entries, 6 are not DDS files, c++ ok 3241
+PASS  A5 the entries c++ rejects are exactly the 0-byte ones  -- [('data/characters/Textures.blk', '_legs.dds'), ('data/characters/Textures.blk', '_legs_bump.dds'), ('data/characters/Textures.blk', '_legs_bump_2.dds'), ('data/characters/Textures.blk', 'alpha.dds'), ('data/levels/lev2/lev2.blk', 'b.dds'), ('data/levels/lev2/lev2.blk', 'rockpath_1.dds')]
+PASS  A5 format counts equal  -- python {'DXT5': 2871, 'A8R8G8B8': 6, 'DXT3': 362, 'DXT1': 2}
+PASS  A5 lomn_datacheck --dump of the sample exits 0
+PASS  A5 BC1-3 bit-exact vs bcdec.py on every block of 20 sampled textures (+6 A8R8G8B8)  -- 181568 blocks; sizes [(32, 32), (64, 64), (128, 128), (256, 128), (256, 256), (512, 512), (1024, 512)]; mismatches []
+      lev1/vllg: drawn models 10, drawn textures 27 (1.32 MB)
+      lev4/crss: drawn models 14, drawn textures 37 (5.01 MB)
+PASS  TGA: every .tga entry decodes  -- 2566 files, kinds {'type10_32bpp_a8_bottom': 1550, 'type2_24bpp_a0_bottom': 43, 'type2_24bpp_a0_top': 3, 'type2_32bpp_a0_bottom': 242, 'type2_32bpp_a8_bottom': 728}
+PASS  SLB: every .slb passes the bounded fix-up reader  -- 1177 tables, 1097 with 0x00C0FFEE trailer
+
+39/39 checks passed (18.9 s)
+timeout 1800 .venv/bin/python tools/decomp/worklist.py check gen/decomp worklist/status.json . --ctest-dir build/native
+worklist check: 5618 functions, 0 errors
+make check: all layers green
+timeout 3000 make -o .venv/.ok check  52.45s user 9.25s system 102% cpu 1:00.39 total
+EXIT=0

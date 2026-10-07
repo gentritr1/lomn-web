@@ -1,0 +1,61 @@
+[1/24] Building CXX object CMakeFiles/lomn_area.dir/src/view/math.cpp.o
+[2/24] Building CXX object CMakeFiles/lomn_gpu_test.dir/tests/test_gpu.cpp.o
+[3/24] Building CXX object CMakeFiles/lomn_area.dir/src/view/mips.cpp.o
+[4/24] Building CXX object CMakeFiles/lomn_native.dir/src/app/main_native.cpp.o
+[5/24] Building CXX object CMakeFiles/lomn_core.dir/src/app/loop.cpp.o
+[6/24] Building CXX object CMakeFiles/lomn_core.dir/src/rhi/null_device.cpp.o
+[7/24] Building CXX object CMakeFiles/lomn_gpu_area_test.dir/tests/test_gpu_area.cpp.o
+[8/24] Linking CXX static library liblomn_core.a
+[9/24] Linking CXX executable lomn_datacheck
+[10/24] Building CXX object CMakeFiles/lomn_area.dir/src/view/synthetic.cpp.o
+[11/24] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_rhi_null.cpp.o
+[12/24] Building CXX object CMakeFiles/lomn_webgpu.dir/src/rhi/webgpu_device.cpp.o
+[13/24] Linking CXX static library liblomn_webgpu.a
+[14/24] Linking CXX executable lomn_gpu_test
+[15/24] Linking CXX executable lomn_native
+[16/24] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_loop.cpp.o
+[17/24] Building CXX object CMakeFiles/lomn_view.dir/tools/lomn_view.cpp.o
+[18/24] Building CXX object CMakeFiles/lomn_area.dir/src/view/area.cpp.o
+[19/24] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_rhi_mesh.cpp.o
+[20/24] Linking CXX static library liblomn_area.a
+[21/24] Linking CXX executable lomn_gpu_area_test
+[22/24] Linking CXX executable lomn_view
+[23/24] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_view_area.cpp.o
+[24/24] Linking CXX executable lomn_tests
+Test project $W/work/build/asan
+      Start  1: determinism_null
+ 1/10 Test  #1: determinism_null .................   Passed    0.94 sec
+      Start  2: a7_null_calls
+ 2/10 Test  #2: a7_null_calls ....................   Passed    0.58 sec
+      Start  3: view_cli_dangling_flag
+ 3/10 Test  #3: view_cli_dangling_flag ...........   Passed    0.08 sec
+      Start  4: view_cli_missing_install
+ 4/10 Test  #4: view_cli_missing_install .........   Passed    0.08 sec
+      Start  5: cli_dangling_flag
+ 5/10 Test  #5: cli_dangling_flag ................   Passed    0.09 sec
+      Start  6: gpu_triangle
+ 6/10 Test  #6: gpu_triangle .....................   Passed    0.49 sec
+      Start  7: gpu_no_adapter
+ 7/10 Test  #7: gpu_no_adapter ...................   Passed    0.09 sec
+      Start  8: a7_gpu_pixels
+ 8/10 Test  #8: a7_gpu_pixels ....................   Passed    0.50 sec
+      Start  9: a7_gpu_no_adapter
+ 9/10 Test  #9: a7_gpu_no_adapter ................   Passed    0.09 sec
+      Start 10: unit
+10/10 Test #10: unit .............................   Passed    1.32 sec
+
+100% tests passed, 0 tests failed out of 10
+
+Label Time Summary:
+gpu    =   1.17 sec*proc (4 tests)
+
+Total Test time (real) =   4.28 sec
+ASAN_CTEST_EXIT=0
+cannot create $TMPDIR/… Not a directory
+[doctest] doctest version is "2.5.3"
+[doctest] run with "--help" for options
+===============================================================================
+[doctest] test cases:    93 |    93 passed | 0 failed | 0 skipped
+[doctest] assertions: 53931 | 53931 passed | 0 failed |
+[doctest] Status: SUCCESS!
+ASAN_UNIT_EXIT=0

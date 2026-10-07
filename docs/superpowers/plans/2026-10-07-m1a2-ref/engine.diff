@@ -1,0 +1,3884 @@
+diff -ruN base/engine/CMakeLists.txt work/engine/CMakeLists.txt
+--- base/engine/CMakeLists.txt	2026-10-07 07:48:56
++++ work/engine/CMakeLists.txt	2026-10-07 08:07:48
+@@ -20,6 +20,11 @@
+ target_link_libraries(lomn_sage PUBLIC lomn_core)
+ target_compile_options(lomn_sage PRIVATE -Wall -Wextra)
+ 
++# M1a-2 first pixels: CPU mips, D3D-convention matrices, area loader + unlit renderer on rhi, the A7 synthetic scene.
++add_library(lomn_area STATIC src/view/mips.cpp src/view/math.cpp src/view/area.cpp src/view/synthetic.cpp)
++target_link_libraries(lomn_area PUBLIC lomn_sage)
++target_compile_options(lomn_area PRIVATE -Wall -Wextra)
++
+ if(EMSCRIPTEN)
+   set(EMDAWN_PORT "--use-port=${LOMN_TOOLCHAIN_DIR}/emdawnwebgpu_pkg/emdawnwebgpu.port.py")
+ else()
+@@ -54,6 +59,14 @@
+   target_link_options(lomn_native PRIVATE -sNODERAWFS=1 -sALLOW_MEMORY_GROWTH=1)
+   add_test(NAME determinism_null COMMAND ${CMAKE_COMMAND} -DRUNNER=node -DEXE=$<TARGET_FILE:lomn_native>
+            -DOUT=${CMAKE_CURRENT_BINARY_DIR}/determinism -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/determinism.cmake)
++  # M1a-2 A7 under Node: the same synthetic scene's null call log must equal the same checked-in expected log, so the
++  # native and wasm32 logs are byte-identical (make test-wasm also cmp's the two files directly).
++  add_executable(lomn_view tools/lomn_view.cpp)
++  target_link_libraries(lomn_view PRIVATE lomn_area)
++  target_include_directories(lomn_view PRIVATE src/app)
++  target_link_options(lomn_view PRIVATE -sNODERAWFS=1 -sALLOW_MEMORY_GROWTH=1)
++  add_test(NAME a7_null_calls COMMAND ${CMAKE_COMMAND} -DRUNNER=node -DEXE=$<TARGET_FILE:lomn_view> -DOUT=${CMAKE_CURRENT_BINARY_DIR}/a7
++           -DEXPECTED=${CMAKE_CURRENT_SOURCE_DIR}/tests/data/a7_calls.txt -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/a7_calls.cmake)
+ else()
+   add_executable(lomn_native src/app/main_native.cpp)
+   target_link_libraries(lomn_native PRIVATE $<IF:$<BOOL:${LOMN_WEBGPU}>,lomn_webgpu,lomn_core>)
+@@ -64,6 +77,20 @@
+   add_executable(lomn_datacheck tools/lomn_datacheck.cpp)
+   target_link_libraries(lomn_datacheck PRIVATE lomn_sage)
+   target_compile_options(lomn_datacheck PRIVATE -Wall -Wextra)
++  # M1a-2: lomn_view renders an area to PNG (webgpu) or a call log (null); --synthetic 1 is the A7 scene.
++  add_executable(lomn_view tools/lomn_view.cpp)
++  target_link_libraries(lomn_view PRIVATE lomn_area $<$<BOOL:${LOMN_WEBGPU}>:lomn_webgpu>)
++  target_include_directories(lomn_view PRIVATE src/app "${LOMN_TOOLCHAIN_DIR}/include")
++  target_compile_options(lomn_view PRIVATE -Wall -Wextra)
++  # A7 contract (no game data): the synthetic scene's null call log must equal the checked-in expected log, twice.
++  add_test(NAME a7_null_calls COMMAND ${CMAKE_COMMAND} -DEXE=$<TARGET_FILE:lomn_view> -DOUT=${CMAKE_CURRENT_BINARY_DIR}/a7
++           -DEXPECTED=${CMAKE_CURRENT_SOURCE_DIR}/tests/data/a7_calls.txt -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/a7_calls.cmake)
++  add_test(NAME view_cli_dangling_flag COMMAND sh -c
++           "\"$0\" --synthetic 1 --backend null --out \"$1\" --fov >/dev/null 2>&1; [ $? -eq 2 ]"
++           $<TARGET_FILE:lomn_view> ${CMAKE_CURRENT_BINARY_DIR}/view_dangling.txt)
++  add_test(NAME view_cli_missing_install COMMAND sh -c
++           "\"$0\" --install /nonexistent/lomn --level lev1 --area vllg --backend null --out \"$1\" >/dev/null 2>&1; [ $? -eq 3 ]"
++           $<TARGET_FILE:lomn_view> ${CMAKE_CURRENT_BINARY_DIR}/view_missing.txt)
+   # A trailing flag with no value must be rejected with exit 2 (usage), not silently ignored.
+   add_test(NAME cli_dangling_flag COMMAND sh -c
+            "\"$0\" --backend null --frames 10 --out \"$1\" --shot >/dev/null 2>&1; [ $? -eq 2 ]"
+@@ -80,12 +107,22 @@
+              "out=$(\"$0\" --backend webgpu --frames 1 --out \"$1\" 2>&1); rc=$?; printf '%s\\n' \"$out\"; echo \"rc=$rc\"; [ \"$rc\" -eq 3 ] && printf '%s' \"$out\" | grep -q \"webgpu unavailable: no WebGPU adapter\""
+              $<TARGET_FILE:lomn_native> ${CMAKE_CURRENT_BINARY_DIR}/noadapter)
+     set_tests_properties(gpu_no_adapter PROPERTIES ENVIRONMENT "LOMN_WEBGPU_BACKEND=d3d12" LABELS gpu)
++    # A7 on Dawn: the synthetic scene rendered and checked at known pixels (77 = skip without an adapter).
++    add_executable(lomn_gpu_area_test tests/test_gpu_area.cpp)
++    target_link_libraries(lomn_gpu_area_test PRIVATE lomn_area lomn_webgpu)
++    add_test(NAME a7_gpu_pixels COMMAND lomn_gpu_area_test)
++    set_tests_properties(a7_gpu_pixels PROPERTIES SKIP_RETURN_CODE 77 LABELS gpu)
++    add_test(NAME a7_gpu_no_adapter COMMAND sh -c
++             "out=$(\"$0\" --synthetic 1 --out \"$1\" 2>&1); rc=$?; printf '%s\\n' \"$out\"; [ \"$rc\" -eq 3 ]"
++             $<TARGET_FILE:lomn_view> ${CMAKE_CURRENT_BINARY_DIR}/a7_noadapter.png)
++    set_tests_properties(a7_gpu_no_adapter PROPERTIES ENVIRONMENT "LOMN_WEBGPU_BACKEND=d3d12" LABELS gpu)
+   endif()
+ endif()
+ 
+ # Unit tests: natively, and under Node when cross-compiled with emcmake (CMAKE_CROSSCOMPILING_EMULATOR=node).
+-add_executable(lomn_tests tests/test_main.cpp tests/test_fs.cpp tests/test_rhi_null.cpp tests/test_loop.cpp tests/test_sage_blockfile.cpp tests/test_sage_blockchain.cpp tests/test_sage_slb.cpp tests/test_sage_xfile.cpp tests/test_sage_image.cpp)
+-target_link_libraries(lomn_tests PRIVATE lomn_sage)
++add_executable(lomn_tests tests/test_main.cpp tests/test_fs.cpp tests/test_rhi_null.cpp tests/test_loop.cpp tests/test_sage_blockfile.cpp tests/test_sage_blockchain.cpp tests/test_sage_slb.cpp tests/test_sage_xfile.cpp tests/test_sage_image.cpp
++               tests/test_rhi_mesh.cpp tests/test_view_mips.cpp tests/test_view_area.cpp)
++target_link_libraries(lomn_tests PRIVATE lomn_area)
+ target_include_directories(lomn_tests PRIVATE "${LOMN_TOOLCHAIN_DIR}/include")
+ if(EMSCRIPTEN)
+   target_link_options(lomn_tests PRIVATE -sNODERAWFS=1 -sALLOW_MEMORY_GROWTH=1)
+diff -ruN base/engine/include/lomn/rhi.h work/engine/include/lomn/rhi.h
+--- base/engine/include/lomn/rhi.h	2026-10-07 07:48:56
++++ work/engine/include/lomn/rhi.h	2026-10-07 08:21:29
+@@ -1,6 +1,12 @@
+ // Render interface (frozen in M0; additive changes only, reviewed). Two backends: "null" (records a
+ // deterministic call log, no GPU) and "webgpu" (Dawn natively, emdawnwebgpu in the browser).
+ // M0 surface: render targets, one uniform block per pipeline (dynamic offset, 256-byte aligned), non-indexed draws.
++// M1a-2 additive surface (unlit textured indexed draws): vertex/index buffers, RGBA8 textures with a CPU-supplied mip
++// chain, samplers, render targets with a depth buffer, mesh pipelines (vertex layout, blend, depth, cull), bind groups
++// {dynamic-offset uniform block, texture, sampler} and indexed draws. Every M0 call keeps its behaviour and log text.
++// Ids are never reused within a device; every new call validates its ids and sizes in BOTH backends (shared rules in
++// src/rhi/registry.h): an invalid create returns 0, an invalid write/draw is rejected (logged by the null backend,
++// reported on stderr by WebGPU) and never reaches the GPU.
+ #pragma once
+ #include <cstdint>
+ #include <functional>
+@@ -14,6 +20,13 @@
+ using BufferId = uint32_t;    // 0 = none
+ using PipelineId = uint32_t;
+ constexpr uint32_t kUniformAlign = 256;
++using SamplerId = uint32_t;    // M1a-2; 0 = none
++using BindGroupId = uint32_t;  // M1a-2; 0 = none
++// M1a-2 limits. Sampled textures: the DDS decoder's cap (sage::kMaxTextureDim). Render targets: WebGPU's default
++// maxTextureDimension2D. Mesh pipelines take at most 8 vertex attributes (WebGPU's default maxVertexAttributes is 16).
++constexpr uint32_t kMaxTextureSize = 4096;
++constexpr uint32_t kMaxRenderTargetSize = 8192;
++constexpr uint32_t kMaxVertexAttributes = 8;
+ 
+ struct PipelineDesc {
+   std::string wgsl;               // must define the vertex/fragment entry points below
+@@ -23,10 +36,66 @@
+ };
+ 
+ struct FrameStats {
+-  uint32_t draws = 0;
+-  uint32_t pipelines_total = 0;
++  uint32_t draws = 0;            // M0 draws + M1a-2 indexed draws accepted this frame
++  uint32_t pipelines_total = 0;  // M0 + mesh pipelines created so far
++  uint64_t indices = 0;          // M1a-2: indices submitted by draw_indexed this frame
+ };
+ 
++// ---- M1a-2 additive types ----
++struct RenderTargetDesc {
++  uint32_t width = 0, height = 0;   // 1..kMaxRenderTargetSize
++  bool depth = false;               // adds a depth buffer (Depth32Float in WebGPU), cleared at every begin_frame
++  float clear_depth = 1.0f;         // 0..1; with LESSEQUAL the far plane (1.0) is the only useful clear value
++};
++
++enum class VertexFormat : uint8_t { Float32x2, Float32x3, Float32x4 };
++struct VertexAttribute {
++  VertexFormat format = VertexFormat::Float32x3;
++  uint32_t offset = 0;    // bytes into the vertex
++  uint32_t location = 0;  // @location(n), < kMaxVertexAttributes, unique
++};
++// Opaque: no blending. AlphaBlend: colour = src * SRCALPHA + dst * INVSRCALPHA (D3DRS_SRCBLEND 5, D3DRS_DESTBLEND 6);
++// the target's alpha channel is left unchanged (the D3D8 back buffer alpha is never displayed).
++enum class BlendMode : uint8_t { Opaque, AlphaBlend };
++// Numbered like D3DCMPFUNC - 1 (D3DCMP_NEVER = 1 ... D3DCMP_ALWAYS = 8).
++enum class CompareFunc : uint8_t { Never, Less, Equal, LessEqual, Greater, NotEqual, GreaterEqual, Always };
++enum class CullMode : uint8_t { None, Front, Back };  // None = render mode 0x11 (D3DCULL_NONE)
++
++// Pipeline for indexed meshes. Bind group 0 layout (fixed): @binding(0) var<uniform> (dynamic offset, uniform_bytes),
++// @binding(1) texture_2d<f32>, @binding(2) sampler (filtering). One vertex buffer (slot 0), u32 indices, triangle list.
++// Alpha test has no fixed-function equivalent in WebGPU: it is a `discard` in the fragment entry point (pick a
++// different fs_entry per pipeline).
++struct MeshPipelineDesc {
++  std::string wgsl;
++  std::string vs_entry = "vs";
++  std::string fs_entry = "fs";
++  uint32_t uniform_bytes = 0;     // 1..kUniformAlign
++  uint32_t vertex_stride = 0;     // 4..2048, multiple of 4
++  std::vector<VertexAttribute> attributes;  // 1..kMaxVertexAttributes, each inside the stride
++  BlendMode blend = BlendMode::Opaque;
++  bool depth_write = true;                  // only meaningful on a target with depth
++  CompareFunc depth_compare = CompareFunc::LessEqual;
++  CullMode cull = CullMode::None;
++};
++
++enum class FilterMode : uint8_t { Nearest, Linear };
++enum class AddressMode : uint8_t { Wrap, Clamp, Mirror };
++struct SamplerDesc {
++  FilterMode mag = FilterMode::Linear, min = FilterMode::Linear, mip = FilterMode::Linear;
++  AddressMode u = AddressMode::Wrap, v = AddressMode::Wrap;  // D3D8 default (the game never sets ADDRESSU/V)
++  uint16_t max_anisotropy = 1;  // 1..16; > 1 requires all three filters Linear (WebGPU rule)
++};
++
++struct DrawIndexedDesc {
++  PipelineId pipeline = 0;       // from create_mesh_pipeline
++  BufferId vertices = 0;         // from create_vertex_buffer
++  BufferId indices = 0;          // from create_index_buffer (u32 indices)
++  uint32_t first_index = 0;      // in indices
++  uint32_t index_count = 0;      // > 0, multiple of 3; first_index + index_count inside the index buffer
++  BindGroupId bind_group = 0;    // its uniform_bytes must equal the pipeline's
++  uint32_t uniform_offset = 0;   // multiple of kUniformAlign; offset + uniform_bytes inside the uniform buffer
++};
++
+ class Device {
+  public:
+   virtual ~Device() = default;
+@@ -42,6 +111,25 @@
+   // Synchronous readback of a render target into tightly packed RGBA8. False if unsupported (null, browser).
+   virtual bool read_pixels(TextureId target, std::vector<uint8_t>& rgba) = 0;
+   virtual FrameStats last_frame_stats() const = 0;
++
++  // ---- M1a-2 additive calls ----
++  // NOT pure virtual: a Device written against the M0 surface (e.g. a test double) still compiles and reports every
++  // M1a-2 call as unsupported (0 / false / no draw). Both shipped backends override all of them.
++  // Render target with an optional depth buffer (RGBA8, readable like create_render_target). 0 if invalid.
++  virtual TextureId create_render_target_ex(const RenderTargetDesc&) { return 0; }
++  // Vertex / index (u32) buffers, filled with write_buffer (offset and size multiples of 4). 0 if bytes is 0 or > 256 MiB.
++  virtual BufferId create_vertex_buffer(uint32_t) { return 0; }
++  virtual BufferId create_index_buffer(uint32_t) { return 0; }
++  // Sampled RGBA8 (unorm, no sRGB: D3D8 had none) texture with mip_levels levels (1..floor(log2(max(w,h)))+1). 0 if invalid.
++  virtual TextureId create_texture(uint32_t /*width*/, uint32_t /*height*/, uint32_t /*mip_levels*/) { return 0; }
++  // Uploads one whole mip level, tightly packed RGBA8: bytes must be max(1,w>>mip) * max(1,h>>mip) * 4. False if rejected.
++  virtual bool write_texture(TextureId, uint32_t /*mip*/, const void* /*rgba*/, size_t /*bytes*/) { return false; }
++  virtual SamplerId create_sampler(const SamplerDesc&) { return 0; }
++  virtual PipelineId create_mesh_pipeline(const MeshPipelineDesc&) { return 0; }
++  // Group 0 of a mesh pipeline: [uniforms + dynamic offset, uniform_bytes], texture (sampled), sampler. 0 if invalid.
++  virtual BindGroupId create_bind_group(BufferId /*uniforms*/, uint32_t /*uniform_bytes*/, TextureId, SamplerId) { return 0; }
++  // Indexed triangle-list draw inside begin_frame/end_frame. Invalid draws are rejected and not counted.
++  virtual void draw_indexed(const DrawIndexedDesc&) {}
+ };
+ 
+ // Null backend: appends one line per call to *call_log (if non-null). Lines are stable text, so two runs
+diff -ruN base/engine/include/lomn/view/area.h work/engine/include/lomn/view/area.h
+--- base/engine/include/lomn/view/area.h	1970-01-01 01:00:00
++++ work/engine/include/lomn/view/area.h	2026-10-07 08:13:08
+@@ -0,0 +1,180 @@
++// M1a-2 "first pixels": an area's static geometry, loaded the way GcAreaLoader::LoadArea does and drawn UNLIT and
++// textured straight on rhi (no D3D8 shim yet; that is M1a-3).
++//
++// Load (CPU only, no device): Art.blk header (optional), enter_area (second = <lev>.blk, current = <area>.blk),
++// <area>_OBJ.slb -> route() per record -> for every record routed main / trans / back / moveable / no-light moveable:
++// model "<area prefix>/Xs/<id>.x" (SrBlockFileLoad order; cached per area by id) -> parse_x -> per subset, the
++// material's texture (only materials a subset uses) -> resolve_texture (ScDrawableTexture::Load rule) -> load ->
++// decode_dds / decode_tga -> CPU box-filter mip chain (cached per area by resolved request). <area>_POS.slb gives the
++// start position (first record with flag 0x1000).
++// Upload + render (rhi): one vertex and index buffer per model, one RGBA8 texture per resolved name (+ a 1x1 white
++// texture for untextured or missing ones), 2 mesh pipelines (opaque; alpha = blend + alpha test), one bind group per
++// texture, one 256-byte uniform slot per draw. See REPORT.md (M1a-2 reference bundle) for every decision.
++#pragma once
++#include <cstdint>
++#include <string>
++#include <string_view>
++#include <vector>
++
++#include "lomn/fs.h"
++#include "lomn/rhi.h"
++#include "lomn/sage/slb.h"
++#include "lomn/view/math.h"
++#include "lomn/view/mips.h"
++
++namespace lomn::view {
++
++// World transform (spec M1 §2.1): RotX(kWorldRotX) then the OBJ record position in _41.._43 (GcArea::GcArea 0x00504220
++// + GcObjectLoader::LoadObjects 0x0053fc60). Constant read from LEGOBionicle.exe .data @0x72a444.
++constexpr float kWorldRotX = -1.5707982f;
++constexpr uint32_t kPosStartFlag = 0x1000;
++
++// Caps on what one area may make the renderer allocate (untrusted input, spec §5). Measured over all 123 area
++// blockfiles of the Beta 1.5.0 install with `lomn_view --survey 1` (2026-10-07; every area loads, 0 failures):
++//   drawn placements max 55 (lev6/ta03), draws max 165 (lev6/ta11), textures max 76 (lev2/vllg),
++//   texture bytes incl. mips max 56,994,412 (lev0/frnt), vertex+index bytes max 1,270,872 (lev6/ta14).
++// Headroom: 18.6x, 24.8x, 13.5x, 9.4x, 52.8x. The texture-byte cap is bounded by the wasm32 heap (2 GB, and the
++// CPU copy lives until upload) rather than by a multiple; a rejection is a named error, never a partial area.
++constexpr uint32_t kMaxPlacements = 1024;                // drawn OBJ records per area
++constexpr uint32_t kMaxDraws = 4096;                     // placements x subsets per frame (uniform buffer <= 1 MiB)
++constexpr uint32_t kMaxAreaTextures = 1024;              // distinct resolved textures per area
++constexpr uint64_t kMaxAreaTextureBytes = 512ull << 20;  // RGBA8 incl. mips, per area
++constexpr uint64_t kMaxAreaGeometryBytes = 64ull << 20;  // vertex + index bytes, per area
++
++constexpr uint32_t kNoTexture = 0xffffffffu;  // subset drawn with the 1x1 white texture
++
++struct AreaOptions {
++  bool draw_main = true, draw_trans = true, draw_back = true, draw_moveable = true, draw_nolight = true;
++};
++
++struct SubsetDraw {
++  uint32_t first_index = 0, index_count = 0;  // into Model::indices (triangle list)
++  uint32_t texture = kNoTexture;              // index into AreaData::textures
++  bool alpha = false;                         // texture IsAlphaOn (DXT3 / A8R8G8B8 / TGA with alpha bits): 2nd pass
++  float diffuse[4] = {1, 1, 1, 1};            // material faceColor (white without a material)
++};
++
++struct Model {
++  std::string id;                 // 4CC as in the OBJ record
++  uint32_t vertex_count = 0;
++  bool has_colors = false;        // MeshVertexColors present
++  std::vector<float> vertices;    // interleaved, kVertexFloats per vertex: position xyz, uv, colour rgba
++  std::vector<uint32_t> indices;  // triangle list, sorted by attribute id (parse_x)
++  std::vector<SubsetDraw> subsets;
++  float bounds_min[3] = {0, 0, 0}, bounds_max[3] = {0, 0, 0};  // model space
++};
++constexpr uint32_t kVertexFloats = 9;  // 36-byte stride
++
++struct Texture {
++  std::string request;   // resolved request ("Root/Data/Levels/lev1/textures/<name>.dds")
++  std::string format;    // "DXT1" | "DXT3" | "DXT5" | "A8R8G8B8" | "TGA24" | "TGA32" | "TGA32a"
++  bool alpha_on = false;
++  std::vector<MipLevel> mips;
++};
++
++struct Placement {
++  uint32_t record = 0;  // index in the OBJ table
++  uint32_t model = 0;   // index into AreaData::models
++  sage::Route route = sage::Route::Ignored;
++  uint32_t flags = 0;
++  float pos[3] = {0, 0, 0};
++  float orient[3] = {0, 0, 0};  // NOT applied (moveables use SetOrientation; out of M1a-2 scope)
++  Mat4 world;                   // RotX(kWorldRotX) * T(pos)
++};
++
++struct AreaStats {
++  double load_ms = 0;    // blockfile headers, SLB tables, .x reads + parses, texture entry reads (excludes decode_ms)
++  double decode_ms = 0;  // DDS/TGA decode + mip generation
++  uint32_t obj_records = 0, placements = 0, ignored_records = 0, disabled_records = 0, missing_models = 0;
++  uint32_t routes[6] = {0, 0, 0, 0, 0, 0};  // placements per sage::Route value
++  uint32_t models = 0, subsets = 0, alpha_subsets = 0, untextured_subsets = 0, vertices = 0, triangles = 0;
++  uint32_t models_without_colors = 0, placements_with_orientation = 0;
++  uint32_t textures = 0, textures_missing = 0, textures_failed = 0, textures_alpha = 0;
++  uint64_t texture_bytes = 0;   // RGBA8 incl. full mip chains (what is uploaded)
++  uint64_t geometry_bytes = 0;  // vertex + index bytes
++  uint32_t draws = 0;           // placements x subsets (one indexed draw each)
++};
++
++struct AreaData {
++  std::string level, area;
++  bool art_blk = false;  // Art.blk opened (optional: without it only the area and level blockfiles are searched)
++  std::vector<Model> models;
++  std::vector<Texture> textures;
++  std::vector<Placement> placements;
++  uint32_t pos_records = 0;
++  bool has_start = false;
++  uint32_t start_record = 0;
++  float start[3] = {0, 0, 0};
++  bool has_bounds = false;  // world AABB of every placed model (all routes except back)
++  float bounds_min[3] = {0, 0, 0}, bounds_max[3] = {0, 0, 0};
++  AreaStats stats;
++  std::vector<std::string> warnings;  // sorted, deduplicated
++};
++
++// False only when the area cannot be entered (no level/area blockfile) or a cap is exceeded; missing models or
++// textures are warnings (counted in stats) like the game's skip-and-continue loaders.
++bool load_area(const fs::FileSystem& fs, std::string_view level, std::string_view area, const AreaOptions& opt, AreaData& out,
++               std::string* err);
++
++// Camera (spec M1 §2.3). Only the eye position comes from data (first POS record with flag 0x1000); orientation, FOV
++// and clip planes are a DOCUMENTED FALLBACK until M1a-3 mines the Base.osi camera literals. Defaults below.
++struct CameraSettings {
++  float fov_deg = 60.0f;      // vertical, D3DXMatrixPerspectiveFovRH fovy
++  float near_z = 0.5f;
++  float far_z = 4000.0f;
++  float eye_height = 3.0f;    // added to the POS start y (the record marks where the Toa stands)
++  float pitch_deg = -10.0f;   // negative looks down
++  bool eye_set = false;       // --eye overrides the POS start (eye_height is then not added)
++  float eye[3] = {0, 0, 0};
++  bool yaw_set = false;       // default yaw: towards the centre of the area's world bounds (xz)
++  float yaw_deg = 0.0f;       // 0 looks along -Z, 90 along +X
++};
++
++struct Camera {
++  float eye[3] = {0, 0, 0}, at[3] = {0, 0, 0};
++  float fov_deg = 0, near_z = 0, far_z = 0, yaw_deg = 0, pitch_deg = 0, aspect = 1;
++  std::string eye_source;  // "pos_start" | "cli" | "bounds_centre" | "origin"
++  std::string yaw_source;  // "cli" | "towards_bounds_centre" | "default"
++  Mat4 view, proj;
++};
++Camera make_camera(const AreaData& area, const CameraSettings& s, float aspect);
++
++struct RenderOptions {
++  bool vertex_colors = true;  // diffuse = vertex colour when present (D3DMCS_COLOR1), else material diffuse
++  float alpha_ref = 1.0f;     // ALPHAREF (0..255): alpha pass discards a*255 <= ref (ALPHAFUNC GREATER)
++  float clear[4] = {0.0f, 0.0f, 0.0f, 1.0f};  // 0xff000000
++};
++
++class AreaRenderer {
++ public:
++  // Creates every GPU object for `area` (which must outlive the renderer's use of it). False on a device failure.
++  bool upload(rhi::Device& dev, const AreaData& area, const RenderOptions& opt, std::string* err);
++  // One frame into `target` (a render target with depth). Draw order: main, moveable, no-light, back, then trans
++  // sorted far-to-near from the eye; within each object the opaque subsets, then the alpha subsets (DrawX's 2 passes).
++  void render(rhi::Device& dev, rhi::TextureId target, const AreaData& area, const Camera& cam);
++  uint32_t pipelines() const { return pipelines_created_; }
++  uint64_t uploaded_texture_bytes() const { return uploaded_texture_bytes_; }
++  uint32_t textures_created() const { return textures_created_; }
++
++ private:
++  struct GpuModel {
++    rhi::BufferId vb = 0, ib = 0;
++  };
++  RenderOptions opt_;
++  rhi::PipelineId opaque_ = 0, alpha_ = 0;
++  rhi::SamplerId sampler_ = 0;
++  rhi::BufferId uniforms_ = 0;
++  uint32_t uniform_slots_ = 0;
++  std::vector<GpuModel> models_;
++  std::vector<rhi::BindGroupId> texture_groups_;  // per AreaData::textures index
++  rhi::BindGroupId white_group_ = 0;
++  uint32_t pipelines_created_ = 0, textures_created_ = 0;
++  uint64_t uploaded_texture_bytes_ = 0;
++  std::vector<uint8_t> uniform_data_;
++};
++
++// The WGSL used by both pipelines (exposed for tests and the call-log checksum).
++const char* area_wgsl();
++constexpr uint32_t kAreaUniformBytes = 96;  // mat4 wvp, vec4 diffuse, vec4 params
++
++}  // namespace lomn::view
+diff -ruN base/engine/include/lomn/view/math.h work/engine/include/lomn/view/math.h
+--- base/engine/include/lomn/view/math.h	1970-01-01 01:00:00
++++ work/engine/include/lomn/view/math.h	2026-10-07 08:01:18
+@@ -0,0 +1,36 @@
++// 4x4 matrices in the game's convention (D3D8 / D3DX): row-major storage m[row*4 + col], ROW vectors (v' = v * M),
++// translation in _41.._43 (m[12..14]); a product a*b applies a first. Uploaded unchanged to WGSL, the same 16 floats
++// read as a column-major mat4x4f, so `M * v` in WGSL equals the D3D `v * M` (no transpose anywhere).
++//
++// Determinism (native == wasm32 call logs): trig and sqrt are evaluated in double through <cmath> and rounded once to
++// float; every other step is plain float arithmetic with -ffp-contract=off (inherited from lomn_core). D3DX itself
++// computes in float, so the last bit may differ from the original; bit-faithful D3DX helpers are a later item
++// (parent spec §4: "validated against recorded outputs").
++#pragma once
++#include <cstdint>
++
++namespace lomn::view {
++
++struct Mat4 {
++  float m[16] = {};
++};
++
++Mat4 mat_identity();
++Mat4 mat_mul(const Mat4& a, const Mat4& b);
++// D3DUtil_SetRotateXMatrix: _22 = cos, _23 = sin, _32 = -sin, _33 = cos. With the game's -1.5707982 this maps a
++// model-space (x, y, z) to (x, z, -y) up to ~2e-6: the .x files are Z-up, the world is Y-up.
++Mat4 mat_rotation_x(float radians);
++Mat4 mat_translation(float x, float y, float z);
++// D3DXMatrixPerspectiveFovRH(fovy, aspect, zn, zf), documented form:
++//   yScale = cot(fovy/2), xScale = yScale / aspect
++//   [xScale 0 0 0; 0 yScale 0 0; 0 0 zf/(zn-zf) -1; 0 0 zn*zf/(zn-zf) 0]
++// A view-space point at z = -zn gets z_ndc = 0 and at z = -zf gets z_ndc = 1: D3D's [0,1] depth range, which is also
++// WebGPU's, so the matrix is used unchanged (no [-1,1] remap as for OpenGL).
++Mat4 perspective_fov_rh(float fovy_radians, float aspect, float zn, float zf);
++// D3DXMatrixLookAtRH: z = normalize(eye - at), x = normalize(cross(up, z)), y = cross(z, x);
++//   [x.x y.x z.x 0; x.y y.y z.y 0; x.z y.z z.z 0; -dot(x,eye) -dot(y,eye) -dot(z,eye) 1]
++Mat4 look_at_rh(const float eye[3], const float at[3], const float up[3]);
++// out = (p, 1) * M (homogeneous, 4 floats).
++void transform_point(const Mat4& m, const float p[3], float out[4]);
++
++}  // namespace lomn::view
+diff -ruN base/engine/include/lomn/view/mips.h work/engine/include/lomn/view/mips.h
+--- base/engine/include/lomn/view/mips.h	1970-01-01 01:00:00
++++ work/engine/include/lomn/view/mips.h	2026-10-07 08:00:00
+@@ -0,0 +1,34 @@
++// CPU box-filter mip chains for RGBA8 textures (spec M1 §5: RGBA8 upload + CPU mips; the game's DDS files store mip
++// count 0 and D3DX built the chain at load, with its default BOX mip filter).
++//
++// Level n+1 has size max(1, w/2) x max(1, h/2) (floor), down to 1x1: floor(log2(max(w, h))) + 1 levels, the same
++// chain length D3D/WebGPU use. Each destination texel is the exact area-weighted average of the source texels its
++// footprint covers: per axis, destination texel x covers source interval [x*W/w, (x+1)*W/w), and a source texel's
++// weight is its overlap with that interval. For an even size this is the classic 2-tap average; for an odd size
++// (e.g. 5 -> 2) the middle texel is split between both destination texels, so no source texel is dropped
++// (non-power-of-two safe); a 1-texel axis stays 1 and is copied. The result is round-half-up of the weighted sum
++// divided by W*H in exact integer (u64) arithmetic, per channel, on straight (non-premultiplied) alpha like D3DX.
++#pragma once
++#include <cstdint>
++#include <vector>
++
++namespace lomn::view {
++
++struct MipLevel {
++  uint32_t width = 0, height = 0;
++  std::vector<uint8_t> rgba;  // width*height*4
++};
++
++// floor(log2(max(w, h))) + 1 (0 for an empty image).
++uint32_t mip_level_count(uint32_t width, uint32_t height);
++
++// One box-filter step. False (and dst untouched) if the sizes do not match rgba.size() or either side is 0.
++bool downsample_box(const std::vector<uint8_t>& src, uint32_t width, uint32_t height, MipLevel& dst);
++
++// The full chain; level 0 takes ownership of `rgba`. False if the size does not match or is 0.
++bool build_mip_chain(std::vector<uint8_t> rgba, uint32_t width, uint32_t height, std::vector<MipLevel>& out);
++
++// Bytes of the whole chain for a width x height RGBA8 texture.
++uint64_t mip_chain_bytes(uint32_t width, uint32_t height);
++
++}  // namespace lomn::view
+diff -ruN base/engine/include/lomn/view/synthetic.h work/engine/include/lomn/view/synthetic.h
+--- base/engine/include/lomn/view/synthetic.h	1970-01-01 01:00:00
++++ work/engine/include/lomn/view/synthetic.h	2026-10-07 08:05:15
+@@ -0,0 +1,30 @@
++// The A7 contract scene (spec M1 §4 A7): a tiny synthetic install, built in memory from bytes written here (no game
++// data), that goes through the same path as a real area: blockfiles, OBJ/POS SLB tables, binary .x, DDS decode,
++// texture resolution, mip generation, upload and draw.
++//
++// Root/Data/Levels/levt/levt.blk: red.dds (DXT1 4x4, solid red, alpha off), cut.dds (A8R8G8B8 8x8: u < 0.5 green
++//   alpha 255, u >= 0.5 magenta alpha 0; alpha on)
++// Root/Data/Levels/levt/test.blk:
++//   quad.x  3 subsets (Z-up model space, faces in the y = 0 plane, so the world plane is z = 0 after RotX):
++//           red quad x [-8,-1] (texture red), cut quad x [1,8] (texture cut, alpha pass), a third quad far off-screen
++//           whose texture "nothere" does not exist (white fallback); vertex colours (1, 0.5, 1, 1)
++//   blue.x  one quad x [-8,8], model z [-2,8] (world y), material diffuse (0,0,1,1), no texture, no vertex colours
++//   test_OBJ.slb  quad main @0; blue main @(0,0,-2); blue back @-50; quad trans @-60; blue trans @-70;
++//                 blue nolight @-80; "nope" flags 0x4 (ignored: never loaded); "miss" main (no such model: warning)
++//   test_POS.slb  a pickup record (0x60) then the start record (0x1000) at (0, 0, 10)
++// Camera for the scene: eye = start (eye_height 0), yaw 0 (looking along -Z), pitch 0, fov 90, near 0.1, far 100.
++#pragma once
++#include "lomn/fs.h"
++#include "lomn/view/area.h"
++
++namespace lomn::view {
++
++constexpr const char* kSyntheticLevel = "levt";
++constexpr const char* kSyntheticArea = "test";
++
++// Mounts the scene's blockfiles into `fs`. False if a mount fails.
++bool mount_synthetic_install(fs::MemoryFileSystem& fs);
++// The camera settings the expected call log and pixel checks were written for.
++CameraSettings synthetic_camera();
++
++}  // namespace lomn::view
+diff -ruN base/engine/src/rhi/null_device.cpp work/engine/src/rhi/null_device.cpp
+--- base/engine/src/rhi/null_device.cpp	2026-10-07 07:48:56
++++ work/engine/src/rhi/null_device.cpp	2026-10-07 08:20:02
+@@ -1,36 +1,52 @@
++#include <cstdarg>
+ #include <cstdio>
+ 
+ #include "lomn/rhi.h"
++#include "registry.h"
+ 
+ namespace lomn::rhi {
+ namespace {
+ 
++using detail::BufInfo;
++using detail::BufKind;
++using detail::Registry;
++using detail::TexInfo;
++using detail::TexKind;
++
+ class NullDevice final : public Device {
+  public:
+   explicit NullDevice(std::vector<std::string>* log) : log_(log) {}
+   std::string backend() const override { return "null"; }
+   std::string adapter() const override { return "none"; }
+   TextureId create_render_target(uint32_t w, uint32_t h) override {
+-    rec("create_render_target %ux%u -> %u", w, h, ++next_tex_);
+-    return next_tex_;
++    TextureId id = reg_.add_texture({TexKind::RenderTarget, w, h, 1, false});
++    rec("create_render_target %ux%u -> %u", w, h, id);
++    return id;
+   }
+   BufferId create_uniform_buffer(uint32_t bytes) override {
+-    rec("create_uniform_buffer %u -> %u", bytes, ++next_buf_);
+-    return next_buf_;
++    // Capacity as the WebGPU backend allocates it (rounded up to kUniformAlign), so both validate writes alike.
++    BufferId id = reg_.add_buffer({BufKind::Uniform, static_cast<uint32_t>((uint64_t(bytes) + kUniformAlign - 1) / kUniformAlign * kUniformAlign)});
++    rec("create_uniform_buffer %u -> %u", bytes, id);
++    return id;
+   }
+   void write_buffer(BufferId b, uint32_t off, const void* data, uint32_t size) override {
+-    uint32_t sum = 0;  // simple checksum so the log captures content, not just size
+-    for (uint32_t i = 0; i < size; ++i) sum = sum * 31u + static_cast<const uint8_t*>(data)[i];
+-    rec("write_buffer %u +%u %u bytes sum=%08x", b, off, size, sum);
++    std::string why = reg_.check_write_buffer(b, off, size, data == nullptr);
++    if (!why.empty()) {
++      rec("write_buffer %u +%u %u bytes rejected: %s", b, off, size, why.c_str());
++      return;
++    }
++    rec("write_buffer %u +%u %u bytes sum=%08x", b, off, size, detail::checksum(data, size));
+   }
+   PipelineId create_pipeline(const PipelineDesc& d) override {
+     ++stats_.pipelines_total;
+-    rec("create_pipeline wgsl=%zu bytes vs=%s fs=%s uniforms=%u -> %u", d.wgsl.size(), d.vs_entry.c_str(),
+-        d.fs_entry.c_str(), d.uniform_bytes, ++next_pipe_);
+-    return next_pipe_;
++    PipelineId id = reg_.add_pipeline({false, d.uniform_bytes});
++    rec("create_pipeline wgsl=%zu bytes vs=%s fs=%s uniforms=%u -> %u", d.wgsl.size(), d.vs_entry.c_str(), d.fs_entry.c_str(),
++        d.uniform_bytes, id);
++    return id;
+   }
+   void begin_frame(TextureId t, const float c[4]) override {
+     stats_.draws = 0;
++    stats_.indices = 0;
+     rec("begin_frame target=%u clear=%.3f,%.3f,%.3f,%.3f", t, c[0], c[1], c[2], c[3]);
+   }
+   void draw(PipelineId p, uint32_t n, BufferId u, uint32_t off) override {
+@@ -41,16 +57,127 @@
+   bool read_pixels(TextureId, std::vector<uint8_t>&) override { return false; }
+   FrameStats last_frame_stats() const override { return stats_; }
+ 
++  // ---- M1a-2 ----
++  TextureId create_render_target_ex(const RenderTargetDesc& d) override {
++    std::string why = Registry::check_render_target(d);
++    if (!why.empty()) {
++      rec("create_render_target_ex %ux%u depth=%d rejected: %s -> 0", d.width, d.height, int(d.depth), why.c_str());
++      return 0;
++    }
++    TextureId id = reg_.add_texture({TexKind::RenderTarget, d.width, d.height, 1, d.depth});
++    rec("create_render_target_ex %ux%u depth=%d clear_depth=%.3f -> %u", d.width, d.height, int(d.depth), d.clear_depth, id);
++    return id;
++  }
++  BufferId create_vertex_buffer(uint32_t bytes) override { return make_buffer("create_vertex_buffer", BufKind::Vertex, bytes); }
++  BufferId create_index_buffer(uint32_t bytes) override { return make_buffer("create_index_buffer", BufKind::Index, bytes); }
++  TextureId create_texture(uint32_t w, uint32_t h, uint32_t mips) override {
++    std::string why = Registry::check_texture(w, h, mips);
++    if (!why.empty()) {
++      rec("create_texture %ux%u mips=%u rejected: %s -> 0", w, h, mips, why.c_str());
++      return 0;
++    }
++    TextureId id = reg_.add_texture({TexKind::Sampled, w, h, mips, false});
++    rec("create_texture %ux%u mips=%u -> %u", w, h, mips, id);
++    return id;
++  }
++  bool write_texture(TextureId t, uint32_t mip, const void* rgba, size_t bytes) override {
++    std::string why = reg_.check_write_texture(t, mip, bytes, rgba == nullptr);
++    if (!why.empty()) {
++      rec("write_texture %u mip=%u %llu bytes rejected: %s", t, mip, static_cast<unsigned long long>(bytes), why.c_str());
++      return false;
++    }
++    const TexInfo& ti = reg_.textures[t];
++    rec("write_texture %u mip=%u %ux%u %llu bytes sum=%08x", t, mip, detail::mip_dim(ti.width, mip), detail::mip_dim(ti.height, mip),
++        static_cast<unsigned long long>(bytes), detail::checksum(rgba, bytes));
++    return true;
++  }
++  SamplerId create_sampler(const SamplerDesc& s) override {
++    std::string why = Registry::check_sampler(s);
++    if (!why.empty()) {
++      rec("create_sampler rejected: %s -> 0", why.c_str());
++      return 0;
++    }
++    SamplerId id = reg_.add_sampler(s);
++    rec("create_sampler mag=%s min=%s mip=%s u=%s v=%s aniso=%u -> %u", detail::filter_name(s.mag), detail::filter_name(s.min),
++        detail::filter_name(s.mip), detail::address_name(s.u), detail::address_name(s.v), unsigned(s.max_anisotropy), id);
++    return id;
++  }
++  PipelineId create_mesh_pipeline(const MeshPipelineDesc& d) override {
++    std::string why = Registry::check_mesh_pipeline(d);
++    if (!why.empty()) {
++      rec("create_mesh_pipeline rejected: %s -> 0", why.c_str());
++      return 0;
++    }
++    ++stats_.pipelines_total;
++    PipelineId id = reg_.add_pipeline({true, d.uniform_bytes});
++    std::string attrs;
++    for (const VertexAttribute& a : d.attributes) {
++      char b[48];
++      std::snprintf(b, sizeof b, "%s%u:%s@%u", attrs.empty() ? "" : ",", a.location, detail::vertex_format_name(a.format), a.offset);
++      attrs += b;
++    }
++    rec("create_mesh_pipeline wgsl=%zu bytes sum=%08x vs=%s fs=%s uniforms=%u stride=%u attrs=[%s] blend=%s depth_write=%d depth=%s cull=%s -> %u",
++        d.wgsl.size(), detail::checksum(d.wgsl.data(), d.wgsl.size()), d.vs_entry.c_str(), d.fs_entry.c_str(), d.uniform_bytes,
++        d.vertex_stride, attrs.c_str(), detail::blend_name(d.blend), int(d.depth_write), detail::compare_name(d.depth_compare),
++        detail::cull_name(d.cull), id);
++    return id;
++  }
++  BindGroupId create_bind_group(BufferId u, uint32_t ubytes, TextureId t, SamplerId s) override {
++    std::string why = reg_.check_bind_group(u, ubytes, t, s);
++    if (!why.empty()) {
++      rec("create_bind_group uniforms=%u bytes=%u texture=%u sampler=%u rejected: %s -> 0", u, ubytes, t, s, why.c_str());
++      return 0;
++    }
++    BindGroupId id = reg_.add_bind_group({u, ubytes, t, s});
++    rec("create_bind_group uniforms=%u bytes=%u texture=%u sampler=%u -> %u", u, ubytes, t, s, id);
++    return id;
++  }
++  void draw_indexed(const DrawIndexedDesc& d) override {
++    std::string why = reg_.check_draw_indexed(d);
++    if (!why.empty()) {
++      rec("draw_indexed pipeline=%u vb=%u ib=%u first=%u count=%u bind_group=%u+%u rejected: %s", d.pipeline, d.vertices, d.indices,
++          d.first_index, d.index_count, d.bind_group, d.uniform_offset, why.c_str());
++      return;
++    }
++    ++stats_.draws;
++    stats_.indices += d.index_count;
++    rec("draw_indexed pipeline=%u vb=%u ib=%u first=%u count=%u bind_group=%u+%u", d.pipeline, d.vertices, d.indices, d.first_index,
++        d.index_count, d.bind_group, d.uniform_offset);
++  }
++
+  private:
+-  template <typename... A>
+-  void rec(const char* fmt, A... a) {
++  BufferId make_buffer(const char* what, BufKind kind, uint32_t bytes) {
++    std::string why = Registry::check_buffer_bytes(bytes);
++    if (!why.empty()) {
++      rec("%s %u rejected: %s -> 0", what, bytes, why.c_str());
++      return 0;
++    }
++    BufferId id = reg_.add_buffer({kind, bytes});
++    rec("%s %u -> %u", what, bytes, id);
++    return id;
++  }
++  // Lines of any length (M1a-2 pipeline lines exceed M0's 256-byte buffer); identical text for M0 calls.
++  void rec(const char* fmt, ...) {
+     if (!log_) return;
+     char buf[256];
+-    std::snprintf(buf, sizeof buf, fmt, a...);
+-    log_->emplace_back(buf);
++    va_list ap;
++    va_start(ap, fmt);
++    int n = std::vsnprintf(buf, sizeof buf, fmt, ap);
++    va_end(ap);
++    if (n < 0) return;
++    if (static_cast<size_t>(n) < sizeof buf) {
++      log_->emplace_back(buf, static_cast<size_t>(n));
++      return;
++    }
++    std::string s(static_cast<size_t>(n) + 1, '\0');
++    va_start(ap, fmt);
++    std::vsnprintf(&s[0], s.size(), fmt, ap);
++    va_end(ap);
++    s.resize(static_cast<size_t>(n));
++    log_->push_back(std::move(s));
+   }
+   std::vector<std::string>* log_;
+-  uint32_t next_tex_ = 0, next_buf_ = 0, next_pipe_ = 0;
++  Registry reg_;
+   FrameStats stats_;
+ };
+ 
+diff -ruN base/engine/src/rhi/registry.h work/engine/src/rhi/registry.h
+--- base/engine/src/rhi/registry.h	1970-01-01 01:00:00
++++ work/engine/src/rhi/registry.h	2026-10-07 08:19:59
+@@ -0,0 +1,176 @@
++// Internal (M1a-2): the object table and validation rules shared by the null and WebGPU backends, so both accept and
++// reject exactly the same calls. Ids are allocated per kind (textures = render targets + sampled textures, buffers,
++// pipelines, samplers, bind groups), start at 1 and are never reused. Every check returns "" when the call is valid,
++// else a short reason. All size arithmetic is u64 (wasm32 size_t is 32-bit).
++#pragma once
++#include <cstdint>
++#include <map>
++#include <string>
++
++#include "lomn/rhi.h"
++
++namespace lomn::rhi::detail {
++
++constexpr uint64_t kMaxBufferBytes = 256ull << 20;  // WebGPU default maxBufferSize
++
++enum class BufKind { Uniform, Vertex, Index };
++struct BufInfo {
++  BufKind kind = BufKind::Uniform;
++  uint32_t bytes = 0;
++};
++enum class TexKind { RenderTarget, Sampled };
++struct TexInfo {
++  TexKind kind = TexKind::RenderTarget;
++  uint32_t width = 0, height = 0, mips = 1;
++  bool depth = false;
++};
++struct PipeInfo {
++  bool mesh = false;
++  uint32_t uniform_bytes = 0;
++};
++struct BindInfo {
++  BufferId uniforms = 0;
++  uint32_t uniform_bytes = 0;
++  TextureId texture = 0;
++  SamplerId sampler = 0;
++};
++
++// floor(log2(max(w, h))) + 1: the full chain down to 1x1.
++inline uint32_t full_mip_count(uint32_t w, uint32_t h) {
++  uint32_t m = w > h ? w : h, n = 1;
++  while (m > 1) {
++    m >>= 1;
++    ++n;
++  }
++  return n;
++}
++inline uint32_t mip_dim(uint32_t d, uint32_t mip) {
++  uint32_t v = mip >= 32 ? 0 : d >> mip;
++  return v ? v : 1;
++}
++// The M0 content checksum (sum = sum * 31 + byte), reused for every M1a-2 data upload.
++inline uint32_t checksum(const void* data, uint64_t size) {
++  uint32_t sum = 0;
++  const uint8_t* p = static_cast<const uint8_t*>(data);
++  for (uint64_t i = 0; i < size; ++i) sum = sum * 31u + p[i];
++  return sum;
++}
++inline uint32_t vertex_format_bytes(VertexFormat f) {
++  switch (f) {
++    case VertexFormat::Float32x2: return 8;
++    case VertexFormat::Float32x3: return 12;
++    default: return 16;
++  }
++}
++inline const char* vertex_format_name(VertexFormat f) {
++  switch (f) {
++    case VertexFormat::Float32x2: return "f32x2";
++    case VertexFormat::Float32x3: return "f32x3";
++    default: return "f32x4";
++  }
++}
++inline const char* blend_name(BlendMode b) { return b == BlendMode::AlphaBlend ? "alpha" : "opaque"; }
++inline const char* compare_name(CompareFunc c) {
++  static const char* n[] = {"never", "less", "equal", "lessequal", "greater", "notequal", "greaterequal", "always"};
++  return static_cast<unsigned>(c) < 8 ? n[static_cast<unsigned>(c)] : "?";
++}
++inline const char* cull_name(CullMode c) { return c == CullMode::None ? "none" : c == CullMode::Front ? "front" : "back"; }
++inline const char* filter_name(FilterMode f) { return f == FilterMode::Linear ? "linear" : "nearest"; }
++inline const char* address_name(AddressMode a) { return a == AddressMode::Wrap ? "wrap" : a == AddressMode::Clamp ? "clamp" : "mirror"; }
++
++class Registry {
++ public:
++  std::map<TextureId, TexInfo> textures;
++  std::map<BufferId, BufInfo> buffers;
++  std::map<PipelineId, PipeInfo> pipelines;
++  std::map<SamplerId, SamplerDesc> samplers;
++  std::map<BindGroupId, BindInfo> bind_groups;
++
++  TextureId add_texture(const TexInfo& t) { textures[++next_tex_] = t; return next_tex_; }
++  BufferId add_buffer(const BufInfo& b) { buffers[++next_buf_] = b; return next_buf_; }
++  PipelineId add_pipeline(const PipeInfo& p) { pipelines[++next_pipe_] = p; return next_pipe_; }
++  SamplerId add_sampler(const SamplerDesc& s) { samplers[++next_sampler_] = s; return next_sampler_; }
++  BindGroupId add_bind_group(const BindInfo& b) { bind_groups[++next_bind_] = b; return next_bind_; }
++
++  static std::string check_render_target(const RenderTargetDesc& d) {
++    if (d.width == 0 || d.height == 0 || d.width > kMaxRenderTargetSize || d.height > kMaxRenderTargetSize) return "size out of range";
++    if (!(d.clear_depth >= 0.0f && d.clear_depth <= 1.0f)) return "clear_depth outside [0,1]";
++    return "";
++  }
++  static std::string check_buffer_bytes(uint32_t bytes) {
++    if (bytes == 0 || bytes > kMaxBufferBytes) return "size out of range";
++    return "";
++  }
++  static std::string check_texture(uint32_t w, uint32_t h, uint32_t mips) {
++    if (w == 0 || h == 0 || w > kMaxTextureSize || h > kMaxTextureSize) return "size out of range";
++    if (mips == 0 || mips > full_mip_count(w, h)) return "mip count out of range";
++    return "";
++  }
++  std::string check_write_buffer(BufferId b, uint32_t off, uint32_t size, bool data_null) const {
++    auto it = buffers.find(b);
++    if (it == buffers.end()) return "unknown buffer";
++    if (data_null && size) return "null data";
++    if (off % 4 || size % 4) return "offset/size not a multiple of 4";
++    if (uint64_t(off) + size > it->second.bytes) return "write outside the buffer";
++    return "";
++  }
++  std::string check_write_texture(TextureId t, uint32_t mip, uint64_t bytes, bool data_null) const {
++    auto it = textures.find(t);
++    if (it == textures.end() || it->second.kind != TexKind::Sampled) return "unknown sampled texture";
++    if (data_null) return "null data";
++    if (mip >= it->second.mips) return "mip out of range";
++    if (bytes != uint64_t(mip_dim(it->second.width, mip)) * mip_dim(it->second.height, mip) * 4) return "byte count does not match the mip size";
++    return "";
++  }
++  static std::string check_sampler(const SamplerDesc& s) {
++    if (s.max_anisotropy < 1 || s.max_anisotropy > 16) return "max_anisotropy out of range";
++    if (s.max_anisotropy > 1 && (s.mag != FilterMode::Linear || s.min != FilterMode::Linear || s.mip != FilterMode::Linear))
++      return "anisotropy needs linear filters";
++    return "";
++  }
++  static std::string check_mesh_pipeline(const MeshPipelineDesc& d) {
++    if (d.wgsl.empty()) return "empty wgsl";
++    if (d.uniform_bytes == 0 || d.uniform_bytes > kUniformAlign) return "uniform_bytes out of range";
++    if (d.vertex_stride < 4 || d.vertex_stride > 2048 || d.vertex_stride % 4) return "vertex_stride out of range";
++    if (d.attributes.empty() || d.attributes.size() > kMaxVertexAttributes) return "attribute count out of range";
++    uint32_t used = 0;
++    for (const VertexAttribute& a : d.attributes) {
++      if (a.location >= kMaxVertexAttributes || (used >> a.location) & 1u) return "attribute location invalid or repeated";
++      used |= 1u << a.location;
++      if (a.offset % 4 || uint64_t(a.offset) + vertex_format_bytes(a.format) > d.vertex_stride) return "attribute outside the stride";
++    }
++    if (static_cast<unsigned>(d.depth_compare) > 7) return "bad depth compare";
++    return "";
++  }
++  std::string check_bind_group(BufferId u, uint32_t ubytes, TextureId t, SamplerId s) const {
++    auto b = buffers.find(u);
++    if (b == buffers.end() || b->second.kind != BufKind::Uniform) return "unknown uniform buffer";
++    if (ubytes == 0 || ubytes > kUniformAlign || ubytes > b->second.bytes) return "uniform_bytes out of range";
++    auto tx = textures.find(t);
++    if (tx == textures.end() || tx->second.kind != TexKind::Sampled) return "unknown sampled texture";
++    if (!samplers.count(s)) return "unknown sampler";
++    return "";
++  }
++  std::string check_draw_indexed(const DrawIndexedDesc& d) const {
++    auto p = pipelines.find(d.pipeline);
++    if (p == pipelines.end() || !p->second.mesh) return "unknown mesh pipeline";
++    auto vb = buffers.find(d.vertices);
++    if (vb == buffers.end() || vb->second.kind != BufKind::Vertex) return "unknown vertex buffer";
++    auto ib = buffers.find(d.indices);
++    if (ib == buffers.end() || ib->second.kind != BufKind::Index) return "unknown index buffer";
++    if (d.index_count == 0 || d.index_count % 3) return "index_count not a positive multiple of 3";
++    if ((uint64_t(d.first_index) + d.index_count) * 4 > ib->second.bytes) return "index range outside the index buffer";
++    auto bg = bind_groups.find(d.bind_group);
++    if (bg == bind_groups.end()) return "unknown bind group";
++    if (bg->second.uniform_bytes != p->second.uniform_bytes) return "bind group does not match the pipeline layout";
++    if (d.uniform_offset % kUniformAlign) return "uniform_offset not aligned";
++    auto ub = buffers.find(bg->second.uniforms);
++    if (ub == buffers.end() || uint64_t(d.uniform_offset) + bg->second.uniform_bytes > ub->second.bytes) return "uniform range outside the buffer";
++    return "";
++  }
++
++ private:
++  uint32_t next_tex_ = 0, next_buf_ = 0, next_pipe_ = 0, next_sampler_ = 0, next_bind_ = 0;
++};
++
++}  // namespace lomn::rhi::detail
+diff -ruN base/engine/src/rhi/webgpu_device.cpp work/engine/src/rhi/webgpu_device.cpp
+--- base/engine/src/rhi/webgpu_device.cpp	2026-10-07 07:48:56
++++ work/engine/src/rhi/webgpu_device.cpp	2026-10-07 08:21:51
+@@ -1,14 +1,18 @@
+ // WebGPU backend. Same code for native (Dawn, headless render targets + synchronous readback via
+ // wgpuInstanceWaitAny) and browser (emdawnwebgpu, presents to a canvas; no Asyncify: device creation
+ // is callback-driven and the caller starts its frame loop from the callback).
++// M1a-2: indexed meshes (vertex/index buffers, sampled RGBA8 textures with CPU mips, samplers, depth targets, mesh
++// pipelines, bind groups). Validation is shared with the null backend (registry.h): a rejected call never reaches Dawn.
+ #include <webgpu/webgpu.h>
+ 
+ #include <cstdio>
+ #include <cstdlib>
+ #include <cstring>
+ #include <map>
++#include <utility>
+ 
+ #include "lomn/rhi.h"
++#include "registry.h"
+ 
+ #if defined(__EMSCRIPTEN__)
+ #define LOMN_CB_MODE WGPUCallbackMode_AllowSpontaneous
+@@ -19,22 +23,63 @@
+ namespace lomn::rhi {
+ namespace {
+ 
++using detail::BufKind;
++using detail::Registry;
++using detail::TexKind;
++
+ WGPUStringView sv(const std::string& s) { return WGPUStringView{s.data(), s.size()}; }
+ std::string str(WGPUStringView v) { return v.data ? std::string(v.data, v.length == WGPU_STRLEN ? std::strlen(v.data) : v.length) : std::string(); }
+ 
++constexpr WGPUTextureFormat kDepthFormat = WGPUTextureFormat_Depth32Float;
++
+ struct Target {
+   WGPUTexture texture = nullptr;
+   WGPUTextureView view = nullptr;
++  WGPUTexture depth = nullptr;        // M1a-2: optional depth buffer
++  WGPUTextureView depth_view = nullptr;
++  float clear_depth = 1.0f;
+   uint32_t width = 0, height = 0;
+ };
++struct Sampled {
++  WGPUTexture texture = nullptr;
++  WGPUTextureView view = nullptr;
++};
++// Pipeline variants are built lazily per (colour format, pass has depth): the canvas format differs from offscreen
++// RGBA8Unorm, and a pass with a depth attachment needs a depthStencil state in every pipeline drawn into it.
++using VariantKey = std::pair<WGPUTextureFormat, bool>;
+ struct Pipeline {
+   PipelineDesc desc;
++  MeshPipelineDesc mesh_desc;  // M1a-2 (mesh == true)
++  bool mesh = false;
+   WGPUShaderModule module = nullptr;
+-  WGPUBindGroupLayout layout = nullptr;
++  WGPUBindGroupLayout layout = nullptr;  // owned only for M0 pipelines; mesh pipelines share mesh_layouts_
+   WGPUPipelineLayout pipeline_layout = nullptr;
+-  std::map<WGPUTextureFormat, WGPURenderPipeline> by_format;  // built lazily per render-target format
++  std::map<VariantKey, WGPURenderPipeline> by_format;
+ };
+ 
++WGPUVertexFormat vformat(VertexFormat f) {
++  switch (f) {
++    case VertexFormat::Float32x2: return WGPUVertexFormat_Float32x2;
++    case VertexFormat::Float32x3: return WGPUVertexFormat_Float32x3;
++    default: return WGPUVertexFormat_Float32x4;
++  }
++}
++WGPUCompareFunction cmp(CompareFunc c) {
++  switch (c) {
++    case CompareFunc::Never: return WGPUCompareFunction_Never;
++    case CompareFunc::Less: return WGPUCompareFunction_Less;
++    case CompareFunc::Equal: return WGPUCompareFunction_Equal;
++    case CompareFunc::LessEqual: return WGPUCompareFunction_LessEqual;
++    case CompareFunc::Greater: return WGPUCompareFunction_Greater;
++    case CompareFunc::NotEqual: return WGPUCompareFunction_NotEqual;
++    case CompareFunc::GreaterEqual: return WGPUCompareFunction_GreaterEqual;
++    default: return WGPUCompareFunction_Always;
++  }
++}
++WGPUAddressMode addr(AddressMode a) {
++  return a == AddressMode::Wrap ? WGPUAddressMode_Repeat : a == AddressMode::Clamp ? WGPUAddressMode_ClampToEdge : WGPUAddressMode_MirrorRepeat;
++}
++
+ class WebGpuDevice final : public Device {
+  public:
+   WebGpuDevice(WGPUInstance inst, WGPUAdapter adapter, WGPUDevice dev, WGPUSurface surface, WGPUTextureFormat surface_format,
+@@ -58,15 +103,24 @@
+     if (frame_surface_view_) wgpuTextureViewRelease(frame_surface_view_);
+     if (frame_surface_texture_) wgpuTextureRelease(frame_surface_texture_);
+     for (auto& kv : bind_groups_) wgpuBindGroupRelease(kv.second);
++    for (auto& kv : mesh_bind_groups_) wgpuBindGroupRelease(kv.second);
+     for (auto& kv : pipelines_) {
+       Pipeline& p = kv.second;
+       for (auto& v : p.by_format) wgpuRenderPipelineRelease(v.second);
+       if (p.pipeline_layout) wgpuPipelineLayoutRelease(p.pipeline_layout);
+-      if (p.layout) wgpuBindGroupLayoutRelease(p.layout);
++      if (p.layout && !p.mesh) wgpuBindGroupLayoutRelease(p.layout);
+       if (p.module) wgpuShaderModuleRelease(p.module);
+     }
++    for (auto& kv : mesh_layouts_) wgpuBindGroupLayoutRelease(kv.second);
++    for (auto& kv : samplers_) wgpuSamplerRelease(kv.second);
++    for (auto& kv : sampled_) {
++      if (kv.second.view) wgpuTextureViewRelease(kv.second.view);
++      if (kv.second.texture) wgpuTextureRelease(kv.second.texture);
++    }
+     for (auto& kv : buffers_) wgpuBufferRelease(kv.second);
+     for (auto& kv : targets_) {
++      if (kv.second.depth_view) wgpuTextureViewRelease(kv.second.depth_view);
++      if (kv.second.depth) wgpuTextureRelease(kv.second.depth);
+       if (kv.second.view) wgpuTextureViewRelease(kv.second.view);
+       if (kv.second.texture) wgpuTextureRelease(kv.second.texture);
+     }
+@@ -84,39 +138,31 @@
+   std::string adapter() const override { return adapter_desc_; }
+ 
+   TextureId create_render_target(uint32_t w, uint32_t h) override {
+-    WGPUTextureDescriptor td = WGPU_TEXTURE_DESCRIPTOR_INIT;
+-    td.size = {w, h, 1};
+-    td.format = WGPUTextureFormat_RGBA8Unorm;
+-    td.usage = WGPUTextureUsage_RenderAttachment | WGPUTextureUsage_CopySrc;
+-    Target t;
+-    t.texture = wgpuDeviceCreateTexture(dev_, &td);
+-    t.view = wgpuTextureCreateView(t.texture, nullptr);
+-    t.width = w;
+-    t.height = h;
+-    targets_[++next_tex_] = t;
+-    return next_tex_;
++    Target t = make_target(w, h);
++    TextureId id = reg_.add_texture({TexKind::RenderTarget, w, h, 1, false});
++    targets_[id] = t;
++    return id;
+   }
+ 
+   BufferId create_uniform_buffer(uint32_t bytes) override {
+     WGPUBufferDescriptor bd = WGPU_BUFFER_DESCRIPTOR_INIT;
+-    bd.size = (bytes + kUniformAlign - 1) / kUniformAlign * kUniformAlign;
++    bd.size = (uint64_t(bytes) + kUniformAlign - 1) / kUniformAlign * kUniformAlign;
+     bd.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
+-    buffers_[++next_buf_] = wgpuDeviceCreateBuffer(dev_, &bd);
+-    return next_buf_;
++    BufferId id = reg_.add_buffer({BufKind::Uniform, static_cast<uint32_t>(bd.size)});
++    buffers_[id] = wgpuDeviceCreateBuffer(dev_, &bd);
++    return id;
+   }
+ 
+   void write_buffer(BufferId b, uint32_t off, const void* data, uint32_t size) override {
++    std::string why = reg_.check_write_buffer(b, off, size, data == nullptr);
++    if (!why.empty()) return reject("write_buffer", why);
+     wgpuQueueWriteBuffer(queue_, buffers_.at(b), off, data, size);
+   }
+ 
+   PipelineId create_pipeline(const PipelineDesc& d) override {
+-    WGPUShaderSourceWGSL src = WGPU_SHADER_SOURCE_WGSL_INIT;
+-    src.code = sv(d.wgsl);
+-    WGPUShaderModuleDescriptor smd = WGPU_SHADER_MODULE_DESCRIPTOR_INIT;
+-    smd.nextInChain = &src.chain;
+     Pipeline p;
+     p.desc = d;
+-    p.module = wgpuDeviceCreateShaderModule(dev_, &smd);
++    p.module = shader(d.wgsl);
+     if (d.uniform_bytes) {
+       WGPUBindGroupLayoutEntry e = WGPU_BIND_GROUP_LAYOUT_ENTRY_INIT;
+       e.binding = 0;
+@@ -134,32 +180,72 @@
+       p.pipeline_layout = wgpuDeviceCreatePipelineLayout(dev_, &pl);
+     }
+     ++stats_.pipelines_total;
+-    pipelines_[++next_pipe_] = p;
+-    return next_pipe_;
++    PipelineId id = reg_.add_pipeline({false, d.uniform_bytes});
++    pipelines_[id] = p;
++    return id;
+   }
+ 
+-  WGPURenderPipeline variant(Pipeline& p, WGPUTextureFormat fmt) {
+-    auto it = p.by_format.find(fmt);
++  WGPURenderPipeline variant(Pipeline& p, WGPUTextureFormat fmt, bool depth) {
++    auto it = p.by_format.find({fmt, depth});
+     if (it != p.by_format.end()) return it->second;
+     WGPUColorTargetState ct = WGPU_COLOR_TARGET_STATE_INIT;
+     ct.format = fmt;
++    WGPUBlendState blend = WGPU_BLEND_STATE_INIT;
++    if (p.mesh && p.mesh_desc.blend == BlendMode::AlphaBlend) {
++      blend.color = {WGPUBlendOperation_Add, WGPUBlendFactor_SrcAlpha, WGPUBlendFactor_OneMinusSrcAlpha};
++      // Destination alpha is kept: the D3D8 back buffer's alpha is not displayed (X8R8G8B8), and blending it here would
++      // leave partially transparent pixels in readbacks/PNGs (measured: 14,560 pixels in a ghut frame before this rule).
++      blend.alpha = {WGPUBlendOperation_Add, WGPUBlendFactor_Zero, WGPUBlendFactor_One};
++      ct.blend = &blend;
++    }
+     WGPUFragmentState fs = WGPU_FRAGMENT_STATE_INIT;
+     fs.module = p.module;
+-    fs.entryPoint = sv(p.desc.fs_entry);
++    fs.entryPoint = sv(p.mesh ? p.mesh_desc.fs_entry : p.desc.fs_entry);
+     fs.targetCount = 1;
+     fs.targets = &ct;
+     WGPURenderPipelineDescriptor rpd = WGPU_RENDER_PIPELINE_DESCRIPTOR_INIT;
+     rpd.layout = p.pipeline_layout;
+     rpd.vertex.module = p.module;
+-    rpd.vertex.entryPoint = sv(p.desc.vs_entry);
++    rpd.vertex.entryPoint = sv(p.mesh ? p.mesh_desc.vs_entry : p.desc.vs_entry);
+     rpd.fragment = &fs;
+-    return p.by_format[fmt] = wgpuDeviceCreateRenderPipeline(dev_, &rpd);
++    WGPUDepthStencilState ds = WGPU_DEPTH_STENCIL_STATE_INIT;
++    if (depth) {
++      ds.format = kDepthFormat;
++      // M0 pipelines ignore depth (always pass, never write) so they keep their M0 output in a depth pass.
++      ds.depthWriteEnabled = p.mesh && p.mesh_desc.depth_write ? WGPUOptionalBool_True : WGPUOptionalBool_False;
++      ds.depthCompare = p.mesh ? cmp(p.mesh_desc.depth_compare) : WGPUCompareFunction_Always;
++      rpd.depthStencil = &ds;
++    }
++    std::vector<WGPUVertexAttribute> attrs;
++    WGPUVertexBufferLayout vbl = WGPU_VERTEX_BUFFER_LAYOUT_INIT;
++    if (p.mesh) {
++      for (const VertexAttribute& a : p.mesh_desc.attributes) {
++        WGPUVertexAttribute va = WGPU_VERTEX_ATTRIBUTE_INIT;
++        va.format = vformat(a.format);
++        va.offset = a.offset;
++        va.shaderLocation = a.location;
++        attrs.push_back(va);
++      }
++      vbl.stepMode = WGPUVertexStepMode_Vertex;
++      vbl.arrayStride = p.mesh_desc.vertex_stride;
++      vbl.attributeCount = attrs.size();
++      vbl.attributes = attrs.data();
++      rpd.vertex.bufferCount = 1;
++      rpd.vertex.buffers = &vbl;
++      rpd.primitive.topology = WGPUPrimitiveTopology_TriangleList;
++      rpd.primitive.cullMode = p.mesh_desc.cull == CullMode::None ? WGPUCullMode_None
++                               : p.mesh_desc.cull == CullMode::Front ? WGPUCullMode_Front : WGPUCullMode_Back;
++    }
++    return p.by_format[{fmt, depth}] = wgpuDeviceCreateRenderPipeline(dev_, &rpd);
+   }
+ 
+   void begin_frame(TextureId target, const float c[4]) override {
+     stats_.draws = 0;
++    stats_.indices = 0;
+     frame_active_ = false;
++    pass_depth_ = false;
+     WGPUTextureView view = nullptr;
++    const Target* tgt = nullptr;
+     if (target == 0) {
+       // Skip the frame (draw/end_frame become no-ops) rather than touching a null surface or texture.
+       if (!surface_) {
+@@ -179,7 +265,13 @@
+       frame_surface_view_ = view = wgpuTextureCreateView(st.texture, nullptr);
+       pass_format_ = surface_format_;
+     } else {
+-      view = targets_.at(target).view;
++      auto it = targets_.find(target);
++      if (it == targets_.end()) {
++        log_skip_once("unknown render target " + std::to_string(target));
++        return;
++      }
++      tgt = &it->second;
++      view = tgt->view;
+       pass_format_ = WGPUTextureFormat_RGBA8Unorm;
+     }
+     enc_ = wgpuDeviceCreateCommandEncoder(dev_, nullptr);
+@@ -191,6 +283,15 @@
+     WGPURenderPassDescriptor rp = WGPU_RENDER_PASS_DESCRIPTOR_INIT;
+     rp.colorAttachmentCount = 1;
+     rp.colorAttachments = &ca;
++    WGPURenderPassDepthStencilAttachment da = WGPU_RENDER_PASS_DEPTH_STENCIL_ATTACHMENT_INIT;
++    if (tgt && tgt->depth_view) {
++      da.view = tgt->depth_view;
++      da.depthLoadOp = WGPULoadOp_Clear;
++      da.depthStoreOp = WGPUStoreOp_Discard;
++      da.depthClearValue = tgt->clear_depth;
++      rp.depthStencilAttachment = &da;
++      pass_depth_ = true;
++    }
+     pass_ = wgpuCommandEncoderBeginRenderPass(enc_, &rp);
+     frame_active_ = true;
+   }
+@@ -198,7 +299,7 @@
+   void draw(PipelineId pid, uint32_t n, BufferId u, uint32_t off) override {
+     if (!frame_active_) return;
+     Pipeline& p = pipelines_.at(pid);
+-    wgpuRenderPassEncoderSetPipeline(pass_, variant(p, pass_format_));
++    wgpuRenderPassEncoderSetPipeline(pass_, variant(p, pass_format_, pass_depth_));
+     if (p.desc.uniform_bytes) wgpuRenderPassEncoderSetBindGroup(pass_, 0, bind_group(pid, p, u), 1, &off);
+     wgpuRenderPassEncoderDraw(pass_, n, 1, 0, 0);
+     ++stats_.draws;
+@@ -229,7 +330,9 @@
+     (void)rgba;
+     return false;  // browser readback is async; tests screenshot the canvas instead
+ #else
+-    const Target& t = targets_.at(target);
++    auto tit = targets_.find(target);
++    if (tit == targets_.end()) return false;
++    const Target& t = tit->second;
+     const uint32_t row = (t.width * 4 + 255) / 256 * 256;
+     WGPUBufferDescriptor bd = WGPU_BUFFER_DESCRIPTOR_INIT;
+     bd.size = uint64_t(row) * t.height;
+@@ -287,7 +390,207 @@
+ 
+   FrameStats last_frame_stats() const override { return stats_; }
+ 
++  // ---- M1a-2 ----
++  TextureId create_render_target_ex(const RenderTargetDesc& d) override {
++    std::string why = Registry::check_render_target(d);
++    if (!why.empty()) {
++      reject("create_render_target_ex", why);
++      return 0;
++    }
++    Target t = make_target(d.width, d.height);
++    if (d.depth) {
++      WGPUTextureDescriptor td = WGPU_TEXTURE_DESCRIPTOR_INIT;
++      td.size = {d.width, d.height, 1};
++      td.format = kDepthFormat;
++      td.usage = WGPUTextureUsage_RenderAttachment;
++      t.depth = wgpuDeviceCreateTexture(dev_, &td);
++      t.depth_view = wgpuTextureCreateView(t.depth, nullptr);
++      t.clear_depth = d.clear_depth;
++    }
++    TextureId id = reg_.add_texture({TexKind::RenderTarget, d.width, d.height, 1, d.depth});
++    targets_[id] = t;
++    return id;
++  }
++
++  BufferId create_vertex_buffer(uint32_t bytes) override { return make_buffer(BufKind::Vertex, bytes, WGPUBufferUsage_Vertex); }
++  BufferId create_index_buffer(uint32_t bytes) override { return make_buffer(BufKind::Index, bytes, WGPUBufferUsage_Index); }
++
++  TextureId create_texture(uint32_t w, uint32_t h, uint32_t mips) override {
++    std::string why = Registry::check_texture(w, h, mips);
++    if (!why.empty()) {
++      reject("create_texture", why);
++      return 0;
++    }
++    WGPUTextureDescriptor td = WGPU_TEXTURE_DESCRIPTOR_INIT;
++    td.size = {w, h, 1};
++    td.format = WGPUTextureFormat_RGBA8Unorm;
++    td.mipLevelCount = mips;
++    td.usage = WGPUTextureUsage_TextureBinding | WGPUTextureUsage_CopyDst;
++    Sampled s;
++    s.texture = wgpuDeviceCreateTexture(dev_, &td);
++    s.view = wgpuTextureCreateView(s.texture, nullptr);
++    TextureId id = reg_.add_texture({TexKind::Sampled, w, h, mips, false});
++    sampled_[id] = s;
++    return id;
++  }
++
++  bool write_texture(TextureId t, uint32_t mip, const void* rgba, size_t bytes) override {
++    std::string why = reg_.check_write_texture(t, mip, bytes, rgba == nullptr);
++    if (!why.empty()) {
++      reject("write_texture", why);
++      return false;
++    }
++    const detail::TexInfo& ti = reg_.textures.at(t);
++    const uint32_t w = detail::mip_dim(ti.width, mip), h = detail::mip_dim(ti.height, mip);
++    WGPUTexelCopyTextureInfo dst = WGPU_TEXEL_COPY_TEXTURE_INFO_INIT;
++    dst.texture = sampled_.at(t).texture;
++    dst.mipLevel = mip;
++    WGPUTexelCopyBufferLayout layout = WGPU_TEXEL_COPY_BUFFER_LAYOUT_INIT;
++    layout.bytesPerRow = w * 4;
++    layout.rowsPerImage = h;
++    WGPUExtent3D ext = {w, h, 1};
++    wgpuQueueWriteTexture(queue_, &dst, rgba, bytes, &layout, &ext);
++    return true;
++  }
++
++  SamplerId create_sampler(const SamplerDesc& s) override {
++    std::string why = Registry::check_sampler(s);
++    if (!why.empty()) {
++      reject("create_sampler", why);
++      return 0;
++    }
++    WGPUSamplerDescriptor sd = WGPU_SAMPLER_DESCRIPTOR_INIT;
++    sd.addressModeU = addr(s.u);
++    sd.addressModeV = addr(s.v);
++    sd.addressModeW = WGPUAddressMode_Repeat;
++    sd.magFilter = s.mag == FilterMode::Linear ? WGPUFilterMode_Linear : WGPUFilterMode_Nearest;
++    sd.minFilter = s.min == FilterMode::Linear ? WGPUFilterMode_Linear : WGPUFilterMode_Nearest;
++    sd.mipmapFilter = s.mip == FilterMode::Linear ? WGPUMipmapFilterMode_Linear : WGPUMipmapFilterMode_Nearest;
++    sd.maxAnisotropy = s.max_anisotropy;
++    SamplerId id = reg_.add_sampler(s);
++    samplers_[id] = wgpuDeviceCreateSampler(dev_, &sd);
++    return id;
++  }
++
++  PipelineId create_mesh_pipeline(const MeshPipelineDesc& d) override {
++    std::string why = Registry::check_mesh_pipeline(d);
++    if (!why.empty()) {
++      reject("create_mesh_pipeline", why);
++      return 0;
++    }
++    Pipeline p;
++    p.mesh = true;
++    p.mesh_desc = d;
++    p.module = shader(d.wgsl);
++    p.layout = mesh_layout(d.uniform_bytes);
++    WGPUPipelineLayoutDescriptor pl = WGPU_PIPELINE_LAYOUT_DESCRIPTOR_INIT;
++    pl.bindGroupLayoutCount = 1;
++    pl.bindGroupLayouts = &p.layout;
++    p.pipeline_layout = wgpuDeviceCreatePipelineLayout(dev_, &pl);
++    ++stats_.pipelines_total;
++    PipelineId id = reg_.add_pipeline({true, d.uniform_bytes});
++    pipelines_[id] = p;
++    return id;
++  }
++
++  BindGroupId create_bind_group(BufferId u, uint32_t ubytes, TextureId t, SamplerId s) override {
++    std::string why = reg_.check_bind_group(u, ubytes, t, s);
++    if (!why.empty()) {
++      reject("create_bind_group", why);
++      return 0;
++    }
++    WGPUBindGroupEntry e[3] = {WGPU_BIND_GROUP_ENTRY_INIT, WGPU_BIND_GROUP_ENTRY_INIT, WGPU_BIND_GROUP_ENTRY_INIT};
++    e[0].binding = 0;
++    e[0].buffer = buffers_.at(u);
++    e[0].size = ubytes;
++    e[1].binding = 1;
++    e[1].textureView = sampled_.at(t).view;
++    e[2].binding = 2;
++    e[2].sampler = samplers_.at(s);
++    WGPUBindGroupDescriptor bd = WGPU_BIND_GROUP_DESCRIPTOR_INIT;
++    bd.layout = mesh_layout(ubytes);
++    bd.entryCount = 3;
++    bd.entries = e;
++    BindGroupId id = reg_.add_bind_group({u, ubytes, t, s});
++    mesh_bind_groups_[id] = wgpuDeviceCreateBindGroup(dev_, &bd);
++    return id;
++  }
++
++  void draw_indexed(const DrawIndexedDesc& d) override {
++    if (!frame_active_) return;
++    std::string why = reg_.check_draw_indexed(d);
++    if (!why.empty()) return reject("draw_indexed", why);
++    Pipeline& p = pipelines_.at(d.pipeline);
++    wgpuRenderPassEncoderSetPipeline(pass_, variant(p, pass_format_, pass_depth_));
++    wgpuRenderPassEncoderSetBindGroup(pass_, 0, mesh_bind_groups_.at(d.bind_group), 1, &d.uniform_offset);
++    WGPUBuffer vb = buffers_.at(d.vertices), ib = buffers_.at(d.indices);
++    wgpuRenderPassEncoderSetVertexBuffer(pass_, 0, vb, 0, WGPU_WHOLE_SIZE);
++    wgpuRenderPassEncoderSetIndexBuffer(pass_, ib, WGPUIndexFormat_Uint32, 0, WGPU_WHOLE_SIZE);
++    wgpuRenderPassEncoderDrawIndexed(pass_, d.index_count, 1, d.first_index, 0, 0);
++    ++stats_.draws;
++    stats_.indices += d.index_count;
++  }
++
+  private:
++  Target make_target(uint32_t w, uint32_t h) {
++    WGPUTextureDescriptor td = WGPU_TEXTURE_DESCRIPTOR_INIT;
++    td.size = {w, h, 1};
++    td.format = WGPUTextureFormat_RGBA8Unorm;
++    td.usage = WGPUTextureUsage_RenderAttachment | WGPUTextureUsage_CopySrc;
++    Target t;
++    t.texture = wgpuDeviceCreateTexture(dev_, &td);
++    t.view = wgpuTextureCreateView(t.texture, nullptr);
++    t.width = w;
++    t.height = h;
++    return t;
++  }
++
++  WGPUShaderModule shader(const std::string& wgsl) {
++    WGPUShaderSourceWGSL src = WGPU_SHADER_SOURCE_WGSL_INIT;
++    src.code = sv(wgsl);
++    WGPUShaderModuleDescriptor smd = WGPU_SHADER_MODULE_DESCRIPTOR_INIT;
++    smd.nextInChain = &src.chain;
++    return wgpuDeviceCreateShaderModule(dev_, &smd);
++  }
++
++  BufferId make_buffer(BufKind kind, uint32_t bytes, WGPUBufferUsage usage) {
++    std::string why = Registry::check_buffer_bytes(bytes);
++    if (!why.empty()) {
++      reject(kind == BufKind::Vertex ? "create_vertex_buffer" : "create_index_buffer", why);
++      return 0;
++    }
++    WGPUBufferDescriptor bd = WGPU_BUFFER_DESCRIPTOR_INIT;
++    bd.size = (uint64_t(bytes) + 3) / 4 * 4;
++    bd.usage = usage | WGPUBufferUsage_CopyDst;
++    BufferId id = reg_.add_buffer({kind, bytes});
++    buffers_[id] = wgpuDeviceCreateBuffer(dev_, &bd);
++    return id;
++  }
++
++  // One canonical group-0 layout per uniform size, shared by every mesh pipeline and bind group with that size (so a
++  // bind group is compatible with all of them).
++  WGPUBindGroupLayout mesh_layout(uint32_t ubytes) {
++    auto it = mesh_layouts_.find(ubytes);
++    if (it != mesh_layouts_.end()) return it->second;
++    WGPUBindGroupLayoutEntry e[3] = {WGPU_BIND_GROUP_LAYOUT_ENTRY_INIT, WGPU_BIND_GROUP_LAYOUT_ENTRY_INIT, WGPU_BIND_GROUP_LAYOUT_ENTRY_INIT};
++    e[0].binding = 0;
++    e[0].visibility = WGPUShaderStage_Vertex | WGPUShaderStage_Fragment;
++    e[0].buffer.type = WGPUBufferBindingType_Uniform;
++    e[0].buffer.hasDynamicOffset = true;
++    e[0].buffer.minBindingSize = ubytes;
++    e[1].binding = 1;
++    e[1].visibility = WGPUShaderStage_Fragment;
++    e[1].texture.sampleType = WGPUTextureSampleType_Float;
++    e[1].texture.viewDimension = WGPUTextureViewDimension_2D;
++    e[2].binding = 2;
++    e[2].visibility = WGPUShaderStage_Fragment;
++    e[2].sampler.type = WGPUSamplerBindingType_Filtering;
++    WGPUBindGroupLayoutDescriptor bl = WGPU_BIND_GROUP_LAYOUT_DESCRIPTOR_INIT;
++    bl.entryCount = 3;
++    bl.entries = e;
++    return mesh_layouts_[ubytes] = wgpuDeviceCreateBindGroupLayout(dev_, &bl);
++  }
++
+   WGPUBindGroup bind_group(PipelineId pid, const Pipeline& p, BufferId u) {
+     auto key = (uint64_t(pid) << 32) | u;
+     auto it = bind_groups_.find(key);
+@@ -303,6 +606,10 @@
+     return bind_groups_[key] = wgpuDeviceCreateBindGroup(dev_, &bd);
+   }
+ 
++  void reject(const char* call, const std::string& why) {
++    if (rejects_++ < 16) std::fprintf(stderr, "[webgpu] %s rejected: %s\n", call, why.c_str());
++  }
++
+   void log_skip_once(const std::string& why) {
+     if (logged_skip_) return;
+     logged_skip_ = true;
+@@ -316,19 +623,25 @@
+   WGPUSurface surface_;
+   WGPUTextureFormat surface_format_;
+   std::string adapter_desc_;
++  Registry reg_;
+   std::map<TextureId, Target> targets_;
++  std::map<TextureId, Sampled> sampled_;
+   std::map<BufferId, WGPUBuffer> buffers_;
+   std::map<PipelineId, Pipeline> pipelines_;
+-  std::map<uint64_t, WGPUBindGroup> bind_groups_;
+-  uint32_t next_tex_ = 0, next_buf_ = 0, next_pipe_ = 0;
++  std::map<SamplerId, WGPUSampler> samplers_;
++  std::map<uint64_t, WGPUBindGroup> bind_groups_;          // M0: implicit, per (pipeline, uniform buffer)
++  std::map<BindGroupId, WGPUBindGroup> mesh_bind_groups_;  // M1a-2: explicit
++  std::map<uint32_t, WGPUBindGroupLayout> mesh_layouts_;
+   WGPUCommandEncoder enc_ = nullptr;
+   WGPURenderPassEncoder pass_ = nullptr;
+   WGPUTextureView frame_surface_view_ = nullptr;
+   WGPUTexture frame_surface_texture_ = nullptr;
+   WGPUTextureFormat pass_format_ = WGPUTextureFormat_RGBA8Unorm;
++  bool pass_depth_ = false;
+   FrameStats stats_;
+   bool frame_active_ = false;
+   bool logged_skip_ = false;
++  uint32_t rejects_ = 0;
+ };
+ 
+ struct Pending {
+diff -ruN base/engine/src/view/area.cpp work/engine/src/view/area.cpp
+--- base/engine/src/view/area.cpp	1970-01-01 01:00:00
++++ work/engine/src/view/area.cpp	2026-10-07 08:24:23
+@@ -0,0 +1,568 @@
++#include "lomn/view/area.h"
++
++#include <algorithm>
++#include <chrono>
++#include <cmath>
++#include <cstring>
++#include <map>
++#include <set>
++
++#include "lomn/sage/blockchain.h"
++#include "lomn/sage/image.h"
++#include "lomn/sage/xfile.h"
++
++namespace lomn::view {
++namespace {
++
++using Clock = std::chrono::steady_clock;
++double ms_since(Clock::time_point t0) { return std::chrono::duration<double, std::milli>(Clock::now() - t0).count(); }
++
++std::string lower(std::string s) {
++  for (char& c : s) c = static_cast<char>(c >= 'A' && c <= 'Z' ? c - 'A' + 'a' : c);
++  return s;
++}
++bool ends_with(const std::string& s, const char* suf) {
++  const size_t n = std::strlen(suf);
++  return s.size() >= n && s.compare(s.size() - n, n, suf) == 0;
++}
++bool fail(std::string* err, const std::string& msg) {
++  if (err) *err = msg;
++  return false;
++}
++
++bool route_enabled(sage::Route r, const AreaOptions& o) {
++  switch (r) {
++    case sage::Route::Main: return o.draw_main;
++    case sage::Route::Trans: return o.draw_trans;
++    case sage::Route::Back: return o.draw_back;
++    case sage::Route::Moveable: return o.draw_moveable;
++    case sage::Route::NoLightMoveable: return o.draw_nolight;
++    default: return false;
++  }
++}
++
++class Loader {
++ public:
++  Loader(const fs::FileSystem& fs, AreaData& out) : chain_(fs), out_(out) {}
++
++  bool run(std::string_view level, std::string_view area, const AreaOptions& opt, std::string* err) {
++    const auto t0 = Clock::now();
++    out_.level = std::string(level.substr(0, 4));
++    out_.area = std::string(area.substr(0, 4));
++    std::string e;
++    // GcGame::LoadArtBlockHeader: Art.blk is the global fallback of both lookup orders. Optional here.
++    out_.art_blk = chain_.open_art("Root/Data/Art/Art.blk", &e);
++    if (!out_.art_blk) warn("art.blk not opened: " + e);
++    if (!chain_.enter_area(out_.level, out_.area, &e)) return fail(err, "area: " + e);
++    prefix_ = "Root/Data/Levels/" + out_.level + "/" + out_.area;  // "%.4s/%.4s" area prefix (GcAreaLoader::LoadArea)
++
++    std::vector<sage::ObjRecord> recs;
++    if (load_table("_obj.slb", e)) {
++      sage::Slb slb;
++      if (!slb.parse(std::move(bytes_), &e) || !sage::parse_obj(slb, recs, &e)) {
++        warn("obj table rejected: " + e);  // the game's loader throws and LoadArea skips it: nothing is placed
++        recs.clear();
++      }
++    } else {
++      warn("no obj table: " + e);
++    }
++    if (load_table("_pos.slb", e)) {
++      sage::Slb slb;
++      std::vector<sage::PosRecord> pos;
++      if (slb.parse(std::move(bytes_), &e) && sage::parse_pos(slb, pos, &e)) {
++        out_.pos_records = static_cast<uint32_t>(pos.size());
++        for (uint32_t i = 0; i < pos.size(); ++i)
++          if (pos[i].flags & kPosStartFlag) {
++            out_.has_start = true;
++            out_.start_record = i;
++            std::memcpy(out_.start, pos[i].pos, sizeof out_.start);
++            break;
++          }
++      } else {
++        warn("pos table rejected: " + e);
++      }
++    } else {
++      warn("no pos table: " + e);
++    }
++
++    AreaStats& st = out_.stats;
++    st.obj_records = static_cast<uint32_t>(recs.size());
++    const Mat4 rot = mat_rotation_x(kWorldRotX);
++    for (uint32_t i = 0; i < recs.size(); ++i) {  // bounded by parse_obj (n * 60 <= table bytes) and kMaxPlacements
++      const sage::ObjRecord& r = recs[i];
++      const sage::Route rt = sage::route(r.flags);
++      if (rt == sage::Route::Ignored) {
++        ++st.ignored_records;
++        continue;
++      }
++      if (!route_enabled(rt, opt)) {
++        ++st.disabled_records;
++        continue;
++      }
++      if (out_.placements.size() >= kMaxPlacements) return fail(err, "area: more than kMaxPlacements drawn records");
++      uint32_t model = 0;
++      if (!model_for(sage::fourcc(r.id), model)) {
++        if (!fatal_.empty()) return fail(err, fatal_);  // a cap was exceeded
++        ++st.missing_models;
++        continue;
++      }
++      Placement p;
++      p.record = i;
++      p.model = model;
++      p.route = rt;
++      p.flags = r.flags;
++      std::memcpy(p.pos, r.pos, sizeof p.pos);
++      std::memcpy(p.orient, r.orient, sizeof p.orient);
++      if (r.orient[0] != 0.0f || r.orient[1] != 0.0f || r.orient[2] != 0.0f) ++st.placements_with_orientation;
++      p.world = mat_mul(rot, mat_translation(r.pos[0], r.pos[1], r.pos[2]));
++      st.routes[static_cast<int>(rt)]++;
++      const uint64_t draws = uint64_t(st.draws) + out_.models[model].subsets.size();
++      if (draws > kMaxDraws) return fail(err, "area: more than kMaxDraws draws");
++      st.draws = static_cast<uint32_t>(draws);
++      if (rt != sage::Route::Back) grow_bounds(out_.models[model], p.world);
++      out_.placements.push_back(p);
++    }
++    st.placements = static_cast<uint32_t>(out_.placements.size());
++    st.models = static_cast<uint32_t>(out_.models.size());
++    st.textures = static_cast<uint32_t>(out_.textures.size());
++    std::sort(warnings_.begin(), warnings_.end());
++    warnings_.erase(std::unique(warnings_.begin(), warnings_.end()), warnings_.end());
++    out_.warnings = warnings_;
++    st.load_ms = ms_since(t0) - st.decode_ms;
++    return true;
++  }
++
++ private:
++  void warn(std::string w) { warnings_.push_back(std::move(w)); }
++  bool fatal(const std::string& why) {
++    fatal_ = why;
++    return false;
++  }
++
++  bool load_table(const char* suffix, std::string& e) {
++    // "Root/Data/Levels/%.4s/%.4s/%.4s_obj.slb" through SrBlockFileLoad (current -> second -> Art).
++    return chain_.load(prefix_ + "/" + out_.area + suffix, bytes_, nullptr, &e);
++  }
++
++  // Model by 4CC id, cached per area (ScDrawableModel::Create keeps a map keyed by the full path; Find ignores case).
++  // False when the model is missing or rejected (a warning); false with fatal_ set when a cap is exceeded.
++  bool model_for(const std::string& id, uint32_t& index) {
++    const std::string key = lower(id);
++    auto it = model_cache_.find(key);
++    if (it != model_cache_.end()) {
++      if (it->second < 0) return false;
++      index = static_cast<uint32_t>(it->second);
++      return true;
++    }
++    model_cache_[key] = -1;
++    std::string e;
++    const std::string path = prefix_ + "/Xs/" + id + ".x";  // GcArea::GcArea "%s/Xs/%s", LoadX appends ".x"
++    if (!chain_.load(path, bytes_, nullptr, &e)) {
++      warn("model " + id + ": " + e);
++      return false;
++    }
++    sage::XFile xf;
++    if (!sage::parse_x(bytes_.data(), bytes_.size(), xf, &e)) {
++      warn("model " + id + ": " + e);
++      return false;
++    }
++    Model m;
++    if (!build_model(id, xf.mesh, m)) return false;
++    model_cache_[key] = static_cast<int64_t>(out_.models.size());
++    index = static_cast<uint32_t>(out_.models.size());
++    out_.models.push_back(std::move(m));
++    return true;
++  }
++
++  bool build_model(const std::string& id, const sage::XMesh& x, Model& m) {
++    AreaStats& st = out_.stats;
++    const uint64_t n = x.positions.size() / 3;
++    if (n == 0 || x.indices.empty()) {
++      warn("model " + id + ": empty mesh");
++      return false;
++    }
++    // parse_x guarantees these; re-checked so a parser change can never turn into an out-of-range GPU upload.
++    for (uint32_t v : x.indices)
++      if (v >= n) {
++        warn("model " + id + ": index out of range");
++        return false;
++      }
++    const uint64_t bytes = n * kVertexFloats * 4 + uint64_t(x.indices.size()) * 4;
++    if (bytes > kMaxAreaGeometryBytes - std::min(kMaxAreaGeometryBytes, st.geometry_bytes)) return fatal("area: geometry over kMaxAreaGeometryBytes");
++    st.geometry_bytes += bytes;
++    m.id = id;
++    m.vertex_count = static_cast<uint32_t>(n);
++    m.has_colors = x.has_colors && x.colors.size() == n * 4;
++    const bool has_uv = x.uvs.size() == n * 2;
++    m.vertices.resize(n * kVertexFloats);
++    for (uint64_t v = 0; v < n; ++v) {
++      float* o = &m.vertices[v * kVertexFloats];
++      const float* p = &x.positions[v * 3];
++      o[0] = p[0];
++      o[1] = p[1];
++      o[2] = p[2];
++      o[3] = has_uv ? x.uvs[v * 2] : 0.0f;
++      o[4] = has_uv ? x.uvs[v * 2 + 1] : 0.0f;
++      for (int c = 0; c < 4; ++c) o[5 + c] = m.has_colors ? x.colors[v * 4 + c] : 1.0f;
++      for (int k = 0; k < 3; ++k) {
++        if (v == 0 || p[k] < m.bounds_min[k]) m.bounds_min[k] = p[k];
++        if (v == 0 || p[k] > m.bounds_max[k]) m.bounds_max[k] = p[k];
++      }
++    }
++    m.indices = x.indices;
++    const uint64_t tris = x.indices.size() / 3;
++    for (const sage::XSubset& s : x.subsets) {  // bounded by parse_x (one per used material)
++      if (s.face_count == 0 || uint64_t(s.face_start) + s.face_count > tris) {
++        warn("model " + id + ": subset outside the index list");
++        return false;
++      }
++      SubsetDraw d;
++      d.first_index = s.face_start * 3;
++      d.index_count = s.face_count * 3;
++      // XMesh invariant: materials may be empty (then attrib_id is 0 and there is no material): default material.
++      const sage::XMaterial* mat = s.attrib_id < x.materials.size() ? &x.materials[s.attrib_id] : nullptr;
++      if (mat) std::memcpy(d.diffuse, mat->diffuse, sizeof d.diffuse);
++      if (mat && mat->has_texture) {
++        uint32_t t = kNoTexture;
++        if (!texture_for(mat->texture, t) && !fatal_.empty()) return false;
++        d.texture = t;
++        d.alpha = t != kNoTexture && out_.textures[t].alpha_on;
++      }
++      if (d.texture == kNoTexture) ++st.untextured_subsets;
++      if (d.alpha) ++st.alpha_subsets;
++      m.subsets.push_back(d);
++    }
++    st.subsets += static_cast<uint32_t>(m.subsets.size());
++    st.vertices += m.vertex_count;
++    st.triangles += static_cast<uint32_t>(tris);
++    if (!m.has_colors) ++st.models_without_colors;
++    return true;
++  }
++
++  // ScDrawableTexture::Load: resolve "<lev>/textures/<name>" (.dds then .tga), cached per area by resolved request.
++  bool texture_for(const std::string& name, uint32_t& index) {
++    AreaStats& st = out_.stats;
++    std::string chosen;
++    if (!sage::resolve_texture(chain_, out_.level, name, chosen)) {
++      ++st.textures_missing;
++      warn("texture " + name + ": not found");
++      return false;
++    }
++    const std::string key = lower(chosen);
++    auto it = texture_cache_.find(key);
++    if (it != texture_cache_.end()) {
++      if (it->second < 0) return false;
++      index = static_cast<uint32_t>(it->second);
++      return true;
++    }
++    texture_cache_[key] = -1;
++    if (out_.textures.size() >= kMaxAreaTextures) return fatal("area: more than kMaxAreaTextures textures");
++    std::string e;
++    std::vector<uint8_t> bytes;
++    if (!chain_.load(chosen, bytes, nullptr, &e)) {
++      ++st.textures_failed;
++      warn("texture " + name + ": " + e);
++      return false;
++    }
++    const auto t0 = Clock::now();
++    sage::Image img;
++    Texture tex;
++    tex.request = chosen;
++    bool ok = false;
++    if (ends_with(key, ".tga")) {
++      sage::TgaInfo ti;
++      ok = sage::decode_tga(bytes.data(), bytes.size(), img, &ti, &e);
++      if (ok) {
++        // Spec R8: a 32-bpp TGA declaring 0 alpha bits is X8R8G8B8 (opaque); INFERRED from D3DX, confirm in A8.
++        tex.alpha_on = ti.alpha_bits > 0;
++        tex.format = ti.bits == 24 ? "TGA24" : tex.alpha_on ? "TGA32a" : "TGA32";
++        if (!tex.alpha_on)
++          for (size_t i = 3; i < img.rgba.size(); i += 4) img.rgba[i] = 255;
++      }
++    } else {
++      sage::DdsInfo di;
++      ok = sage::decode_dds(bytes.data(), bytes.size(), img, &di, &e);
++      if (ok) {
++        tex.alpha_on = di.alpha_on;  // ScDrawableTexture mAlphaOn: DXT3 and A8R8G8B8 only
++        tex.format = sage::dds_format_name(di.format);
++      }
++    }
++    if (!ok) {
++      st.decode_ms += ms_since(t0);
++      ++st.textures_failed;
++      warn("texture " + name + ": " + e);
++      return false;
++    }
++    const uint64_t chain_bytes = mip_chain_bytes(img.width, img.height);
++    if (chain_bytes > kMaxAreaTextureBytes - std::min(kMaxAreaTextureBytes, st.texture_bytes)) {
++      st.decode_ms += ms_since(t0);
++      return fatal("area: textures over kMaxAreaTextureBytes");
++    }
++    if (!build_mip_chain(std::move(img.rgba), img.width, img.height, tex.mips)) {
++      st.decode_ms += ms_since(t0);
++      ++st.textures_failed;
++      warn("texture " + name + ": mip chain failed");
++      return false;
++    }
++    st.decode_ms += ms_since(t0);
++    st.texture_bytes += chain_bytes;
++    if (tex.alpha_on) ++st.textures_alpha;
++    texture_cache_[key] = static_cast<int64_t>(out_.textures.size());
++    index = static_cast<uint32_t>(out_.textures.size());
++    out_.textures.push_back(std::move(tex));
++    return true;
++  }
++
++  void grow_bounds(const Model& m, const Mat4& world) {
++    for (int c = 0; c < 8; ++c) {
++      const float p[3] = {(c & 1) ? m.bounds_max[0] : m.bounds_min[0], (c & 2) ? m.bounds_max[1] : m.bounds_min[1],
++                          (c & 4) ? m.bounds_max[2] : m.bounds_min[2]};
++      float w[4];
++      transform_point(world, p, w);
++      for (int k = 0; k < 3; ++k) {
++        if (!out_.has_bounds || w[k] < out_.bounds_min[k]) out_.bounds_min[k] = w[k];
++        if (!out_.has_bounds || w[k] > out_.bounds_max[k]) out_.bounds_max[k] = w[k];
++      }
++      out_.has_bounds = true;
++    }
++  }
++
++  sage::BlockChain chain_;
++  AreaData& out_;
++  std::string prefix_;
++  std::vector<uint8_t> bytes_;
++  std::map<std::string, int64_t> model_cache_, texture_cache_;  // ordered maps: deterministic, no pointer keys
++  std::vector<std::string> warnings_;
++  std::string fatal_;  // set when a cap is exceeded: the whole load fails
++};
++
++const char* kWgsl = R"(// lomn M1a-2 unlit area shader. Uniform block per draw (dynamic offset).
++struct U {
++  wvp: mat4x4f,     // world * view * proj, D3D row-vector matrix uploaded as-is (column-major read == transpose)
++  diffuse: vec4f,   // material diffuse, used when the vertex has no colour
++  params: vec4f,    // x: 1 = use vertex colour, y: alpha reference (0..1), alpha pass discards a <= y
++}
++@group(0) @binding(0) var<uniform> u: U;
++@group(0) @binding(1) var tex: texture_2d<f32>;
++@group(0) @binding(2) var samp: sampler;
++struct VOut {
++  @builtin(position) pos: vec4f,
++  @location(0) uv: vec2f,
++  @location(1) color: vec4f,
++}
++@vertex fn vs(@location(0) p: vec3f, @location(1) uv: vec2f, @location(2) c: vec4f) -> VOut {
++  var o: VOut;
++  o.pos = u.wvp * vec4f(p, 1.0);
++  o.uv = uv;
++  o.color = select(u.diffuse, c, u.params.x > 0.5);
++  return o;
++}
++// D3D stage 0 defaults: COLOROP MODULATE(TEXTURE, DIFFUSE), ALPHAOP SELECTARG1(TEXTURE).
++fn shade(i: VOut) -> vec4f {
++  let t = textureSample(tex, samp, i.uv);
++  return vec4f(t.rgb * i.color.rgb, t.a);
++}
++@fragment fn fs_opaque(i: VOut) -> @location(0) vec4f {
++  return vec4f(shade(i).rgb, 1.0);
++}
++@fragment fn fs_alpha(i: VOut) -> @location(0) vec4f {
++  let c = shade(i);
++  if (c.a <= u.params.y) {
++    discard;
++  }
++  return c;
++}
++)";
++
++}  // namespace
++
++const char* area_wgsl() { return kWgsl; }
++
++bool load_area(const fs::FileSystem& fs, std::string_view level, std::string_view area, const AreaOptions& opt, AreaData& out,
++               std::string* err) {
++  out = AreaData();
++  AreaData tmp;
++  Loader l(fs, tmp);
++  if (err) err->clear();
++  if (!l.run(level, area, opt, err)) return false;  // no partial state on failure
++  out = std::move(tmp);
++  return true;
++}
++
++Camera make_camera(const AreaData& a, const CameraSettings& s, float aspect) {
++  Camera c;
++  c.fov_deg = s.fov_deg;
++  c.near_z = s.near_z;
++  c.far_z = s.far_z;
++  c.aspect = aspect;
++  float centre[3] = {0, 0, 0};
++  if (a.has_bounds)
++    for (int k = 0; k < 3; ++k) centre[k] = (a.bounds_min[k] + a.bounds_max[k]) * 0.5f;
++  if (s.eye_set) {
++    std::memcpy(c.eye, s.eye, sizeof c.eye);
++    c.eye_source = "cli";
++  } else if (a.has_start) {
++    c.eye[0] = a.start[0];
++    c.eye[1] = a.start[1] + s.eye_height;
++    c.eye[2] = a.start[2];
++    c.eye_source = "pos_start";
++  } else if (a.has_bounds) {
++    std::memcpy(c.eye, centre, sizeof c.eye);
++    c.eye[1] += s.eye_height;
++    c.eye_source = "bounds_centre";
++  } else {
++    c.eye_source = "origin";
++  }
++  constexpr double kDeg = 3.14159265358979323846 / 180.0;
++  float yaw = s.yaw_deg;
++  if (s.yaw_set) {
++    c.yaw_source = "cli";
++  } else {
++    const float dx = centre[0] - c.eye[0], dz = centre[2] - c.eye[2];
++    if (a.has_bounds && dx * dx + dz * dz > 1e-6f) {
++      yaw = static_cast<float>(std::atan2(static_cast<double>(dx), static_cast<double>(-dz)) / kDeg);
++      c.yaw_source = "towards_bounds_centre";
++    } else {
++      yaw = 0.0f;
++      c.yaw_source = "default";
++    }
++  }
++  c.yaw_deg = yaw;
++  c.pitch_deg = s.pitch_deg;
++  const double y = yaw * kDeg, p = s.pitch_deg * kDeg;
++  const float fwd[3] = {static_cast<float>(std::sin(y) * std::cos(p)), static_cast<float>(std::sin(p)),
++                        static_cast<float>(-std::cos(y) * std::cos(p))};
++  for (int k = 0; k < 3; ++k) c.at[k] = c.eye[k] + fwd[k];
++  const float up[3] = {0, 1, 0};
++  c.view = look_at_rh(c.eye, c.at, up);
++  c.proj = perspective_fov_rh(static_cast<float>(s.fov_deg * kDeg), aspect, s.near_z, s.far_z);
++  return c;
++}
++
++bool AreaRenderer::upload(rhi::Device& dev, const AreaData& a, const RenderOptions& opt, std::string* err) {
++  opt_ = opt;
++  rhi::MeshPipelineDesc pd;
++  pd.wgsl = kWgsl;
++  pd.uniform_bytes = kAreaUniformBytes;
++  pd.vertex_stride = kVertexFloats * 4;
++  pd.attributes = {{rhi::VertexFormat::Float32x3, 0, 0}, {rhi::VertexFormat::Float32x2, 12, 1}, {rhi::VertexFormat::Float32x4, 20, 2}};
++  pd.cull = rhi::CullMode::None;               // render mode 0x11: D3DCULL_NONE
++  pd.depth_compare = rhi::CompareFunc::LessEqual;  // D3DRS_ZFUNC LESSEQUAL
++  pd.depth_write = true;                       // ZWRITE on in both DrawX passes
++  pd.fs_entry = "fs_opaque";
++  pd.blend = rhi::BlendMode::Opaque;
++  opaque_ = dev.create_mesh_pipeline(pd);
++  pd.fs_entry = "fs_alpha";
++  pd.blend = rhi::BlendMode::AlphaBlend;  // DrawX pass 2: ALPHABLENDENABLE 1, SRCALPHA/INVSRCALPHA, ALPHATEST GREATER
++  alpha_ = dev.create_mesh_pipeline(pd);
++  if (!opaque_ || !alpha_) return fail(err, "render: mesh pipeline rejected");
++  pipelines_created_ = 2;
++  // MAG/MIN ANISOTROPIC (max 3) and MIP LINEAR set globally; GcArea::Render forces MAGFILTER LINEAR; ADDRESS never set.
++  rhi::SamplerDesc sd;
++  sd.max_anisotropy = 3;
++  sampler_ = dev.create_sampler(sd);
++  if (!sampler_) return fail(err, "render: sampler rejected");
++  uniform_slots_ = a.stats.draws ? a.stats.draws : 1;
++  uniforms_ = dev.create_uniform_buffer(uniform_slots_ * rhi::kUniformAlign);
++  if (!uniforms_) return fail(err, "render: uniform buffer rejected");
++  const uint8_t white[4] = {255, 255, 255, 255};
++  rhi::TextureId wt = dev.create_texture(1, 1, 1);
++  if (!wt || !dev.write_texture(wt, 0, white, 4)) return fail(err, "render: white texture rejected");
++  white_group_ = dev.create_bind_group(uniforms_, kAreaUniformBytes, wt, sampler_);
++  if (!white_group_) return fail(err, "render: bind group rejected");
++  textures_created_ = 1;
++  uploaded_texture_bytes_ = 4;
++  texture_groups_.clear();
++  for (const Texture& t : a.textures) {
++    const MipLevel& top = t.mips.front();
++    rhi::TextureId id = dev.create_texture(top.width, top.height, static_cast<uint32_t>(t.mips.size()));
++    if (!id) return fail(err, "render: texture rejected: " + t.request);
++    for (uint32_t m = 0; m < t.mips.size(); ++m) {
++      if (!dev.write_texture(id, m, t.mips[m].rgba.data(), t.mips[m].rgba.size())) return fail(err, "render: mip upload rejected: " + t.request);
++      uploaded_texture_bytes_ += t.mips[m].rgba.size();
++    }
++    ++textures_created_;
++    const rhi::BindGroupId bg = dev.create_bind_group(uniforms_, kAreaUniformBytes, id, sampler_);
++    if (!bg) return fail(err, "render: bind group rejected: " + t.request);
++    texture_groups_.push_back(bg);
++  }
++  models_.clear();
++  for (const Model& m : a.models) {
++    GpuModel g;
++    const uint32_t vbytes = static_cast<uint32_t>(m.vertices.size() * 4), ibytes = static_cast<uint32_t>(m.indices.size() * 4);
++    g.vb = dev.create_vertex_buffer(vbytes);
++    g.ib = dev.create_index_buffer(ibytes);
++    if (!g.vb || !g.ib) return fail(err, "render: buffer rejected for model " + m.id);
++    dev.write_buffer(g.vb, 0, m.vertices.data(), vbytes);
++    dev.write_buffer(g.ib, 0, m.indices.data(), ibytes);
++    models_.push_back(g);
++  }
++  uniform_data_.assign(size_t(uniform_slots_) * rhi::kUniformAlign, 0);
++  return true;
++}
++
++void AreaRenderer::render(rhi::Device& dev, rhi::TextureId target, const AreaData& a, const Camera& cam) {
++  // Object order: route groups, record order inside a group; trans sorted far-to-near (GcTransDirector::SortIt; the
++  // direction is INFERRED). Distances in double so the order is identical on every platform for equal floats.
++  static const sage::Route kOrder[] = {sage::Route::Main, sage::Route::Moveable, sage::Route::NoLightMoveable, sage::Route::Back};
++  std::vector<uint32_t> objects;
++  for (sage::Route r : kOrder)
++    for (uint32_t i = 0; i < a.placements.size(); ++i)
++      if (a.placements[i].route == r) objects.push_back(i);
++  std::vector<std::pair<double, uint32_t>> trans;
++  for (uint32_t i = 0; i < a.placements.size(); ++i)
++    if (a.placements[i].route == sage::Route::Trans) {
++      double d = 0;
++      for (int k = 0; k < 3; ++k) {
++        const double v = double(a.placements[i].pos[k]) - cam.eye[k];
++        d += v * v;
++      }
++      trans.push_back({-d, i});
++    }
++  std::stable_sort(trans.begin(), trans.end(), [](const auto& x, const auto& y) { return x.first < y.first; });
++  for (const auto& t : trans) objects.push_back(t.second);
++
++  struct Item {
++    uint32_t placement, subset;
++  };
++  std::vector<Item> items;
++  for (uint32_t o : objects) {
++    const Model& m = a.models[a.placements[o].model];
++    for (int pass = 0; pass < 2; ++pass)
++      for (uint32_t s = 0; s < m.subsets.size(); ++s)
++        if (m.subsets[s].alpha == (pass == 1)) items.push_back({o, s});
++  }
++  const Mat4 vp = mat_mul(cam.view, cam.proj);
++  const uint32_t n = static_cast<uint32_t>(std::min<size_t>(items.size(), uniform_slots_));
++  for (uint32_t i = 0; i < n; ++i) {
++    const Placement& p = a.placements[items[i].placement];
++    const SubsetDraw& sd = a.models[p.model].subsets[items[i].subset];
++    float u[24];
++    const Mat4 wvp = mat_mul(p.world, vp);
++    std::memcpy(u, wvp.m, 64);
++    std::memcpy(u + 16, sd.diffuse, 16);
++    u[20] = opt_.vertex_colors && a.models[p.model].has_colors ? 1.0f : 0.0f;
++    u[21] = opt_.alpha_ref / 255.0f;
++    u[22] = 0.0f;
++    u[23] = 0.0f;
++    std::memcpy(&uniform_data_[size_t(i) * rhi::kUniformAlign], u, sizeof u);
++  }
++  if (n) dev.write_buffer(uniforms_, 0, uniform_data_.data(), n * rhi::kUniformAlign);
++  dev.begin_frame(target, opt_.clear);
++  for (uint32_t i = 0; i < n; ++i) {
++    const Placement& p = a.placements[items[i].placement];
++    const SubsetDraw& sd = a.models[p.model].subsets[items[i].subset];
++    rhi::DrawIndexedDesc d;
++    d.pipeline = sd.alpha ? alpha_ : opaque_;
++    d.vertices = models_[p.model].vb;
++    d.indices = models_[p.model].ib;
++    d.first_index = sd.first_index;
++    d.index_count = sd.index_count;
++    d.bind_group = sd.texture == kNoTexture ? white_group_ : texture_groups_[sd.texture];
++    d.uniform_offset = i * rhi::kUniformAlign;
++    dev.draw_indexed(d);
++  }
++  dev.end_frame();
++}
++
++}  // namespace lomn::view
+diff -ruN base/engine/src/view/math.cpp work/engine/src/view/math.cpp
+--- base/engine/src/view/math.cpp	1970-01-01 01:00:00
++++ work/engine/src/view/math.cpp	2026-10-07 08:19:47
+@@ -0,0 +1,97 @@
++#include "lomn/view/math.h"
++
++#include <cmath>
++
++namespace lomn::view {
++
++Mat4 mat_identity() {
++  Mat4 r;
++  r.m[0] = r.m[5] = r.m[10] = r.m[15] = 1.0f;
++  return r;
++}
++
++Mat4 mat_mul(const Mat4& a, const Mat4& b) {
++  Mat4 r;
++  for (int i = 0; i < 4; ++i)
++    for (int j = 0; j < 4; ++j) {
++      float s = 0.0f;
++      for (int k = 0; k < 4; ++k) s += a.m[i * 4 + k] * b.m[k * 4 + j];
++      r.m[i * 4 + j] = s;
++    }
++  return r;
++}
++
++Mat4 mat_rotation_x(float radians) {
++  const float c = static_cast<float>(std::cos(static_cast<double>(radians)));
++  const float s = static_cast<float>(std::sin(static_cast<double>(radians)));
++  Mat4 r = mat_identity();
++  r.m[5] = c;
++  r.m[6] = s;
++  r.m[9] = -s;
++  r.m[10] = c;
++  return r;
++}
++
++Mat4 mat_translation(float x, float y, float z) {
++  Mat4 r = mat_identity();
++  r.m[12] = x;
++  r.m[13] = y;
++  r.m[14] = z;
++  return r;
++}
++
++Mat4 perspective_fov_rh(float fovy, float aspect, float zn, float zf) {
++  const float ys = static_cast<float>(1.0 / std::tan(static_cast<double>(fovy) / 2.0));
++  const float xs = ys / aspect;
++  Mat4 r;
++  r.m[0] = xs;
++  r.m[5] = ys;
++  r.m[10] = zf / (zn - zf);
++  r.m[11] = -1.0f;
++  r.m[14] = zn * zf / (zn - zf);
++  return r;
++}
++
++namespace {
++void normalize3(float v[3]) {
++  const float len = static_cast<float>(std::sqrt(static_cast<double>(v[0] * v[0] + v[1] * v[1] + v[2] * v[2])));
++  if (len > 0.0f) {
++    v[0] /= len;
++    v[1] /= len;
++    v[2] /= len;
++  }
++}
++void cross3(const float a[3], const float b[3], float o[3]) {
++  o[0] = a[1] * b[2] - a[2] * b[1];
++  o[1] = a[2] * b[0] - a[0] * b[2];
++  o[2] = a[0] * b[1] - a[1] * b[0];
++}
++float dot3(const float a[3], const float b[3]) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
++}  // namespace
++
++Mat4 look_at_rh(const float eye[3], const float at[3], const float up[3]) {
++  float z[3] = {eye[0] - at[0], eye[1] - at[1], eye[2] - at[2]};
++  normalize3(z);
++  float x[3];
++  cross3(up, z, x);
++  normalize3(x);
++  float y[3];
++  cross3(z, x, y);
++  Mat4 r;
++  for (int i = 0; i < 3; ++i) {
++    r.m[i * 4 + 0] = x[i];
++    r.m[i * 4 + 1] = y[i];
++    r.m[i * 4 + 2] = z[i];
++  }
++  r.m[12] = -dot3(x, eye);
++  r.m[13] = -dot3(y, eye);
++  r.m[14] = -dot3(z, eye);
++  r.m[15] = 1.0f;
++  return r;
++}
++
++void transform_point(const Mat4& m, const float p[3], float out[4]) {
++  for (int j = 0; j < 4; ++j) out[j] = p[0] * m.m[j] + p[1] * m.m[4 + j] + p[2] * m.m[8 + j] + m.m[12 + j];
++}
++
++}  // namespace lomn::view
+diff -ruN base/engine/src/view/mips.cpp work/engine/src/view/mips.cpp
+--- base/engine/src/view/mips.cpp	1970-01-01 01:00:00
++++ work/engine/src/view/mips.cpp	2026-10-07 08:19:54
+@@ -0,0 +1,93 @@
++#include "lomn/view/mips.h"
++
++namespace lomn::view {
++namespace {
++
++struct Tap {
++  uint32_t src;     // source index
++  uint64_t weight;  // overlap in units of 1/dst_size source texels
++};
++
++// Per destination texel of one axis: the source texels it covers and their overlap weights (sum == src_size).
++// Destination texel x covers [x*S, (x+1)*S) and source texel i covers [i*D, (i+1)*D) in the common unit 1/(S*D).
++std::vector<std::vector<Tap>> axis_taps(uint32_t s, uint32_t d) {
++  std::vector<std::vector<Tap>> taps(d);
++  for (uint32_t x = 0; x < d; ++x) {
++    const uint64_t lo = uint64_t(x) * s, hi = uint64_t(x + 1) * s;
++    for (uint64_t i = lo / d; i < s && i * d < hi; ++i) {
++      const uint64_t a = i * d > lo ? i * d : lo, b = (i + 1) * d < hi ? (i + 1) * d : hi;
++      if (b > a) taps[x].push_back({static_cast<uint32_t>(i), b - a});
++    }
++  }
++  return taps;
++}
++
++}  // namespace
++
++uint32_t mip_level_count(uint32_t width, uint32_t height) {
++  if (width == 0 || height == 0) return 0;
++  uint32_t m = width > height ? width : height, n = 1;
++  while (m > 1) {
++    m >>= 1;
++    ++n;
++  }
++  return n;
++}
++
++uint64_t mip_chain_bytes(uint32_t width, uint32_t height) {
++  uint64_t total = 0;
++  const uint32_t n = mip_level_count(width, height);
++  for (uint32_t i = 0; i < n; ++i) {
++    const uint64_t w = (width >> i) ? (width >> i) : 1, h = (height >> i) ? (height >> i) : 1;
++    total += w * h * 4;
++  }
++  return total;
++}
++
++bool downsample_box(const std::vector<uint8_t>& src, uint32_t width, uint32_t height, MipLevel& dst) {
++  if (width == 0 || height == 0 || src.size() != uint64_t(width) * height * 4) return false;
++  const uint32_t dw = width > 1 ? width / 2 : 1, dh = height > 1 ? height / 2 : 1;
++  const auto tx = axis_taps(width, dw), ty = axis_taps(height, dh);
++  const uint64_t total = uint64_t(width) * height;  // sum of all weights of one destination texel
++  MipLevel out;
++  out.width = dw;
++  out.height = dh;
++  out.rgba.resize(size_t(dw) * dh * 4);
++  for (uint32_t y = 0; y < dh; ++y) {
++    for (uint32_t x = 0; x < dw; ++x) {
++      uint64_t acc[4] = {0, 0, 0, 0};
++      for (const Tap& vy : ty[y]) {
++        const uint8_t* row = &src[(size_t(vy.src) * width) * 4];
++        for (const Tap& vx : tx[x]) {
++          const uint64_t w = vx.weight * vy.weight;
++          const uint8_t* p = row + size_t(vx.src) * 4;
++          for (int c = 0; c < 4; ++c) acc[c] += w * p[c];
++        }
++      }
++      uint8_t* o = &out.rgba[(size_t(y) * dw + x) * 4];
++      for (int c = 0; c < 4; ++c) o[c] = static_cast<uint8_t>((acc[c] + total / 2) / total);
++    }
++  }
++  dst = std::move(out);
++  return true;
++}
++
++bool build_mip_chain(std::vector<uint8_t> rgba, uint32_t width, uint32_t height, std::vector<MipLevel>& out) {
++  out.clear();
++  if (width == 0 || height == 0 || rgba.size() != uint64_t(width) * height * 4) return false;
++  const uint32_t n = mip_level_count(width, height);
++  out.reserve(n);
++  out.push_back({width, height, std::move(rgba)});
++  for (uint32_t i = 1; i < n; ++i) {
++    MipLevel next;
++    const MipLevel& prev = out.back();
++    if (!downsample_box(prev.rgba, prev.width, prev.height, next)) {
++      out.clear();
++      return false;
++    }
++    out.push_back(std::move(next));
++  }
++  return true;
++}
++
++}  // namespace lomn::view
+diff -ruN base/engine/src/view/synthetic.cpp work/engine/src/view/synthetic.cpp
+--- base/engine/src/view/synthetic.cpp	1970-01-01 01:00:00
++++ work/engine/src/view/synthetic.cpp	2026-10-07 08:05:56
+@@ -0,0 +1,276 @@
++#include "lomn/view/synthetic.h"
++
++#include <algorithm>
++#include <cstring>
++#include <initializer_list>
++#include <string>
++#include <vector>
++
++namespace lomn::view {
++namespace {
++
++using Bytes = std::vector<uint8_t>;
++
++void put16(Bytes& b, uint16_t v) {
++  b.push_back(static_cast<uint8_t>(v));
++  b.push_back(static_cast<uint8_t>(v >> 8));
++}
++void put32(Bytes& b, uint32_t v) {
++  for (int i = 0; i < 4; ++i) b.push_back(static_cast<uint8_t>(v >> (8 * i)));
++}
++void putf(Bytes& b, float f) {
++  uint32_t u;
++  std::memcpy(&u, &f, 4);
++  put32(b, u);
++}
++void putstr(Bytes& b, const std::string& s) { b.insert(b.end(), s.begin(), s.end()); }
++uint32_t id4(const char* s) {  // "vllw" -> LE u32 whose file bytes read "wllv"
++  return (uint32_t(uint8_t(s[0])) << 24) | (uint32_t(uint8_t(s[1])) << 16) | (uint32_t(uint8_t(s[2])) << 8) | uint32_t(uint8_t(s[3]));
++}
++
++// "BLKF", version 1, entries sorted by name (the game's Find binary-searches), stored (flags 2), then payloads.
++Bytes make_blk(std::vector<std::pair<std::string, Bytes>> es) {
++  std::sort(es.begin(), es.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
++  Bytes b;
++  putstr(b, "BLKF");
++  put32(b, 1);
++  put32(b, static_cast<uint32_t>(es.size()));
++  uint32_t off = static_cast<uint32_t>(12 + 56 * es.size());
++  for (const auto& e : es) {
++    Bytes name(40, 0);
++    std::memcpy(name.data(), e.first.data(), std::min<size_t>(e.first.size(), 39));
++    b.insert(b.end(), name.begin(), name.end());
++    put32(b, static_cast<uint32_t>(e.second.size()));
++    put32(b, static_cast<uint32_t>(e.second.size()));
++    put32(b, 2);
++    put32(b, off);
++    off += static_cast<uint32_t>(e.second.size());
++  }
++  for (const auto& e : es) b.insert(b.end(), e.second.begin(), e.second.end());
++  return b;
++}
++
++Bytes dds_header(uint32_t w, uint32_t h, const char* fourcc) {
++  Bytes b;
++  putstr(b, "DDS ");
++  put32(b, 124);
++  put32(b, 0x1007);
++  put32(b, h);
++  put32(b, w);
++  put32(b, 0);
++  put32(b, 0);
++  put32(b, 0);  // mip count 0, like every Beta DDS
++  for (int i = 0; i < 11; ++i) put32(b, 0);
++  put32(b, 32);
++  if (fourcc) {
++    put32(b, 0x4);
++    putstr(b, fourcc);
++    for (int i = 0; i < 5; ++i) put32(b, 0);
++  } else {  // A8R8G8B8
++    put32(b, 0x41);
++    put32(b, 0);
++    put32(b, 32);
++    put32(b, 0x00ff0000u);
++    put32(b, 0x0000ff00u);
++    put32(b, 0x000000ffu);
++    put32(b, 0xff000000u);
++  }
++  put32(b, 0x1000);
++  for (int i = 0; i < 4; ++i) put32(b, 0);
++  return b;
++}
++
++Bytes red_dds() {  // DXT1 4x4: c0 = c1 = 0xF800 (red), all indices 0
++  Bytes b = dds_header(4, 4, "DXT1");
++  put16(b, 0xF800);
++  put16(b, 0xF800);
++  put32(b, 0);
++  return b;
++}
++
++Bytes cut_dds() {  // A8R8G8B8 8x8: columns 0..3 opaque green, 4..7 transparent magenta
++  Bytes b = dds_header(8, 8, nullptr);
++  for (int y = 0; y < 8; ++y)
++    for (int x = 0; x < 8; ++x) put32(b, x < 4 ? 0xff00ff00u : 0x00ff00ffu);
++  return b;
++}
++
++// Binary .x token writer (xof 0303bin 0032): NAME=1, STRING=2, INTEGER_LIST=6, FLOAT_LIST=7, '{'=10, '}'=11.
++struct X {
++  Bytes b;
++  X() { putstr(b, "xof 0303bin 0032"); }
++  X& name(const std::string& s) {
++    put16(b, 1);
++    put32(b, static_cast<uint32_t>(s.size()));
++    putstr(b, s);
++    return *this;
++  }
++  X& str(const std::string& s) {
++    put16(b, 2);
++    put32(b, static_cast<uint32_t>(s.size()));
++    putstr(b, s);
++    put16(b, 20);
++    return *this;
++  }
++  X& ints(const std::vector<uint32_t>& v) {
++    put16(b, 6);
++    put32(b, static_cast<uint32_t>(v.size()));
++    for (uint32_t x : v) put32(b, x);
++    return *this;
++  }
++  X& floats(const std::vector<float>& v) {
++    put16(b, 7);
++    put32(b, static_cast<uint32_t>(v.size()));
++    for (float x : v) putf(b, x);
++    return *this;
++  }
++  X& open() {
++    put16(b, 10);
++    return *this;
++  }
++  X& close() {
++    put16(b, 11);
++    return *this;
++  }
++  X& obj(const std::string& type) { return name(type).open(); }
++};
++
++// A quad in the model's y = 0 plane (world z = 0 after RotX), x [x0,x1], model z [z0,z1] (world y), u along x.
++void quad(std::vector<float>& pos, std::vector<float>& uv, std::vector<uint32_t>& faces, float x0, float x1, float z0, float z1) {
++  const uint32_t base = static_cast<uint32_t>(pos.size() / 3);
++  for (float v : {x0, 0.f, z0, x1, 0.f, z0, x1, 0.f, z1, x0, 0.f, z1}) pos.push_back(v);
++  for (float v : {0.f, 1.f, 1.f, 1.f, 1.f, 0.f, 0.f, 0.f}) uv.push_back(v);
++  for (uint32_t v : {4u, base, base + 1, base + 2, base + 3}) faces.push_back(v);
++}
++
++void material(X& x, std::initializer_list<float> diffuse, const char* texture) {
++  std::vector<float> f(diffuse);
++  for (float v : {0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f}) f.push_back(v);  // power, specular, emissive
++  x.obj("Material").floats(f);
++  if (texture) x.obj("TextureFilename").str(texture).close();
++  x.close();
++}
++
++Bytes quad_x() {
++  std::vector<float> pos, uv;
++  std::vector<uint32_t> faces;
++  quad(pos, uv, faces, -8, -1, -4, 4);   // subset 0: red
++  quad(pos, uv, faces, 1, 8, -4, 4);     // subset 1: cut (alpha)
++  quad(pos, uv, faces, 50, 60, -4, 4);   // subset 2: missing texture, off-screen
++  X x;
++  x.obj("Mesh").ints({12}).floats(pos);
++  std::vector<uint32_t> fi = {3};
++  fi.insert(fi.end(), faces.begin(), faces.end());
++  x.ints(fi);
++  x.obj("MeshTextureCoords").ints({12}).floats(uv).close();
++  x.obj("MeshVertexColors").ints({12});
++  for (uint32_t i = 0; i < 12; ++i) x.ints({i}).floats({1.0f, 0.5f, 1.0f, 1.0f});
++  x.close();
++  x.obj("MeshMaterialList").ints({3, 3, 0, 1, 2});
++  material(x, {1, 1, 1, 1}, "red");
++  material(x, {1, 1, 1, 1}, "cut");
++  material(x, {1, 1, 1, 1}, "nothere");
++  x.close();
++  x.close();
++  return x.b;
++}
++
++Bytes blue_x() {
++  std::vector<float> pos, uv;
++  std::vector<uint32_t> faces;
++  quad(pos, uv, faces, -8, 8, -2, 8);
++  X x;
++  x.obj("Mesh").ints({4}).floats(pos);
++  std::vector<uint32_t> fi = {1};
++  fi.insert(fi.end(), faces.begin(), faces.end());
++  x.ints(fi);
++  x.obj("MeshMaterialList").ints({1, 1, 0});
++  material(x, {0, 0, 1, 1}, nullptr);
++  x.close();
++  x.close();
++  return x.b;
++}
++
++struct Rec {
++  const char* id;
++  float x, y, z;
++  uint32_t flags;
++};
++
++// {slot, n, n, ptr=0x16} + 60-byte records at 0x16, padding, one fix-up slot (12), count, 0x00C0FFEE (the Beta shape).
++Bytes obj_slb(const std::vector<Rec>& recs) {
++  Bytes b;
++  put32(b, id4("????"));
++  put32(b, static_cast<uint32_t>(recs.size()));
++  put32(b, static_cast<uint32_t>(recs.size()));
++  put32(b, 0x16);
++  put16(b, 0);
++  put32(b, 0);
++  for (const Rec& r : recs) {
++    put32(b, id4(r.id));
++    putf(b, r.x);
++    putf(b, r.y);
++    putf(b, r.z);
++    for (int k = 0; k < 3; ++k) putf(b, 0.0f);  // orient
++    put32(b, 0);                                // +0x1c
++    for (int k = 0; k < 6; ++k) putf(b, 0.0f);  // ext0, ext1
++    put32(b, r.flags);
++  }
++  put16(b, 0);
++  put32(b, 12);
++  put32(b, 1);
++  put32(b, 0x00C0FFEEu);
++  return b;
++}
++
++Bytes pos_slb(const std::vector<Rec>& recs) {  // {slot, n, ptr=12} + 20-byte records
++  Bytes b;
++  put32(b, 0);
++  put32(b, static_cast<uint32_t>(recs.size()));
++  put32(b, 12);
++  for (const Rec& r : recs) {
++    put32(b, id4(r.id));
++    putf(b, r.x);
++    putf(b, r.y);
++    putf(b, r.z);
++    put32(b, r.flags);
++  }
++  put32(b, 8);
++  put32(b, 1);
++  put32(b, 0x00C0FFEEu);
++  return b;
++}
++
++}  // namespace
++
++bool mount_synthetic_install(fs::MemoryFileSystem& fs) {
++  Bytes level = make_blk({{"red.dds", red_dds()}, {"cut.dds", cut_dds()}});
++  Bytes area = make_blk({
++      {"quad.x", quad_x()},
++      {"blue.x", blue_x()},
++      {"test_obj.slb", obj_slb({{"quad", 0, 0, 0, 0x10},
++                                {"blue", 0, 0, -2, 0x10},
++                                {"blue", 0, 0, -50, 0x08},
++                                {"quad", 0, 0, -60, 0x110},
++                                {"blue", 0, 0, -70, 0x110},
++                                {"blue", 0, 0, -80, 0x20},
++                                {"nope", 0, 0, 0, 0x04},
++                                {"miss", 0, 0, 0, 0x10}})},
++      {"test_pos.slb", pos_slb({{"pkup", 1, 2, 3, 0x60}, {"strt", 0, 0, 10, 0x1000}})},
++  });
++  return fs.mount("Root/Data/Levels/levt/levt.blk", std::move(level)) && fs.mount("Root/Data/Levels/levt/test.blk", std::move(area));
++}
++
++CameraSettings synthetic_camera() {
++  CameraSettings s;
++  s.fov_deg = 90.0f;
++  s.near_z = 0.1f;
++  s.far_z = 100.0f;
++  s.eye_height = 0.0f;
++  s.pitch_deg = 0.0f;
++  s.yaw_set = true;
++  s.yaw_deg = 0.0f;
++  return s;
++}
++
++}  // namespace lomn::view
+diff -ruN base/engine/tests/a7_calls.cmake work/engine/tests/a7_calls.cmake
+--- base/engine/tests/a7_calls.cmake	1970-01-01 01:00:00
++++ work/engine/tests/a7_calls.cmake	2026-10-07 08:08:02
+@@ -0,0 +1,30 @@
++# ctest helper (spec M1 A7): render the synthetic scene on the null backend twice and require both call logs to be
++# non-empty, byte-identical, and equal to the checked-in EXPECTED log. RUNNER is empty natively and "node" for wasm32,
++# so native and wasm32 are each pinned to the same file (and make test-wasm cmp's the two outputs directly).
++foreach(run a b)
++  file(MAKE_DIRECTORY ${OUT}/${run})
++  execute_process(COMMAND ${RUNNER} ${EXE} --synthetic 1 --backend null --out ${OUT}/${run}/calls.txt
++                  RESULT_VARIABLE rc TIMEOUT 120)
++  if(NOT rc EQUAL 0)
++    message(FATAL_ERROR "lomn_view --synthetic run ${run} failed: ${rc}")
++  endif()
++  file(SIZE ${OUT}/${run}/calls.txt sz)
++  if(sz EQUAL 0)
++    message(FATAL_ERROR "${OUT}/${run}/calls.txt is empty")
++  endif()
++endforeach()
++execute_process(COMMAND ${CMAKE_COMMAND} -E compare_files ${OUT}/a/calls.txt ${OUT}/b/calls.txt RESULT_VARIABLE diff)
++if(NOT diff EQUAL 0)
++  message(FATAL_ERROR "A7 call log differs between two runs")
++endif()
++if(NOT EXISTS ${EXPECTED})
++  message(FATAL_ERROR "missing expected log ${EXPECTED}")
++endif()
++execute_process(COMMAND ${CMAKE_COMMAND} -E compare_files ${OUT}/a/calls.txt ${EXPECTED} RESULT_VARIABLE diff)
++if(NOT diff EQUAL 0)
++  message(FATAL_ERROR "A7 call log ${OUT}/a/calls.txt differs from the expected ${EXPECTED}")
++endif()
++file(READ ${OUT}/a/calls.txt.json m)
++if(NOT m MATCHES "\"draws_last_frame\":10,")
++  message(FATAL_ERROR "A7 metrics: expected 10 draws in the frame: ${m}")
++endif()
+diff -ruN base/engine/tests/data/a7_calls.txt work/engine/tests/data/a7_calls.txt
+--- base/engine/tests/data/a7_calls.txt	1970-01-01 01:00:00
++++ work/engine/tests/data/a7_calls.txt	2026-10-07 08:12:04
+@@ -0,0 +1,40 @@
++create_render_target_ex 64x64 depth=1 clear_depth=1.000 -> 1
++create_mesh_pipeline wgsl=1266 bytes sum=0e2d755a vs=vs fs=fs_opaque uniforms=96 stride=36 attrs=[0:f32x3@0,1:f32x2@12,2:f32x4@20] blend=opaque depth_write=1 depth=lessequal cull=none -> 1
++create_mesh_pipeline wgsl=1266 bytes sum=0e2d755a vs=vs fs=fs_alpha uniforms=96 stride=36 attrs=[0:f32x3@0,1:f32x2@12,2:f32x4@20] blend=alpha depth_write=1 depth=lessequal cull=none -> 2
++create_sampler mag=linear min=linear mip=linear u=wrap v=wrap aniso=3 -> 1
++create_uniform_buffer 2560 -> 1
++create_texture 1x1 mips=1 -> 2
++write_texture 2 mip=0 1x1 4 bytes sum=0077c7c0
++create_bind_group uniforms=1 bytes=96 texture=2 sampler=1 -> 1
++create_texture 4x4 mips=3 -> 3
++write_texture 3 mip=0 4x4 64 bytes sum=9c4d3a00
++write_texture 3 mip=1 2x2 16 bytes sum=26b6ce80
++write_texture 3 mip=2 1x1 4 bytes sum=0073eba0
++create_bind_group uniforms=1 bytes=96 texture=3 sampler=1 -> 2
++create_texture 8x8 mips=4 -> 4
++write_texture 4 mip=0 8x8 256 bytes sum=50277800
++write_texture 4 mip=1 4x4 64 bytes sum=71afce00
++write_texture 4 mip=2 2x2 16 bytes sum=d5003180
++write_texture 4 mip=3 1x1 4 bytes sum=003c2000
++create_bind_group uniforms=1 bytes=96 texture=4 sampler=1 -> 3
++create_vertex_buffer 432 -> 2
++create_index_buffer 72 -> 3
++write_buffer 2 +0 432 bytes sum=4dc87b5c
++write_buffer 3 +0 72 bytes sum=9e45dfa0
++create_vertex_buffer 144 -> 4
++create_index_buffer 24 -> 5
++write_buffer 4 +0 144 bytes sum=ec634a76
++write_buffer 5 +0 24 bytes sum=7a8948f8
++write_buffer 1 +0 2560 bytes sum=56ab9d5a
++begin_frame target=1 clear=0.000,0.000,0.000,1.000
++draw_indexed pipeline=1 vb=2 ib=3 first=0 count=6 bind_group=2+0
++draw_indexed pipeline=1 vb=2 ib=3 first=12 count=6 bind_group=1+256
++draw_indexed pipeline=2 vb=2 ib=3 first=6 count=6 bind_group=3+512
++draw_indexed pipeline=1 vb=4 ib=5 first=0 count=6 bind_group=1+768
++draw_indexed pipeline=1 vb=4 ib=5 first=0 count=6 bind_group=1+1024
++draw_indexed pipeline=1 vb=4 ib=5 first=0 count=6 bind_group=1+1280
++draw_indexed pipeline=1 vb=4 ib=5 first=0 count=6 bind_group=1+1536
++draw_indexed pipeline=1 vb=2 ib=3 first=0 count=6 bind_group=2+1792
++draw_indexed pipeline=1 vb=2 ib=3 first=12 count=6 bind_group=1+2048
++draw_indexed pipeline=2 vb=2 ib=3 first=6 count=6 bind_group=3+2304
++end_frame draws=10
+diff -ruN base/engine/tests/test_gpu_area.cpp work/engine/tests/test_gpu_area.cpp
+--- base/engine/tests/test_gpu_area.cpp	1970-01-01 01:00:00
++++ work/engine/tests/test_gpu_area.cpp	2026-10-07 08:21:29
+@@ -0,0 +1,113 @@
++// A7 on Dawn (headless): the synthetic scene rendered through load_area + AreaRenderer and checked at known pixels.
++// Exits 77 (ctest SKIP) without an adapter. Pixel centres below are computed from the scene geometry in
++// lomn/view/synthetic.h: 64x64, fov 90, eye (0,0,10) looking along -Z, so a point at world z = 0 has x_ndc = x / 10
++// and at z = -2 x_ndc = x / 12; pixel (px, py) has ndc ((px + 0.5) / 32 - 1, 1 - (py + 0.5) / 32).
++#include <cstdio>
++#include <cstdlib>
++
++#include "lomn/fs.h"
++#include "lomn/rhi.h"
++#include "lomn/view/area.h"
++#include "lomn/view/synthetic.h"
++
++using namespace lomn;
++
++int main() {
++  std::unique_ptr<rhi::Device> dev;
++  std::string err;
++  rhi::create_webgpu_device(nullptr, 0, 0, [&](std::unique_ptr<rhi::Device> d, std::string e) {
++    dev = std::move(d);
++    err = std::move(e);
++  });
++  if (!dev) {
++    std::printf("SKIPPED (no WebGPU adapter: %s)\n", err.c_str());
++    return 77;
++  }
++  fs::MemoryFileSystem mfs;
++  view::AreaData area;
++  if (!view::mount_synthetic_install(mfs) || !view::load_area(mfs, view::kSyntheticLevel, view::kSyntheticArea, view::AreaOptions(), area, &err)) {
++    std::printf("load failed: %s\n", err.c_str());
++    return 1;
++  }
++  rhi::RenderTargetDesc rd{64, 64, true, 1.0f};
++  rhi::TextureId rt = dev->create_render_target_ex(rd);
++  view::AreaRenderer r;
++  if (!rt || !r.upload(*dev, area, view::RenderOptions(), &err)) {
++    std::printf("upload failed: %s\n", err.c_str());
++    return 1;
++  }
++  r.render(*dev, rt, area, view::make_camera(area, view::synthetic_camera(), 1.0f));
++  std::vector<uint8_t> px;
++  if (!dev->read_pixels(rt, px) || px.size() != 64 * 64 * 4) return 1;
++  struct Probe {
++    int x, y, r, g, b;
++    const char* what;
++  };
++  const Probe probes[] = {
++      {17, 32, 255, 0, 0, "red DXT1 quad (opaque) in front of the blue quad: depth test LESSEQUAL"},
++      {41, 32, 0, 128, 0, "cut quad, opaque texels: green x vertex colour (1,0.5,1)"},
++      {52, 25, 0, 0, 255, "cut quad, alpha-0 texels discarded (no depth write): blue quad behind shows"},
++      {32, 16, 0, 0, 255, "blue quad: material diffuse, no vertex colours, no texture (white)"},
++      {58, 32, 255, 128, 255, "trans quad @-60, missing texture: white fallback x vertex colour"},
++      {1, 1, 0, 0, 0, "clear colour 0xff000000"},
++  };
++  bool ok = true;
++  for (const Probe& p : probes) {
++    const uint8_t* c = &px[(static_cast<size_t>(p.y) * 64 + p.x) * 4];
++    const bool hit = std::abs(c[0] - p.r) <= 2 && std::abs(c[1] - p.g) <= 2 && std::abs(c[2] - p.b) <= 2 && c[3] == 255;
++    std::printf("%s (%d,%d) = %u,%u,%u,%u want %d,%d,%d: %s\n", hit ? "ok  " : "FAIL", p.x, p.y, c[0], c[1], c[2], c[3], p.r, p.g, p.b, p.what);
++    ok = ok && hit;
++  }
++  const uint32_t a7_draws = dev->last_frame_stats().draws;
++  std::printf("adapter=%s draws=%u\n", dev->adapter().c_str(), a7_draws);
++  ok = ok && a7_draws == 10;
++
++  // Blend state on Dawn, straight through rhi with the area shader: a full-target opaque quad (vertex colour blue,
++  // white texture), then an alpha-pipeline quad (vertex colour red, texture alpha 128) over it. SRCALPHA/INVSRCALPHA
++  // gives red * 128/255 + blue * 127/255 = (128, 0, 127); the target's alpha stays 255.
++  rhi::MeshPipelineDesc pd;
++  pd.wgsl = view::area_wgsl();
++  pd.uniform_bytes = view::kAreaUniformBytes;
++  pd.vertex_stride = 36;
++  pd.attributes = {{rhi::VertexFormat::Float32x3, 0, 0}, {rhi::VertexFormat::Float32x2, 12, 1}, {rhi::VertexFormat::Float32x4, 20, 2}};
++  pd.fs_entry = "fs_opaque";
++  rhi::PipelineId opaque = dev->create_mesh_pipeline(pd);
++  pd.fs_entry = "fs_alpha";
++  pd.blend = rhi::BlendMode::AlphaBlend;
++  rhi::PipelineId alpha = dev->create_mesh_pipeline(pd);
++  const float verts[2][4][9] = {
++      {{-1, -1, 0.5f, 0, 0, 0, 0, 1, 1}, {1, -1, 0.5f, 0, 0, 0, 0, 1, 1}, {1, 1, 0.5f, 0, 0, 0, 0, 1, 1}, {-1, 1, 0.5f, 0, 0, 0, 0, 1, 1}},
++      {{-1, -1, 0.25f, 0, 0, 1, 0, 0, 1}, {1, -1, 0.25f, 0, 0, 1, 0, 0, 1}, {1, 1, 0.25f, 0, 0, 1, 0, 0, 1}, {-1, 1, 0.25f, 0, 0, 1, 0, 0, 1}}};
++  const uint32_t idx[12] = {0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7};
++  rhi::BufferId vb = dev->create_vertex_buffer(sizeof verts), ib = dev->create_index_buffer(sizeof idx);
++  rhi::BufferId ub = dev->create_uniform_buffer(2 * rhi::kUniformAlign);
++  dev->write_buffer(vb, 0, verts, sizeof verts);
++  dev->write_buffer(ib, 0, idx, sizeof idx);
++  float u[2][64] = {};
++  for (int k = 0; k < 2; ++k) {
++    u[k][0] = u[k][5] = u[k][10] = u[k][15] = 1.0f;  // wvp = identity (positions already in clip space)
++    u[k][20] = 1.0f;                                   // use vertex colour
++    u[k][21] = 1.0f / 255.0f;                          // alpha ref 1
++  }
++  dev->write_buffer(ub, 0, u, sizeof u);
++  const uint8_t white[4] = {255, 255, 255, 255}, half[4] = {255, 255, 255, 128};
++  rhi::TextureId tw = dev->create_texture(1, 1, 1), th = dev->create_texture(1, 1, 1);
++  dev->write_texture(tw, 0, white, 4);
++  dev->write_texture(th, 0, half, 4);
++  rhi::SamplerId s = dev->create_sampler(rhi::SamplerDesc());
++  rhi::BindGroupId bw = dev->create_bind_group(ub, view::kAreaUniformBytes, tw, s), bh = dev->create_bind_group(ub, view::kAreaUniformBytes, th, s);
++  rhi::TextureId rt2 = dev->create_render_target_ex(rhi::RenderTargetDesc{8, 8, true, 1.0f});
++  const float clear[4] = {0, 0, 0, 1};
++  dev->begin_frame(rt2, clear);
++  dev->draw_indexed({opaque, vb, ib, 0, 6, bw, 0});
++  dev->draw_indexed({alpha, vb, ib, 6, 6, bh, rhi::kUniformAlign});
++  dev->end_frame();
++  std::vector<uint8_t> px2;
++  if (!dev->read_pixels(rt2, px2) || px2.size() != 8 * 8 * 4) return 1;
++  const uint8_t* c = &px2[(4 * 8 + 4) * 4];
++  const bool blend_ok = std::abs(c[0] - 128) <= 2 && c[1] <= 2 && std::abs(c[2] - 127) <= 2 && c[3] == 255;
++  std::printf("%s blend (4,4) = %u,%u,%u,%u want 128,0,127,255: SRCALPHA/INVSRCALPHA, target alpha kept\n", blend_ok ? "ok  " : "FAIL", c[0],
++              c[1], c[2], c[3]);
++  ok = ok && blend_ok && dev->last_frame_stats().draws == 2;
++  return ok ? 0 : 1;
++}
+diff -ruN base/engine/tests/test_rhi_mesh.cpp work/engine/tests/test_rhi_mesh.cpp
+--- base/engine/tests/test_rhi_mesh.cpp	1970-01-01 01:00:00
++++ work/engine/tests/test_rhi_mesh.cpp	2026-10-07 08:10:00
+@@ -0,0 +1,229 @@
++// M1a-2 rhi additions on the null backend: stable log text, shared validation (no UB on bad ids or sizes).
++#include <string>
++#include <vector>
++
++#include "doctest.h"
++#include "lomn/rhi.h"
++
++using namespace lomn::rhi;
++
++namespace {
++
++MeshPipelineDesc mesh_desc() {
++  MeshPipelineDesc d;
++  d.wgsl = "w";
++  d.uniform_bytes = 96;
++  d.vertex_stride = 36;
++  d.attributes = {{VertexFormat::Float32x3, 0, 0}, {VertexFormat::Float32x2, 12, 1}, {VertexFormat::Float32x4, 20, 2}};
++  return d;
++}
++
++bool has_line(const std::vector<std::string>& log, const std::string& prefix) {
++  for (const auto& l : log)
++    if (l.rfind(prefix, 0) == 0) return true;
++  return false;
++}
++
++struct Scene {
++  std::vector<std::string> log;
++  std::unique_ptr<Device> d = create_null_device(&log);
++  TextureId rt = 0, tex = 0;
++  BufferId ub = 0, vb = 0, ib = 0;
++  SamplerId s = 0;
++  PipelineId p = 0;
++  BindGroupId bg = 0;
++  Scene() {
++    RenderTargetDesc rd;
++    rd.width = 64;
++    rd.height = 32;
++    rd.depth = true;
++    rt = d->create_render_target_ex(rd);
++    ub = d->create_uniform_buffer(512);
++    vb = d->create_vertex_buffer(36 * 4);
++    ib = d->create_index_buffer(6 * 4);
++    tex = d->create_texture(2, 2, 2);
++    s = d->create_sampler(SamplerDesc());
++    p = d->create_mesh_pipeline(mesh_desc());
++    bg = d->create_bind_group(ub, 96, tex, s);
++  }
++  DrawIndexedDesc draw() const {
++    DrawIndexedDesc x;
++    x.pipeline = p;
++    x.vertices = vb;
++    x.indices = ib;
++    x.index_count = 6;
++    x.bind_group = bg;
++    return x;
++  }
++};
++
++}  // namespace
++
++TEST_CASE("rhi mesh: creation logs stable text, ids per kind shared with the M0 calls") {
++  Scene sc;
++  REQUIRE(sc.log.size() == 8);
++  CHECK(sc.log[0] == "create_render_target_ex 64x32 depth=1 clear_depth=1.000 -> 1");
++  CHECK(sc.log[1] == "create_uniform_buffer 512 -> 1");
++  CHECK(sc.log[2] == "create_vertex_buffer 144 -> 2");
++  CHECK(sc.log[3] == "create_index_buffer 24 -> 3");
++  CHECK(sc.log[4] == "create_texture 2x2 mips=2 -> 2");  // texture ids continue after the render target
++  CHECK(sc.log[5] == "create_sampler mag=linear min=linear mip=linear u=wrap v=wrap aniso=1 -> 1");
++  CHECK(sc.log[6] ==
++        "create_mesh_pipeline wgsl=1 bytes sum=00000077 vs=vs fs=fs uniforms=96 stride=36 attrs=[0:f32x3@0,1:f32x2@12,2:f32x4@20] "
++        "blend=opaque depth_write=1 depth=lessequal cull=none -> 1");
++  CHECK(sc.log[7] == "create_bind_group uniforms=1 bytes=96 texture=2 sampler=1 -> 1");
++  CHECK(sc.d->create_render_target(8, 8) == 3);  // M0 call keeps working, next texture id
++  CHECK(sc.d->last_frame_stats().pipelines_total == 1);
++}
++
++TEST_CASE("rhi mesh: write_texture checks the mip size and logs a content checksum") {
++  Scene sc;
++  const uint8_t px4[16] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16};
++  CHECK(sc.d->write_texture(sc.tex, 0, px4, 16));
++  CHECK(sc.d->write_texture(sc.tex, 1, px4, 4));
++  CHECK_FALSE(sc.d->write_texture(sc.tex, 1, px4, 16));  // mip 1 of 2x2 is 1x1
++  CHECK_FALSE(sc.d->write_texture(sc.tex, 2, px4, 4));   // only 2 levels
++  CHECK_FALSE(sc.d->write_texture(sc.rt, 0, px4, 16));   // a render target is not a sampled texture
++  CHECK_FALSE(sc.d->write_texture(99, 0, px4, 16));
++  CHECK_FALSE(sc.d->write_texture(sc.tex, 0, nullptr, 16));
++  CHECK(has_line(sc.log, "write_texture 2 mip=0 2x2 16 bytes sum="));
++  CHECK(has_line(sc.log, "write_texture 2 mip=1 1x1 4 bytes sum="));
++  CHECK(has_line(sc.log, "write_texture 2 mip=1 16 bytes rejected: byte count does not match the mip size"));
++  CHECK(has_line(sc.log, "write_texture 99 mip=0 16 bytes rejected: unknown sampled texture"));
++}
++
++TEST_CASE("rhi mesh: invalid creations return 0 and are logged") {
++  std::vector<std::string> log;
++  auto d = create_null_device(&log);
++  RenderTargetDesc rd;
++  CHECK(d->create_render_target_ex(rd) == 0);  // 0x0
++  rd.width = rd.height = 8;
++  rd.clear_depth = 2.0f;
++  CHECK(d->create_render_target_ex(rd) == 0);
++  CHECK(d->create_vertex_buffer(0) == 0);
++  CHECK(d->create_index_buffer((256u << 20) + 1) == 0);
++  CHECK(d->create_texture(0, 4, 1) == 0);
++  CHECK(d->create_texture(4097, 4, 1) == 0);
++  CHECK(d->create_texture(4, 4, 4) == 0);  // 4x4 has 3 levels
++  SamplerDesc sd;
++  sd.max_anisotropy = 3;
++  sd.mip = FilterMode::Nearest;
++  CHECK(d->create_sampler(sd) == 0);
++  sd.max_anisotropy = 17;
++  sd.mip = FilterMode::Linear;
++  CHECK(d->create_sampler(sd) == 0);
++  MeshPipelineDesc pd = mesh_desc();
++  pd.attributes[2].offset = 24;  // 24 + 16 > 36
++  CHECK(d->create_mesh_pipeline(pd) == 0);
++  pd = mesh_desc();
++  pd.attributes[1].location = 0;
++  CHECK(d->create_mesh_pipeline(pd) == 0);
++  pd = mesh_desc();
++  pd.uniform_bytes = 0;
++  CHECK(d->create_mesh_pipeline(pd) == 0);
++  pd = mesh_desc();
++  pd.vertex_stride = 34;
++  CHECK(d->create_mesh_pipeline(pd) == 0);
++  CHECK(d->last_frame_stats().pipelines_total == 0);
++  CHECK(d->create_bind_group(1, 96, 1, 1) == 0);  // nothing exists
++  REQUIRE(log.size() == 14);
++  for (const auto& l : log) CHECK(l.find("rejected: ") != std::string::npos);
++  CHECK(log[6] == "create_texture 4x4 mips=4 rejected: mip count out of range -> 0");
++}
++
++TEST_CASE("rhi mesh: bind groups need a uniform buffer, a sampled texture and a sampler") {
++  Scene sc;
++  CHECK(sc.d->create_bind_group(sc.vb, 96, sc.tex, sc.s) == 0);   // vertex buffer as uniforms
++  CHECK(sc.d->create_bind_group(sc.ub, 96, sc.rt, sc.s) == 0);    // render target as texture
++  CHECK(sc.d->create_bind_group(sc.ub, 96, sc.tex, 7) == 0);      // unknown sampler
++  CHECK(sc.d->create_bind_group(sc.ub, 257, sc.tex, sc.s) == 0);  // larger than kUniformAlign
++  CHECK(sc.d->create_bind_group(sc.ub, 96, sc.tex, sc.s) == 2);
++}
++
++TEST_CASE("rhi mesh: write_buffer validates ids, alignment and range (valid M0 writes unchanged)") {
++  Scene sc;
++  const uint32_t data[9] = {};
++  sc.d->write_buffer(sc.vb, 0, data, 36);
++  sc.d->write_buffer(sc.vb, 140, data, 8);  // past the 144-byte buffer
++  sc.d->write_buffer(sc.vb, 2, data, 4);    // unaligned offset
++  sc.d->write_buffer(sc.vb, 0, data, 6);    // unaligned size
++  sc.d->write_buffer(42, 0, data, 4);
++  sc.d->write_buffer(sc.ub, 0, nullptr, 4);
++  CHECK(sc.log[8].rfind("write_buffer 2 +0 36 bytes sum=", 0) == 0);
++  CHECK(sc.log[9] == "write_buffer 2 +140 8 bytes rejected: write outside the buffer");
++  CHECK(sc.log[10] == "write_buffer 2 +2 4 bytes rejected: offset/size not a multiple of 4");
++  CHECK(sc.log[11] == "write_buffer 2 +0 6 bytes rejected: offset/size not a multiple of 4");
++  CHECK(sc.log[12] == "write_buffer 42 +0 4 bytes rejected: unknown buffer");
++  CHECK(sc.log[13] == "write_buffer 1 +0 4 bytes rejected: null data");
++}
++
++TEST_CASE("rhi mesh: draw_indexed counts valid draws and rejects every bad id or range") {
++  Scene sc;
++  const float clear[4] = {0, 0, 0, 1};
++  sc.d->begin_frame(sc.rt, clear);
++  sc.d->draw_indexed(sc.draw());
++  DrawIndexedDesc x = sc.draw();
++  x.uniform_offset = 256;  // second slot of the 512-byte buffer
++  sc.d->draw_indexed(x);
++  auto rejected = [&](DrawIndexedDesc bad, const char* why) {
++    size_t before = sc.log.size();
++    sc.d->draw_indexed(bad);
++    REQUIRE(sc.log.size() == before + 1);
++    CHECK(sc.log.back().find(std::string("rejected: ") + why) != std::string::npos);
++  };
++  x = sc.draw(); x.uniform_offset = 512; rejected(x, "uniform range outside the buffer");
++  x = sc.draw(); x.uniform_offset = 128; rejected(x, "uniform_offset not aligned");
++  x = sc.draw(); x.first_index = 1; rejected(x, "index range outside the index buffer");
++  x = sc.draw(); x.index_count = 4; rejected(x, "index_count not a positive multiple of 3");
++  x = sc.draw(); x.index_count = 0; rejected(x, "index_count not a positive multiple of 3");
++  x = sc.draw(); x.first_index = 0xffffffffu; x.index_count = 3; rejected(x, "index range outside the index buffer");
++  x = sc.draw(); x.vertices = sc.ib; rejected(x, "unknown vertex buffer");
++  x = sc.draw(); x.indices = sc.vb; rejected(x, "unknown index buffer");
++  x = sc.draw(); x.pipeline = 9; rejected(x, "unknown mesh pipeline");
++  x = sc.draw(); x.bind_group = 9; rejected(x, "unknown bind group");
++  PipelineDesc m0;
++  m0.wgsl = "x";
++  m0.uniform_bytes = 16;
++  x = sc.draw(); x.pipeline = sc.d->create_pipeline(m0); rejected(x, "unknown mesh pipeline");  // M0 pipeline
++  MeshPipelineDesc other = mesh_desc();
++  other.uniform_bytes = 64;
++  x = sc.draw(); x.pipeline = sc.d->create_mesh_pipeline(other); rejected(x, "bind group does not match the pipeline layout");
++  sc.d->end_frame();
++  CHECK(sc.d->last_frame_stats().draws == 2);
++  CHECK(sc.d->last_frame_stats().indices == 12);
++  CHECK(sc.log.back() == "end_frame draws=2");
++  CHECK(has_line(sc.log, "draw_indexed pipeline=1 vb=2 ib=3 first=0 count=6 bind_group=1+256"));
++}
++
++namespace {
++// A Device written against the M0 surface only (like test_loop's HostileNameDevice): still compiles, and every M1a-2
++// call reports "unsupported" through the base-class defaults.
++class M0OnlyDevice : public Device {
++ public:
++  std::string backend() const override { return "m0"; }
++  std::string adapter() const override { return "none"; }
++  TextureId create_render_target(uint32_t, uint32_t) override { return 1; }
++  BufferId create_uniform_buffer(uint32_t) override { return 1; }
++  void write_buffer(BufferId, uint32_t, const void*, uint32_t) override {}
++  PipelineId create_pipeline(const PipelineDesc&) override { return 1; }
++  void begin_frame(TextureId, const float*) override {}
++  void draw(PipelineId, uint32_t, BufferId, uint32_t) override {}
++  void end_frame() override {}
++  bool read_pixels(TextureId, std::vector<uint8_t>&) override { return false; }
++  FrameStats last_frame_stats() const override { return {}; }
++};
++}  // namespace
++
++TEST_CASE("rhi mesh: the additions are optional for M0-only devices (defaults report unsupported)") {
++  M0OnlyDevice d;
++  CHECK(d.create_render_target_ex(RenderTargetDesc{64, 64, true, 1.0f}) == 0);
++  CHECK(d.create_vertex_buffer(64) == 0);
++  CHECK(d.create_index_buffer(64) == 0);
++  CHECK(d.create_texture(4, 4, 1) == 0);
++  const uint8_t px[4] = {};
++  CHECK_FALSE(d.write_texture(1, 0, px, 4));
++  CHECK(d.create_sampler(SamplerDesc()) == 0);
++  CHECK(d.create_mesh_pipeline(mesh_desc()) == 0);
++  CHECK(d.create_bind_group(1, 96, 1, 1) == 0);
++  d.draw_indexed(DrawIndexedDesc());
++}
+diff -ruN base/engine/tests/test_view_area.cpp work/engine/tests/test_view_area.cpp
+--- base/engine/tests/test_view_area.cpp	1970-01-01 01:00:00
++++ work/engine/tests/test_view_area.cpp	2026-10-07 08:18:46
+@@ -0,0 +1,494 @@
++// M1a-2 area renderer: D3D-convention matrices, the synthetic A7 scene through load_area / AreaRenderer on the null
++// backend, failure paths and caps.
++#include <algorithm>
++#include <cmath>
++#include <cstring>
++#include <string>
++#include <vector>
++
++#include "doctest.h"
++#include "lomn/fs.h"
++#include "lomn/rhi.h"
++#include "lomn/sage/blockfile.h"
++#include "lomn/view/area.h"
++#include "lomn/view/synthetic.h"
++#include "sage_test_util.h"
++
++using namespace lomn;
++using namespace lomn::view;
++
++namespace {
++
++void xf(const Mat4& m, float x, float y, float z, float out[4]) {
++  const float p[3] = {x, y, z};
++  transform_point(m, p, out);
++}
++
++AreaData load_synthetic(std::string* err = nullptr) {
++  fs::MemoryFileSystem mfs;
++  REQUIRE(mount_synthetic_install(mfs));
++  AreaData a;
++  std::string e;
++  REQUIRE_MESSAGE(load_area(mfs, kSyntheticLevel, kSyntheticArea, AreaOptions(), a, &e), e);
++  if (err) *err = e;
++  return a;
++}
++
++bool has_warning(const AreaData& a, const std::string& needle) {
++  return std::any_of(a.warnings.begin(), a.warnings.end(), [&](const std::string& w) { return w.find(needle) != std::string::npos; });
++}
++
++}  // namespace
++
++TEST_CASE("view math: RotX(-1.5707982) maps model (x, y, z) to world (x, z, -y); translation is _41.._43") {
++  const Mat4 w = mat_mul(mat_rotation_x(kWorldRotX), mat_translation(10, 20, 30));
++  float o[4];
++  xf(w, 1, 2, 3, o);
++  CHECK(o[0] == doctest::Approx(11).epsilon(1e-6));
++  CHECK(o[1] == doctest::Approx(23).epsilon(1e-5));  // z -> y
++  CHECK(o[2] == doctest::Approx(28).epsilon(1e-5));  // -y -> z
++  CHECK(o[3] == 1.0f);
++  CHECK(w.m[12] == 10.0f);
++  CHECK(w.m[13] == 20.0f);
++  CHECK(w.m[14] == 30.0f);
++  // The game's constant is not exactly -pi/2: cos is ~ -1.7e-6, not 0.
++  const Mat4 r = mat_rotation_x(kWorldRotX);
++  CHECK(r.m[6] == doctest::Approx(-1.0f));
++  CHECK(std::fabs(r.m[5]) < 1e-5f);
++  CHECK(r.m[5] != 0.0f);
++}
++
++TEST_CASE("view math: PerspectiveFovRH maps view z = -near to depth 0 and z = -far to depth 1 (WebGPU range)") {
++  const Mat4 p = perspective_fov_rh(1.5707964f, 2.0f, 0.5f, 100.0f);
++  CHECK(p.m[0] == doctest::Approx(0.5f));  // cot(45 deg) / aspect
++  CHECK(p.m[5] == doctest::Approx(1.0f));
++  CHECK(p.m[11] == -1.0f);
++  CHECK(p.m[15] == 0.0f);
++  float o[4];
++  xf(p, 0, 0, -0.5f, o);
++  CHECK(o[2] / o[3] == doctest::Approx(0.0).epsilon(1e-6));
++  xf(p, 0, 0, -100.0f, o);
++  CHECK(o[2] / o[3] == doctest::Approx(1.0).epsilon(1e-6));
++  xf(p, 0, 0, -10.0f, o);
++  CHECK(o[2] / o[3] > 0.0f);
++  CHECK(o[2] / o[3] < 1.0f);
++  xf(p, 10, 0, -10.0f, o);  // 45 deg right at aspect 2 -> x_ndc 0.5
++  CHECK(o[0] / o[3] == doctest::Approx(0.5f));
++}
++
++TEST_CASE("view math: LookAtRH puts the target on the -Z axis of view space") {
++  const float eye[3] = {1, 2, 3}, at[3] = {1, 2, -7}, up[3] = {0, 1, 0};
++  const Mat4 v = look_at_rh(eye, at, up);
++  float o[4];
++  xf(v, 1, 2, -7, o);
++  CHECK(o[0] == doctest::Approx(0).epsilon(1e-6));
++  CHECK(o[1] == doctest::Approx(0).epsilon(1e-6));
++  CHECK(o[2] == doctest::Approx(-10));
++  xf(v, 2, 2, 3, o);  // +X world is +X view (right) when looking along -Z
++  CHECK(o[0] == doctest::Approx(1));
++}
++
++TEST_CASE("area: the synthetic scene loads with routing, skips and texture resolution as the game would") {
++  AreaData a = load_synthetic();
++  const AreaStats& s = a.stats;
++  CHECK(a.level == "levt");
++  CHECK(a.area == "test");
++  CHECK_FALSE(a.art_blk);
++  CHECK(has_warning(a, "art.blk not opened"));
++  CHECK(s.obj_records == 8);
++  CHECK(s.placements == 6);
++  CHECK(s.ignored_records == 1);
++  CHECK(s.missing_models == 1);
++  CHECK(s.routes[static_cast<int>(sage::Route::Main)] == 2);
++  CHECK(s.routes[static_cast<int>(sage::Route::Back)] == 1);
++  CHECK(s.routes[static_cast<int>(sage::Route::Trans)] == 2);
++  CHECK(s.routes[static_cast<int>(sage::Route::NoLightMoveable)] == 1);
++  CHECK(s.routes[static_cast<int>(sage::Route::Moveable)] == 0);
++  CHECK(has_warning(a, "model miss"));
++  CHECK_FALSE(has_warning(a, "nope"));  // A6: an ignored record's model is never loaded
++  REQUIRE(a.models.size() == 2);        // quad, blue: loaded once each (cached by id)
++  CHECK(a.models[0].id == "quad");
++  CHECK(a.models[0].has_colors);
++  CHECK(a.models[0].vertex_count == 12);
++  CHECK_FALSE(a.models[1].has_colors);
++  REQUIRE(a.models[0].subsets.size() == 3);
++  CHECK_FALSE(a.models[0].subsets[0].alpha);
++  CHECK(a.models[0].subsets[1].alpha);
++  CHECK(a.models[0].subsets[2].texture == kNoTexture);
++  CHECK(a.models[1].subsets[0].texture == kNoTexture);
++  CHECK(a.models[1].subsets[0].diffuse[2] == 1.0f);
++  CHECK(s.subsets == 4);
++  CHECK(s.draws == 3 + 1 + 1 + 3 + 1 + 1);
++  CHECK(s.alpha_subsets == 1);
++  CHECK(s.untextured_subsets == 2);
++  CHECK(s.models_without_colors == 1);
++  REQUIRE(a.textures.size() == 2);
++  CHECK(s.textures_missing == 1);
++  CHECK(has_warning(a, "texture nothere: not found"));
++  CHECK(a.textures[0].request == "Root/Data/Levels/levt/textures/red.dds");
++  CHECK(a.textures[0].format == "DXT1");
++  CHECK_FALSE(a.textures[0].alpha_on);
++  CHECK(a.textures[0].mips.size() == 3);
++  CHECK(a.textures[1].format == "A8R8G8B8");
++  CHECK(a.textures[1].alpha_on);
++  CHECK(a.textures[1].mips.size() == 4);
++  CHECK(s.texture_bytes == (16 + 4 + 1) * 4 + (64 + 16 + 4 + 1) * 4);
++  CHECK(a.pos_records == 2);
++  REQUIRE(a.has_start);
++  CHECK(a.start_record == 1);
++  CHECK(a.start[2] == 10.0f);
++  // Placement world matrices: RotX then the record position.
++  CHECK(a.placements[1].pos[2] == -2.0f);
++  CHECK(a.placements[1].world.m[14] == -2.0f);
++  REQUIRE(a.has_bounds);  // every route except back: z from -80 (nolight) to 0
++  CHECK(a.bounds_min[2] == doctest::Approx(-80.0f));
++  CHECK(a.bounds_max[1] == doctest::Approx(8.0f));
++}
++
++TEST_CASE("area: route switches leave the disabled records out") {
++  fs::MemoryFileSystem mfs;
++  REQUIRE(mount_synthetic_install(mfs));
++  AreaOptions o;
++  o.draw_trans = o.draw_back = o.draw_nolight = false;
++  AreaData a;
++  std::string e;
++  REQUIRE(load_area(mfs, "levt", "test", o, a, &e));
++  CHECK(a.stats.placements == 2);
++  CHECK(a.stats.disabled_records == 4);
++  CHECK(a.stats.draws == 4);
++}
++
++TEST_CASE("area: camera fallback from the POS start, yaw towards the bounds centre by default") {
++  AreaData a = load_synthetic();
++  Camera c = make_camera(a, synthetic_camera(), 1.0f);
++  CHECK(c.eye_source == "pos_start");
++  CHECK(c.yaw_source == "cli");
++  CHECK(c.eye[2] == 10.0f);
++  CHECK(c.at[2] == doctest::Approx(9.0f));
++  CameraSettings s;  // defaults: eye height 3, pitch -10, yaw towards the bounds centre
++  c = make_camera(a, s, 16.0f / 9.0f);
++  CHECK(c.eye[1] == 3.0f);
++  CHECK(c.yaw_source == "towards_bounds_centre");
++  // Bounds centre: x (-8 + 60) / 2 = 26 (the off-screen quad reaches x 60), z (-80 + 0) / 2 = -40.
++  const double cx = (a.bounds_min[0] + a.bounds_max[0]) / 2, cz = (a.bounds_min[2] + a.bounds_max[2]) / 2;
++  CHECK(cx == doctest::Approx(26.0));
++  CHECK(c.yaw_deg == doctest::Approx(std::atan2(cx, -(cz - 10.0)) * 180.0 / 3.14159265358979).epsilon(1e-4));
++  CHECK(c.pitch_deg == -10.0f);
++  s.eye_set = true;
++  s.eye[0] = 5;
++  c = make_camera(a, s, 1.0f);
++  CHECK(c.eye_source == "cli");
++  CHECK(c.eye[0] == 5.0f);
++  CHECK(c.eye[1] == 0.0f);  // --eye is used as given
++}
++
++TEST_CASE("area: null-backend frame draws opaque subsets before alpha ones and trans far-to-near") {
++  AreaData a = load_synthetic();
++  std::vector<std::string> log;
++  auto dev = rhi::create_null_device(&log);
++  rhi::RenderTargetDesc rd{64, 64, true, 1.0f};
++  rhi::TextureId rt = dev->create_render_target_ex(rd);
++  AreaRenderer r;
++  std::string err;
++  REQUIRE_MESSAGE(r.upload(*dev, a, RenderOptions(), &err), err);
++  CHECK(r.pipelines() == 2);
++  CHECK(r.textures_created() == 3);  // white + 2
++  log.clear();
++  r.render(*dev, rt, a, make_camera(a, synthetic_camera(), 1.0f));
++  CHECK(dev->last_frame_stats().draws == 10);
++  std::vector<std::string> draws;
++  for (const auto& l : log)
++    if (l.rfind("draw_indexed", 0) == 0) draws.push_back(l);
++  REQUIRE(draws.size() == 10);
++  for (const auto& d : draws) CHECK(d.find("rejected") == std::string::npos);
++  // Buffer ids: uniforms 1, quad vb/ib 2/3, blue vb/ib 4/5. Pipelines: 1 opaque, 2 alpha.
++  // main quad: red (opaque), missing->white (opaque), then cut (alpha pass); main blue; nolight blue; back blue;
++  // trans sorted far to near: blue @-70 before quad @-60 (record order is the opposite).
++  CHECK(draws[0] == "draw_indexed pipeline=1 vb=2 ib=3 first=0 count=6 bind_group=2+0");
++  CHECK(draws[1] == "draw_indexed pipeline=1 vb=2 ib=3 first=12 count=6 bind_group=1+256");
++  CHECK(draws[2] == "draw_indexed pipeline=2 vb=2 ib=3 first=6 count=6 bind_group=3+512");
++  CHECK(draws[3] == "draw_indexed pipeline=1 vb=4 ib=5 first=0 count=6 bind_group=1+768");
++  CHECK(draws[4].find("vb=4") != std::string::npos);  // nolight blue
++  CHECK(draws[5].find("vb=4") != std::string::npos);  // back blue
++  CHECK(draws[6].find("vb=4") != std::string::npos);  // trans blue @-70 (farther) first
++  CHECK(draws[7].find("pipeline=1 vb=2") != std::string::npos);  // trans quad @-60
++  CHECK(draws[9].find("pipeline=2 vb=2") != std::string::npos);  // its alpha subset last
++  CHECK(log.front().rfind("write_buffer 1 +0 2560 bytes sum=", 0) == 0);  // one uniform upload per frame
++  CHECK(log.back() == "end_frame draws=10");
++}
++
++TEST_CASE("area: a missing area leaves no partial state; a missing OBJ table places nothing") {
++  fs::MemoryFileSystem mfs;
++  REQUIRE(mount_synthetic_install(mfs));
++  AreaData a = load_synthetic();
++  std::string err;
++  CHECK_FALSE(load_area(mfs, "levt", "none", AreaOptions(), a, &err));
++  CHECK(err.find("cannot open") != std::string::npos);
++  CHECK(a.models.empty());
++  CHECK(a.placements.empty());
++  // An area blockfile without tables: entered, nothing placed, warnings only (the game skips missing loaders).
++  REQUIRE(mfs.mount("Root/Data/Levels/levt/empt.blk", sage_test::make_blk({sage_test::stored("readme.txt", "x")})));
++  REQUIRE(load_area(mfs, "levt", "empt", AreaOptions(), a, &err));
++  CHECK(a.placements.empty());
++  CHECK_FALSE(a.has_start);
++  CHECK(has_warning(a, "no obj table"));
++  CHECK(has_warning(a, "no pos table"));
++}
++
++namespace {
++sage_test::Bytes blue_x_bytes() {
++  fs::MemoryFileSystem mfs;
++  REQUIRE(mount_synthetic_install(mfs));
++  std::vector<uint8_t> blk;
++  REQUIRE(mfs.read("Root/Data/Levels/levt/test.blk", blk) == fs::Error::None);
++  sage::BlockFile bf;
++  std::string err;
++  REQUIRE(bf.open_bytes(blk, &err));
++  std::vector<uint8_t> x;
++  REQUIRE(bf.read(static_cast<size_t>(bf.find("blue.x")), x, &err));
++  return x;
++}
++sage_test::Bytes obj_records(uint32_t n, uint32_t flags) {
++  using namespace sage_test;
++  Bytes b;
++  put32(b, 0);
++  put32(b, n);
++  put32(b, n);
++  put32(b, 16);
++  for (uint32_t i = 0; i < n; ++i) {
++    putstr(b, "eulb");  // LE u32 of "blue"
++    for (int k = 0; k < 13; ++k) putf(b, 0.0f);
++    put32(b, flags);
++  }
++  put32(b, 12);
++  put32(b, 1);
++  put32(b, 0x00C0FFEEu);
++  return b;
++}
++}  // namespace
++
++TEST_CASE("area: placement cap (untrusted OBJ counts) fails the load cleanly") {
++  fs::MemoryFileSystem mfs;
++  REQUIRE(mount_synthetic_install(mfs));
++  sage_test::Bytes x = blue_x_bytes();
++  sage_test::Bytes ok = obj_records(kMaxPlacements, 0x10), over = obj_records(kMaxPlacements + 1, 0x10);
++  REQUIRE(mfs.mount("Root/Data/Levels/levt/capa.blk",
++                    sage_test::make_blk({{"blue.x", x, static_cast<uint32_t>(x.size()), 2},
++                                         {"capa_obj.slb", ok, static_cast<uint32_t>(ok.size()), 2}})));
++  REQUIRE(mfs.mount("Root/Data/Levels/levt/capb.blk",
++                    sage_test::make_blk({{"blue.x", x, static_cast<uint32_t>(x.size()), 2},
++                                         {"capb_obj.slb", over, static_cast<uint32_t>(over.size()), 2}})));
++  AreaData a;
++  std::string err;
++  REQUIRE_MESSAGE(load_area(mfs, "levt", "capa", AreaOptions(), a, &err), err);
++  CHECK(a.stats.placements == kMaxPlacements);
++  CHECK(a.models.size() == 1);
++  CHECK_FALSE(load_area(mfs, "levt", "capb", AreaOptions(), a, &err));
++  CHECK(err.find("kMaxPlacements") != std::string::npos);
++  CHECK(a.placements.empty());
++  // Ignored records do not count against the cap (they are never drawn).
++  sage_test::Bytes ignored = obj_records(kMaxPlacements * 2, 0x4);
++  REQUIRE(mfs.mount("Root/Data/Levels/levt/capc.blk",
++                    sage_test::make_blk({{"capc_obj.slb", ignored, static_cast<uint32_t>(ignored.size()), 2}})));
++  REQUIRE(load_area(mfs, "levt", "capc", AreaOptions(), a, &err));
++  CHECK(a.stats.ignored_records == kMaxPlacements * 2);
++}
++
++namespace {
++// Binary .x with one triangle per material: `n` materials, each with its own texture name tex<i> (or none).
++sage_test::Bytes x_with_subsets(uint32_t n, bool textured) {
++  using namespace sage_test;
++  Bytes b;
++  putstr(b, "xof 0303bin 0032");
++  auto name = [&](const std::string& s) {
++    put16(b, 1);
++    put32(b, static_cast<uint32_t>(s.size()));
++    putstr(b, s);
++  };
++  auto ints = [&](const std::vector<uint32_t>& v) {
++    put16(b, 6);
++    put32(b, static_cast<uint32_t>(v.size()));
++    for (uint32_t x : v) put32(b, x);
++  };
++  auto floats = [&](const std::vector<float>& v) {
++    put16(b, 7);
++    put32(b, static_cast<uint32_t>(v.size()));
++    for (float x : v) putf(b, x);
++  };
++  name("Mesh");
++  put16(b, 10);
++  ints({3});
++  floats({0, 0, 0, 1, 0, 0, 0, 0, 1});
++  std::vector<uint32_t> faces = {n};
++  for (uint32_t i = 0; i < n; ++i) faces.insert(faces.end(), {3, 0, 1, 2});
++  ints(faces);
++  name("MeshMaterialList");
++  put16(b, 10);
++  std::vector<uint32_t> ml = {n, n};
++  for (uint32_t i = 0; i < n; ++i) ml.push_back(i);
++  ints(ml);
++  for (uint32_t i = 0; i < n; ++i) {
++    name("Material");
++    put16(b, 10);
++    floats({1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0});
++    if (textured) {
++      name("TextureFilename");
++      put16(b, 10);
++      std::string t = "tex" + std::to_string(i);
++      put16(b, 2);
++      put32(b, static_cast<uint32_t>(t.size()));
++      putstr(b, t);
++      put16(b, 20);
++      put16(b, 11);
++    }
++    put16(b, 11);
++  }
++  put16(b, 11);
++  put16(b, 11);
++  return b;
++}
++sage_test::Bytes tiny_dxt1() {
++  using namespace sage_test;
++  Bytes b;
++  putstr(b, "DDS ");
++  put32(b, 124);
++  put32(b, 0x1007);
++  put32(b, 4);
++  put32(b, 4);
++  for (int i = 0; i < 14; ++i) put32(b, 0);
++  put32(b, 32);
++  put32(b, 0x4);
++  putstr(b, "DXT1");
++  for (int i = 0; i < 5; ++i) put32(b, 0);
++  put32(b, 0x1000);
++  for (int i = 0; i < 4; ++i) put32(b, 0);
++  for (int i = 0; i < 8; ++i) put8(b, 0x11);
++  return b;
++}
++sage_test::BlkEntrySpec entry(const std::string& n, const sage_test::Bytes& b) { return {n, b, static_cast<uint32_t>(b.size()), 2}; }
++}  // namespace
++
++TEST_CASE("area: draw cap (placements x subsets) fails the load cleanly") {
++  fs::MemoryFileSystem mfs;
++  REQUIRE(mount_synthetic_install(mfs));
++  sage_test::Bytes x5 = x_with_subsets(5, false);
++  // 819 x 5 = 4095 draws fit; 820 x 5 = 4100 > kMaxDraws (4096).
++  sage_test::Bytes fit = obj_records(kMaxDraws / 5, 0x10), over = obj_records(kMaxDraws / 5 + 1, 0x10);
++  REQUIRE(mfs.mount("Root/Data/Levels/levt/drwa.blk", sage_test::make_blk({entry("blue.x", x5), entry("drwa_obj.slb", fit)})));
++  REQUIRE(mfs.mount("Root/Data/Levels/levt/drwb.blk", sage_test::make_blk({entry("blue.x", x5), entry("drwb_obj.slb", over)})));
++  AreaData a;
++  std::string err;
++  REQUIRE_MESSAGE(load_area(mfs, "levt", "drwa", AreaOptions(), a, &err), err);
++  CHECK(a.stats.draws == (kMaxDraws / 5) * 5);
++  CHECK_FALSE(load_area(mfs, "levt", "drwb", AreaOptions(), a, &err));
++  CHECK(err.find("kMaxDraws") != std::string::npos);
++}
++
++TEST_CASE("area: texture-count cap fails the load cleanly") {
++  // One model whose kMaxAreaTextures + 1 subsets each name a different, existing texture.
++  const uint32_t n = kMaxAreaTextures + 1;
++  sage_test::Bytes dds = tiny_dxt1();
++  std::vector<sage_test::BlkEntrySpec> level;
++  for (uint32_t i = 0; i < n; ++i) level.push_back(entry("tex" + std::to_string(i) + ".dds", dds));
++  std::sort(level.begin(), level.end(), [](const auto& a, const auto& b) { return a.name < b.name; });
++  fs::MemoryFileSystem mfs;
++  REQUIRE(mfs.mount("Root/Data/Levels/levx/levx.blk", sage_test::make_blk(level)));
++  sage_test::Bytes xa = x_with_subsets(kMaxAreaTextures, true), xb = x_with_subsets(n, true), recs = obj_records(1, 0x10);
++  REQUIRE(mfs.mount("Root/Data/Levels/levx/texa.blk", sage_test::make_blk({entry("blue.x", xa), entry("texa_obj.slb", recs)})));
++  REQUIRE(mfs.mount("Root/Data/Levels/levx/texb.blk", sage_test::make_blk({entry("blue.x", xb), entry("texb_obj.slb", recs)})));
++  AreaData a;
++  std::string err;
++  REQUIRE_MESSAGE(load_area(mfs, "levx", "texa", AreaOptions(), a, &err), err);
++  CHECK(a.textures.size() == kMaxAreaTextures);
++  CHECK_FALSE(load_area(mfs, "levx", "texb", AreaOptions(), a, &err));
++  CHECK(err.find("kMaxAreaTextures") != std::string::npos);
++  CHECK(a.textures.empty());
++}
++
++TEST_CASE("area: mutated synthetic blockfiles never crash and never leave a partial area (deterministic fuzz)") {
++  fs::MemoryFileSystem base;
++  REQUIRE(mount_synthetic_install(base));
++  std::vector<uint8_t> level, area;
++  REQUIRE(base.read("Root/Data/Levels/levt/levt.blk", level) == fs::Error::None);
++  REQUIRE(base.read("Root/Data/Levels/levt/test.blk", area) == fs::Error::None);
++  uint32_t seed = 0x1234567u;
++  auto rnd = [&]() {
++    seed = seed * 1664525u + 1013904223u;
++    return seed >> 8;
++  };
++  uint32_t loaded = 0;
++  const int iterations = 1500;
++  for (int it = 0; it < iterations; ++it) {
++    std::vector<uint8_t> l = level, a = area;
++    std::vector<uint8_t>& t = (it & 1) ? l : a;
++    switch (rnd() % 4) {
++      case 0: t.resize(rnd() % (t.size() + 1)); break;                                      // truncate
++      case 1: for (int k = 0; k < 4; ++k) t[rnd() % t.size()] ^= uint8_t(1u << (rnd() % 8)); break;  // bit flips
++      case 2: { size_t at = rnd() % (t.size() - 3); uint32_t v = rnd() % 3 ? 0xffffffffu : rnd(); std::memcpy(&t[at], &v, 4); break; }
++      default: t[rnd() % t.size()] = uint8_t(rnd()); break;
++    }
++    fs::MemoryFileSystem mfs;
++    REQUIRE(mfs.mount("Root/Data/Levels/levt/levt.blk", std::move(l)));
++    REQUIRE(mfs.mount("Root/Data/Levels/levt/test.blk", std::move(a)));
++    AreaData out;
++    std::string err;
++    if (!load_area(mfs, "levt", "test", AreaOptions(), out, &err)) {
++      CHECK(out.placements.empty());
++      CHECK(out.models.empty());
++      continue;
++    }
++    ++loaded;
++    // Every accepted area must upload and render without a rejected rhi call.
++    std::vector<std::string> log;
++    auto dev = rhi::create_null_device(&log);
++    rhi::RenderTargetDesc rd{16, 16, true, 1.0f};
++    rhi::TextureId rt = dev->create_render_target_ex(rd);
++    AreaRenderer r;
++    REQUIRE(r.upload(*dev, out, RenderOptions(), &err));
++    r.render(*dev, rt, out, make_camera(out, synthetic_camera(), 1.0f));
++    for (const auto& line : log) CHECK(line.find("rejected") == std::string::npos);
++    CHECK(dev->last_frame_stats().draws == out.stats.draws);
++  }
++  CHECK(loaded > 0);
++  CHECK(loaded < static_cast<uint32_t>(iterations));  // the mutations do reach the rejection paths
++}
++
++namespace {
++// Uncompressed 32-bpp TGA (type 2), bottom-up, BGRA pixels all equal to `bgra`, declaring `alpha_bits`.
++sage_test::Bytes tga32(uint16_t w, uint16_t h, uint8_t alpha_bits, const uint8_t bgra[4]) {
++  using namespace sage_test;
++  Bytes b = {0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0};
++  put16(b, w);
++  put16(b, h);
++  put8(b, 32);
++  put8(b, alpha_bits);
++  for (uint32_t i = 0; i < uint32_t(w) * h; ++i) b.insert(b.end(), bgra, bgra + 4);
++  return b;
++}
++}  // namespace
++
++TEST_CASE("area: TGA textures resolve after .dds misses; 0 declared alpha bits means opaque (spec R8)") {
++  fs::MemoryFileSystem base;
++  REQUIRE(mount_synthetic_install(base));
++  std::vector<uint8_t> area;
++  REQUIRE(base.read("Root/Data/Levels/levt/test.blk", area) == fs::Error::None);
++  const uint8_t half[4] = {10, 20, 30, 0};  // alpha byte 0
++  fs::MemoryFileSystem mfs;
++  REQUIRE(mfs.mount("Root/Data/Levels/levg/levg.blk",
++                    sage_test::make_blk({entry("cut.tga", tga32(4, 2, 8, half)), entry("red.tga", tga32(2, 2, 0, half))})));
++  REQUIRE(mfs.mount("Root/Data/Levels/levg/test.blk", std::move(area)));
++  AreaData a;
++  std::string err;
++  REQUIRE_MESSAGE(load_area(mfs, "levg", "test", AreaOptions(), a, &err), err);
++  REQUIRE(a.textures.size() == 2);
++  CHECK(a.textures[0].request == "Root/Data/Levels/levg/textures/red.tga");
++  CHECK(a.textures[0].format == "TGA32");
++  CHECK_FALSE(a.textures[0].alpha_on);
++  CHECK(a.textures[0].mips[0].rgba == std::vector<uint8_t>{30, 20, 10, 255, 30, 20, 10, 255, 30, 20, 10, 255, 30, 20, 10, 255});
++  CHECK(a.textures[1].format == "TGA32a");
++  CHECK(a.textures[1].alpha_on);
++  CHECK(a.textures[1].mips[0].rgba[3] == 0);
++  CHECK(a.textures[1].mips.size() == 3);  // 4x2 -> 2x1 -> 1x1
++  CHECK(a.models[0].subsets[0].alpha == false);
++  CHECK(a.models[0].subsets[1].alpha == true);
++}
+diff -ruN base/engine/tests/test_view_mips.cpp work/engine/tests/test_view_mips.cpp
+--- base/engine/tests/test_view_mips.cpp	1970-01-01 01:00:00
++++ work/engine/tests/test_view_mips.cpp	2026-10-07 08:09:04
+@@ -0,0 +1,110 @@
++#include <cstdint>
++#include <vector>
++
++#include "doctest.h"
++#include "lomn/view/mips.h"
++
++using lomn::view::build_mip_chain;
++using lomn::view::downsample_box;
++using lomn::view::mip_chain_bytes;
++using lomn::view::mip_level_count;
++using lomn::view::MipLevel;
++
++namespace {
++// RGBA texels whose 4 channels are v, v, v, a (a = 255 unless given).
++std::vector<uint8_t> gray(std::initializer_list<int> vs) {
++  std::vector<uint8_t> o;
++  for (int v : vs) {
++    for (int c = 0; c < 3; ++c) o.push_back(static_cast<uint8_t>(v));
++    o.push_back(255);
++  }
++  return o;
++}
++}  // namespace
++
++TEST_CASE("mips: level count is floor(log2(max)) + 1, 0 for an empty image") {
++  CHECK(mip_level_count(1, 1) == 1);
++  CHECK(mip_level_count(2, 1) == 2);
++  CHECK(mip_level_count(4, 4) == 3);
++  CHECK(mip_level_count(5, 3) == 3);
++  CHECK(mip_level_count(1, 8) == 4);
++  CHECK(mip_level_count(4096, 4096) == 13);
++  CHECK(mip_level_count(4096, 1) == 13);
++  CHECK(mip_level_count(0, 5) == 0);
++  CHECK(mip_chain_bytes(4, 2) == 32 + 8 + 4);
++  CHECK(mip_chain_bytes(1, 1) == 4);
++}
++
++TEST_CASE("mips: 2x2 -> 1x1 is the exact average, rounded half up") {
++  MipLevel d;
++  REQUIRE(downsample_box(gray({0, 1, 2, 4}), 2, 2, d));  // 7/4 = 1.75 -> 2
++  CHECK(d.width == 1);
++  CHECK(d.height == 1);
++  CHECK(d.rgba == gray({2}));
++  REQUIRE(downsample_box(gray({0, 0, 0, 1}), 2, 2, d));  // 0.25 -> 0
++  CHECK(d.rgba[0] == 0);
++  REQUIRE(downsample_box(gray({0, 0, 1, 1}), 2, 2, d));  // 0.5 -> 1 (ties up)
++  CHECK(d.rgba[0] == 1);
++  REQUIRE(downsample_box(gray({255, 255, 255, 254}), 2, 2, d));  // 254.75 -> 255, no overflow
++  CHECK(d.rgba[0] == 255);
++}
++
++TEST_CASE("mips: odd sizes split the middle texel by area (non-power-of-two safe)") {
++  MipLevel d;
++  // 3x1 -> 1x1: all three texels weigh 1/3.
++  REQUIRE(downsample_box(gray({0, 3, 9}), 3, 1, d));
++  CHECK(d.width == 1);
++  CHECK(d.rgba[0] == 4);
++  REQUIRE(downsample_box(gray({1, 1, 2}), 3, 1, d));  // 4/3 -> 1
++  CHECK(d.rgba[0] == 1);
++  // 5x1 -> 2x1: texel 2 is split; dst0 = (2*10 + 2*20 + 1*30)/5 = 18, dst1 = (1*30 + 2*40 + 2*50)/5 = 42.
++  REQUIRE(downsample_box(gray({10, 20, 30, 40, 50}), 5, 1, d));
++  CHECK(d.width == 2);
++  CHECK(d.height == 1);
++  CHECK(d.rgba == gray({18, 42}));
++  // 3x3 -> 1x1: nine equal weights.
++  REQUIRE(downsample_box(gray({0, 0, 0, 0, 90, 0, 0, 0, 0}), 3, 3, d));
++  CHECK(d.rgba[0] == 10);
++}
++
++TEST_CASE("mips: 1xN columns halve only along the long axis") {
++  std::vector<MipLevel> chain;
++  REQUIRE(build_mip_chain(gray({0, 10, 20, 31}), 1, 4, chain));
++  REQUIRE(chain.size() == 3);
++  CHECK(chain[1].width == 1);
++  CHECK(chain[1].height == 2);
++  CHECK(chain[1].rgba == gray({5, 26}));  // (20+31)/2 = 25.5 -> 26
++  CHECK(chain[2].width == 1);
++  CHECK(chain[2].height == 1);
++  CHECK(chain[2].rgba == gray({16}));  // (5+26)/2 = 15.5 -> 16
++}
++
++TEST_CASE("mips: full chain sizes and channel independence (straight alpha)") {
++  std::vector<uint8_t> px = {
++      255, 0, 0, 255, 0, 0, 255, 0, 10, 20, 30, 40, 50, 60, 70, 80,  // row 0
++      0, 255, 0, 255, 0, 0, 0, 0, 90, 100, 110, 120, 130, 140, 150, 160,  // row 1
++  };
++  std::vector<MipLevel> chain;
++  REQUIRE(build_mip_chain(px, 4, 2, chain));
++  REQUIRE(chain.size() == 3);
++  CHECK(chain[0].rgba == px);
++  CHECK(chain[1].width == 2);
++  CHECK(chain[1].height == 1);
++  // Left 2x2: R (255+0+0+0)/4 = 63.75 -> 64, G 63.75 -> 64, B 255/4 -> 64, A (255+0+255+0)/4 = 127.5 -> 128.
++  CHECK(std::vector<uint8_t>(chain[1].rgba.begin(), chain[1].rgba.begin() + 4) == std::vector<uint8_t>{64, 64, 64, 128});
++  // Right 2x2: (10+50+90+130)/4 = 70, (20+60+100+140)/4 = 80, 90, 100.
++  CHECK(std::vector<uint8_t>(chain[1].rgba.begin() + 4, chain[1].rgba.end()) == std::vector<uint8_t>{70, 80, 90, 100});
++  CHECK(chain[2].width == 1);
++  CHECK(chain[2].rgba == std::vector<uint8_t>{67, 72, 77, 114});  // (64+70)/2, (64+80)/2, (64+90)/2, (128+100)/2
++}
++
++TEST_CASE("mips: size mismatch and empty input are rejected without touching the output") {
++  MipLevel d;
++  d.width = 7;
++  CHECK_FALSE(downsample_box(gray({1, 2, 3}), 2, 2, d));
++  CHECK(d.width == 7);
++  CHECK_FALSE(downsample_box({}, 0, 0, d));
++  std::vector<MipLevel> chain(2);
++  CHECK_FALSE(build_mip_chain(gray({1, 2, 3}), 2, 2, chain));
++  CHECK(chain.empty());
++}
+diff -ruN base/engine/tools/lomn_view.cpp work/engine/tools/lomn_view.cpp
+--- base/engine/tools/lomn_view.cpp	1970-01-01 01:00:00
++++ work/engine/tools/lomn_view.cpp	2026-10-07 08:16:55
+@@ -0,0 +1,371 @@
++// lomn_view: render one area of a LOMN install, unlit, from the POS start (M1a-2 "first pixels").
++//   lomn_view --install <dir> --level lev1 --area vllg --out <file.png> [options]
++//   lomn_view --synthetic 1 --out <file> [options]          the A7 contract scene (no game data)
++//   lomn_view --install <dir> --survey 1 --out <file.json>  CPU-load every area (no GPU), per-area counts + maxima
++// Options (every option takes a value):
++//   --backend webgpu|null   webgpu (default) writes <out> as PNG; null writes the rhi call log to <out>
++//   --width 1280 --height 720 --frames 1
++//   --fov 60 --near 0.5 --far 4000 --eye x,y,z --yaw deg --pitch deg --eye-height 3   (camera fallback overrides)
++//   --vertex-colors on|off  --alpha-ref 1  --routes main,trans,back,moveable,nolight
++// Always writes <out>.json metrics (except --survey, whose output IS the JSON).
++// Exit codes (as lomn_native): 0 ok, 2 bad args, 3 no WebGPU adapter / install or area unreadable, 4 failure.
++#include <algorithm>
++#include <chrono>
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++#include <fstream>
++#include <map>
++#include <memory>
++#include <sstream>
++#include <string>
++#include <vector>
++
++#include "json_escape.h"
++#include "lomn/fs.h"
++#include "lomn/rhi.h"
++#include "lomn/view/area.h"
++#include "lomn/view/synthetic.h"
++
++#if !defined(__EMSCRIPTEN__)
++#include <filesystem>
++
++#include "stb_image_write.h"
++#endif
++
++using namespace lomn;
++using Clock = std::chrono::steady_clock;
++
++namespace {
++
++double ms_since(Clock::time_point t0) { return std::chrono::duration<double, std::milli>(Clock::now() - t0).count(); }
++
++int usage(const char* why) {
++  std::fprintf(stderr, "%s\n", why);
++  std::fprintf(stderr,
++               "usage: lomn_view --install DIR --level LEV --area AREA --out FILE [--backend webgpu|null] [--width W --height H]\n"
++               "                 [--fov DEG --near N --far F --eye x,y,z --yaw DEG --pitch DEG --eye-height H] [--frames N]\n"
++               "                 [--vertex-colors on|off] [--alpha-ref 0..255] [--routes main,trans,back,moveable,nolight]\n"
++               "       lomn_view --synthetic 1 --out FILE [...]   |   lomn_view --install DIR --survey 1 --out FILE.json\n");
++  return 2;
++}
++
++bool parse_float(const std::string& s, float& out) {
++  char* end = nullptr;
++  out = std::strtof(s.c_str(), &end);
++  return !s.empty() && end && *end == '\0';
++}
++bool parse_u32(const std::string& s, uint32_t lo, uint32_t hi, uint32_t& out) {
++  char* end = nullptr;
++  unsigned long v = std::strtoul(s.c_str(), &end, 10);
++  if (s.empty() || !end || *end != '\0' || v < lo || v > hi) return false;
++  out = static_cast<uint32_t>(v);
++  return true;
++}
++std::vector<std::string> split(const std::string& s, char sep) {
++  std::vector<std::string> out;
++  std::stringstream ss(s);
++  for (std::string t; std::getline(ss, t, sep);) out.push_back(t);
++  return out;
++}
++
++std::string num(double v) {
++  char b[64];
++  std::snprintf(b, sizeof b, "%.3f", v);
++  return b;
++}
++std::string vec3(const float* v) { return "[" + num(v[0]) + "," + num(v[1]) + "," + num(v[2]) + "]"; }
++std::string js(const std::string& s) { return "\"" + json_escape(s) + "\""; }
++
++std::string routes_json(const view::AreaStats& st) {
++  static const sage::Route rs[] = {sage::Route::Main, sage::Route::Trans, sage::Route::Back, sage::Route::Moveable, sage::Route::NoLightMoveable};
++  std::string o = "{";
++  for (size_t i = 0; i < 5; ++i)
++    o += std::string(i ? "," : "") + "\"" + sage::route_name(rs[i]) + "\":" + std::to_string(st.routes[static_cast<int>(rs[i])]);
++  return o + "}";
++}
++
++std::string area_counts_json(const view::AreaData& a) {
++  const view::AreaStats& s = a.stats;
++  return "\"art_blk\":" + std::string(a.art_blk ? "true" : "false") + ",\"obj_records\":" + std::to_string(s.obj_records) +
++         ",\"placements\":" + std::to_string(s.placements) + ",\"routes\":" + routes_json(s) + ",\"ignored_records\":" +
++         std::to_string(s.ignored_records) + ",\"disabled_records\":" + std::to_string(s.disabled_records) + ",\"missing_models\":" +
++         std::to_string(s.missing_models) + ",\"placements_with_orientation\":" + std::to_string(s.placements_with_orientation) +
++         ",\"models\":" + std::to_string(s.models) + ",\"models_without_colors\":" + std::to_string(s.models_without_colors) +
++         ",\"subsets\":" + std::to_string(s.subsets) + ",\"alpha_subsets\":" + std::to_string(s.alpha_subsets) + ",\"untextured_subsets\":" +
++         std::to_string(s.untextured_subsets) + ",\"draws\":" + std::to_string(s.draws) + ",\"vertices\":" + std::to_string(s.vertices) +
++         ",\"triangles\":" + std::to_string(s.triangles) + ",\"geometry_bytes\":" + std::to_string(s.geometry_bytes) + ",\"textures\":" +
++         std::to_string(s.textures) + ",\"textures_alpha\":" + std::to_string(s.textures_alpha) + ",\"textures_missing\":" +
++         std::to_string(s.textures_missing) + ",\"textures_failed\":" + std::to_string(s.textures_failed) + ",\"texture_bytes_with_mips\":" +
++         std::to_string(s.texture_bytes) + ",\"pos_records\":" + std::to_string(a.pos_records) + ",\"start\":" +
++         (a.has_start ? "{\"record\":" + std::to_string(a.start_record) + ",\"pos\":" + vec3(a.start) + "}" : std::string("null")) +
++         ",\"bounds\":" + (a.has_bounds ? "{\"min\":" + vec3(a.bounds_min) + ",\"max\":" + vec3(a.bounds_max) + "}" : std::string("null"));
++}
++
++std::string models_json(const view::AreaData& a) {
++  std::vector<std::string> ids;
++  for (const view::Model& m : a.models) ids.push_back(m.id);
++  std::sort(ids.begin(), ids.end());
++  std::string o = "[";
++  for (size_t i = 0; i < ids.size(); ++i) o += std::string(i ? "," : "") + js(ids[i]);
++  return o + "]";
++}
++
++std::string warnings_json(const std::vector<std::string>& w) {
++  std::string o = "[";
++  for (size_t i = 0; i < w.size(); ++i) o += std::string(i ? "," : "") + js(w[i]);
++  return o + "]";
++}
++
++#if !defined(__EMSCRIPTEN__)
++// Every <lev>/<area>.blk under data/levels (sorted), CPU-loaded with load_area. Measures the caps' real maxima.
++int survey(const std::string& install, const std::string& out_path) {
++  namespace sfs = std::filesystem;
++  auto fsp = fs::open_disk(install, (sfs::temp_directory_path() / "lomn_view_user").string());
++  if (!fsp) return std::fprintf(stderr, "cannot open install %s\n", install.c_str()), 3;
++  std::error_code ec;
++  sfs::path levels;
++  for (const auto& d : sfs::directory_iterator(install, ec))
++    if (d.is_directory()) {
++      std::string n = d.path().filename().string();
++      std::transform(n.begin(), n.end(), n.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
++      if (n == "data")
++        for (const auto& l : sfs::directory_iterator(d.path(), ec)) {
++          std::string ln = l.path().filename().string();
++          std::transform(ln.begin(), ln.end(), ln.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
++          if (ln == "levels") levels = l.path();
++        }
++    }
++  if (levels.empty()) return std::fprintf(stderr, "no data/levels in %s\n", install.c_str()), 3;
++  std::vector<std::pair<std::string, std::string>> areas;
++  for (const auto& l : sfs::directory_iterator(levels, ec)) {
++    if (!l.is_directory()) continue;
++    std::string lev = l.path().filename().string();
++    for (const auto& f : sfs::directory_iterator(l.path(), ec)) {
++      std::string n = f.path().filename().string();
++      std::string ln = n;
++      std::transform(ln.begin(), ln.end(), ln.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
++      if (ln.size() < 5 || ln.compare(ln.size() - 4, 4, ".blk") != 0) continue;
++      std::string stem = ln.substr(0, ln.size() - 4);
++      std::string llev = lev;
++      std::transform(llev.begin(), llev.end(), llev.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
++      if (stem == llev) continue;  // the level blockfile itself
++      areas.push_back({llev, stem});
++    }
++  }
++  std::sort(areas.begin(), areas.end());
++  std::string rows;
++  uint64_t max_place = 0, max_draws = 0, max_tex = 0, max_tex_bytes = 0, max_geo = 0, max_records = 0, failures = 0;
++  double total_ms = 0;
++  std::string max_place_at, max_draws_at, max_tex_at, max_tex_bytes_at, max_geo_at;
++  auto track = [](uint64_t v, uint64_t& m, std::string& at, const std::string& where) {
++    if (v > m) {
++      m = v;
++      at = where;
++    }
++  };
++  for (const auto& la : areas) {
++    view::AreaData a;
++    std::string err;
++    const auto t0 = Clock::now();
++    bool ok = view::load_area(*fsp, la.first, la.second, view::AreaOptions(), a, &err);
++    const double ms = ms_since(t0);
++    total_ms += ms;
++    const std::string where = la.first + "/" + la.second;
++    rows += std::string(rows.empty() ? "" : ",\n") + "{\"area\":" + js(where) + ",\"ok\":" + (ok ? "true" : "false");
++    if (!ok) {
++      ++failures;
++      rows += ",\"error\":" + js(err) + "}";
++      continue;
++    }
++    rows += "," + area_counts_json(a) + ",\"load_ms\":" + num(a.stats.load_ms) + ",\"decode_ms\":" + num(a.stats.decode_ms) +
++            ",\"warnings\":" + std::to_string(a.warnings.size()) + "}";
++    max_records = std::max<uint64_t>(max_records, a.stats.obj_records);
++    track(a.stats.placements, max_place, max_place_at, where);
++    track(a.stats.draws, max_draws, max_draws_at, where);
++    track(a.stats.textures, max_tex, max_tex_at, where);
++    track(a.stats.texture_bytes, max_tex_bytes, max_tex_bytes_at, where);
++    track(a.stats.geometry_bytes, max_geo, max_geo_at, where);
++  }
++  std::ofstream o(out_path);
++  o << "{\n\"areas_total\":" << areas.size() << ",\"failures\":" << failures << ",\"total_load_ms\":" << num(total_ms) << ",\n\"max\":{\"obj_records\":" << max_records
++    << ",\"placements\":" << max_place << ",\"placements_at\":" << js(max_place_at) << ",\"draws\":" << max_draws << ",\"draws_at\":"
++    << js(max_draws_at) << ",\"textures\":" << max_tex << ",\"textures_at\":" << js(max_tex_at) << ",\"texture_bytes_with_mips\":"
++    << max_tex_bytes << ",\"texture_bytes_at\":" << js(max_tex_bytes_at) << ",\"geometry_bytes\":" << max_geo << ",\"geometry_bytes_at\":"
++    << js(max_geo_at) << "},\n\"areas\":[\n"
++    << rows << "]}\n";
++  if (!o) return std::fprintf(stderr, "cannot write %s\n", out_path.c_str()), 4;
++  std::printf("survey: %zu areas, %llu failures -> %s\n", areas.size(), static_cast<unsigned long long>(failures), out_path.c_str());
++  return failures ? 4 : 0;
++}
++#endif
++
++}  // namespace
++
++int main(int argc, char** argv) {
++  if ((argc - 1) % 2 != 0) return usage((std::string("option ") + argv[argc - 1] + " needs a value").c_str());
++  std::map<std::string, std::string> a;
++  static const char* known[] = {"--install", "--level", "--area", "--out", "--backend", "--width", "--height", "--frames", "--fov", "--near",
++                                "--far", "--eye", "--yaw", "--pitch", "--eye-height", "--vertex-colors", "--alpha-ref", "--routes",
++                                "--synthetic", "--survey"};
++  for (int i = 1; i + 1 < argc; i += 2) {
++    std::string k = argv[i];
++    if (std::find_if(std::begin(known), std::end(known), [&](const char* x) { return k == x; }) == std::end(known))
++      return usage(("unknown option " + k).c_str());
++    a[k] = argv[i + 1];
++  }
++  auto has = [&](const char* k) { return a.count(k) != 0; };
++  const std::string out = has("--out") ? a["--out"] : "";
++  if (out.empty()) return usage("--out is required");
++  const bool synthetic = has("--synthetic") && a["--synthetic"] == "1";
++  if (has("--survey")) {
++#if defined(__EMSCRIPTEN__)
++    return usage("--survey needs the native disk file system");
++#else
++    if (!has("--install")) return usage("--survey needs --install");
++    return survey(a["--install"], out);
++#endif
++  }
++  std::string level = synthetic ? view::kSyntheticLevel : a["--level"], area = synthetic ? view::kSyntheticArea : a["--area"];
++  if (!synthetic && (!has("--install") || level.empty() || area.empty())) return usage("--install, --level and --area are required");
++  const std::string backend = has("--backend") ? a["--backend"] : "webgpu";
++  if (backend != "webgpu" && backend != "null") return usage(("unknown backend " + backend).c_str());
++
++  uint32_t width = 1280, height = 720, frames = 1;
++  if (synthetic) width = height = 64;
++  view::CameraSettings cs = synthetic ? view::synthetic_camera() : view::CameraSettings();
++  view::RenderOptions ro;
++  view::AreaOptions ao;
++  if (has("--width") && !parse_u32(a["--width"], 1, rhi::kMaxRenderTargetSize, width)) return usage("bad --width");
++  if (has("--height") && !parse_u32(a["--height"], 1, rhi::kMaxRenderTargetSize, height)) return usage("bad --height");
++  if (has("--frames") && !parse_u32(a["--frames"], 1, 100000, frames)) return usage("bad --frames");
++  if (has("--fov") && (!parse_float(a["--fov"], cs.fov_deg) || !(cs.fov_deg > 0.0f && cs.fov_deg < 180.0f))) return usage("bad --fov");
++  if (has("--near") && (!parse_float(a["--near"], cs.near_z) || !(cs.near_z > 0.0f))) return usage("bad --near");
++  if (has("--far") && (!parse_float(a["--far"], cs.far_z) || !(cs.far_z > cs.near_z))) return usage("bad --far");
++  if (!(cs.far_z > cs.near_z)) return usage("--far must be greater than --near");
++  if (has("--eye")) {
++    auto p = split(a["--eye"], ',');
++    if (p.size() != 3) return usage("bad --eye (x,y,z)");
++    for (int k = 0; k < 3; ++k)
++      if (!parse_float(p[k], cs.eye[k])) return usage("bad --eye (x,y,z)");
++    cs.eye_set = true;
++  }
++  if (has("--yaw")) {
++    if (!parse_float(a["--yaw"], cs.yaw_deg)) return usage("bad --yaw");
++    cs.yaw_set = true;
++  }
++  if (has("--pitch") && (!parse_float(a["--pitch"], cs.pitch_deg) || !(cs.pitch_deg > -90.0f && cs.pitch_deg < 90.0f))) return usage("bad --pitch");
++  if (has("--eye-height") && !parse_float(a["--eye-height"], cs.eye_height)) return usage("bad --eye-height");
++  if (has("--vertex-colors")) {
++    if (a["--vertex-colors"] != "on" && a["--vertex-colors"] != "off") return usage("bad --vertex-colors (on|off)");
++    ro.vertex_colors = a["--vertex-colors"] == "on";
++  }
++  if (has("--alpha-ref") && (!parse_float(a["--alpha-ref"], ro.alpha_ref) || !(ro.alpha_ref >= 0.0f && ro.alpha_ref <= 255.0f))) return usage("bad --alpha-ref");
++  if (has("--routes")) {
++    ao.draw_main = ao.draw_trans = ao.draw_back = ao.draw_moveable = ao.draw_nolight = false;
++    for (const std::string& r : split(a["--routes"], ',')) {
++      if (r == "main") ao.draw_main = true;
++      else if (r == "trans") ao.draw_trans = true;
++      else if (r == "back") ao.draw_back = true;
++      else if (r == "moveable") ao.draw_moveable = true;
++      else if (r == "nolight") ao.draw_nolight = true;
++      else return usage(("bad --routes entry " + r).c_str());
++    }
++  }
++
++  // File system: the synthetic scene in memory, or the install on disk (case-insensitive VFS).
++  std::unique_ptr<fs::FileSystem> fsp;
++  if (synthetic) {
++    auto mem = std::make_unique<fs::MemoryFileSystem>();
++    if (!view::mount_synthetic_install(*mem)) return std::fprintf(stderr, "synthetic install failed\n"), 4;
++    fsp = std::move(mem);
++  } else {
++#if defined(__EMSCRIPTEN__)
++    return usage("--install needs the native build (the browser path is M1b)");
++#else
++    fsp = fs::open_disk(a["--install"], (std::filesystem::temp_directory_path() / "lomn_view_user").string());
++    if (!fsp) return std::fprintf(stderr, "cannot open install %s\n", a["--install"].c_str()), 3;
++#endif
++  }
++
++  std::unique_ptr<rhi::Device> dev;
++  std::vector<std::string> calls;
++  if (backend == "null") {
++    dev = rhi::create_null_device(&calls);
++  } else {
++#if defined(LOMN_HAS_WEBGPU)
++    std::string err;
++    rhi::create_webgpu_device(nullptr, 0, 0, [&](std::unique_ptr<rhi::Device> d, std::string e) {
++      dev = std::move(d);
++      err = std::move(e);
++    });
++    if (!dev) return std::fprintf(stderr, "webgpu unavailable: %s\n", err.c_str()), 3;
++#else
++    return std::fprintf(stderr, "webgpu unavailable: built without the WebGPU backend\n"), 3;
++#endif
++  }
++
++  view::AreaData data;
++  std::string err;
++  if (!view::load_area(*fsp, level, area, ao, data, &err)) {
++    std::fprintf(stderr, "%s\n", err.c_str());
++    return err.rfind("area: cannot", 0) == 0 || err.find("blockchain: cannot open") != std::string::npos ? 3 : 4;
++  }
++  const auto t_up = Clock::now();
++  rhi::RenderTargetDesc rd;
++  rd.width = width;
++  rd.height = height;
++  rd.depth = true;
++  rhi::TextureId rt = dev->create_render_target_ex(rd);
++  view::AreaRenderer renderer;
++  if (!rt || !renderer.upload(*dev, data, ro, &err)) {
++    std::fprintf(stderr, "upload failed: %s\n", rt ? err.c_str() : "render target rejected");
++    return 4;
++  }
++  const double upload_ms = ms_since(t_up);
++  const view::Camera cam = view::make_camera(data, cs, static_cast<float>(width) / static_cast<float>(height));
++  std::vector<double> frame_ms;
++  for (uint32_t f = 0; f < frames; ++f) {
++    const auto t0 = Clock::now();
++    renderer.render(*dev, rt, data, cam);
++    frame_ms.push_back(ms_since(t0));
++  }
++  const rhi::FrameStats fstats = dev->last_frame_stats();
++  double readback_ms = 0;
++  bool wrote = false;
++  if (backend == "null") {
++    std::ofstream f(out);
++    for (const auto& c : calls) f << c << '\n';
++    wrote = static_cast<bool>(f);
++  } else {
++#if !defined(__EMSCRIPTEN__)
++    std::vector<uint8_t> px;
++    const auto t0 = Clock::now();
++    if (!dev->read_pixels(rt, px)) return std::fprintf(stderr, "readback failed\n"), 4;
++    readback_ms = ms_since(t0);
++    wrote = stbi_write_png(out.c_str(), static_cast<int>(width), static_cast<int>(height), 4, px.data(), static_cast<int>(width) * 4) != 0;
++#endif
++  }
++  if (!wrote) return std::fprintf(stderr, "cannot write %s\n", out.c_str()), 4;
++
++  std::vector<double> sorted = frame_ms;
++  std::sort(sorted.begin(), sorted.end());
++  const double p50 = sorted[sorted.size() / 2];
++  std::ofstream m(out + ".json");
++  m << "{\n\"tool\":\"lomn_view\",\"level\":" << js(data.level) << ",\"area\":" << js(data.area) << ",\"synthetic\":"
++    << (synthetic ? "true" : "false") << ",\n\"backend\":" << js(dev->backend()) << ",\"adapter\":" << js(dev->adapter())
++    << ",\"width\":" << width << ",\"height\":" << height << ",\n\"frames\":" << frames << ",\"frames_rendered\":" << frame_ms.size()
++    << ",\"load_ms\":" << num(data.stats.load_ms) << ",\"decode_ms\":" << num(data.stats.decode_ms) << ",\"upload_ms\":" << num(upload_ms)
++    << ",\"frame_submit_ms_first\":" << num(frame_ms.front()) << ",\"frame_submit_ms_p50\":" << num(p50) << ",\"readback_ms\":" << num(readback_ms)
++    << ",\n\"draws_last_frame\":" << fstats.draws << ",\"indices_last_frame\":" << fstats.indices << ",\"pipelines\":" << fstats.pipelines_total
++    << ",\"gpu_textures\":" << renderer.textures_created() << ",\"texture_bytes_uploaded\":" << renderer.uploaded_texture_bytes() << ",\n"
++    << area_counts_json(data) << ",\n\"model_ids\":" << models_json(data) << ",\n\"camera\":{\"fallback\":true,\"eye\":" << vec3(cam.eye) << ",\"at\":" << vec3(cam.at)
++    << ",\"eye_source\":" << js(cam.eye_source) << ",\"yaw_deg\":" << num(cam.yaw_deg) << ",\"yaw_source\":" << js(cam.yaw_source)
++    << ",\"pitch_deg\":" << num(cam.pitch_deg) << ",\"fov_deg\":" << num(cam.fov_deg) << ",\"near\":" << num(cam.near_z) << ",\"far\":"
++    << num(cam.far_z) << ",\"aspect\":" << num(cam.aspect) << "},\n\"render\":{\"vertex_colors\":" << (ro.vertex_colors ? "true" : "false")
++    << ",\"alpha_ref\":" << num(ro.alpha_ref) << "},\n\"warnings\":" << warnings_json(data.warnings) << "\n}\n";
++  if (!m) return std::fprintf(stderr, "cannot write %s.json\n", out.c_str()), 4;
++  std::printf("ok %s/%s backend=%s draws=%u textures=%u out=%s\n", data.level.c_str(), data.area.c_str(), dev->backend().c_str(),
++              fstats.draws, data.stats.textures, out.c_str());
++  return 0;
++}

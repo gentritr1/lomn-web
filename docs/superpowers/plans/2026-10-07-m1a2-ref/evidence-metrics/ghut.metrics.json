@@ -1,0 +1,11 @@
+{
+"tool":"lomn_view","level":"lev2","area":"ghut","synthetic":false,
+"backend":"webgpu","adapter":"apple/metal-3/Metal driver on macOS Version 26.5.2 (Build 25F84)","width":1280,"height":720,
+"frames":60,"frames_rendered":60,"load_ms":20.498,"decode_ms":9.751,"upload_ms":4.937,"frame_submit_ms_first":3.631,"frame_submit_ms_p50":0.231,"readback_ms":40.329,
+"draws_last_frame":30,"indices_last_frame":17886,"pipelines":2,"gpu_textures":31,"texture_bytes_uploaded":10052916,
+"art_blk":true,"obj_records":1,"placements":1,"routes":{"main":1,"trans":0,"back":0,"moveable":0,"nolight":0},"ignored_records":0,"disabled_records":0,"missing_models":0,"placements_with_orientation":0,"models":1,"models_without_colors":0,"subsets":30,"alpha_subsets":2,"untextured_subsets":0,"draws":30,"vertices":5268,"triangles":5962,"geometry_bytes":261192,"textures":30,"textures_alpha":2,"textures_missing":0,"textures_failed":0,"texture_bytes_with_mips":10052912,"pos_records":2,"start":{"record":0,"pos":[0.003,-2.325,-15.822]},"bounds":{"min":[-15.831,-5.671,-47.216],"max":[16.031,12.282,-6.201]},
+"model_ids":["main"],
+"camera":{"fallback":true,"eye":[0.003,0.675,-15.822],"at":[0.012,0.501,-16.807],"eye_source":"pos_start","yaw_deg":0.510,"yaw_source":"towards_bounds_centre","pitch_deg":-10.000,"fov_deg":60.000,"near":0.500,"far":4000.000,"aspect":1.778},
+"render":{"vertex_colors":true,"alpha_ref":1.000},
+"warnings":[]
+}
