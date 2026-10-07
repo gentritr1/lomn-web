@@ -490,3 +490,102 @@ TEST_CASE("x: MeshVertexColors with fewer entries than nColors is rejected ('Mes
     CHECK(err.find("MeshVertexColors truncated") != std::string::npos);
   }
 }
+
+// M1a-4 cleanup C1-a: the remaining decode_mesh count/length checks that deleting left the whole suite green. One
+// crafted input per check (per sub-condition where a line holds several), each reaching exactly that check, asserting
+// the exact message. Rows are doctest SUBCASEs so a mutation run can name one row: `lomn_tests -tc="x: crafted*"
+// -sc="<id>"`. The mutation table (check deleted in a scratch copy -> which row fails) is in the M1a-4 cleanup report.
+//   - "ASan" in a row's note = deleting the check reads past the end of the std::vector; the row's list size is a power
+//     of two (vector capacity == size), so ASan reports a heap-buffer-overflow. Plain builds see garbage instead.
+//   - None of the seven lines is redundant: every row below is an input that passes every EARLIER check and is only
+//     stopped by this one (see the per-row reach notes).
+namespace {
+
+struct XRow {
+  const char* id;
+  Bytes bytes;
+  const char* msg;  // the exact error string
+};
+
+// A Mesh object whose body is written by `body`.
+template <class F>
+Bytes mesh_obj(F&& body) {
+  X x;
+  x.obj("Mesh");
+  body(x);
+  x.close();
+  return x.b;
+}
+
+// 3 vertices and one triangle: passes every Mesh-level check; children are added by the row.
+void tri_mesh(X& x) { x.ints({3}).floats({0, 0, 0, 1, 0, 0, 1, 1, 0}).ints({1, 3, 0, 1, 2}); }
+// 4 vertices only (nVertices + positions); the row appends the face list.
+void quad_verts(X& x) { x.ints({4}).floats({0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0}); }
+
+std::vector<XRow> count_length_rows() {
+  std::vector<XRow> r;
+  // L181 "Mesh header truncated": fewer than 2 ints (nVertices, nFaces). ASan / null deref without it (iv[1] / iv[0]).
+  r.push_back({"L181-mesh-1-int", mesh_obj([](X& x) { x.ints({3}); }), "x: Mesh header truncated"});
+  r.push_back({"L181-mesh-0-ints", mesh_obj([](X&) {}), "x: Mesh header truncated"});
+  // L191 "Mesh faces truncated" (k >= size): four quads consume exactly the list (22 ints) while nFaces = 5 still passes
+  // the nf <= (size-2)/4 pre-check (5 <= 5). Fifth face: k == size. Without it: iv[22] is read past the end.
+  r.push_back({"L191-faces-exhausted",
+               mesh_obj([](X& x) { quad_verts(x); x.ints({5, 4, 0, 1, 2, 3, 4, 0, 1, 2, 3, 4, 0, 1, 2, 3, 4, 0, 1, 2, 3}); }),
+               "x: Mesh faces truncated"});
+  // L194 "Mesh faces truncated" (c > size-k-1): one quad announced, its 4 indices cut to 3 (6 ints; nf=1 <= (6-2)/4).
+  r.push_back({"L194-face-longer-than-list", mesh_obj([](X& x) { quad_verts(x); x.ints({1, 4, 0, 1, 2}); }), "x: Mesh faces truncated"});
+  // L210 "MeshNormals header truncated": < 2 ints. ASan / null deref without it (ni[1] / ni[0]).
+  r.push_back({"L210-normals-1-int", mesh_obj([](X& x) { tri_mesh(x); x.obj("MeshNormals").ints({1}).floats({0, 0, 1}).close(); }),
+               "x: MeshNormals header truncated"});
+  r.push_back({"L210-normals-0-ints", mesh_obj([](X& x) { tri_mesh(x); x.obj("MeshNormals").floats({0, 0, 1}).close(); }),
+               "x: MeshNormals header truncated"});
+  // L213 "MeshNormals face count differs": the normals list has 2 faces (both well-formed) for a 1-face mesh. Without
+  // the check the per-face loop only walks nf=1 faces and the file is accepted.
+  r.push_back({"L213-normals-more-faces",
+               mesh_obj([](X& x) { tri_mesh(x); x.obj("MeshNormals").ints({1, 2, 3, 0, 0, 0, 3, 0, 0, 0}).floats({0, 0, 1}).close(); }),
+               "x: MeshNormals face count differs from Mesh"});
+  // L216 "MeshNormals face mismatch", three sub-conditions, each alone:
+  //  (a) q >= ni.size(): normals list has 3 of 4 faces' worth of data (16 ints, nFaces field says 4): the 4th face starts
+  //      at q == 16. ASan without it (ni[16] read past the end).
+  r.push_back({"L216a-normals-exhausted",
+               mesh_obj([](X& x) {
+                 quad_verts(x);
+                 x.ints({4, 4, 0, 1, 2, 3, 4, 0, 1, 2, 3, 3, 0, 1, 2, 3, 0, 1, 2});
+                 x.obj("MeshNormals").ints({1, 4, 4, 0, 0, 0, 0, 4, 0, 0, 0, 0, 3, 0, 0, 0}).floats({0, 0, 1}).close();
+               }),
+               "x: MeshNormals face mismatch"});
+  //  (b) ni[q] != poly_size[f]: a 4-corner normal list for a triangle, with enough ints that (c) cannot fire. Without
+  //      the sub-condition the file is accepted.
+  r.push_back({"L216b-normals-corner-count",
+               mesh_obj([](X& x) { tri_mesh(x); x.obj("MeshNormals").ints({1, 1, 4, 0, 0, 0, 0}).floats({0, 0, 1}).close(); }),
+               "x: MeshNormals face mismatch"});
+  //  (c) ni[q] > ni.size()-q-1: the corner count matches (3) but only 2 indices remain. Without it ni[5] is read past
+  //      the end (garbage index in a plain build, an ASan report in the sanitizer build).
+  r.push_back({"L216c-normals-list-cut",
+               mesh_obj([](X& x) { tri_mesh(x); x.obj("MeshNormals").ints({1, 1, 3, 0, 0}).floats({0, 0, 1}).close(); }),
+               "x: MeshNormals face mismatch"});
+  // L228 "MeshTextureCoords count differs from nVertices", both sub-conditions:
+  //  (a) mt->ints.empty(): no count at all. Without it mt->ints[0] dereferences a null vector.
+  r.push_back({"L228a-uv-no-count", mesh_obj([](X& x) { tri_mesh(x); x.obj("MeshTextureCoords").floats({0, 0, 1, 0, 1, 1}).close(); }),
+               "x: MeshTextureCoords count differs from nVertices"});
+  //  (b) ints[0] != nv: 5 UVs of floats for a 3-vertex mesh (the later 'floats short' check only looks at nv, so the file
+  //      would be accepted).
+  r.push_back({"L228b-uv-count-differs",
+               mesh_obj([](X& x) { tri_mesh(x); x.obj("MeshTextureCoords").ints({5}).floats({0, 0, 1, 0, 1, 1, 0, 1, 0.5f, 0.5f}).close(); }),
+               "x: MeshTextureCoords count differs from nVertices"});
+  return r;
+}
+
+}  // namespace
+
+TEST_CASE("x: crafted count/length rejections, one input per decode_mesh check (cleanup C1-a)") {
+  for (const XRow& row : count_length_rows()) {
+    SUBCASE(row.id) {
+      XFile xf;
+      std::string err;
+      CHECK_FALSE(parse_x(row.bytes.data(), row.bytes.size(), xf, &err));
+      CHECK(err == row.msg);
+      CHECK(is_default(xf));  // nothing partial leaks out
+    }
+  }
+}
