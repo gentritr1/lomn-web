@@ -5,8 +5,10 @@ Writes tools/decomp/data/d3d8_vtables.txt:
   m <slot> <MethodName>
 """
 import hashlib
+import os
 import re
 import sys
+import tempfile
 import urllib.request
 
 D3D8_H_COMMIT = "2bcf06abc9ec5f8f73c743896b815a7a7654f9ae"
@@ -40,8 +42,27 @@ def fetch() -> str:
     return raw.decode("latin1")
 
 
-if __name__ == "__main__":
-    out = sys.argv[1]
-    with open(out, "w") as f:
-        f.write(render(fetch()))
+def main(argv: list[str]) -> int:
+    """Write D3D8 vtables to output file atomically.
+
+    Args:
+        argv: Command-line arguments; argv[0] is the output file path.
+
+    Returns:
+        0 on success; raises SystemExit on error.
+    """
+    out = argv[0]
+    # Compute text first, before touching the output file
+    text = render(fetch())
+    # Write atomically: to a .tmp file first, then replace
+    out_dir = os.path.dirname(out) or "."
+    tmp = os.path.join(out_dir, os.path.basename(out) + ".tmp")
+    with open(tmp, "w") as f:
+        f.write(text)
+    os.replace(tmp, out)
     print("wrote", out)
+    return 0
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])
