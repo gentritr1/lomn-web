@@ -200,9 +200,29 @@ def wgsl_layout(wgsl):
     body = re.search(r'struct U \{([^}]*)\}', wgsl)
     if not body:
         raise SystemExit('ffp_oracle: no `struct U` in the WGSL')
-    out, at = {}, 0
-    for name, ty in re.findall(r'(\w+)\s*:\s*(array<[^>]*>|\w+)\s*,', body.group(1) + ','):
-        m = re.fullmatch(r'array<vec4f,\s*(\d+)>', ty)
+    # M1a-4 fix round 1 (M-6): fail closed. Every member (split at top-level commas) must be exactly `name: type` with a
+    # type this oracle sizes; an attribute (@align/@size/...) or any other type is an error naming the field, so the
+    # layout can never shift silently.
+    out, at, depth, cur, members = {}, 0, 0, '', []
+    for ch in body.group(1):
+        depth += ch == '<'
+        depth -= ch == '>'
+        if ch == ',' and depth == 0:
+            members.append(cur)
+            cur = ''
+        else:
+            cur += ch
+    members.append(cur)
+    for mem in (x.strip() for x in members):
+        if not mem:
+            continue
+        name = re.findall(r'(\w+)\s*:', mem)
+        name = name[0] if name else mem
+        if '@' in mem:
+            raise SystemExit('ffp_oracle: uniform field %s has an attribute (%s): not modelled' % (name, mem))
+        f = re.fullmatch(r'(\w+)\s*:\s*(.+)', mem)
+        ty = f.group(2).strip() if f else None
+        m = re.fullmatch(r'array<vec4f,\s*(\d+)>', ty) if ty else None
         size = 16 if ty == 'mat4x4f' else 4 if ty == 'vec4f' else 4 * int(m.group(1)) if m else None
         if size is None:
             raise SystemExit('ffp_oracle: uniform field %s has an unmodelled type %s' % (name, ty))

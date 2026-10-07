@@ -149,3 +149,24 @@ def test_uniform_block_is_checked_against_the_wgsl_layout(tmp_path):
         assert "MISMATCH uniforms %s: %s" % (what, field) in r.stdout, r.stdout
     r = run(tmp_path, [good], header=False)
     assert r.returncode == 1 and "no WGSL header line" in r.stdout, r.stdout
+
+
+def test_wgsl_layout_fails_closed(tmp_path):
+    """M1a-4 fix round 1 (M-6): an @align/@size attribute or a field type the oracle cannot size ends the run with an
+    error naming the field, never a silently shifted layout."""
+    sys.path.insert(0, str(ORACLE.parent))
+    import ffp_oracle
+    import pytest
+    ok = "struct U {\n  a: vec4f,\n  m: mat4x4f,\n  l: array<vec4f, 2>,\n}\n"
+    assert ffp_oracle.wgsl_layout(ok) == {"a": (0, 4), "m": (4, 16), "l": (20, 8)}
+    for body, field in (("  a: vec4f,\n  @align(16) b: vec4f,\n", "b"), ("  a: vec4f,\n  @size(32) b: vec4f,\n", "b"),
+                        ("  a: vec3<f32>,\n  b: vec4f,\n", "a"), ("  a: vec4f,\n  b: f32,\n", "b"),
+                        ("  a: vec4f,\n  b: array<vec4f>,\n", "b")):
+        with pytest.raises(SystemExit) as e:
+            ffp_oracle.wgsl_layout("struct U {\n" + body + "}\n")
+        assert ("field %s" % field) in str(e.value), (body, str(e.value))
+    # A whole uniform file whose header shader uses an attribute fails the run (exit != 0), naming the field.
+    p = tmp_path / "c.jsonl"
+    p.write_text(json.dumps({"wgsl": "struct U {\n  @align(16) d: vec4f,\n}\n"}) + "\n")
+    r = subprocess.run([sys.executable, str(ORACLE), str(p)], capture_output=True, text=True, timeout=60)
+    assert r.returncode != 0 and "field d" in (r.stdout + r.stderr), r.stdout + r.stderr
