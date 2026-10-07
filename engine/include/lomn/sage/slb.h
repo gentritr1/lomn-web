@@ -91,7 +91,8 @@ enum class Route { Ignored, Main, Trans, Back, Moveable, NoLightMoveable };
 Route route(uint32_t flags);
 const char* route_name(Route r);  // "ignored" | "main" | "trans" | "back" | "moveable" | "nolight"
 
-// Cinematic tables use another header and are not placement tables: cin*_obj.slb (case-insensitive basename).
+// Cinematic tables use another header and are not placement tables: the whole entry name must match
+// cin*_obj.slb case-insensitively (no directory stripping: BLK entry names carry no path).
 bool is_cinematic_obj(const std::string& entry_name);
 
 }  // namespace lomn::sage

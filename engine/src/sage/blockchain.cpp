@@ -36,8 +36,16 @@ bool BlockChain::open_second(std::string_view path, std::string* err) { return o
 bool BlockChain::enter_area(std::string_view level, std::string_view area, std::string* err) {
   // "%.4s": the game truncates both ids to 4 characters.
   std::string lev(level.substr(0, 4)), are(area.substr(0, 4));
-  if (!open_second("Root/Data/Levels/" + lev + "/" + lev + ".blk", err)) return false;
-  return open_current("Root/Data/Levels/" + lev + "/" + are + ".blk", err);
+  // A failed entry leaves NO area entered (not the previous one, not half of the new one).
+  clear_current();
+  clear_second();
+  if (!open_second("Root/Data/Levels/" + lev + "/" + lev + ".blk", err) ||
+      !open_current("Root/Data/Levels/" + lev + "/" + are + ".blk", err)) {
+    clear_current();
+    clear_second();
+    return false;
+  }
+  return true;
 }
 
 const BlockFile* BlockChain::blockfile(Source s) const {

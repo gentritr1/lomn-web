@@ -115,3 +115,27 @@ TEST_CASE("blockchain: missing or corrupt blockfiles fail to open; range reads a
   CHECK(m.size("Root/data/BAD.blk", size) == fs::Error::None);
   CHECK(size == 12);
 }
+
+TEST_CASE("blockchain: a failed enter_area leaves no area entered") {
+  fs::MemoryFileSystem m;
+  mount_world(m);
+  BlockChain c(m);
+  std::string err;
+  REQUIRE(c.open_art("Root/Data/Art/Art.blk", &err));
+  REQUIRE(c.enter_area("lev1", "vllg", &err));
+  Source from;
+  REQUIRE(load_str(c, "main.x", &from) == "area-main");  // only the old area's blk has main.x
+  CHECK_FALSE(c.enter_area("lev9", "zzzz", &err));      // level blk missing
+  CHECK(c.blockfile(Source::Current) == nullptr);
+  CHECK(c.blockfile(Source::Second) == nullptr);
+  CHECK(load_str(c, "main.x", &from).front() == '<');    // old area is gone
+  CHECK(from == Source::None);
+  // "no area" now: Art, then the disk.
+  CHECK(load_str(c, "Root/data/loose.txt", &from) == "disk");
+  CHECK(from == Source::Disk);
+  // The level blk opens but the area blk is missing: neither stays open.
+  REQUIRE(c.enter_area("lev1", "vllg", &err));
+  CHECK_FALSE(c.enter_area("lev1", "nope", &err));
+  CHECK(c.blockfile(Source::Current) == nullptr);
+  CHECK(c.blockfile(Source::Second) == nullptr);
+}
