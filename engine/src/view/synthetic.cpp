@@ -423,6 +423,12 @@ bool mount_synthetic_install(fs::MemoryFileSystem& fs) {
                                 {"nope", 0, 0, 0, 0x04},
                                 {"miss", 0, 0, 0, 0x10}})},
       {"test_pos.slb", pos_slb({{"pkup", 1, 2, 3, 0x60}, {"strt", 0, 0, 10, 0x1000}})},
+      // M1a-4 fix round 1 (M-1): lights for an area WITHOUT a SetCaveLighting call (no lego_area_testt class), so the
+      // A9 oracle sees ctor intensities: a style-1 point light at intensity 1.0 (> 0.9: the x1.2 boost) and a
+      // directional record at intensity 0.5 whose "Shad" fill takes the record's intensity. The A7 scene draws unlit,
+      // so no uniform (and no A7 call-log line) changes.
+      {"test_light.slb", light_slb({{"lmp2", 1, 2, 3, 1.0f, 10.0f, 1, 0.75f, 0.5f, 1, 0x42},
+                                    {"sun2", 0.25f, -1, 0.5f, 0.5f, 0, 0.6f, 0.7f, 0.8f, 1, 0x80}})},
   });
   // The A9 state scene: the A7 objects plus a plant ("plnt": fog toggle + DrawX context flag), "mixm" (alpha 128,
   // "_glass" mTrans 0, textures.slb TFACTOR 0.5), the two GcTransDirector::SortIt special ids (Task 8A E1) - "sky1"
