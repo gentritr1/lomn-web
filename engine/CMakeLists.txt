@@ -122,6 +122,15 @@ else()
            "if [ -z \"$LOMN_DATA\" ]; then echo 'SKIPPED (no LOMN_DATA)'; exit 77; fi; mkdir -p \"$1\"; for la in lev1:vllg lev2:ghut lev4:crss; do l=\${la%%:*}; a=\${la##*:}; \"$0\" --install \"$LOMN_DATA/install\" --level $l --area $a --backend null --out \"$1/$a.txt\" --state-log \"$1/$a.state.txt\" >/dev/null || exit 1; timeout 120 python3 \"$2\" --install \"$LOMN_DATA/install\" --level $l --area $a --compare \"$1/$a.state.txt\" || exit 1; done"
            $<TARGET_FILE:lomn_view> ${CMAKE_CURRENT_BINARY_DIR}/a9_oracle_real ${CMAKE_CURRENT_SOURCE_DIR}/../tools/research/oracle/a9_oracle.py)
   set_tests_properties(a9_oracle_real PROPERTIES SKIP_RETURN_CODE 77)
+  # M1a-3 Task 8A C1: C++ OsiFile::eval_calls vs the independent Python evaluator (tools/research/osi.py) over EVERY
+  # class.method pair of the real Base.osi (8,406 on Beta 1.5.0): 0 mismatches. 77 = skip without LOMN_DATA.
+  add_executable(lomn_osi_dump tools/lomn_osi_dump.cpp)
+  target_link_libraries(lomn_osi_dump PRIVATE lomn_sage)
+  target_compile_options(lomn_osi_dump PRIVATE -Wall -Wextra)
+  add_test(NAME osi_all_methods COMMAND sh -c
+           "if [ -z \"$LOMN_DATA\" ]; then echo 'SKIPPED (no LOMN_DATA)'; exit 77; fi; b=\"$LOMN_DATA/install/data/Base.osi\"; timeout 120 \"$0\" \"$b\" > \"$1\" || exit 1; timeout 120 python3 \"$2\" \"$b\" --compare-all \"$1\""
+           $<TARGET_FILE:lomn_osi_dump> ${CMAKE_CURRENT_BINARY_DIR}/osi_all_methods.txt ${CMAKE_CURRENT_SOURCE_DIR}/../tools/research/osi.py)
+  set_tests_properties(osi_all_methods PROPERTIES SKIP_RETURN_CODE 77)
   add_test(NAME view_cli_dangling_flag COMMAND sh -c
            "\"$0\" --synthetic 1 --backend null --out \"$1\" --fov >/dev/null 2>&1; [ $? -eq 2 ]"
            $<TARGET_FILE:lomn_view> ${CMAKE_CURRENT_BINARY_DIR}/view_dangling.txt)

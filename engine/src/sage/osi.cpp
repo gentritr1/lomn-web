@@ -181,7 +181,9 @@ bool OsiFile::disasm(uint32_t start, std::vector<Insn>& out, std::string* err) c
         case 'i': case 'I': {
           uint32_t x;
           if (!c.u32(x)) return fail(err, "truncated operand");
-          v = ops[k] == 'i' ? static_cast<int32_t>(x) : x;
+          // Task 8A C1: both arms must be int64_t. `cond ? int32_t : uint32_t` has the common type uint32_t, which
+          // turned PushConstanti32 (0x40) -1 into 4294967295 (and 0x84's first operand likewise); 'i' is signed.
+          v = ops[k] == 'i' ? int64_t(int32_t(x)) : int64_t(x);
           break;
         }
         case 'f': {

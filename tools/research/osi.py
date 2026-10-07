@@ -15,6 +15,8 @@ Two call finders, which answer DIFFERENT questions (do not cross-check one again
                                   colour prints as 0).  CLI: --plain-calls class.func ...
 
 Usage: osi.py Base.osi --eval lego_area_vllg initfull                                  (JSON to stdout)
+       osi.py Base.osi --dump-all          (every class.method's evaluated calls, canonical text; see dump_all)
+       osi.py Base.osi --compare-all CPP_DUMP   (vs engine/tools/lomn_osi_dump.cpp; exit 1 on any mismatch)
        osi.py Base.osi --plain-calls gcareadirector.setfog gcgraphicsoptions.setdrawdistance ...
        osi.py Base.osi --summary
 """
@@ -229,9 +231,66 @@ def eval_calls(d, o, cls, method):
     return calls
 
 
+def _arg_text(v):
+    """Canonical text of one evaluated argument (the same format as the C++ dump, engine/tools/lomn_osi_dump.cpp):
+    i:<decimal>, f:<f32 bits, 8 hex> (the C++ evaluator stores each fold as float32, this one keeps float64; both are
+    compared after one double->f32 round to nearest even, so a CHAIN of float folds could differ - none does on the real
+    Base.osi), f:nan (any NaN: payload bits are not compared), s:<latin1 bytes as hex>, ? = unknown."""
+    if v is None:
+        return '?'
+    if isinstance(v, str):
+        return 's:' + v.encode('latin1').hex()
+    if isinstance(v, float):
+        if v != v:
+            return 'f:nan'
+        try:
+            bits = struct.unpack('<I', struct.pack('<f', v))[0]
+        except OverflowError:  # finite double beyond float32: the C++ cast gives +-inf
+            bits = 0x7f800000 if v > 0 else 0xff800000
+        return 'f:%08x' % bits
+    return 'i:%d' % v
+
+
+def dump_all(d, o):
+    """One line per class.method pair (every pair, in table order, shared bytecode included):
+    'class.method<TAB>call(args) | call(args) ...' with the evaluator's literal arguments."""
+    out = []
+    for cname, _, meths in o['classes']:
+        for sym, _ in meths:
+            mname = o['symbols'][sym] if sym < len(o['symbols']) else '?'
+            try:
+                calls = eval_calls(d, o, cname, mname)
+                body = ' | '.join('%s(%s)' % (k, ','.join(_arg_text(x) for x in a)) for k, a in calls)
+            except (OsiError, IndexError):
+                body = 'ERROR'
+            out.append('%s.%s\t%s' % (cname.lower(), mname.lower(), body))
+    return out
+
+
+def compare_all(d, o, cpp_path):
+    """C++ (lomn_osi_dump) vs this evaluator over every class.method pair; exit status 1 on any difference."""
+    mine = dump_all(d, o)
+    theirs = open(cpp_path, encoding='latin1').read().splitlines()
+    bad = [(i, a, b) for i, (a, b) in enumerate(zip(mine, theirs)) if a != b]
+    ncalls = sum(0 if not l.split('\t', 1)[1] else l.split('\t', 1)[1].count(' | ') + 1 for l in mine)
+    for i, a, b in bad[:5]:
+        print('MISMATCH line %d:\n  python: %s\n  c++:    %s' % (i + 1, a[:300], b[:300]))
+    if len(mine) != len(theirs):
+        print('LENGTH differs: python %d methods, c++ %d' % (len(mine), len(theirs)))
+        return 1
+    print('osi all-methods: %d class.method pairs, %d calls, %d mismatches (C++ eval_calls vs osi.py eval_calls)'
+          % (len(mine), ncalls, len(bad)))
+    return 1 if bad else 0
+
+
 def main():
     d = open(sys.argv[1], 'rb').read()
     o = parse(d)
+    if '--dump-all' in sys.argv:
+        print('\n'.join(dump_all(d, o)))
+        return
+    if '--compare-all' in sys.argv:
+        sys.exit(compare_all(d, o, sys.argv[sys.argv.index('--compare-all') + 1]))
     if '--summary' in sys.argv:
         n = sum(len(disasm(d, off)) for _, off in subroutines(o))
         print(json.dumps({'version': o['version'], 'strings': len(o['strings']), 'globals': len(o['globals']),

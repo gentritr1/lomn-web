@@ -2,6 +2,7 @@
 // carries the same bytes) and hostile variants of it: every truncation, bit flips, a bad version, an unknown opcode,
 // every per-file / per-method cap (REF3 revision 2: values measured on the real Base.osi, see osi.h).
 // The time/memory side of the caps is probed by probe_osi.cpp (ctest osi_probe, native and wasm32).
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -37,8 +38,9 @@ TEST_CASE("osi: tables and the straight-line literal finder") {
   CHECK(calls[0].fn == "setfog");
   REQUIRE(calls[0].args.size() == 4);
   double v = 0;
-  REQUIRE(calls[0].args[0].number(v));
-  CHECK(static_cast<uint32_t>(static_cast<int64_t>(v)) == 0xff808080u);
+  // PushConstanti32 (0x40) is a SIGNED 32-bit operand (Task 8A C1): 0xff808080 is -8,355,712, as osi.py decodes it.
+  REQUIRE(calls[0].args[0].kind == sage::OsiValue::Int);
+  CHECK(calls[0].args[0].i == int64_t(int32_t(0xff808080u)));
   REQUIRE(calls[0].args[1].number(v));
   CHECK(v == -5.0);  // 0 - 5 folded
   REQUIRE(calls[0].args[2].number(v));
@@ -49,6 +51,47 @@ TEST_CASE("osi: tables and the straight-line literal finder") {
   CHECK(v == 1.0);
   CHECK_FALSE(o.eval_calls("lego_area_none", "initfull", calls, &err));
   CHECK_FALSE(o.eval_calls("lego_area_statt", "process", calls, &err));
+}
+
+TEST_CASE("osi: signed 32-bit pushes and the integer/float folds (Task 8A C1)") {
+  // push i32 -5, push i8 3, Add -> int -2; push i32 INT_MIN, push i32 -1, Divide -> float 2147483648 (Divide always
+  // folds as a float); push i32 -1 -> int -1; push i32 INT_MIN, push i32 -1, Multiply -> int 2147483648 (folds are in
+  // 64 bits: no 32-bit wrap, as osi.py's Python ints); push u32 0xffffffff (0x48) -> int 4294967295 (unsigned).
+  std::vector<uint8_t> c;
+  auto i32 = [&](int32_t v) {
+    c.push_back(0x40);
+    test::osi_put32(c, static_cast<uint32_t>(v));
+  };
+  i32(-5);
+  c.insert(c.end(), {0x43, 3, 0x70});
+  i32(INT32_MIN);
+  i32(-1);
+  c.push_back(0x73);
+  i32(-1);
+  i32(INT32_MIN);
+  i32(-1);
+  c.push_back(0x72);
+  c.push_back(0x48);
+  test::osi_put32(c, 0xffffffffu);
+  c.insert(c.end(), {0x82, 0, 0, 1, 0, 5, 0x30, 0x52});
+  sage::OsiFile o;
+  std::string err;
+  REQUIRE_MESSAGE(o.parse(with_code(c), &err), err);
+  std::vector<sage::OsiCall> calls;
+  REQUIRE_MESSAGE(o.eval_calls("lego_area_statt", "initfull", calls, &err), err);
+  REQUIRE(calls.size() == 1);
+  REQUIRE(calls[0].args.size() == 5);
+  const auto& a = calls[0].args;
+  CHECK(a[0].kind == sage::OsiValue::Int);
+  CHECK(a[0].i == -2);
+  CHECK(a[1].kind == sage::OsiValue::Float);
+  CHECK(a[1].f == 2147483648.0f);
+  CHECK(a[2].kind == sage::OsiValue::Int);
+  CHECK(a[2].i == -1);
+  CHECK(a[3].kind == sage::OsiValue::Int);
+  CHECK(a[3].i == 2147483648ll);
+  CHECK(a[4].kind == sage::OsiValue::Int);
+  CHECK(a[4].i == 4294967295ll);
 }
 
 TEST_CASE("osi: every truncation and 2000 bit flips fail cleanly or parse; bad version and opcodes are rejected") {
