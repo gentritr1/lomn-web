@@ -13,8 +13,15 @@ export async function launch(profileDir) {
 }
 
 // Console errors/warnings, page exceptions and every request the page makes (any origin): URL, method and request-body bytes.
+// T8 P10: also records the navigations the TEST makes (page.goto, page.reload) in w.expected_navs as "path?query" keys.
+// networkCheck treats every other top-level navigation (a window.open popup, a script-driven location change) as a finding.
+export const navKey = (u) => { try { const x = new URL(u, 'http://x'); return x.pathname + x.search; } catch { return String(u); } };
 export function watch(page) {
-  const w = { console: [], errors: [], urls: [], reqs: [] };
+  const w = { console: [], errors: [], urls: [], reqs: [], expected_navs: new Set() };
+  const goto = page.goto?.bind(page);
+  if (goto) page.goto = (u, ...rest) => { w.expected_navs.add(navKey(u)); return goto(u, ...rest); };
+  const reload = page.reload?.bind(page);
+  if (reload) page.reload = (...rest) => { w.expected_navs.add(navKey(page.url())); return reload(...rest); };
   page.on('console', (m) => {
     if (!['error', 'warning'].includes(m.type())) return;
     if (m.location().url.endsWith('/favicon.ico')) return;  // the test server answers 404 for the favicon
@@ -112,6 +119,9 @@ export function diffRgb(a, b) {
 // (method, bytes read), so an upload to a path that is in the manifest fails too ("nothing is uploaded" is a product promise).
 // Review fix N2: data can also leave in the URL: any request other than the page's own top-level navigation (whose
 // ?hud=1&area=... is the page's, and which the browser marks via Sec-Fetch-*) must have no query string or fragment.
+// T8 P10: "the page's own top-level navigation" means one the TEST made (watch() records page.goto / page.reload URLs): a
+// window.open('/index.html?d=...') popup is also a top-level navigation by Sec-Fetch-*, so any top-level navigation whose
+// path+query the test did not open is a finding (`navigations`), seen server-side (all pages) and browser-side (this page).
 export function networkCheck(srv, site, watcher, fromResponse = 0, fromUrl = 0) {
   const manifest = JSON.parse(fs.readFileSync(path.join(site, 'asset-manifest.json'), 'utf8'));
   const allowed = new Set(manifest.files.map((f) => '/' + f.path).concat(['/', '/asset-manifest.json', '/favicon.ico']));
@@ -131,5 +141,10 @@ export function networkCheck(srv, site, watcher, fromResponse = 0, fromUrl = 0) 
     ...watcher.reqs.slice(fromUrl).filter((x) => !x.top_nav && hasData(x.url)).map((x) => ({ side: 'browser', url: x.url })),
     ...resp.filter((r) => !r.top_nav && hasData(r.url ?? r.path)).map((r) => ({ side: 'server', url: r.url })),
   ];
-  return { ok: !foreignPaths.length && !foreignUrls.length && !uploads.length && !queries.length && bytes <= buildBytes, foreignPaths, foreignUrls, uploads, queries, bytes, buildBytes, responses: resp.length };
+  const expected = watcher.expected_navs ?? new Set();
+  const navigations = [
+    ...watcher.reqs.slice(fromUrl).filter((x) => x.top_nav && !expected.has(navKey(x.url))).map((x) => ({ side: 'browser', url: x.url })),
+    ...resp.filter((r) => r.top_nav && !expected.has(navKey(r.url ?? r.path))).map((r) => ({ side: 'server', url: r.url })),
+  ];
+  return { ok: !foreignPaths.length && !foreignUrls.length && !uploads.length && !queries.length && !navigations.length && bytes <= buildBytes, foreignPaths, foreignUrls, uploads, queries, navigations, bytes, buildBytes, responses: resp.length };
 }
