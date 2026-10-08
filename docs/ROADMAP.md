@@ -67,7 +67,7 @@ Workspace: `.superpowers/sdd/2026-10-08-lomn-web-m2a1/`. It is git-ignored; the 
 4. Remove the finished task worktrees: `lomn-web-m2-{vm,oracle,ca,cb,t6,t7}`.
 
 ### 3.2 M2a-2: native framework, Setup to the first Process
-Process: consult Fable, then plan, then subagent-driven development.
+Process: the controller (Opus 5.5) writes the spec and plan, Fable 5.1 reviews them once for precision, then subagent-driven development with Sonnet 5.5 / Opus 5.5 medium.
 - Generated typed stubs for every native, with real returns for the 3 copy-kind natives.
 - The natives `Setup` needs, implemented against the decomp with a citation per native.
 - `lomn_view --script`: Setup plus N Process frames, headless, native and wasm32.
@@ -96,7 +96,7 @@ Tile fonts (binary `.fnt`), HUD sprites, text and rectangles through the D3D8 sh
   - you test it in your browser.
 
 ### 3.5 M3 onward
-Each milestone starts with its own Fable consult, then a spec, then a plan; none is planned yet.
+Each milestone gets a spec and a plan (Opus 5.5), one Fable 5.1 precision review of them before implementation, and a Fable final review at its end; none is planned yet.
 - M3, one playable area: needs traces from the original game as its oracle. Expect to be asked for recordings.
 - M4: audio, cutscenes, saves.
 - M5: the full game.
@@ -130,7 +130,13 @@ Each milestone starts with its own Fable consult, then a spec, then a plan; none
 - **Never run** the game's .exe or any DLL; parse them as data only.
 - **Never commit:** game data, renders, decompiled code blocks, or assembled .osi files. `gen/` stays out of git.
 - **Scrub personal paths** before any commit.
-- **Roles:** Claude subagents implement, never Codex. The controller specs, reviews and owns git, and consults Fable before every spec and plan.
+- **Roles:** Claude subagents implement, never Codex. The controller specs, reviews and owns git.
+- **Models (owner direction 2026-10-08, on API credits):**
+  - **Fable 5.1:** only for one precise review of each sub-milestone's spec and plan before implementation, and for the final review at the end of each milestone (M2, M3…).
+  - **Opus 5.5 at medium effort:** the controller, design-heavy implementation, risky-code reviews, and sub-milestone final reviews.
+  - **Sonnet 5.5:** well-specified implementation, corpus authoring, mechanical fixes, and scoped re-reviews.
+  - Start a fresh session per sub-milestone and resume from this file. Fast mode stays off.
+  - Record $ spent per sub-milestone from the Console dashboard.
 - **Verification:**
   - run it on a frozen `git archive` copy;
   - the copy needs a `.toolchain` symlink, a real `.venv/` with symlinks and `.ok`, and `.env.local`;
