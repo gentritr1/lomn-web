@@ -21,8 +21,8 @@ Inside M2:
 | Sub-milestone | Acceptance | State |
 |---|---|---|
 | M2a-0 | completed decompiled code plus citation tables for 96 opcodes and 1,056 natives | done |
-| M2a-1 | VM core, an independent Python oracle, a 527-program conformance corpus; Base.osi Setup plus 600 frames byte-identical across native, wasm32 and Python; mutation bite and fuzz seed | done; **final review running** (§3) |
-| M2a-2 | native framework; `Setup` runs to the first `Process`; `lomn_view --script` runs N frames headless | next |
+| M2a-1 | VM core, an independent Python oracle, a 528-program conformance corpus; Base.osi Setup plus 600 frames byte-identical across native, wasm32 and Python; mutation bite and fuzz seed | **done 2026-10-09** (gate green on 5734f02) |
+| M2a-2 | native framework; `Setup` runs to the first `Process`; `lomn_view --script` runs N frames headless | **next** |
 | M2a-3 | menu systems: tile fonts, HUD sprites and text, camera spline, SDL3 input → `Input`/`OnEvent`, `Bionicle.ini`; the menu renders | after M2a-2; **needs your menu screenshots** |
 | M2a-4 | hardening: VM fuzz under ASan/UBSan, native and wasm32; caps measured; perf entries | after M2a-3 |
 | M2b | the browser page boots to the main menu; keys drive the menu | ends M2 |
@@ -49,24 +49,16 @@ Controller-verified 2026-10-08: the page loads to the folder picker with 0 conso
 
 ## 3. Resume steps, in order
 
-### 3.1 Close M2a-1
-Workspace: `.superpowers/sdd/2026-10-08-lomn-web-m2a1/`. It is git-ignored; the ledger is `progress.md`.
-1. **Fable final review: done 2026-10-08, READY WITH FIXES** (0 Critical, 2 Important, 7 Minor; full report in `final-review-report.md`).
-   - **I1:** atof's overflow test. The C++ VM and `expect_calc` decide by the raw decimal exponent, but the binary uses the exponent adjusted after digit normalisation (0x65c5c1–0x65c624). Example: `"10e32767"` wrongly switches fpu_pc to 64. Fix: port the oracle's `_strtold_overflow` model into `engine/src/osi/convert.cpp` and `tools/osi/expect_calc.py`, reword `docs/osi/opcodes.md`, and add unit and trace-cmp cases.
-   - **I2:** deep re-entrant engine calls crash wasm32 ("memory access out of bounds") before the 1000-slot cap fires; native is correct. Fix: an explicit engine-call nesting cap in both engines, `-sSTACK_SIZE`/`STACK_OVERFLOW_CHECK` on the wasm targets, and a corpus program. This must land before M2a-2 adds re-entrant natives.
-   - **Minors:** the oracle's RecursionError on deep re-entry; the stale S05 regex below, plus an anchors test that FAIL regexes name existing programs; type-only expectation compare; dead `Heap::duplicate_in_place`; divergences on undefined inputs. The report lists them all.
+### 3.1 M2a-1: closed 2026-10-09
+- The Fable final review was READY WITH FIXES. Every Critical and Important finding is fixed: I1 (726789c) and I2 (9a1b467). The minors M2, M3 and M6 and the atof overflow are fixed too (f7d859d, 0ccf4ee, 0a964d5).
+- Each fix was verified by the controller, and I1 and I2 also had an Opus review.
+- The gate on 5734f02 is all green.
+- Items carried into M2a-2:
+  - a native that catches a nested VmError and continues: C++ and the oracle resume at different PCs. This needs an asm ruling and a corpus program with a swallowing native.
+  - re-measure the maximum engine-call nesting with real natives (cap 64; measured max 1 with stubs);
+  - E3 rep 3 (Haiku vs Sonnet).
 
-2. **One fix dispatch** covering every Critical and Important finding. Also add the ledgered ruling: widen S05's `conform` EXPECT regex in `tools/research/oracle/mutate_vm.py:196` to the new programs `a/0x70-float-negative-lhs-cancels-to-positive-zero` and `a/0x71-float-negative-lhs-minus-itself-positive-zero`. Then:
-   - a scoped re-review;
-   - a frozen-copy check: anchors, `make conform-trace-cmp`, `mutate_vm --only S05`, the A6 differential. Delete the copy once its result is ledgered.
-3. **Close-out:**
-   - ledger, metrics (`~/.claude/process-metrics/lomn-web.jsonl`), board, memory;
-   - E2 round 3 notes in `docs/knowledge/process-experiments.md`;
-   - numbers in `docs/knowledge/measurements.md`;
-   - this file.
-4. Remove the finished task worktrees: `lomn-web-m2-{vm,oracle,ca,cb,t6,t7}`.
-
-### 3.2 M2a-2: native framework, Setup to the first Process
+### 3.2 M2a-2: native framework, Setup to the first Process (NEXT: start here)
 Process: the controller (Opus 5.5) writes the spec and plan, Fable 5.1 reviews them once for precision, then subagent-driven development with Sonnet 5.5 / Opus 5.5 medium.
 - Generated typed stubs for every native, with real returns for the 3 copy-kind natives.
 - The natives `Setup` needs, implemented against the decomp with a citation per native.
