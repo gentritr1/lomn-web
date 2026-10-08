@@ -111,6 +111,10 @@ CallResult Vm::call(std::string_view name, const std::vector<Variant>& args) {
     --nesting_;
     if (!outer) throw;
     record_error(VmError(std::string("Undefined: host exception: ") + e.what()));
+  } catch (...) {
+    --nesting_;
+    if (!outer) throw;
+    record_error(VmError("Undefined: host exception: unknown"));
   }
   CallResult r;
   r.found = true;

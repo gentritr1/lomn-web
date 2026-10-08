@@ -39,6 +39,8 @@ target_compile_options(lomn_osi PRIVATE -Wall -Wextra)
 if(EMSCRIPTEN)
   target_compile_options(lomn_osi PUBLIC -fwasm-exceptions)
   target_link_options(lomn_osi PUBLIC -fwasm-exceptions)
+  # 512 KiB stack travels with the VM library (INTERFACE): every wasm executable linking lomn_osi inherits it; see LOMN_OSI_WASM_STACK.
+  target_link_options(lomn_osi INTERFACE -sSTACK_SIZE=524288)
 endif()
 
 # M1a-3 faithful states: the D3D8 fixed-function state shim (state log) and its compiler to rhi (uber-shader + pipeline
@@ -317,7 +319,8 @@ add_executable(lomn_tests tests/test_main.cpp tests/test_fs.cpp tests/test_rhi_n
 # (measured 2026-10-09, Vm::call -> call_impl -> run -> dispatch -> 0x82 -> native -> Vm::call), 116,240 bytes in use at
 # the 65th call's nesting-cap throw in lomn_osi_conform. 512 KiB = 4.5x that (the default 64 KiB runs out near level 33:
 # 65,152 bytes in use there). STACK_OVERFLOW_CHECK=2 makes any future overflow a clean trap instead of a write below the stack.
-set(LOMN_OSI_WASM_STACK -sSTACK_OVERFLOW_CHECK=2 -sSTACK_SIZE=524288)
+# STACK_SIZE itself is INTERFACE on lomn_osi (above); only the instrumenting check (tests/tools, not production) is set here.
+set(LOMN_OSI_WASM_STACK -sSTACK_OVERFLOW_CHECK=2)
 target_link_libraries(lomn_tests PRIVATE lomn_area lomn_osi)
 target_include_directories(lomn_tests PRIVATE "${LOMN_TOOLCHAIN_DIR}/include")
 target_compile_definitions(lomn_tests PRIVATE "LOMN_TESTS_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/tests\"")  # test_fuzz_fragments.cpp scans fuzz_fragments.h and xfile.cpp (native and wasm32 via NODERAWFS)
