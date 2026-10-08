@@ -624,7 +624,8 @@ int main(int argc, char** argv) {
   if (has("--survey") && (has("--level") || has("--area"))) return usage("--survey cannot be combined with --level or --area");
   if (has("--manifest")) {  // M1b
     if (a["--manifest"] != "1") return usage("--manifest takes exactly 1");
-    if (synthetic || has("--survey") || has("--level") || has("--area")) return usage("--manifest takes only --install and --out");
+    // C-f6: --texture-cache (any value) is a combination error too: the manifest pass has no decode cache to configure.
+    if (synthetic || has("--survey") || has("--level") || has("--area") || has("--texture-cache")) return usage("--manifest takes only --install and --out");
 #if defined(__EMSCRIPTEN__)
     return usage("--manifest needs the native disk file system");
 #else

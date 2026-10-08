@@ -223,6 +223,12 @@ else()
   add_test(NAME view_cli_manifest_addressable COMMAND sh -c
            "rm -rf \"$1\"; \"$0\" --synthetic 2 --backend null --out \"$1.txt\" --write-install \"$1\" >/dev/null 2>&1 || exit 1; cp \"$1/data/levels/levt/stat.blk\" \"$1/data/levels/levt/statx.blk\" || exit 1; \"$0\" --install \"$1\" --manifest 1 --out \"$1.json\" >/dev/null 2>&1 || { echo 'manifest failed'; exit 1; }; grep -q 'levt/statx\"' \"$1.json\" || { echo 'statx not reported'; exit 1; }; grep -q '\"area\":\"levt/statx\"' \"$1.json\" && { echo 'levt/statx listed as an area'; exit 1; }; grep -q '\"not_addressable\":\\[\"levt/statx\"\\]' \"$1.json\" || { echo 'not_addressable missing'; exit 1; }; grep -q '\"areas\":2,' \"$1.json\" || { echo 'area count != 2'; exit 1; }"
            $<TARGET_FILE:lomn_view> ${CMAKE_CURRENT_BINARY_DIR}/view_manifest_addr)
+  # M1 close-out C-f6: --manifest reads the install with its own fixed settings and used to return before --texture-cache was
+  # parsed, so "--manifest 1 --texture-cache on" silently ignored the flag. Any value of the combination is a usage error (exit 2)
+  # that writes nothing; --manifest alone still works (the control).
+  add_test(NAME view_cli_manifest_texture_cache COMMAND sh -c
+           "rm -rf \"$1\"; \"$0\" --synthetic 2 --backend null --out \"$1.txt\" --write-install \"$1\" >/dev/null 2>&1 || exit 1; \"$0\" --install \"$1\" --manifest 1 --out \"$1.ok.json\" >/dev/null 2>&1 || { echo 'control: --manifest alone failed'; exit 1; }; for v in on off yes; do rm -f \"$1.bad.json\"; \"$0\" --install \"$1\" --manifest 1 --texture-cache $v --out \"$1.bad.json\" >/dev/null 2>&1; rc=$?; if [ $rc -ne 2 ]; then echo \"--manifest 1 --texture-cache $v: rc=$rc (want 2)\"; exit 1; fi; [ ! -e \"$1.bad.json\" ] || { echo 'usage error wrote an output'; exit 1; }; done"
+           $<TARGET_FILE:lomn_view> ${CMAKE_CURRENT_BINARY_DIR}/view_manifest_texcache)
   # C8: a survey that finds no area is an environment error (exit 3), not an empty success.
   add_test(NAME view_cli_survey_empty COMMAND sh -c
            "rm -rf \"$1\"; mkdir -p \"$1/Data/Levels/lev1\" || exit 1; \"$0\" --install \"$1\" --survey 1 --out \"$1/s.json\" >/dev/null 2>&1; rc=$?; [ $rc -eq 3 ] || { echo \"rc=$rc (want 3)\"; exit 1; }"
