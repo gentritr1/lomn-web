@@ -63,3 +63,16 @@ def test_the_control_is_a_comment_only_change() -> None:
     _, _, rel, old, new, _ = ctl
     assert rel.endswith(".cpp")
     assert old.lstrip().startswith("//") and new.lstrip().startswith("//") and "\n" not in old + new
+
+
+def test_every_conform_fail_regex_names_a_real_program() -> None:
+    root = REPO / "tests" / "osi" / "conformance"
+    lines = [f"FAIL {p.parent.name}/{p.name[: -len('.expect.json')]}" for p in sorted(root.glob("*/*.expect.json"))]
+    assert lines, "no conformance programs found"
+    bad = []
+    for mid, name, rel, old, new, checks in _entries():
+        r = checks.get("conform")
+        if r and r.startswith("FAIL "):
+            if not any(re.search(r, ln) for ln in lines):
+                bad.append(f"[{mid}] conform regex {r!r} matches no program under tests/osi/conformance ({name})")
+    assert not bad, "a stale target reports OFF-TARGET although the corpus may catch it:\n" + "\n".join(bad)

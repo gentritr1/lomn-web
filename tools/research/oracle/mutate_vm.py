@@ -196,7 +196,7 @@ M = [
     ("S05", "exact zero: x + (-x) takes the lhs sign instead of +0", CV,
      "      if (c == 0) return 0u;",
      "      if (c == 0) return pa.neg ? 0x80000000u : 0u;",
-     {"conform": r"FAIL a/0x70-signed-zero-x-plus-minus-x", "unit": r"x87_arith"}),
+     {"conform": r"FAIL a/(0x70-signed-zero-x-plus-minus-x|0x70-float-negative-lhs-cancels-to-positive-zero|0x71-float-negative-lhs-minus-itself-positive-zero)", "unit": r"x87_arith"}),
     ("S06", "exact zero: a zero product loses its sign", CV,
      "      if (m == 0) return neg ? 0x80000000u : 0u;",
      "      if (m == 0) return 0u;",
