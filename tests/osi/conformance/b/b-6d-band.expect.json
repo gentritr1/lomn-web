@@ -1,0 +1,21 @@
+{
+  "id": "b-6d-band",
+  "rows": [
+    "0x6d"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 3840
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24
+  },
+  "note": "0x6d: 0xff0f & 0x0ff0 = 0x0f00 = 3840."
+}

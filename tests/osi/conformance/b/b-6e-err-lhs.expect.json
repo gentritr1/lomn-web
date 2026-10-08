@@ -1,0 +1,22 @@
+{
+  "id": "b-6e-err-lhs",
+  "rows": [
+    "0x6e"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "Invalid operand to operator '|' (lhs) (type:0F)",
+    "pc": "@err",
+    "op": "0x6e",
+    "depth": 1,
+    "top": {
+      "type": "0xff",
+      "value": 0
+    },
+    "fpu_pc": 64
+  },
+  "note": "0x6e: nothing a -> lhs. depth 1."
+}

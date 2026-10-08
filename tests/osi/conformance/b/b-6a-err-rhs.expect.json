@@ -1,0 +1,22 @@
+{
+  "id": "b-6a-err-rhs",
+  "rows": [
+    "0x6a"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "Invalid operand to operator 'and' (rhs) (type:12)",
+    "pc": "@err",
+    "op": "0x6a",
+    "depth": 1,
+    "top": {
+      "type": "0xff",
+      "value": 0
+    },
+    "fpu_pc": 64
+  },
+  "note": "0x6a: float b -> rhs (type:12). depth 1."
+}

@@ -1,0 +1,37 @@
+{
+  "id": "b-eng-reenter",
+  "rows": [
+    "0x82"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [
+    {
+      "cls": "t",
+      "name": "reenter",
+      "min": 0,
+      "max": 0,
+      "types": [],
+      "returns": {
+        "type": "0x10",
+        "value": 7
+      },
+      "calls": {
+        "entry": "inner",
+        "args": []
+      }
+    }
+  ],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 11
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24
+  },
+  "note": "Re-entrancy: t.reenter calls vm.call(\"inner\") (context depth 1 -> 2 -> 1; a nested C ... R block). After the native: stack [ff, 11, 22, 7]; Pull 3 copies 11 (top-1 = 7, top-2 = 22, top-3 = 11; if the nested call left a slot behind or lost one, Pull 3 would read something else); 0x52 disposes 7, 22, 11. Result 11, depth 0, context_depth 0. NOTE: 'calls' is a native field this corpus needs; conformance.md \u00a71 does not list it."
+}

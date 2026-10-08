@@ -1,0 +1,25 @@
+{
+  "id": "b-60-err-rhs-string",
+  "rows": [
+    "0x60"
+  ],
+  "falsifier": "1 = \"1\" raises (no int/string coercion)",
+  "alternative": "coercion would give 1; a pre-conversion type gives (type:11)",
+  "falsifier_id": "0x60#notes",
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "Invalid operand to operator '=' (rhs) (type:16)",
+    "pc": "@err",
+    "op": "0x60",
+    "depth": 1,
+    "top": {
+      "type": "0xff",
+      "value": 0
+    },
+    "fpu_pc": 64
+  },
+  "note": "0x60: 1 = \"1\" is an error (row notes falsifier). b (0x11) is first converted in place to a 0x16 string (0x605397), so the rhs message prints type 16, not 11. Both operands popped, nothing pushed: depth 1."
+}

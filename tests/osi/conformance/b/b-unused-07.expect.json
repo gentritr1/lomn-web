@@ -1,0 +1,22 @@
+{
+  "id": "b-unused-07",
+  "rows": [
+    "0x07"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "Call of undefined instruction",
+    "pc": "@err",
+    "op": "0x07",
+    "depth": 1,
+    "top": {
+      "type": "0xff",
+      "value": 0
+    },
+    "fpu_pc": 64
+  },
+  "note": "BCLUnused (0x60be60) at 0x07: errors before any change, PC not advanced. depth 1."
+}

@@ -1,0 +1,24 @@
+{
+  "id": "b-96-err-at-count",
+  "rows": [
+    "0x96"
+  ],
+  "falsifier": "insert at i = count is an error",
+  "alternative": "an append reading succeeds",
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "insertion outside of array bounds",
+    "pc": "@err",
+    "op": "0x96",
+    "depth": 1,
+    "top": {
+      "type": "0xff",
+      "value": 0
+    },
+    "fpu_pc": 64
+  },
+  "note": "0x96: inserting at i = count (1) is an ERROR (row: use 0x94). depth 1."
+}

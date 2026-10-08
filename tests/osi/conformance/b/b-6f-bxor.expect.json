@@ -1,0 +1,21 @@
+{
+  "id": "b-6f-bxor",
+  "rows": [
+    "0x6f"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 240
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24
+  },
+  "note": "0x6f: 0xff ^ 0x0f = 0xf0 = 240."
+}

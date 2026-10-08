@@ -1,0 +1,23 @@
+{
+  "id": "b-ff-halt",
+  "rows": [
+    "0xff"
+  ],
+  "falsifier": "0xff pushes a nothing",
+  "alternative": "'pushes nothing' makes the result the 5",
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x0f",
+      "value": 0
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24
+  },
+  "note": "0xff pushes a nothing variant and stops Run: CallWithReturn pops the nothing as the result, then pops with dispose down to the 0xff marker (the 5). Result nothing, depth 0; the code after Halt never runs."
+}

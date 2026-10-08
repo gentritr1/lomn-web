@@ -1,0 +1,21 @@
+{
+  "id": "b-31-popn-0",
+  "rows": [
+    "0x31"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 5
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24
+  },
+  "note": "0x31: n=0 pops nothing; 5 is returned."
+}

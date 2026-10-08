@@ -1,0 +1,22 @@
+{
+  "id": "b-60-err-lhs-colour",
+  "rows": [
+    "0x60"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "Invalid operand to operator '=' (lhs) (type:15)",
+    "pc": "@err",
+    "op": "0x60",
+    "depth": 1,
+    "top": {
+      "type": "0xff",
+      "value": 0
+    },
+    "fpu_pc": 64
+  },
+  "note": "0x60: a colour (0x15), b int: none of the cases apply and a is not int -> lhs (type:15). depth 1."
+}

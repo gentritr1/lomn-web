@@ -1,0 +1,23 @@
+{
+  "id": "b-b0-nothing",
+  "rows": [
+    "0xb0"
+  ],
+  "falsifier": "converting nothing to a string yields type 0, no error",
+  "alternative": "an error, or a string such as \"\"",
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x00",
+      "value": 0
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24
+  },
+  "note": "0xb0: nothing -> {type 0, value 0} silently (row notes: falsifier IsString(ConvertToString(nothing)) -> 0, no error)."
+}

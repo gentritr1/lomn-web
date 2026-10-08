@@ -1,0 +1,22 @@
+{
+  "id": "b-92-err-nonarray",
+  "rows": [
+    "0x92"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "array reference on non-array",
+    "pc": "@err",
+    "op": "0x92",
+    "depth": 1,
+    "top": {
+      "type": "0xff",
+      "value": 0
+    },
+    "fpu_pc": 64
+  },
+  "note": "0x92 on nothing -> error; a popped: depth 1."
+}

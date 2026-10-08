@@ -1,0 +1,22 @@
+{
+  "id": "b-84-literal",
+  "rows": [
+    "0x84"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "Direct call without a memoised site",
+    "pc": "@err",
+    "op": "0x84",
+    "depth": 1,
+    "top": {
+      "type": "0xff",
+      "value": 0
+    },
+    "fpu_pc": 64
+  },
+  "note": "D10: a literal 0x84 in the file is our error \"Direct call without a memoised site\" (the original would call an arbitrary address). Nothing changed: depth 1."
+}

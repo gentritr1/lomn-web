@@ -1,0 +1,21 @@
+{
+  "id": "b-33-pull-3",
+  "rows": [
+    "0x33"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 10
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24
+  },
+  "note": "0x33: copies the slot at top-n with top-1 = the top: n=3 over 10 20 30 -> 10."
+}

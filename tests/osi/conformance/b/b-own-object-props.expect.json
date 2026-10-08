@@ -1,0 +1,38 @@
+{
+  "id": "b-own-object-props",
+  "rows": [
+    "0x30",
+    "0x10"
+  ],
+  "falsifier": "the object owns (and frees) its properties",
+  "alternative": "props not freed: heap.live.s = 2",
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 0
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24,
+    "heap": {
+      "live": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      },
+      "allocs": {
+        "o": 1,
+        "a": 0,
+        "s": 2,
+        "g": 0
+      }
+    }
+  },
+  "note": "Ownership: an object owns its props. 0x13 (ref 1), 0x35 (ref 2), string 1 moved into x by 0x10 (which disposes o: ref 1); again for y with string 2. 0x30 drops the last reference: F o 1, then the dtor disposes props back to front (F s 2, F s 1). allocs o 1 s 2, live 0."
+}

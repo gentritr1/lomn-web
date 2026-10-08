@@ -1,0 +1,22 @@
+{
+  "id": "b-95-err-beyond",
+  "rows": [
+    "0x95"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "removal outside of array bounds",
+    "pc": "@err",
+    "op": "0x95",
+    "depth": 1,
+    "top": {
+      "type": "0xff",
+      "value": 0
+    },
+    "fpu_pc": 64
+  },
+  "note": "0x95: i 1 >= count 1. depth 1."
+}

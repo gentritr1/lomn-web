@@ -1,0 +1,19 @@
+{
+  "id": "b-30-cap-underflow",
+  "rows": [
+    "0x30"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "Stack underflow",
+    "pc": "@err",
+    "op": "0x30",
+    "depth": 0,
+    "top": null,
+    "fpu_pc": 64
+  },
+  "note": "D10 (our cap, opcodes.md 'Errors in the port'): the first 0x30 pops the 0xff marker (depth 1 -> 0), the second pops at depth 0 -> \"Stack underflow\" at depth 0; top is the empty slot (null = ----:--------)."
+}

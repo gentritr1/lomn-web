@@ -1,0 +1,21 @@
+{
+  "id": "b-eng-prefix",
+  "rows": [],
+  "falsifier": "FindFunction matches an entry that is a prefix of the query, first entry wins",
+  "alternative": "exact match: M line, result nothing; longest match: 2",
+  "entry": "SetupLevel_1",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 1
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24
+  },
+  "note": "opcodes.md 'Engine calls', FindFunction: prefix-tolerant, case-insensitive, first entry wins: the query SetupLevel_1 starts with entry 'setup' (entry 0) -> setup runs -> 1."
+}

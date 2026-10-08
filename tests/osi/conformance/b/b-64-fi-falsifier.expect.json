@@ -1,0 +1,27 @@
+{
+  "id": "b-64-fi-falsifier",
+  "rows": [
+    "0x64"
+  ],
+  "falsifier": "the int operand is loaded exactly (fild), not converted to f32 first (the float,int path: fild b)",
+  "alternative": "f32(16777217) = 16777216.0, so 16777216.0 >= 16777216.0 gives 1",
+  "falsifier_id": [
+    "0x64#2",
+    "0x64#notes"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 0
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24
+  },
+  "note": "0x64 float a, int b (falsifier line 0x64 #2, row notes). expect_calc.compare('>=', Flt.bits(0x4b800000), Int(16777217)) -> 0."
+}

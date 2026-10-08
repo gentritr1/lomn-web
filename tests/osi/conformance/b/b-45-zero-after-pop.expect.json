@@ -1,0 +1,22 @@
+{
+  "id": "b-45-zero-after-pop",
+  "rows": [
+    "0x45",
+    "0x30"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 0
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24
+  },
+  "note": "0x43 pushes 9, 0x30 pops it (dispose: int owns nothing), 0x45 pushes int 0."
+}

@@ -1,0 +1,24 @@
+{
+  "id": "b-60-nothing-int0",
+  "rows": [
+    "0x60"
+  ],
+  "falsifier": "nothing = 0 is 0, not an error and not 1",
+  "alternative": "nothing read as int 0 gives 1; an error-on-nothing reading raises",
+  "falsifier_id": "0x60#notes",
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 0
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24
+  },
+  "note": "0x60 case 1: a nothing, b int 0 (not nothing) -> 0, not an error (row notes falsifier: nothing = 0 -> 0)."
+}

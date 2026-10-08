@@ -1,0 +1,23 @@
+{
+  "id": "b-ff-halt-nested",
+  "rows": [
+    "0xff"
+  ],
+  "falsifier": "0xff does not return to the caller frame",
+  "alternative": "a Return-like unwind gives 9 or 4",
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x0f",
+      "value": 0
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24
+  },
+  "note": "0xff inside a 0x50-called function: no unwind to the type-2 marker; Run stops; CallWithReturn takes the nothing as the result and pops 4, the type-2 marker and the 0xff marker. depth 0, context_depth 0."
+}

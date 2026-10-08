@@ -1,0 +1,21 @@
+{
+  "id": "b-32-swap-top",
+  "rows": [
+    "0x32"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 1
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24
+  },
+  "note": "0x32: a b -> b a. Stack 1 2 becomes 2 1; top 1 is returned."
+}

@@ -1,0 +1,27 @@
+{
+  "id": "b-b2-guard",
+  "rows": [
+    "0xb2"
+  ],
+  "falsifier": "the low 32 bits of the 64-bit chop are kept",
+  "alternative": "saturation gives 0x7fffffff; a 32-bit fistp gives 0x80000000",
+  "falsifier_id": [
+    "guard:0xb2",
+    "0xb2#notes"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 3000000000
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24
+  },
+  "note": "0xb2 guard: fistp qword keeps the low 32 bits: expect_calc.float_to_int(Flt(3.0e9)) = 3000000000 (u32) = -1294967296. f32(3.0e9) is exact (3000000000 = 11718750 * 2^8)."
+}

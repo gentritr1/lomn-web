@@ -1,0 +1,21 @@
+{
+  "id": "b-46-raw-index",
+  "rows": [
+    "0x46"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x11",
+      "value": 4660
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24
+  },
+  "note": "0x46: the index is not range-checked; operand 0x1234 -> {0x11, 4660}. The value is only returned, never dereferenced (rule 4)."
+}

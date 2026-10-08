@@ -1,0 +1,21 @@
+{
+  "id": "b-48-colour-max",
+  "rows": [
+    "0x48"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x15",
+      "value": 4294967295
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24
+  },
+  "note": "0x48: {0x15, 0xffffffff}."
+}

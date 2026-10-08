@@ -1,0 +1,21 @@
+{
+  "id": "b-40-i32-neg",
+  "rows": [
+    "0x40"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 4294967294
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24
+  },
+  "note": "0x40: operand -2 = 0xfffffffe, value 4294967294."
+}

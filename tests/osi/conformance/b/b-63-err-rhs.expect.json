@@ -1,0 +1,22 @@
+{
+  "id": "b-63-err-rhs",
+  "rows": [
+    "0x63"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "Invalid operand to operator '<=' (rhs) (type:16)",
+    "pc": "@err",
+    "op": "0x63",
+    "depth": 1,
+    "top": {
+      "type": "0xff",
+      "value": 0
+    },
+    "fpu_pc": 64
+  },
+  "note": "0x63: int vs a 0x16 string (0xb0 of 1.0) -> rhs (type:16). depth 1 (both operands popped)."
+}

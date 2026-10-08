@@ -1,0 +1,22 @@
+{
+  "id": "b-91-err-nonarray",
+  "rows": [
+    "0x91"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "array reference on non-array",
+    "pc": "@err",
+    "op": "0x91",
+    "depth": 1,
+    "top": {
+      "type": "0xff",
+      "value": 0
+    },
+    "fpu_pc": 64
+  },
+  "note": "0x91: a is an int (neither 5 nor 0x13). depth 1."
+}

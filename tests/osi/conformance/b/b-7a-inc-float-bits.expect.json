@@ -1,0 +1,23 @@
+{
+  "id": "b-7a-inc-float-bits",
+  "rows": [
+    "0x7a"
+  ],
+  "falsifier": "0x7a adds 1 to the raw value word, no type check",
+  "alternative": "float + 1.0 gives 40000000",
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x12",
+      "bits": "3f800001"
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24
+  },
+  "note": "0x7a on a float adds 1 to the raw bits: 3f800000 -> 3f800001 (type stays 0x12)."
+}

@@ -1,0 +1,23 @@
+{
+  "id": "b-43-i8-neg",
+  "rows": [
+    "0x43"
+  ],
+  "falsifier": "0x43 sign-extends its operand",
+  "alternative": "zero-extension gives 128",
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 4294967168
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24
+  },
+  "note": "0x43: operand byte 0x80 = i8 -128, sign-extended to 0xffffff80 = 4294967168 (zero-extension gives 128)."
+}

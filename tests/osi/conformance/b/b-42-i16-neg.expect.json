@@ -1,0 +1,21 @@
+{
+  "id": "b-42-i16-neg",
+  "rows": [
+    "0x42"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 4294967295
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24
+  },
+  "note": "0x42: sign-extended i16 0xffff -> -1 = 4294967295."
+}

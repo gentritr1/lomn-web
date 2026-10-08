@@ -1,0 +1,37 @@
+{
+  "id": "b-93-set-float-index",
+  "rows": [
+    "0x93"
+  ],
+  "falsifier": "0x93 does not type-check the index",
+  "alternative": "an index type check raises an error",
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 9
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24,
+    "heap": {
+      "live": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      },
+      "allocs": {
+        "o": 0,
+        "a": 1,
+        "s": 0,
+        "g": 0
+      }
+    }
+  },
+  "note": "0x93: i's type is never checked: float +0.0 has value word 0 -> index 0; a[0] <- 9."
+}

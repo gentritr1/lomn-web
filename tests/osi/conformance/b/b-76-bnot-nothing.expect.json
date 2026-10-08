@@ -1,0 +1,23 @@
+{
+  "id": "b-76-bnot-nothing",
+  "rows": [
+    "0x76"
+  ],
+  "falsifier": "~nothing is int 1",
+  "alternative": "nothing as int 0 gives 0xffffffff",
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 1
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24
+  },
+  "note": "0x76: nothing -> int 1 (the 0x6c nothing rule), not ~0."
+}

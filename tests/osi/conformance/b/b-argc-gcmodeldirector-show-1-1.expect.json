@@ -1,0 +1,23 @@
+{
+  "id": "b-argc-gcmodeldirector-show-1-1",
+  "rows": [
+    "0x82"
+  ],
+  "argc_violation": "gcmodeldirector.show/1#1",
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "natives.json",
+  "expect_error": {
+    "message": "Script is calling GcModelDirector.Show",
+    "pc": "@err",
+    "op": "0x82",
+    "depth": 2,
+    "top": {
+      "type": "0x11",
+      "value": 0
+    },
+    "fpu_pc": 64
+  },
+  "note": "types.md argc-violation table: gcmodeldirector.show registered 2..2, called with 1. The min/max check fails ('Too few parameters passed to game function') inside 0x82's catch -> Error(\"Script is calling %s.%s\") with the string-table texts. The check precedes conversion: the arguments stay unconverted, nothing pushed: depth = 1 + the values pushed (1 arguments)."
+}

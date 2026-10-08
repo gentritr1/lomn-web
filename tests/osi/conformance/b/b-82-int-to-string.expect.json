@@ -1,0 +1,49 @@
+{
+  "id": "b-82-int-to-string",
+  "rows": [
+    "0x82",
+    "0x60"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [
+    {
+      "cls": "t",
+      "name": "s",
+      "min": 1,
+      "max": 1,
+      "types": [
+        "string"
+      ],
+      "returns": {
+        "arg": 0
+      }
+    }
+  ],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 1
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24,
+    "heap": {
+      "live": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      },
+      "allocs": {
+        "o": 0,
+        "a": 0,
+        "s": 3,
+        "g": 0
+      }
+    }
+  },
+  "note": "0x82: int declared string -> \"%d\" (to_string(Int(-42)) = b'-42'), A s 1; the native returns a copy (A s 2); pop frees s 1. 0x60 converts \"-42\" in place (A s 3), compares case-insensitively -> 1, disposes both. allocs s 3, live s 0."
+}

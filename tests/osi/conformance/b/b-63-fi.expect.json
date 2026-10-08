@@ -1,0 +1,21 @@
+{
+  "id": "b-63-fi",
+  "rows": [
+    "0x63"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 1
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24
+  },
+  "note": "0x63 float a, int b: equal -> 1. expect_calc.compare('<=', Flt.bits(0x40000000), Int(2)) -> 1."
+}

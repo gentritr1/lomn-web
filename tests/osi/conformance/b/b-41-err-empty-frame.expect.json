@@ -1,0 +1,22 @@
+{
+  "id": "b-41-err-empty-frame",
+  "rows": [
+    "0x41"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "unwritten instruction BCL_PushConstanti24 called",
+    "pc": "@err",
+    "op": "0x41",
+    "depth": 1,
+    "top": {
+      "type": "0xff",
+      "value": 0
+    },
+    "fpu_pc": 64
+  },
+  "note": "0x41: always errors, before any change, PC not advanced: depth 1 (the 0xff marker of CallWithReturn)."
+}

@@ -1,0 +1,22 @@
+{
+  "id": "b-95-err-nonarray",
+  "rows": [
+    "0x95"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "array reference on non-array",
+    "pc": "@err",
+    "op": "0x95",
+    "depth": 1,
+    "top": {
+      "type": "0xff",
+      "value": 0
+    },
+    "fpu_pc": 64
+  },
+  "note": "0x95 on nothing. depth 1."
+}

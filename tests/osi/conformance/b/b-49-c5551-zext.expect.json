@@ -1,0 +1,23 @@
+{
+  "id": "b-49-c5551-zext",
+  "rows": [
+    "0x49"
+  ],
+  "falsifier": "0x49 zero-extends and pushes type 0x14",
+  "alternative": "0x15 or sign-extended 0xffff8001",
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x14",
+      "value": 32769
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24
+  },
+  "note": "0x49: zero-extended: 0x8001 -> 32769 (sign-extension would give 0xffff8001); type 0x14."
+}

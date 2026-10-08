@@ -1,0 +1,62 @@
+{
+  "id": "b-eng-args-exact-argc",
+  "rows": [],
+  "falsifier": "exactly argc arguments are pushed",
+  "alternative": "all 10 pushed gives 10",
+  "entry": "main",
+  "args": [
+    {
+      "type": "0x10",
+      "value": 1
+    },
+    {
+      "type": "0x10",
+      "value": 2
+    },
+    {
+      "type": "0x10",
+      "value": 3
+    },
+    {
+      "type": "0x10",
+      "value": 4
+    },
+    {
+      "type": "0x10",
+      "value": 5
+    },
+    {
+      "type": "0x10",
+      "value": 6
+    },
+    {
+      "type": "0x10",
+      "value": 7
+    },
+    {
+      "type": "0x10",
+      "value": 8
+    },
+    {
+      "type": "0x10",
+      "value": 9
+    },
+    {
+      "type": "0x10",
+      "value": 10
+    }
+  ],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 3
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24
+  },
+  "note": "SetPCAndArgs: the callee gets exactly the declared argc (3) of the 10 supplied: a0..a2 pushed (1 2 3), a3..a9 disposed. 0x52 returns the top, a2 = 3 (all 10 pushed would give 10)."
+}

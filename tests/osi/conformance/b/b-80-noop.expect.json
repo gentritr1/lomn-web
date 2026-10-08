@@ -1,0 +1,23 @@
+{
+  "id": "b-80-noop",
+  "rows": [
+    "0x80"
+  ],
+  "falsifier": "0x80 changes no state",
+  "alternative": "an engine-state read would push a value (result not 9)",
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 9
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24
+  },
+  "note": "0x80: no stack change (computes two tokens and discards them): 9 still on top."
+}

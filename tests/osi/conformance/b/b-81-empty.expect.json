@@ -1,0 +1,21 @@
+{
+  "id": "b-81-empty",
+  "rows": [
+    "0x81"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 3
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24
+  },
+  "note": "0x81: nothing popped: 3 4 stay; one 0x30 leaves 3."
+}

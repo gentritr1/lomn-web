@@ -1,0 +1,35 @@
+{
+  "id": "b-83-err-too-many",
+  "rows": [
+    "0x83"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [
+    {
+      "cls": "t",
+      "name": "echo",
+      "min": 1,
+      "max": 1,
+      "types": [
+        "int"
+      ],
+      "returns": {
+        "arg": 0
+      }
+    }
+  ],
+  "registry": "none",
+  "expect_error": {
+    "message": "Script is calling t.echo",
+    "pc": "@err",
+    "op": "0x83",
+    "depth": 3,
+    "top": {
+      "type": "0x10",
+      "value": 7
+    },
+    "fpu_pc": 64
+  },
+  "note": "0x83: n 2 > max 1 -> caught -> 'Script is calling t.echo'; s popped; arguments stay: depth 3, top 7."
+}

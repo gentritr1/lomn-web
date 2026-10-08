@@ -1,0 +1,23 @@
+{
+  "id": "b-81-noop",
+  "rows": [
+    "0x81"
+  ],
+  "falsifier": "0x81 changes no state",
+  "alternative": "an engine-state write would pop 9",
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 9
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24
+  },
+  "note": "0x81: no stack change (nothing popped): 9 still on top."
+}

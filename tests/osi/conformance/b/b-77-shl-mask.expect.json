@@ -1,0 +1,23 @@
+{
+  "id": "b-77-shl-mask",
+  "rows": [
+    "0x77"
+  ],
+  "falsifier": "the shift count is b & 31",
+  "alternative": "an unmasked shift gives 0",
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 2
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24
+  },
+  "note": "0x77: shl by cl uses b & 31: expect_calc.shift_left(1, 33) = 2 (a full 33-bit shift would give 0)."
+}

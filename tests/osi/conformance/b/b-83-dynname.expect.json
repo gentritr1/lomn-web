@@ -1,0 +1,58 @@
+{
+  "id": "b-83-dynname",
+  "rows": [
+    "0x83"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [
+    {
+      "cls": "t",
+      "name": "echo",
+      "min": 1,
+      "max": 1,
+      "types": [
+        "int"
+      ],
+      "returns": {
+        "arg": 0
+      }
+    },
+    {
+      "cls": "t",
+      "name": "name",
+      "min": 0,
+      "max": 0,
+      "types": [],
+      "returns": {
+        "text": "echo"
+      }
+    }
+  ],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 6
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24,
+    "heap": {
+      "live": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      },
+      "allocs": {
+        "o": 0,
+        "a": 0,
+        "s": 1,
+        "g": 0
+      }
+    }
+  },
+  "note": "0x83 with a 0x16 name (t.name returns the dynamic string \"echo\", A s 1): s disposed at the end (F s 1). allocs s 1, live s 0."
+}

@@ -1,0 +1,22 @@
+{
+  "id": "b-82-err-unregistered",
+  "rows": [
+    "0x82"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "Call to unregistered Game Function",
+    "pc": "@err",
+    "op": "0x82",
+    "depth": 2,
+    "top": {
+      "type": "0x10",
+      "value": 1
+    },
+    "fpu_pc": 64
+  },
+  "note": "0x82: map miss escapes with its own message (no catch record); nothing popped: depth 2, top int 1."
+}

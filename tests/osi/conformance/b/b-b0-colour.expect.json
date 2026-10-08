@@ -1,0 +1,21 @@
+{
+  "id": "b-b0-colour",
+  "rows": [
+    "0xb0"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x00",
+      "value": 0
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24
+  },
+  "note": "0xb0: a colour is not a listed source -> {type 0, value 0}."
+}

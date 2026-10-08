@@ -1,0 +1,23 @@
+{
+  "id": "b-34-dupn-order",
+  "rows": [
+    "0x34"
+  ],
+  "falsifier": "0x34 copies the top n in order",
+  "alternative": "reversed order gives 20",
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 10
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24
+  },
+  "note": "0x34: n times push Duplicate(top-n): 10 20 -> 10 20 10 -> 10 20 10 20; one pop leaves 10 on top. A reversed copy (10 20 20 10) would give 20."
+}

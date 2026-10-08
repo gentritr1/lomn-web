@@ -1,0 +1,22 @@
+{
+  "id": "b-6f-err-rhs",
+  "rows": [
+    "0x6f"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "Invalid operand to operator '@' (rhs) (type:15)",
+    "pc": "@err",
+    "op": "0x6f",
+    "depth": 1,
+    "top": {
+      "type": "0xff",
+      "value": 0
+    },
+    "fpu_pc": 64
+  },
+  "note": "0x6f: colour b -> rhs. depth 1."
+}

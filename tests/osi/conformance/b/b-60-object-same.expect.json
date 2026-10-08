@@ -1,0 +1,35 @@
+{
+  "id": "b-60-object-same",
+  "rows": [
+    "0x60"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 1
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24,
+    "heap": {
+      "live": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      },
+      "allocs": {
+        "o": 1,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      }
+    }
+  },
+  "note": "0x60 case 3: both type 1 -> pointer identity: 1. 0x13 (ref 1), 0x35 (ref 2); both operands disposed on the object path (ref 0, F o 1). allocs o 1, live o 0."
+}

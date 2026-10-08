@@ -1,0 +1,23 @@
+{
+  "id": "b-cap-overflow",
+  "rows": [
+    "0x40",
+    "0x50"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "Stack overflow (1000 slots)",
+    "pc": "@err",
+    "op": "0x40",
+    "depth": 1000,
+    "top": {
+      "type": "0x02",
+      "value": 57
+    },
+    "fpu_pc": 64
+  },
+  "note": "D10 cap via 0x50 recursion. Depth 1 (0xff marker). Each 0x40 pushes t (+1) and each 0x50 pops t and inserts a type-2 marker (net +1): after k calls depth = 1 + k. The next push happens at depth 1 + k; at k = 999 it is a push at depth 1000 -> 'Stack overflow (1000 slots)', nothing written. 0x50's insert peaks at depth 999. top = the last type-2 marker, value = PC after f's 0x50 n byte (label 'ret', file offset)."
+}

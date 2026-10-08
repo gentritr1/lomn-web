@@ -1,0 +1,23 @@
+{
+  "id": "b-argc-gctimer-durationaverage-0-1",
+  "rows": [
+    "0x82"
+  ],
+  "argc_violation": "gctimer.durationaverage/0#1",
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "natives.json",
+  "expect_error": {
+    "message": "Script is calling GcTimer.DurationAverage",
+    "pc": "@err",
+    "op": "0x82",
+    "depth": 1,
+    "top": {
+      "type": "0xff",
+      "value": 0
+    },
+    "fpu_pc": 64
+  },
+  "note": "types.md argc-violation table: gctimer.durationaverage registered 1..1, called with 0. The min/max check fails ('Too few parameters passed to game function') inside 0x82's catch -> Error(\"Script is calling %s.%s\") with the string-table texts. The check precedes conversion: the arguments stay unconverted, nothing pushed: depth = 1 + the values pushed (0 arguments)."
+}

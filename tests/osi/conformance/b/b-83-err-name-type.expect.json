@@ -1,0 +1,35 @@
+{
+  "id": "b-83-err-name-type",
+  "rows": [
+    "0x83"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [
+    {
+      "cls": "t",
+      "name": "echo",
+      "min": 1,
+      "max": 1,
+      "types": [
+        "int"
+      ],
+      "returns": {
+        "arg": 0
+      }
+    }
+  ],
+  "registry": "none",
+  "expect_error": {
+    "message": "Invalid member type for function call (must be a string)",
+    "pc": "@err",
+    "op": "0x83",
+    "depth": 2,
+    "top": {
+      "type": "0x10",
+      "value": 6
+    },
+    "fpu_pc": 64
+  },
+  "note": "0x83: s is an int -> escapes with its own message; s popped (not disposed), the argument stays: depth 2, top 6."
+}

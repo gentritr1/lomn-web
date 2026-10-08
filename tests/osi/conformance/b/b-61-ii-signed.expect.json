@@ -1,0 +1,23 @@
+{
+  "id": "b-61-ii-signed",
+  "rows": [
+    "0x61"
+  ],
+  "falsifier": "int < is signed",
+  "alternative": "unsigned compare gives 0",
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 1
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24
+  },
+  "note": "0x61 int,int signed (setl): -1 < 1 -> 1 (unsigned would give 0). expect_calc.compare('<', Int(-1), Int(1)) -> 1."
+}

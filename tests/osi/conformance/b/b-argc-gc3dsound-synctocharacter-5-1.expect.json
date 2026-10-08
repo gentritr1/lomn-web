@@ -1,0 +1,23 @@
+{
+  "id": "b-argc-gc3dsound-synctocharacter-5-1",
+  "rows": [
+    "0x82"
+  ],
+  "argc_violation": "gc3dsound.synctocharacter/5#1",
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "natives.json",
+  "expect_error": {
+    "message": "Script is calling Gc3DSound.SyncToCharacter",
+    "pc": "@err",
+    "op": "0x82",
+    "depth": 6,
+    "top": {
+      "type": "0x10",
+      "value": 5
+    },
+    "fpu_pc": 64
+  },
+  "note": "types.md argc-violation table: gc3dsound.synctocharacter registered 2..2, called with 5. The min/max check fails ('Too many parameters passed to game function') inside 0x82's catch -> Error(\"Script is calling %s.%s\") with the string-table texts. The check precedes conversion: the arguments stay unconverted, nothing pushed: depth = 1 + the values pushed (5 arguments)."
+}

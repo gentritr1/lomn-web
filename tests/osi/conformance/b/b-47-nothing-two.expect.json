@@ -1,0 +1,21 @@
+{
+  "id": "b-47-nothing-two",
+  "rows": [
+    "0x47"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x0f",
+      "value": 0
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24
+  },
+  "note": "0x47 twice, 0x30 pops one nothing; the other nothing is returned; the 3 below is disposed by 0x52."
+}

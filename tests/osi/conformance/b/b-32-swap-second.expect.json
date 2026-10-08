@@ -1,0 +1,21 @@
+{
+  "id": "b-32-swap-second",
+  "rows": [
+    "0x32"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 2
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24
+  },
+  "note": "0x32: 1 2 -> 2 1; 0x30 pops 1; 2 is returned."
+}

@@ -1,0 +1,23 @@
+{
+  "id": "b-argc-gcmodeldirector-setinputstate-2-2",
+  "rows": [
+    "0x82"
+  ],
+  "argc_violation": "gcmodeldirector.setinputstate/2#2",
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "natives.json",
+  "expect_error": {
+    "message": "Script is calling gcmodeldirector.setinputstate",
+    "pc": "@err",
+    "op": "0x82",
+    "depth": 3,
+    "top": {
+      "type": "0x12",
+      "bits": "3f000000"
+    },
+    "fpu_pc": 64
+  },
+  "note": "types.md argc-violation table: gcmodeldirector.setinputstate registered 3..3, called with 2. The min/max check fails ('Too few parameters passed to game function') inside 0x82's catch -> Error(\"Script is calling %s.%s\") with the string-table texts. The check precedes conversion: the arguments stay unconverted, nothing pushed: depth = 1 + the values pushed (2 arguments)."
+}

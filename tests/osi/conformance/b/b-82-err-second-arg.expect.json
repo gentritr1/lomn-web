@@ -1,0 +1,37 @@
+{
+  "id": "b-82-err-second-arg",
+  "rows": [
+    "0x82"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [
+    {
+      "cls": "t",
+      "name": "fc",
+      "min": 2,
+      "max": 2,
+      "types": [
+        "float",
+        "colour"
+      ],
+      "returns": {
+        "type": "0x10",
+        "value": 0
+      }
+    }
+  ],
+  "registry": "none",
+  "expect_error": {
+    "message": "Script is calling t.fc",
+    "pc": "@err",
+    "op": "0x82",
+    "depth": 3,
+    "top": {
+      "type": "0x10",
+      "value": 9
+    },
+    "fpu_pc": 64
+  },
+  "note": "0x82: arg 0 (int 3, declared float) is converted in place first (to 40400000), then arg 1 (int 9, declared colour) fails -> 'Script is calling t.fc'. Converted args stay converted (visible in the trace cmp); top = the unconverted int 9, depth 3."
+}

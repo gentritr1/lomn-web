@@ -1,0 +1,35 @@
+{
+  "id": "b-91-get-third",
+  "rows": [
+    "0x91"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 30
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24,
+    "heap": {
+      "live": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      },
+      "allocs": {
+        "o": 0,
+        "a": 1,
+        "s": 0,
+        "g": 0
+      }
+    }
+  },
+  "note": "[10,20,30]; a[2] = 30."
+}

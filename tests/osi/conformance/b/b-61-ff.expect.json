@@ -1,0 +1,21 @@
+{
+  "id": "b-61-ff",
+  "rows": [
+    "0x61"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 1
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24
+  },
+  "note": "0x61 float,float. expect_calc.compare('<', Flt.bits(0x3fc00000), Flt.bits(0x40200000)) -> 1."
+}

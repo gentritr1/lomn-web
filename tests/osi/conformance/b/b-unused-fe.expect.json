@@ -1,0 +1,22 @@
+{
+  "id": "b-unused-fe",
+  "rows": [
+    "0xfe"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "Call of undefined instruction",
+    "pc": "@err",
+    "op": "0xfe",
+    "depth": 2,
+    "top": {
+      "type": "0x10",
+      "value": 5
+    },
+    "fpu_pc": 64
+  },
+  "note": "BCLUnused at 0xfe with an int below: nothing popped. depth 2, top 5."
+}

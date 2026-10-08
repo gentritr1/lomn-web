@@ -1,0 +1,26 @@
+{
+  "id": "b-eng-short-query",
+  "rows": [],
+  "falsifier": "a shorter query does not match",
+  "alternative": "a symmetric prefix match runs setup and gives 1",
+  "entry": "Set",
+  "args": [
+    {
+      "type": "0x10",
+      "value": 5
+    }
+  ],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x0f",
+      "value": 0
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24
+  },
+  "note": "FindFunction: a query shorter than the entry fails (its NUL meets a letter) -> SetPCAndArgs false -> Message 'Unable to locate function Set in scripts' (an M line, not an error), Run skipped, result nothing; the 0xff marker is popped: depth 0, context_depth 0. The int argument is neither pushed nor disposed."
+}

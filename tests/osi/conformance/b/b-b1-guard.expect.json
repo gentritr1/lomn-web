@@ -1,0 +1,27 @@
+{
+  "id": "b-b1-guard",
+  "rows": [
+    "0xb1"
+  ],
+  "falsifier": "int -> float rounds once to nearest even",
+  "alternative": "ties away from zero gives 4b800001 (16777218.0)",
+  "falsifier_id": [
+    "guard:0xb1",
+    "0xb1#notes"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x12",
+      "bits": "4b800000"
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24
+  },
+  "note": "0xb1 guard: fild exact, one fstp dword round-to-nearest-even: expect_calc.int_to_float(16777217) = 4b800000 (16777216.0; the tie goes to the even mantissa)."
+}

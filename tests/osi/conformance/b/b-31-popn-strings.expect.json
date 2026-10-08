@@ -1,0 +1,35 @@
+{
+  "id": "b-31-popn-strings",
+  "rows": [
+    "0x31"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 7
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24,
+    "heap": {
+      "live": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      },
+      "allocs": {
+        "o": 0,
+        "a": 0,
+        "s": 2,
+        "g": 0
+      }
+    }
+  },
+  "note": "0x31: n Pops WITH dispose: both 0xb0 strings (A s 1, A s 2) are freed (F s 2, F s 1): live s 0."
+}

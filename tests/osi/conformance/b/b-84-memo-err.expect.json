@@ -1,0 +1,49 @@
+{
+  "id": "b-84-memo-err",
+  "rows": [
+    "0x84",
+    "0x82"
+  ],
+  "falsifier": "a memoised 0x82 site fails with 0x84's message",
+  "alternative": "re-running 0x82 semantics gives 'Script is calling t.usetimer'",
+  "entry": "main",
+  "args": [],
+  "natives": [
+    {
+      "cls": "t",
+      "name": "timer",
+      "min": 0,
+      "max": 0,
+      "types": [],
+      "returns": {
+        "game": "GcTimer"
+      }
+    },
+    {
+      "cls": "t",
+      "name": "usetimer",
+      "min": 1,
+      "max": 1,
+      "types": [
+        "type:GcTimer"
+      ],
+      "returns": {
+        "type": "0x10",
+        "value": 1
+      }
+    }
+  ],
+  "registry": "none",
+  "expect_error": {
+    "message": "Script is calling a game function directly.",
+    "pc": "@err",
+    "op": "0x82",
+    "depth": 3,
+    "top": {
+      "type": "0x10",
+      "value": 3
+    },
+    "fpu_pc": 64
+  },
+  "note": "First f(timer): 0x82 succeeds (same type, Duplicate) and self-patches the site to 0x84. Second f(3): the site runs as 0x84, whose catch(...) ends in Error(\"Script is calling a game function directly.\"); the int stays: [0xff][type-2 marker][3] -> depth 3, top int 3. op is the pristine byte 0x82 (trace.md: the I line prints 0x82, never 0x84)."
+}

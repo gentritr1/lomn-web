@@ -1,0 +1,24 @@
+{
+  "id": "b-91-err-negative",
+  "rows": [
+    "0x91"
+  ],
+  "falsifier": "a negative index counts as huge",
+  "alternative": "Python-style a[-1] gives 7",
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "Reference beyond start/end of array",
+    "pc": "@err",
+    "op": "0x91",
+    "depth": 1,
+    "top": {
+      "type": "0xff",
+      "value": 0
+    },
+    "fpu_pc": 64
+  },
+  "note": "0x91: i -1 is used unsigned (0xffffffff >= 1) -> error, not 'from the end'."
+}

@@ -1,0 +1,37 @@
+{
+  "id": "b-33-pull-string-deepcopy",
+  "rows": [
+    "0x33"
+  ],
+  "falsifier": "Duplicate deep-copies a 0x16 string",
+  "alternative": "shared: allocs.s = 1, result {0x16, 1}",
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x16",
+      "value": 2
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24,
+    "heap": {
+      "live": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      },
+      "allocs": {
+        "o": 0,
+        "a": 0,
+        "s": 2,
+        "g": 0
+      }
+    }
+  },
+  "note": "Ownership (string deep copy) via 0x33: Duplicate of a 0x16 deep-copies (opcodes.md conventions). 0xb0 makes string 1; Pull 1 pushes a copy, string 2. 0x52 returns string 2 and disposes string 1; the host disposes the result after R. allocs s 2, live s 0. A shared reference would give allocs s 1 and result handle 1."
+}

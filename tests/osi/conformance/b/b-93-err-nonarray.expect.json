@@ -1,0 +1,22 @@
+{
+  "id": "b-93-err-nonarray",
+  "rows": [
+    "0x93"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "array reference on non-array",
+    "pc": "@err",
+    "op": "0x93",
+    "depth": 1,
+    "top": {
+      "type": "0xff",
+      "value": 0
+    },
+    "fpu_pc": 64
+  },
+  "note": "0x93 on an int a. depth 1."
+}

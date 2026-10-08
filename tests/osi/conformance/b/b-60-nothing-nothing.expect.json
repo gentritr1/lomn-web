@@ -1,0 +1,21 @@
+{
+  "id": "b-60-nothing-nothing",
+  "rows": [
+    "0x60"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 1
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24
+  },
+  "note": "0x60 case 1: a nothing -> 1 if b nothing."
+}

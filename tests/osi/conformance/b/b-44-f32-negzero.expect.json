@@ -1,0 +1,21 @@
+{
+  "id": "b-44-f32-negzero",
+  "rows": [
+    "0x44"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x12",
+      "bits": "80000000"
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24
+  },
+  "note": "0x44: raw bits 80000000 (-0.0) are kept, not normalised to +0.0."
+}

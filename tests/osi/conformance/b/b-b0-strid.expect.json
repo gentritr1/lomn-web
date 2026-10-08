@@ -1,0 +1,36 @@
+{
+  "id": "b-b0-strid",
+  "rows": [
+    "0xb0",
+    "0x60"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 1
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24,
+    "heap": {
+      "live": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      },
+      "allocs": {
+        "o": 0,
+        "a": 0,
+        "s": 2,
+        "g": 0
+      }
+    }
+  },
+  "note": "0xb0: 0x11 -> dynamic copy (A s 1); 0x60 converts its b (A s 2); equal -> 1."
+}

@@ -1,0 +1,24 @@
+{
+  "id": "b-b2-trunc-neg",
+  "rows": [
+    "0xb2"
+  ],
+  "falsifier": "float -> int truncates toward zero",
+  "alternative": "ROUND or floor gives -3",
+  "falsifier_id": "0xb2#notes",
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 4294967294
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24
+  },
+  "note": "0xb2: expect_calc.float_to_int(Flt(-2.7)) = -2 (row notes falsifier)."
+}

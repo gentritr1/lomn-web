@@ -1,0 +1,22 @@
+{
+  "id": "b-77-err-rhs",
+  "rows": [
+    "0x77"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "Invalid operand to operator '<<' (rhs) (type:11)",
+    "pc": "@err",
+    "op": "0x77",
+    "depth": 1,
+    "top": {
+      "type": "0xff",
+      "value": 0
+    },
+    "fpu_pc": 64
+  },
+  "note": "0x77: 0x11 b -> rhs. depth 1."
+}

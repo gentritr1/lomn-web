@@ -1,0 +1,21 @@
+{
+  "id": "b-6b-or-false",
+  "rows": [
+    "0x6b"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 0
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24
+  },
+  "note": "0x6b: 0 or 0 -> 0."
+}

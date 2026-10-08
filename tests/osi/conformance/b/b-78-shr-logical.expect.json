@@ -1,0 +1,24 @@
+{
+  "id": "b-78-shr-logical",
+  "rows": [
+    "0x78"
+  ],
+  "falsifier": "0x78 is a logical shift",
+  "alternative": "arithmetic shift gives -4 (0xfffffffc)",
+  "falsifier_id": "0x78#notes",
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 2147483644
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24
+  },
+  "note": "0x78: LOGICAL shr: expect_calc.shift_right(-8, 1) = 0x7ffffffc = 2147483644 (row notes falsifier)."
+}

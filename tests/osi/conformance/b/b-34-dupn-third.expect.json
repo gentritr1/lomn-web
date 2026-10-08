@@ -1,0 +1,21 @@
+{
+  "id": "b-34-dupn-third",
+  "rows": [
+    "0x34"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 20
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24
+  },
+  "note": "0x34: 10 20 10 20, two pops -> 10 20; 20 returned."
+}

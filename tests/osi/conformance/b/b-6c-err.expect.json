@@ -1,0 +1,22 @@
+{
+  "id": "b-6c-err",
+  "rows": [
+    "0x6c"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "Invalid operand to operator 'not' (type:12)",
+    "pc": "@err",
+    "op": "0x6c",
+    "depth": 1,
+    "top": {
+      "type": "0xff",
+      "value": 0
+    },
+    "fpu_pc": 64
+  },
+  "note": "0x6c: a float (even 0.0) is neither int nor nothing -> error (type:12); a popped: depth 1."
+}

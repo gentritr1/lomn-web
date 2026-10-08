@@ -1,0 +1,48 @@
+{
+  "id": "b-82-string-to-float",
+  "rows": [
+    "0x82"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [
+    {
+      "cls": "t",
+      "name": "f",
+      "min": 1,
+      "max": 1,
+      "types": [
+        "float"
+      ],
+      "returns": {
+        "arg": 0
+      }
+    }
+  ],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x12",
+      "bits": "3f000000"
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 64,
+    "heap": {
+      "live": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      },
+      "allocs": {
+        "o": 0,
+        "a": 0,
+        "s": 1,
+        "g": 0
+      }
+    }
+  },
+  "note": "0x82: a 0x11 slot given to a float parameter is first replaced in place by a dynamic string (A s 1), then atof: expect_calc.atof(b'0.5') = 3f000000, pc_after 64 (D8': fpu_pc 64 after the call). PushInto disposes the old value (the in-place string, F s 1). allocs s 1, live s 0."
+}

@@ -1,0 +1,35 @@
+{
+  "id": "b-84-memo-ok",
+  "rows": [
+    "0x82",
+    "0x84"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [
+    {
+      "cls": "t",
+      "name": "echo",
+      "min": 1,
+      "max": 1,
+      "types": [
+        "int"
+      ],
+      "returns": {
+        "arg": 0
+      }
+    }
+  ],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 2
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24
+  },
+  "note": "0x82 then its memoised second execution (0x84 semantics, D4: our VM memoises per site and traces 82 both times). f(1) via 0x50 returns 1 (popped); f(2) through the memoised site still converts/pops its argument and returns 2."
+}

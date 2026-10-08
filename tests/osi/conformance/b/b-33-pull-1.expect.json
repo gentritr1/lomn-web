@@ -1,0 +1,23 @@
+{
+  "id": "b-33-pull-1",
+  "rows": [
+    "0x33"
+  ],
+  "falsifier": "0x33 n=1 copies the top (top-1 is the top element)",
+  "alternative": "n counted from 0 gives 10",
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 20
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24
+  },
+  "note": "0x33: n=1 = Dup: 20. (A reading with top-0 as the top would give 10.)"
+}
