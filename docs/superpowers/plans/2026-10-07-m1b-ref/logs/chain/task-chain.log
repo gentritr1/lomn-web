@@ -1,0 +1,10 @@
+task chain over BASE 4e9956e, started 18:28:16, loadavg { 9.41 9.74 13.60 }
+T1 rc=0 71 s | native: 100% tests passed, 0 tests failed out of 29 | wasm: 100% tests passed, 0 tests failed out of 7 | web: pixels {"centre":[255,128,0,255],"corner":[0,0,64,255]} 
+T2 rc=0 35 s | native: 100% tests passed, 0 tests failed out of 29 | wasm: 100% tests passed, 0 tests failed out of 7 | web: pixels {"centre":[255,128,0,255],"corner":[0,0,64,255]} 
+T3 rc=0 59 s | native: 100% tests passed, 0 tests failed out of 30 | wasm: 100% tests passed, 0 tests failed out of 7 | web: pixels {"centre":[255,128,0,255],"corner":[0,0,64,255]} 
+T4 rc=0 31 s | native: 100% tests passed, 0 tests failed out of 30 | wasm: 100% tests passed, 0 tests failed out of 7 | web: pixels {"centre":[255,128,0,255],"corner":[0,0,64,255]} 
+T5a rc=0 16 s | native: 100% tests passed, 0 tests failed out of 30 | wasm: 100% tests passed, 0 tests failed out of 7 | web: pixels {"centre":[255,128,0,255],"corner":[0,0,64,255]} 
+T5b rc=0 78 s | native: 100% tests passed, 0 tests failed out of 30 | wasm: 100% tests passed, 0 tests failed out of 7 | web: pixels {"centre":[255,128,0,255],"corner":[0,0,64,255]} byo_synthetic: 73/73 checks passed 
+T6 rc=0 77 s | native: 100% tests passed, 0 tests failed out of 30 | wasm: 100% tests passed, 0 tests failed out of 7 | web: pixels {"centre":[255,128,0,255],"corner":[0,0,64,255]} byo_synthetic: 73/73 checks passed 
+after T6 the tree equals the reference (engine, web, tools, docs, Makefile)
+finished 18:34:24, loadavg { 10.77 12.17 13.64 }, result PASS

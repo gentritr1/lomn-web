@@ -6,9 +6,15 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Pinned third-party inputs are fetched by tools/toolchain.sh into .toolchain/ (see deps.lock).
 set(LOMN_TOOLCHAIN_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../.toolchain" CACHE PATH "pinned toolchain root")
 option(LOMN_WEBGPU "build the WebGPU backend" ON)
+# M1b: the browser viewer's initial wasm memory (bytes, a multiple of 64 KiB). Measured 2026-10-07 (REF4 REPORT "Memory
+# budget", Chromium/Metal, 16 MiB start): boot set resident 16 MiB (no growth), after lev1/vllg 16, lev2/ghut 19.25,
+# lev4/crss 40, lev0/frnt (largest texture set, 57.0 MB with mips) 83.06 MiB = the high-water mark; a sweep of all 122
+# browser-addressable areas afterwards never grew it. 96 MiB = that mark + 15.6% headroom, so growth (a heap copy without
+# pthreads, spec §4.6) does not happen in normal use; MAXIMUM_MEMORY stays 2 GB for anything larger.
+set(LOMN_WEB_INITIAL_MEMORY 100663296)
 enable_testing()
 
-add_library(lomn_core STATIC src/fs/memory_fs.cpp src/rhi/null_device.cpp src/app/loop.cpp)
+add_library(lomn_core STATIC src/fs/memory_fs.cpp src/fs/prefetch_fs.cpp src/rhi/null_device.cpp src/app/loop.cpp)
 target_include_directories(lomn_core PUBLIC include PRIVATE "${LOMN_TOOLCHAIN_DIR}/include")
 target_compile_options(lomn_core PRIVATE -Wall -Wextra)
 # Native clang fuses a*b+c into FMA by default and wasm never does; forbid it so native == wasm32 bit for bit.
@@ -29,7 +35,8 @@ target_compile_options(lomn_d3d PRIVATE -Wall -Wextra)
 
 # M1a-2 first pixels + M1a-3: CPU mips, area loader, the SAGE frame replay on the shim, the A7/A9 synthetic scene.
 add_library(lomn_area STATIC src/view/mips.cpp src/view/area.cpp src/view/sage_frame.cpp src/view/synthetic.cpp
-            src/view/texture_cache.cpp)
+            src/view/texture_cache.cpp
+            src/view/fly_camera.cpp src/view/prefetch.cpp)  # M1b: free-fly camera, prefetch helpers
 target_link_libraries(lomn_area PUBLIC lomn_sage lomn_d3d)
 target_compile_options(lomn_area PRIVATE -Wall -Wextra)
 
@@ -57,9 +64,24 @@ endif()
 
 if(EMSCRIPTEN)
   if(LOMN_WEBGPU)
+    # M1b viewer: an ES module factory (web/app/engine.js imports it); INVOKE_RUN=0 so the boot set is prefetched into
+    # the heap before main(). INITIAL_MEMORY is set from measurement (REF4 REPORT "Memory budget").
+    # Optimisation (REF4 r2 decision D14, amends parent spec §4.6 "-O2 + wasm-opt"): the Release build (-O3; emcc runs
+    # wasm-opt at link for both levels) measured against -O2, 4 interleaved reps per arm (web/tests/measure_arms.mjs,
+    # loadavg 13-20): load of 4 areas median 613 vs 605 ms (spread 236 / 525 ms), frame CPU p50 0.7 vs 0.7 ms (spread
+    # 0.1): indistinguishable; wasm 332,641 vs 344,390 B, the only difference beyond the (zero) null spread: -O3 kept.
+    # -sDYNAMIC_EXECUTION=0: no eval/new Function in the glue (the page's CSP allows only 'wasm-unsafe-eval').
     add_executable(lomn_web src/app/main_web.cpp)
-    target_link_libraries(lomn_web PRIVATE lomn_webgpu)
-    target_link_options(lomn_web PRIVATE -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=2GB)
+    target_link_libraries(lomn_web PRIVATE lomn_area lomn_webgpu)
+    target_include_directories(lomn_web PRIVATE src/app)
+    # The measured configuration, readable at runtime (lomn_build_info -> window.__lomn.metrics.build and the HUD).
+    string(TOUPPER "${CMAKE_BUILD_TYPE}" _lomn_bt)
+    string(STRIP "${CMAKE_CXX_FLAGS} ${CMAKE_CXX_FLAGS_${_lomn_bt}}" _lomn_flags)
+    target_compile_definitions(lomn_web PRIVATE "LOMN_BUILD_TYPE=\"${CMAKE_BUILD_TYPE}\"" "LOMN_BUILD_FLAGS=\"${_lomn_flags}\"")
+    target_link_options(lomn_web PRIVATE -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=2GB -sINITIAL_MEMORY=${LOMN_WEB_INITIAL_MEMORY}
+                        -sMODULARIZE=1 -sEXPORT_ES6=1 -sEXPORT_NAME=createLomn -sINVOKE_RUN=0 -sENVIRONMENT=web -sDYNAMIC_EXECUTION=0
+                        "SHELL:-sEXPORTED_FUNCTIONS=_main,_malloc,_free"
+                        "SHELL:-sEXPORTED_RUNTIME_METHODS=callMain,UTF8ToString,stringToNewUTF8,HEAPU8")
   endif()
   # Null-backend runner under Node: its trace/calls must be byte-identical to the native runner's.
   add_executable(lomn_native src/app/main_native.cpp)
@@ -196,6 +218,11 @@ else()
   add_test(NAME datacheck_no_tmpdir COMMAND sh -c
            "rm -rf \"$2\"; \"$1\" --synthetic 2 --backend null --out \"$2.txt\" --write-install \"$2\" >/dev/null 2>&1 || exit 1; TMPDIR=/nonexistent/lomn-tmp \"$0\" \"$2\" --areas levt/stat > \"$2.json\" 2>\"$2.err\"; rc=$?; [ $rc -eq 0 ] || { echo \"rc=$rc\"; cat \"$2.err\"; exit 1; }; grep -q '\"blk\"' \"$2.json\" || { echo 'no JSON'; exit 1; }"
            $<TARGET_FILE:lomn_datacheck> $<TARGET_FILE:lomn_view> ${CMAKE_CURRENT_BINARY_DIR}/datacheck_tmpdir)
+  # REF4 r2 M6: --manifest lists only the areas the game can address (view::list_areas: ids of 1..4 characters, the level
+  # blockfile excluded), like the browser; a longer stem (lev4c on Beta 1.5.0) is reported under not_addressable.
+  add_test(NAME view_cli_manifest_addressable COMMAND sh -c
+           "rm -rf \"$1\"; \"$0\" --synthetic 2 --backend null --out \"$1.txt\" --write-install \"$1\" >/dev/null 2>&1 || exit 1; cp \"$1/data/levels/levt/stat.blk\" \"$1/data/levels/levt/statx.blk\" || exit 1; \"$0\" --install \"$1\" --manifest 1 --out \"$1.json\" >/dev/null 2>&1 || { echo 'manifest failed'; exit 1; }; grep -q 'levt/statx\"' \"$1.json\" || { echo 'statx not reported'; exit 1; }; grep -q '\"area\":\"levt/statx\"' \"$1.json\" && { echo 'levt/statx listed as an area'; exit 1; }; grep -q '\"not_addressable\":\\[\"levt/statx\"\\]' \"$1.json\" || { echo 'not_addressable missing'; exit 1; }; grep -q '\"areas\":2,' \"$1.json\" || { echo 'area count != 2'; exit 1; }"
+           $<TARGET_FILE:lomn_view> ${CMAKE_CURRENT_BINARY_DIR}/view_manifest_addr)
   # C8: a survey that finds no area is an environment error (exit 3), not an empty success.
   add_test(NAME view_cli_survey_empty COMMAND sh -c
            "rm -rf \"$1\"; mkdir -p \"$1/Data/Levels/lev1\" || exit 1; \"$0\" --install \"$1\" --survey 1 --out \"$1/s.json\" >/dev/null 2>&1; rc=$?; [ $rc -eq 3 ] || { echo \"rc=$rc (want 3)\"; exit 1; }"
@@ -246,6 +273,13 @@ else()
     target_link_libraries(lomn_gpu_ffp_test PRIVATE lomn_d3d lomn_webgpu)
     add_test(NAME gpu_ffp COMMAND lomn_gpu_ffp_test)
     set_tests_properties(gpu_ffp PROPERTIES SKIP_RETURN_CODE 77 LABELS gpu)
+    # M1b: destroy_* on Dawn (dependency rule, ids never reused, live counts), a depth-target re-creation leak loop,
+    # surface calls rejected headless, and AreaRenderer::release over N uploads of the synthetic scene (flat counts,
+    # pixels unchanged).
+    add_executable(lomn_gpu_destroy_test tests/test_gpu_destroy.cpp)
+    target_link_libraries(lomn_gpu_destroy_test PRIVATE lomn_area lomn_webgpu)
+    add_test(NAME gpu_destroy COMMAND lomn_gpu_destroy_test)
+    set_tests_properties(gpu_destroy PROPERTIES SKIP_RETURN_CODE 77 LABELS gpu)
     add_test(NAME a7_gpu_no_adapter COMMAND sh -c
              "out=$(\"$0\" --synthetic 1 --out \"$1\" 2>&1); rc=$?; printf '%s\\n' \"$out\"; [ \"$rc\" -eq 3 ] && printf '%s' \"$out\" | grep -q \"webgpu unavailable: no WebGPU adapter\""
              $<TARGET_FILE:lomn_view> ${CMAKE_CURRENT_BINARY_DIR}/a7_noadapter.png)
@@ -256,7 +290,8 @@ endif()
 # Unit tests: natively, and under Node when cross-compiled with emcmake (CMAKE_CROSSCOMPILING_EMULATOR=node).
 add_executable(lomn_tests tests/test_main.cpp tests/test_fs.cpp tests/test_rhi_null.cpp tests/test_loop.cpp tests/test_sage_blockfile.cpp tests/test_sage_blockchain.cpp tests/test_sage_slb.cpp tests/test_sage_xfile.cpp tests/test_sage_image.cpp
                tests/test_rhi_mesh.cpp tests/test_view_mips.cpp tests/test_view_area.cpp tests/test_d3d.cpp tests/test_sage_osi.cpp
-               tests/test_area_states.cpp tests/test_sage_frame.cpp tests/test_view_texture_cache.cpp tests/test_fuzz_fragments.cpp)
+               tests/test_area_states.cpp tests/test_sage_frame.cpp tests/test_view_texture_cache.cpp tests/test_fuzz_fragments.cpp
+               tests/test_rhi_destroy.cpp tests/test_prefetch_fs.cpp tests/test_fly_camera.cpp)  # M1b
 target_link_libraries(lomn_tests PRIVATE lomn_area)
 target_include_directories(lomn_tests PRIVATE "${LOMN_TOOLCHAIN_DIR}/include")
 target_compile_definitions(lomn_tests PRIVATE "LOMN_TESTS_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/tests\"")  # test_fuzz_fragments.cpp scans fuzz_fragments.h and xfile.cpp (native and wasm32 via NODERAWFS)

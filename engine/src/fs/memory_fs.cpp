@@ -78,7 +78,7 @@ Error MemoryFileSystem::read(std::string_view path, std::vector<uint8_t>& out) c
   auto it = files_.find(n);
   if (it == files_.end()) return Error::NotFound;
   out = it->second;
-  log_access(n);
+  log_read(n, 0, out.size());
   return Error::None;
 }
 
@@ -99,7 +99,7 @@ Error MemoryFileSystem::read_range(std::string_view path, uint64_t offset, uint6
   if (!range_ok(it->second.size(), offset, size)) return Error::Io;
   auto first = it->second.begin() + static_cast<std::ptrdiff_t>(offset);
   out.assign(first, first + static_cast<std::ptrdiff_t>(size));
-  log_access(n);
+  log_read(n, offset, size);
   return Error::None;
 }
 

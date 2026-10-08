@@ -1,0 +1,370 @@
+diff -ruN -x __pycache__ base/tools/builds.json ref/tools/builds.json
+--- base/tools/builds.json	2026-10-07 15:21:46
++++ ref/tools/builds.json	2026-10-07 15:50:13
+@@ -7,5 +7,10 @@
+   "accepted": [
+     {"id": "beta-repo-native", "exe_sha256": "09b55e62f78824607e31433ddfcea827ec836523afd8de3fcc9f3f3f4ec70f0f"},
+     {"id": "beta-1.5.0-installer", "exe_sha256": "b372afb9cb4bbae338a0368dc15cff6bdf49f996148fe80f4e15cfa4869b3ab8"}
+-  ]
++  ],
++  "data": [
++    {"id": "beta-1.5.0-data", "blk_tables_sha256": "542c54c93cd06f7f82baf7fd030f6f803dfe3770bbfce811c6b724fcc5ab97be", "blk_files": 189,
++     "how": "M1b BYO page: tools/byo_fingerprint.py == web/app/fingerprint.js over the Beta 1.5.0 installer's data (2026-10-07)"}
++  ],
++  "rejected": []
+ }
+diff -ruN -x __pycache__ base/tools/byo_fingerprint.py ref/tools/byo_fingerprint.py
+--- base/tools/byo_fingerprint.py	1970-01-01 01:00:00
++++ ref/tools/byo_fingerprint.py	2026-10-07 15:49:47
+@@ -0,0 +1,70 @@
++"""Independent oracle for the BYO page's build identification (web/app/fingerprint.js): the SHA-256 of
++LEGOBionicle.exe and the blockfile-table fingerprint of an install folder.
++
++Fingerprint (written from the format, not from the JS): for every data/**/*.blk under the install root, path relative
++to the root with '/' separators and ASCII lower-case, sorted by that path; table = bytes [0, 12 + count * 56) where
++count is the u32 LE at +8 after the "BLKF" magic; line = "<path> <file size> <sha256 hex of table>"; fingerprint =
++sha256 hex of the lines joined by '\n' plus a final '\n'. Dot files are skipped, as the page does.
++
++Usage: python3 tools/byo_fingerprint.py <install_dir>   -> JSON {exe_sha256, blk_tables_sha256, blk_files, table_bytes}
++"""
++from __future__ import annotations
++
++import hashlib
++import json
++import os
++import struct
++import sys
++from pathlib import Path
++
++
++def lower_ascii(s: str) -> str:
++    return "".join(chr(ord(c) + 32) if "A" <= c <= "Z" else c for c in s)
++
++
++def fingerprint(root: Path) -> dict:
++    blks = []
++    exe = None
++    for d, dirs, files in os.walk(root):
++        dirs[:] = [x for x in dirs if not x.startswith(".")]
++        for f in files:
++            if f.startswith("."):
++                continue
++            p = Path(d) / f
++            rel = p.relative_to(root).as_posix()
++            key = lower_ascii(rel)
++            if key == "legobionicle.exe":
++                exe = p
++            if key.startswith("data/") and key.endswith(".blk"):
++                blks.append((key, p))
++    blks.sort(key=lambda kp: kp[0].encode())
++    lines = []
++    table_bytes = 0
++    for key, p in blks:
++        size = p.stat().st_size
++        with open(p, "rb") as h:
++            hdr = h.read(12)
++            if len(hdr) != 12 or hdr[:4] != b"BLKF":
++                raise ValueError(f"{key}: not a blockfile")
++            (count,) = struct.unpack("<I", hdr[8:12])
++            n = 12 + count * 56
++            if n > size:
++                raise ValueError(f"{key}: table larger than the file")
++            h.seek(0)
++            table = h.read(n)
++        table_bytes += n
++        lines.append(f"{key} {size} {hashlib.sha256(table).hexdigest()}")
++    fp = hashlib.sha256(("\n".join(lines) + "\n").encode()).hexdigest()
++    return {
++        "exe_sha256": hashlib.sha256(exe.read_bytes()).hexdigest() if exe else None,
++        "blk_tables_sha256": fp,
++        "blk_files": len(blks),
++        "table_bytes": table_bytes,
++    }
++
++
++if __name__ == "__main__":
++    if len(sys.argv) != 2:
++        print(__doc__, file=sys.stderr)
++        sys.exit(2)
++    print(json.dumps(fingerprint(Path(sys.argv[1])), indent=1))
+diff -ruN -x __pycache__ base/tools/research/oracle/mutate4.py ref/tools/research/oracle/mutate4.py
+--- base/tools/research/oracle/mutate4.py	1970-01-01 01:00:00
++++ ref/tools/research/oracle/mutate4.py	2026-10-07 18:09:22
+@@ -0,0 +1,207 @@
++"""M1b (REF4) mutation bite check: each deliberate defect in the new logic must make at least one named check fail.
++Run ONLY in a scratch copy of the tree (it edits sources in place and restores them):
++
++    python3 tools/research/oracle/mutate4.py <scratch_tree> [--only N,M] [--skip-browser]
++
++<scratch_tree> needs build/native (Release, LOMN_WEBGPU=ON) and build/wasm already built, the toolchain symlinks
++(.toolchain, web/node_modules) and PATH with node >= 23 and emsdk. Checks:
++  unit     build/native/lomn_tests (doctest; includes the M1b null-backend, prefetch, fly-camera cases)
++  gpu      build/native/lomn_gpu_destroy_test (Dawn)
++  node     node --test web/tests/unit_test.mjs
++  browser  node web/tests/byo_synthetic.mjs (Playwright, real GPU) after rebuilding lomn_web when engine code changed
++A mutation is CAUGHT when a listed check fails (or the build fails), MISSED otherwise. The no-op control must be MISSED.
++"""
++from __future__ import annotations
++
++import subprocess
++import sys
++import time
++from pathlib import Path
++
++M = [
++    # (id, file, old, new, checks)
++    ("prefetch: containment rejects a read ending at the range end", "engine/src/fs/prefetch_fs.cpp",
++     "offset - r->offset <= r->length - length) return r.get();", "offset - r->offset < r->length - length) return r.get();", ["unit"]),
++    ("prefetch: a hit does not stamp the touch generation", "engine/src/fs/prefetch_fs.cpp",
++     "  r->touched_gen = generation_;\n  const uint8_t* first", "  const uint8_t* first", ["unit"]),
++    ("prefetch: release_untouched frees pinned (boot) ranges", "engine/src/fs/prefetch_fs.cpp",
++     "if (r.committed && !r.pinned && r.touched_gen != generation_) {", "if (r.committed && r.touched_gen != generation_) {", ["unit"]),
++    ("prefetch: misses are not deduplicated", "engine/src/fs/prefetch_fs.cpp",
++     "  if (miss_set_.count(b)) return;\n", "", ["unit"]),
++    ("prefetch: reserve accepts a range past the end of the file", "engine/src/fs/prefetch_fs.cpp",
++     "if (offset > f.size || length > f.size - offset) return set_err(err, \"range outside the file: \" + n), nullptr;",
++     "if (offset > f.size) return set_err(err, \"range outside the file: \" + n), nullptr;", ["unit"]),
++    ("prefetch: an empty read is a miss", "engine/src/fs/prefetch_fs.cpp",
++     "  if (length == 0) {  // nothing to move", "  if (length == 0 && false) {  // nothing to move", ["unit"]),
++    ("rhi registry: a texture used by a live bind group may be destroyed", "engine/src/rhi/registry.h",
++     "    if (BindGroupId g = bind_group_using_texture(t)) return \"in use by bind group \" + std::to_string(g);\n", "", ["unit", "gpu"]),
++    ("rhi null: destroy does not remove the object", "engine/src/rhi/null_device.cpp",
++     "    table.erase(id);\n    rec(\"%s %u\", what, id);", "    rec(\"%s %u\", what, id);", ["unit"]),
++    ("rhi webgpu: destroy_bind_group leaves the registry entry", "engine/src/rhi/webgpu_device.cpp",
++     "    reg_.bind_groups.erase(g);\n    return true;", "    return true;", ["gpu"]),
++    ("area: release destroys textures/samplers before the bind groups", "engine/src/view/area.cpp",
++     "    for (const auto& kv : impl_->groups) count(dev.destroy_bind_group(kv.second));\n    for (const auto& kv : impl_->pipelines) count(dev.destroy_pipeline(kv.second));\n    for (const auto& kv : impl_->samplers) count(dev.destroy_sampler(kv.second));\n  }\n  for (rhi::TextureId t : created_textures_) count(dev.destroy_texture(t));",
++     "    for (const auto& kv : impl_->pipelines) count(dev.destroy_pipeline(kv.second));\n    for (const auto& kv : impl_->samplers) count(dev.destroy_sampler(kv.second));\n  }\n  for (rhi::TextureId t : created_textures_) count(dev.destroy_texture(t));\n  if (impl_)\n    for (const auto& kv : impl_->groups) count(dev.destroy_bind_group(kv.second));",
++     ["unit", "gpu"]),
++    ("area: upload does not record created textures (release leaks them)", "engine/src/view/area.cpp",
++     "    created_textures_.push_back(id);  // M1b", "    // created_textures_.push_back(id);  // M1b", ["unit", "gpu"]),
++    ("fly camera: forward moves backwards", "engine/src/view/fly_camera.cpp",
++     "const float f = (in.forward ? 1.0f : 0.0f) - (in.back ? 1.0f : 0.0f);", "const float f = (in.back ? 1.0f : 0.0f) - (in.forward ? 1.0f : 0.0f);", ["unit"]),
++    ("list_areas: the level blockfile is listed as an area", "engine/src/view/prefetch.cpp",
++     "if (stem == lev || lev.empty()", "if (lev.empty()", ["unit"]),
++    ("js fingerprint: blockfiles not sorted", "web/app/fingerprint.js",
++     "    .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));", "    ;", ["node"]),
++    ("js fingerprint: table length without the 12-byte header", "web/app/fingerprint.js",
++     "const len = BLK_HEADER + count * BLK_ENTRY;", "const len = count * BLK_ENTRY;", ["node"]),
++    ("js classify: accepted list checked before the rejected list", "web/app/fingerprint.js",
++     "  const rej = builds.rejected.find((r) => r.exe_sha256 === exeSha);", "  const rej = builds.accepted.length < 0 ? null : null;", ["node"]),
++    ("js byo: DLLs are copied / indexed", "web/app/byo.js",
++     "return !(k.endsWith('.exe') || k.endsWith('.dll'));", "return !k.endsWith('.exe');", ["node"]),
++    ("js engine: negative range offsets accepted", "web/app/engine.js",
++     "|| offset < 0 || length < 0)", ")", ["node"]),
++    ("js engine: chunk written one byte late", "web/app/engine.js",
++     "this.M.HEAPU8.set(buf, ptr + pos);", "this.M.HEAPU8.set(buf.subarray(1), ptr + pos + 1);", ["browser"]),
++    ("js byo: quota check always passes", "web/app/byo.js",
++     "return { ok: free >= needBytes,", "return { ok: true,", ["browser"]),
++    ("webgpu: the surface depth buffer is never attached", "engine/src/rhi/webgpu_device.cpp",
++     "WGPUTextureView depth_view = tgt ? tgt->depth_view : surface_depth_view_;", "WGPUTextureView depth_view = tgt ? tgt->depth_view : nullptr;",
++     ["browser"]),
++    ("main_web: area switch never releases the previous area's ranges", "engine/src/app/main_web.cpp",
++     "  s.fs_released = s.fs.release_untouched();", "  s.fs_released = 0;", ["browser"]),
++    # ---- REF4 revision 2 ----
++    ("C1 main_web: a lost device does not reach the page state", "engine/src/app/main_web.cpp",
++     "      emscripten_cancel_main_loop();\n      set_state(\"error\", why);", "      emscripten_cancel_main_loop();", ["browser"]),
++    ("C1 webgpu: the first uncaptured error is not forwarded", "engine/src/rhi/webgpu_device.cpp",
++     "      static_cast<LostSink*>(u1)->notify(std::string(\"GPU error (\") + error_type_name(type) + \"): \" + str(m));\n", "", ["gpu"]),
++    ("C2 classify: accepted exe + unknown tables hard-rejected again", "web/app/fingerprint.js",
++     "return { ok: true, build: acc.id, data: 'unknown', warning,", "return { ok: false, build: acc.id, data: 'unknown', warning,", ["node"]),
++    ("C2 page: the soft-accept warning is not shown", "web/app/main.js",
++     "    $('warning').hidden = false;\n", "", ["browser"]),
++    ("I1 webgpu: textures released but never destroyed (left to GC)", "engine/src/rhi/webgpu_device.cpp",
++     "    if (frame_open_) return deferred_textures_.push_back(t);\n    wgpuTextureDestroy(t);\n", "    if (frame_open_) return deferred_textures_.push_back(t);\n", ["browser"]),
++    ("I1 webgpu: Destroy not deferred inside an open frame", "engine/src/rhi/webgpu_device.cpp",
++     "    if (frame_open_) return deferred_textures_.push_back(t);\n", "", ["gpu"]),
++    ("I2 main_web: expectation from the snapped p50 again (circular)", "engine/src/app/main_web.cpp",
++     "const double hz = measured ? s.display_hz : nominal_hz(p50);", "const double hz = nominal_hz(p50);", ["browser"]),
++    ("I3 page: a moved remembered folder is not caught", "web/app/main.js",
++     "        try {\n          src = await handleSource(handle, 'handle');\n        } catch (err) {",
++     "        try {\n          src = await handleSource(handle, 'handle');\n        } finally {}\n        if (false) { const err = null;", ["browser"]),
++    ("I4 page: no Content-Security-Policy", "web/index.html",
++     "<meta http-equiv=\"Content-Security-Policy\"", "<meta name=\"x-no-csp\"", ["browser"]),
++    ("I6 byo: the copy is never compared with its manifest", "web/app/byo.js",
++     "  const have = new Map(entries.map((e) => [lowerAscii(e.path), e.size]));\n", "  const have = new Map(entries.map((e) => [lowerAscii(e.path), e.size]));\n  return '';\n", ["node", "browser"]),
++    ("M3 page: keys move the camera without canvas focus", "web/app/main.js",
++     "const ours = () => document.activeElement === c || document.pointerLockElement === c;", "const ours = () => true;", ["browser"]),
++    ("no-op control (comment only; must be MISSED)", "engine/src/fs/prefetch_fs.cpp",
++     "// outside the file: a caller error, not a miss", "// outside the file: a caller error (not a miss)", ["unit", "node"]),
++]
++
++
++LOGDIR = None
++
++
++# A browser run counts as CAUGHT only if a check this mutation targets failed (the run has ~70 checks; an unrelated
++# failure, e.g. a timing check on a loaded host, must not pass for a bite). Keyed by the mutation's name.
++EXPECT = {
++    "js engine: chunk written one byte late": r"OPFS path: copied",
++    "js byo: quota check always passes": r"quota",
++    "webgpu: the surface depth buffer is never attached": r"pixels",
++    "main_web: area switch never releases the previous area's ranges": r"own read set",
++    "C1 main_web: a lost device does not reach the page state": r"C1",
++    "C2 page: the soft-accept warning is not shown": r"C2",
++    "I1 webgpu: textures released but never destroyed (left to GC)": r"I1",
++    "I2 main_web: expectation from the snapped p50 again (circular)": r"I2",
++    "I3 page: a moved remembered folder is not caught": r"I3",
++    "I4 page: no Content-Security-Policy": r"CSP",
++    "I6 byo: the copy is never compared with its manifest": r"I6",
++    "M3 page: keys move the camera without canvas focus": r"M3",
++}
++
++
++def run(cmd, cwd, timeout, log_name=None):
++    t0 = time.time()
++    try:
++        p = subprocess.run(cmd, cwd=cwd, shell=True, capture_output=True, text=True, timeout=timeout)
++        out = p.stdout + p.stderr
++        if LOGDIR and log_name:
++            (LOGDIR / log_name).write_text(out)
++        # Every FAIL line (a browser run prints many ok lines after the first failure, so the tail is not enough).
++        fails = [l for l in out.splitlines() if "FAIL" in l or "ERROR" in l or "not ok" in l]
++        return p.returncode, "\n".join(fails)[-1500:] or out[-1500:], time.time() - t0
++    except subprocess.TimeoutExpired:
++        return 124, "timeout", time.time() - t0
++
++
++def main() -> int:
++    tree = Path(sys.argv[1]).resolve()
++    only = None
++    if "--only" in sys.argv:
++        only = {int(x) for x in sys.argv[sys.argv.index("--only") + 1].split(",")}
++    skip_browser = "--skip-browser" in sys.argv
++    global LOGDIR
++    LOGDIR = tree / "build" / "mutlogs"  # one full log per (mutation, check): what made it CAUGHT
++    LOGDIR.mkdir(parents=True, exist_ok=True)
++    caught = missed = 0
++    for i, (name, rel, old, new, checks) in enumerate(M, 1):
++        if only and i not in only:
++            continue
++        if skip_browser and checks == ["browser"]:
++            print(f"[{i}] SKIPPED (browser) {name}", flush=True)
++            continue
++        f = tree / rel
++        src = f.read_text()
++        if src.count(old) != 1:
++            print(f"[{i}] ERROR pattern not found exactly once in {rel}: {name}", flush=True)
++            return 2
++        f.write_text(src.replace(old, new))
++        verdict, why = "MISSED", ""
++        try:
++            engine_change = rel.startswith("engine/")
++            if engine_change and any(c in ("unit", "gpu") for c in checks):
++                rc, out, _ = run("timeout 900 cmake --build build/native -j4", tree, 960)
++                if rc:
++                    verdict, why = "CAUGHT", "native build failed"
++            if engine_change and "browser" in checks and verdict == "MISSED":
++                rc, out, _ = run("timeout 900 cmake --build build/wasm -j4", tree, 960)
++                if rc:
++                    verdict, why = "CAUGHT", "wasm build failed"
++            for c in checks:
++                if verdict == "CAUGHT":
++                    break
++                cmd = {
++                    "unit": "timeout 300 build/native/lomn_tests",
++                    "gpu": "timeout 120 build/native/lomn_gpu_destroy_test",
++                    "node": "cd web && timeout 60 node --test tests/unit_test.mjs tests/unit_r2_test.mjs",
++                    "browser": "cd web && timeout 600 node tests/byo_synthetic.mjs ../build/wasm ../build/mut-byo ../build/native/lomn_view",
++                }[c]
++                rc, out, secs = run(cmd, tree, 900, f"{i:02d}-{c}.log")
++                if rc != 0:
++                    fails = [l.strip() for l in out.splitlines() if "FAIL" in l or "ERROR" in l or "not ok" in l]
++                    want = EXPECT.get(name) if c == "browser" else None
++                    if want and not any(__import__("re").search(want, l) for l in fails):
++                        why = f"{c} rc={rc} but not on a targeted check ({want}): " + " | ".join(fails)[:300]
++                        continue  # not a bite: try the next check, else MISSED
++                    verdict, why = "CAUGHT", f"{c} rc={rc} ({secs:.0f} s): " + " | ".join(fails)[:300]
++        finally:
++            f.write_text(src)
++            # Rebuild from the restored source at once, so no later (web-only) mutation runs on a mutated build.
++            if rel.startswith("engine/"):
++                run("timeout 900 cmake --build build/native -j4", tree, 960)
++                if "browser" in checks:
++                    run("timeout 900 cmake --build build/wasm -j4", tree, 960)
++        if verdict == "CAUGHT":
++            caught += 1
++        else:
++            missed += 1
++        print(f"[{i}] {verdict} {name}{' :: ' + why if why else ''}", flush=True)
++    # Restore the builds to the unmutated sources.
++    rc1, _, _ = run("timeout 900 cmake --build build/native -j4", tree, 960)
++    rc2, _, _ = run("timeout 900 cmake --build build/wasm -j4", tree, 960)
++    rc3, out, _ = run("timeout 300 build/native/lomn_tests", tree, 400)
++    print(f"restored: native build rc={rc1}, wasm build rc={rc2}, lomn_tests rc={rc3}")
++    print(f"mutations: {caught} CAUGHT, {missed} MISSED (the no-op control must be among the MISSED)")
++    return 0
++
++
++if __name__ == "__main__":
++    sys.exit(main())
+diff -ruN -x __pycache__ base/tools/tests/test_byo_fingerprint.py ref/tools/tests/test_byo_fingerprint.py
+--- base/tools/tests/test_byo_fingerprint.py	1970-01-01 01:00:00
++++ ref/tools/tests/test_byo_fingerprint.py	2026-10-07 15:57:40
+@@ -0,0 +1,66 @@
++"""M1b: the BYO page's build identification (web/app/fingerprint.js, run through web/tools/fingerprint_cli.mjs) equals
++the independent Python oracle (tools/byo_fingerprint.py) on crafted installs, and on the real install (LOMN_DATA) it is
++the fingerprint tools/builds.json accepts."""
++from __future__ import annotations
++
++import json
++import os
++import shutil
++import struct
++import subprocess
++import sys
++from pathlib import Path
++
++import pytest
++
++REPO = Path(__file__).resolve().parents[2]
++sys.path.insert(0, str(REPO / "tools"))
++import byo_fingerprint  # noqa: E402
++
++NODE = shutil.which("node")
++
++
++def blk(count: int, tail: bytes = b"") -> bytes:
++    return b"BLKF" + struct.pack("<II", 7, count) + bytes(range(56)) * count + tail
++
++
++def js_fingerprint(root: Path) -> dict:
++    out = subprocess.run([NODE, str(REPO / "web/tools/fingerprint_cli.mjs"), str(root)], capture_output=True, text=True, timeout=120)
++    assert out.returncode == 0, out.stderr
++    return json.loads(out.stdout)
++
++
++@pytest.mark.skipif(NODE is None, reason="node not found")
++def test_js_equals_python_on_crafted_installs(tmp_path: Path) -> None:
++    root = tmp_path / "inst"
++    (root / "data" / "Levels" / "lev1").mkdir(parents=True)
++    (root / "data" / "Art").mkdir(parents=True)
++    (root / "LEGOBionicle.exe").write_bytes(b"not a real exe")
++    (root / "data" / "Art" / "Art.blk").write_bytes(blk(3, b"x" * 100))
++    (root / "data" / "Levels" / "lev1" / "VLLG.blk").write_bytes(blk(0))
++    (root / "data" / "Levels" / "lev1" / "lev1.blk").write_bytes(blk(1, b"entry bytes"))
++    (root / "data" / ".hidden.blk").write_bytes(b"junk: dot files are skipped")
++    (root / "data" / "Base.osi").write_bytes(b"osi")
++    py = byo_fingerprint.fingerprint(root)
++    assert py == js_fingerprint(root)
++    assert py["blk_files"] == 3
++    # Entry bytes after the table do not change it; a table byte does.
++    (root / "data" / "Levels" / "lev1" / "lev1.blk").write_bytes(blk(1, b"other bytes"))
++    assert byo_fingerprint.fingerprint(root)["blk_tables_sha256"] == py["blk_tables_sha256"]
++    t = bytearray(blk(1, b"other bytes"))
++    t[20] ^= 1
++    (root / "data" / "Levels" / "lev1" / "lev1.blk").write_bytes(bytes(t))
++    changed = byo_fingerprint.fingerprint(root)
++    assert changed["blk_tables_sha256"] != py["blk_tables_sha256"]
++    assert changed == js_fingerprint(root)
++
++
++@pytest.mark.skipif(NODE is None or not os.environ.get("LOMN_DATA"), reason="needs node and LOMN_DATA")
++def test_real_install_is_the_accepted_build() -> None:
++    root = Path(os.environ["LOMN_DATA"]) / "install"
++    py = byo_fingerprint.fingerprint(root)
++    assert py == js_fingerprint(root)
++    builds = json.loads((REPO / "tools" / "builds.json").read_text())
++    assert py["exe_sha256"] in {b["exe_sha256"] for b in builds["accepted"]}
++    assert py["blk_tables_sha256"] in {d["blk_tables_sha256"] for d in builds["data"]}
++    assert py["blk_files"] == 189

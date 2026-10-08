@@ -2,8 +2,64 @@
 <html lang="en">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- REF4 r2 (I4): the browser itself refuses any request to another origin; 'wasm-unsafe-eval' only allows compiling the
+     engine's WebAssembly (no JS eval: the module is linked with -sDYNAMIC_EXECUTION=0). Mirror as a header at deploy. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
 <title>LOMN Web</title>
-<style>body{margin:0;background:#111;color:#eee;font:14px system-ui}canvas{width:256px;height:256px;image-rendering:pixelated}</style>
-<canvas id="canvas" width="64" height="64"></canvas>
-<script src="lomn_web.js"></script>
+<style>
+  :root { color-scheme: dark; }
+  [hidden] { display: none !important; }
+  /* Integer pixel line heights everywhere above the canvas: the canvas then sits on whole device pixels, so a screenshot
+     of it is the drawing buffer unresampled (the pixel tests compare it with native renders). */
+  body { margin: 0; background: #111; color: #eee; font: 14px/20px system-ui, sans-serif; }
+  header { display: flex; gap: 12px; align-items: baseline; height: 20px; padding: 8px 16px; background: #1b1b1b; }
+  header h1 { font-size: 16px; line-height: 20px; margin: 0; }
+  #status { color: #8ab; font: 12px/20px ui-monospace, monospace; }
+  #debug-badge { font: 12px/20px ui-monospace, monospace; padding: 0 6px; color: #111; background: #fc6; border-radius: 3px; }
+  main { padding: 12px 16px; }
+  #byo p { max-width: 60em; }
+  #byo .pick { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  #byo-input { max-width: 100%; }
+  /* Controls have integer heights so the canvas below them stays on whole pixels when the bar wraps (narrow screens). */
+  #byo button, #viewer button, select { font: inherit; line-height: 20px; height: 30px; box-sizing: border-box; padding: 4px 10px; }
+  #message { min-height: 20px; margin: 0 0 8px; color: #fc6; }
+  #warning { margin: 0 0 8px; padding: 4px 8px; line-height: 20px; color: #111; background: #fc6; }
+  #reload { font: inherit; line-height: 20px; height: 30px; box-sizing: border-box; padding: 4px 10px; margin: 0 0 8px; }
+  #message[data-state="rejected"], #message[data-state="quota-short"], #message[data-state="error"] { color: #f66; }
+  #viewer .bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; min-height: 32px; margin-bottom: 8px; }
+  .stage { position: relative; width: min(100%, 1280px); }
+  canvas { display: block; width: 100%; aspect-ratio: 16 / 9; background: #000; outline: none; }
+  canvas.triangle { width: 256px; height: 256px; image-rendering: pixelated; aspect-ratio: auto; }
+  #loading { position: absolute; inset: 0; display: grid; place-items: center; background: rgb(0 0 0 / 0.45); font-size: 18px; }
+  #hud { position: absolute; left: 8px; top: 8px; max-width: calc(100% - 32px); max-height: calc(100% - 32px); overflow: hidden; margin: 0; padding: 6px 8px; background: rgb(0 0 0 / 0.6); font: 11px/15px ui-monospace, monospace; white-space: pre-wrap; overflow-wrap: anywhere; pointer-events: none; }
+</style>
+<header><h1>LOMN Web</h1><span id="status">loading</span><span id="debug-badge" hidden></span></header>
+<main>
+  <section id="byo">
+    <p>This viewer runs <em>BIONICLE: The Legend of Mata Nui</em> (Beta 1.5.0) from <strong>your own copy</strong> of the game.
+      Choose the game folder (the one with <code>LEGOBionicle.exe</code> and <code>data</code>). Nothing is uploaded: the files are read on this computer.</p>
+    <p class="pick">
+      <button id="pick-dir" hidden>Choose game folder…</button>
+      <button id="regrant" hidden></button>
+      <label for="byo-input">Select the folder:</label> <input type="file" id="byo-input" webkitdirectory multiple>
+    </p>
+    <progress id="copy-progress" hidden></progress>
+  </section>
+  <p id="message" role="status" aria-live="polite"></p>
+  <p id="warning" role="alert" hidden></p>
+  <button id="reload" hidden>Reload the page</button>
+  <section id="viewer" hidden>
+    <div class="bar">
+      <label>Area <select id="area-picker"></select></label>
+      <button id="reset-camera">Reset camera</button>
+      <span class="help">Drag to look (double-click locks the pointer), WASD to move, Q/E down/up, Shift faster.</span>
+    </div>
+    <div class="stage">
+      <canvas id="canvas" tabindex="0"></canvas>
+      <div id="loading" hidden>Loading…</div>
+      <pre id="hud" hidden></pre>
+    </div>
+  </section>
+</main>
+<script type="module" src="app/main.js"></script>
 </html>

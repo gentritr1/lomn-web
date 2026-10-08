@@ -7,5 +7,10 @@
   "accepted": [
     {"id": "beta-repo-native", "exe_sha256": "09b55e62f78824607e31433ddfcea827ec836523afd8de3fcc9f3f3f4ec70f0f"},
     {"id": "beta-1.5.0-installer", "exe_sha256": "b372afb9cb4bbae338a0368dc15cff6bdf49f996148fe80f4e15cfa4869b3ab8"}
-  ]
+  ],
+  "data": [
+    {"id": "beta-1.5.0-data", "blk_tables_sha256": "542c54c93cd06f7f82baf7fd030f6f803dfe3770bbfce811c6b724fcc5ab97be", "blk_files": 189,
+     "how": "M1b BYO page: tools/byo_fingerprint.py == web/app/fingerprint.js over the Beta 1.5.0 installer's data (2026-10-07)"}
+  ],
+  "rejected": []
 }

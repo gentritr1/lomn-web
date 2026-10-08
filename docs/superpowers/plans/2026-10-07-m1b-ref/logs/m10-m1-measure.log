@@ -1,0 +1,87 @@
+rep 0 o3: wasm 332641 B, loads 151/80/123/201 ms, cpu p50 0.7 ms, loadavg 14.61 17.86 20.37
+rep 0 o2: wasm 344390 B, loads 105/73/124/206 ms, cpu p50 0.7 ms, loadavg 13.88 17.60 20.25
+rep 0 o3c8: wasm 332641 B, loads 202/66/105/212 ms, cpu p50 0.8 ms, loadavg 13.49 17.46 20.19
+rep 1 o3c8: wasm 332641 B, loads 214/150/223/196 ms, cpu p50 0.7 ms, loadavg 13.02 17.23 20.07
+rep 1 o2: wasm 344390 B, loads 138/112/508/258 ms, cpu p50 0.7 ms, loadavg 14.06 17.31 20.06
+rep 1 o3: wasm 332641 B, loads 129/79/134/241 ms, cpu p50 0.7 ms, loadavg 14.13 17.27 20.04
+rep 2 o3: wasm 332641 B, loads 144/79/134/288 ms, cpu p50 0.7 ms, loadavg 14.17 17.18 19.97
+rep 2 o2: wasm 344390 B, loads 155/140/149/260 ms, cpu p50 0.7 ms, loadavg 18.93 18.07 20.25
+rep 2 o3c8: wasm 332641 B, loads 94/72/94/221 ms, cpu p50 0.7 ms, loadavg 19.09 18.11 20.25
+rep 3 o3c8: wasm 332641 B, loads 94/63/131/167 ms, cpu p50 0.6 ms, loadavg 17.53 17.81 20.12
+rep 3 o2: wasm 344390 B, loads 112/69/105/205 ms, cpu p50 0.6 ms, loadavg 16.93 17.68 20.06
+rep 3 o3: wasm 332641 B, loads 123/127/210/330 ms, cpu p50 0.6 ms, loadavg 16.10 17.48 19.96
+{
+ "o3": {
+  "reps": 4,
+  "wasm_bytes": 332641,
+  "load_total_ms": {
+   "median": 613.3500001430511,
+   "spread": 235.59999990463257,
+   "values": [
+    553.7999997138977,
+    582.5999999046326,
+    644.1000003814697,
+    789.3999996185303
+   ]
+  },
+  "frame_cpu_p50_ms": {
+   "median": 0.7,
+   "spread": 0.09999999999999998,
+   "values": [
+    0.7,
+    0.7,
+    0.7,
+    0.6
+   ]
+  }
+ },
+ "o2": {
+  "reps": 4,
+  "wasm_bytes": 344390,
+  "load_total_ms": {
+   "median": 604.9499998092651,
+   "spread": 525.4000000953674,
+   "values": [
+    507.0999994277954,
+    1015.1999998092651,
+    702.8000001907349,
+    489.7999997138977
+   ]
+  },
+  "frame_cpu_p50_ms": {
+   "median": 0.7,
+   "spread": 0.09999999999999998,
+   "values": [
+    0.7,
+    0.7,
+    0.7,
+    0.6
+   ]
+  }
+ },
+ "o3c8": {
+  "reps": 4,
+  "wasm_bytes": 332641,
+  "load_total_ms": {
+   "median": 531.9000000953674,
+   "spread": 328.699999332428,
+   "values": [
+    583.9000000953674,
+    783.199999332428,
+    479.90000009536743,
+    454.5
+   ]
+  },
+  "frame_cpu_p50_ms": {
+   "median": 0.7,
+   "spread": 0.20000000000000007,
+   "values": [
+    0.8,
+    0.7,
+    0.7,
+    0.6
+   ]
+  }
+ }
+}
+rc=0

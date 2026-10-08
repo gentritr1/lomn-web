@@ -1,0 +1,44 @@
+[1/44] Building CXX object CMakeFiles/lomn_d3d.dir/src/d3d/ffp.cpp.o
+[2/44] Building CXX object CMakeFiles/lomn_core.dir/src/app/loop.cpp.o
+[3/44] Building CXX object CMakeFiles/lomn_core.dir/src/rhi/null_device.cpp.o
+[4/44] Linking CXX static library liblomn_core.a
+[5/44] Linking CXX static library liblomn_d3d.a
+[6/44] Building CXX object CMakeFiles/lomn_area.dir/src/view/sage_frame.cpp.o
+[7/44] Building CXX object CMakeFiles/lomn_area.dir/src/view/area.cpp.o
+[8/44] Building CXX object CMakeFiles/lomn_area.dir/src/view/fly_camera.cpp.o
+[9/44] Building CXX object CMakeFiles/lomn_area.dir/src/view/synthetic.cpp.o
+[10/44] Building CXX object CMakeFiles/lomn_area.dir/src/view/prefetch.cpp.o
+[11/44] Linking CXX static library liblomn_area.a
+[12/44] Building CXX object CMakeFiles/lomn_native.dir/src/app/main_native.cpp.o
+[13/44] Building CXX object CMakeFiles/lomn_gpu_test.dir/tests/test_gpu.cpp.o
+[14/44] Building CXX object CMakeFiles/lomn_webgpu.dir/src/rhi/webgpu_device.cpp.o
+[15/44] Building CXX object CMakeFiles/lomn_ffp_cases.dir/tests/ffp_cases.cpp.o
+[16/44] Linking CXX static library liblomn_webgpu.a
+[17/44] Building CXX object CMakeFiles/lomn_view.dir/tools/lomn_view.cpp.o
+[18/44] Building CXX object CMakeFiles/lomn_gpu_mesh_test.dir/tests/test_gpu_mesh.cpp.o
+[19/44] Building CXX object CMakeFiles/lomn_gpu_area_test.dir/tests/test_gpu_area.cpp.o
+[20/44] Building CXX object CMakeFiles/lomn_gpu_ffp_test.dir/tests/test_gpu_ffp.cpp.o
+[21/44] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_rhi_null.cpp.o
+[22/44] Building CXX object CMakeFiles/lomn_gpu_destroy_test.dir/tests/test_gpu_destroy.cpp.o
+[23/44] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_loop.cpp.o
+[24/44] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_rhi_mesh.cpp.o
+[25/44] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_d3d.cpp.o
+[26/44] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_sage_frame.cpp.o
+[27/44] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_area_states.cpp.o
+[28/44] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_view_area.cpp.o
+[29/44] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_rhi_destroy.cpp.o
+[30/44] Linking CXX executable lomn_datacheck
+[31/44] Linking CXX executable lomn_native
+[32/44] Linking CXX executable lomn_ffp_cases
+[33/44] Linking CXX executable lomn_view
+[34/44] Linking CXX executable lomn_osi_dump
+[35/44] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_fly_camera.cpp.o
+[36/44] Linking CXX executable lomn_gpu_test
+[37/44] Linking CXX executable lomn_gpu_area_test
+[38/44] Linking CXX executable lomn_gpu_mesh_test
+[39/44] Linking CXX executable lomn_gpu_ffp_test
+[40/44] Linking CXX executable lomn_osi_probe
+[41/44] Linking CXX executable lomn_gpu_destroy_test
+[42/44] Linking CXX executable lomn_slb_probe
+[43/44] Building CXX object CMakeFiles/lomn_tests.dir/tests/test_prefetch_fs.cpp.o
+[44/44] Linking CXX executable lomn_tests

@@ -1,0 +1,61 @@
+ok   real install: validated, copied to OPFS, lev1/vllg shown :: lev1/vllg
+ok   accepted as beta-1.5.0-installer + beta-1.5.0-data
+ok   pixels lev1/vllg (first visit, OPFS path) vs native :: 0 of 921600 differ, max delta 0; over tolerance 0: 0
+ok   measured configuration: the page runs the wasm in the build dir (Release) :: Release [-O3 -DNDEBUG] wasm d6c5687fcd84 vs built d6c5687fcd84; canvas 1280x720; apple/metal-3/
+ok   discovery: lev1/vllg fetched exactly its native access log :: 8 rounds, 45 ranges, 2027888 bytes
+ok   lev1/vllg: draws == the area's expected draws, 0 rejected :: draws 31
+ok   pixels lev2/ghut (first visit, OPFS path) vs native :: 0 of 921600 differ, max delta 0; over tolerance 0: 0
+ok   discovery: lev2/ghut fetched exactly its native access log :: 8 rounds, 39 ranges, 2469250 bytes
+ok   lev2/ghut: draws == the area's expected draws, 0 rejected :: draws 30
+ok   pixels lev4/crss (first visit, OPFS path) vs native :: 0 of 921600 differ, max delta 0; over tolerance 0: 0
+ok   discovery: lev4/crss fetched exactly its native access log :: 8 rounds, 59 ranges, 5763178 bytes
+ok   lev4/crss: draws == the area's expected draws, 0 rejected :: draws 42
+ok   pixels lev0/frnt vs native :: 0 of 921600 differ, max delta 0; over tolerance 0: 0
+ok   switch 1 -> lev1/vllg: live objects and resident file bytes flat :: {"textures":28,"buffers":21,"pipelines":3,"samplers":1,"bind_groups":27} fs=2660222
+ok   switch 1: resident file bytes == lev1/vllg's own read set (previous area released) :: 2660222 vs 2660222
+ok   switch 2 -> lev2/ghut: live objects and resident file bytes flat :: {"textures":31,"buffers":3,"pipelines":2,"samplers":1,"bind_groups":30} fs=3101584
+ok   switch 2: resident file bytes == lev2/ghut's own read set (previous area released) :: 3101584 vs 3101584
+ok   switch 3 -> lev4/crss: live objects and resident file bytes flat :: {"textures":38,"buffers":29,"pipelines":4,"samplers":1,"bind_groups":37} fs=6395512
+ok   switch 3: resident file bytes == lev4/crss's own read set (previous area released) :: 6395512 vs 6395512
+ok   switch 4 -> lev1/vllg: live objects and resident file bytes flat :: {"textures":28,"buffers":21,"pipelines":3,"samplers":1,"bind_groups":27} fs=2660222
+ok   switch 4: resident file bytes == lev1/vllg's own read set (previous area released) :: 2660222 vs 2660222
+ok   switch 5 -> lev2/ghut: live objects and resident file bytes flat :: {"textures":31,"buffers":3,"pipelines":2,"samplers":1,"bind_groups":30} fs=3101584
+ok   switch 5: resident file bytes == lev2/ghut's own read set (previous area released) :: 3101584 vs 3101584
+ok   switch 6 -> lev4/crss: live objects and resident file bytes flat :: {"textures":38,"buffers":29,"pipelines":4,"samplers":1,"bind_groups":37} fs=6395512
+ok   switch 6: resident file bytes == lev4/crss's own read set (previous area released) :: 6395512 vs 6395512
+ok   switch 7 -> lev1/vllg: live objects and resident file bytes flat :: {"textures":28,"buffers":21,"pipelines":3,"samplers":1,"bind_groups":27} fs=2660222
+ok   switch 7: resident file bytes == lev1/vllg's own read set (previous area released) :: 2660222 vs 2660222
+ok   switch 8 -> lev2/ghut: live objects and resident file bytes flat :: {"textures":31,"buffers":3,"pipelines":2,"samplers":1,"bind_groups":30} fs=3101584
+ok   switch 8: resident file bytes == lev2/ghut's own read set (previous area released) :: 3101584 vs 3101584
+ok   switch 9 -> lev4/crss: live objects and resident file bytes flat :: {"textures":38,"buffers":29,"pipelines":4,"samplers":1,"bind_groups":37} fs=6395512
+ok   switch 9: resident file bytes == lev4/crss's own read set (previous area released) :: 6395512 vs 6395512
+ok   memory budget: wasm memory growth from boot through vllg/ghut/crss/frnt and 9 switches <= one 16 MiB step :: 100663296 -> 100663296 bytes (growth 0)
+FAIL sweep: every area discovers its set in <= 16 rounds (max 8 at lev1/atrm) :: {"1":4,"2":1,"3":4,"5":1,"6":104,"7":1,"8":7}
+ok   sweep: all 122 areas load and draw their expected draws with 0 rejected
+ok   sweep: no wasm memory growth over every area
+ok   network discipline: first visit (OPFS copy) :: 11 responses, 434651 of 436418 build bytes
+ok   revisit: no picker, no copy :: {"kind":"opfs","how":"revisit","name":"lomn-install","files":505,"bytes":1099991943}
+ok   revisit lev1/vllg: cached prefetch set, 1 round :: rounds 1
+ok   pixels lev1/vllg (revisit) vs native :: 0 of 921600 differ, max delta 0; over tolerance 0: 0
+ok   pixel gate null: lev1/vllg first visit vs revisit page :: 0 differ, max delta 0
+ok   revisit lev2/ghut: cached prefetch set, 1 round :: rounds 1
+ok   pixels lev2/ghut (revisit) vs native :: 0 of 921600 differ, max delta 0; over tolerance 0: 0
+ok   pixel gate null: lev2/ghut first visit vs revisit page :: 0 differ, max delta 0
+ok   revisit lev4/crss: cached prefetch set, 1 round :: rounds 1
+ok   pixels lev4/crss (revisit) vs native :: 0 of 921600 differ, max delta 0; over tolerance 0: 0
+ok   pixel gate null: lev4/crss first visit vs revisit page :: 0 differ, max delta 0
+FAIL I1: live GPUTexture/GPUBuffer counts flat over 30 vllg<->frnt switches :: at vllg: first {"textures":174,"buffers":87,"texture_bytes":111404393.3333331}, last {"textures":1238,"buffers":563,"texture_bytes":1007270702.6666839}
+ok   network discipline: revisit :: 9 responses, 432206 of 436418 build bytes
+ok   handle path: ghut from a directory handle (no copy) :: {"kind":"handle","how":"picked","name":"lomn-install","files":505,"bytes":1099991943}
+ok   pixels lev2/ghut (handle path) vs native :: 0 of 921600 differ, max delta 0; over tolerance 0: 0
+ok   handle revisit from IndexedDB :: {"kind":"handle","how":"revisit","name":"lomn-install","files":505,"bytes":1099991943}
+ok   pixels lev4/crss (handle revisit) vs native :: 0 of 921600 differ, max delta 0; over tolerance 0: 0
+ok   network discipline: handle revisit :: 9 responses, 432206 of 436418 build bytes
+ok   pixel gate positive control: vllg with fog off exceeds the tolerance :: 155532 pixels over 0, max delta 29
+ok   lev1/vllg fps reconciliation: dt samples == frames - 1 :: 602 frames in 9988.7 ms; expected 599.3 intervals at 60 Hz; p50 16.7 p95 17.5
+ok   lev2/ghut fps reconciliation: dt samples == frames - 1 :: 602 frames in 10002.9 ms; expected 600.2 intervals at 60 Hz; p50 16.7 p95 17.5
+ok   lev4/crss fps reconciliation: dt samples == frames - 1 :: 601 frames in 9982.4 ms; expected 598.9 intervals at 60 Hz; p50 16.7 p95 17.5
+ok   network discipline: HUD :: 9 responses, 432206 of 436418 build bytes
+ok   no page exceptions
+a13_real: 57/59 checks passed
+rc=1

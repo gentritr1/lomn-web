@@ -49,7 +49,7 @@ class DiskFileSystem final : public FileSystem {
       if (f.bad() || static_cast<std::uintmax_t>(f.gcount()) != size) return Error::Io;  // truncated read
     }
     out = std::move(buf);
-    log_access(n);
+    log_read(n, 0, size);
     return Error::None;
   }
   Error size(std::string_view path, uint64_t& out) const override {
@@ -78,7 +78,7 @@ class DiskFileSystem final : public FileSystem {
     if (len) f.read(reinterpret_cast<char*>(buf.data()), static_cast<std::streamsize>(len));
     if (!f) return Error::Io;
     out = std::move(buf);
-    log_access(n);
+    log_read(n, offset, len);
     return Error::None;
   }
   Error write(std::string_view path, const uint8_t* data, size_t size) override {

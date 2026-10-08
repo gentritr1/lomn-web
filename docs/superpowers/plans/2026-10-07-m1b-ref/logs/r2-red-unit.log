@@ -1,0 +1,102 @@
+✖ M12 checkRelPath: no empty, ".", ".." or over-long segments; byte length counted in UTF-8 (1.467584ms)
+✖ M11 filesSource: over-long (UTF-8) paths and case duplicates are skipped with a warning, never fatal (9.62825ms)
+✖ I6 checkCopyManifest / sameFiles: the completion manifest is shape-checked and compared with the copy (0.414917ms)
+✖ M2 filterCached: a cached prefetch set over the byte cap is dropped (discovery runs instead) (4.010833ms)
+✖ classify: accepted, rejected-list (named), unknown exe, unknown data (1.247458ms)
+✔ checkBuilds rejects malformed lists (0.356167ms)
+✔ blkTablesFingerprint: order-independent, path-case-insensitive, bounded (9.012708ms)
+✔ wanted(): the exe at the top and data/ except dot files, exes and DLLs (0.420625ms)
+✔ filesSource: strips the picked folder, keeps only wanted files (1.004959ms)
+✔ parseRanges: integers only, malformed lines rejected (0.33275ms)
+ℹ tests 10
+ℹ suites 0
+ℹ pass 5
+ℹ fail 5
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 102.0575
+
+✖ failing tests:
+
+test at tests/unit_r2_test.mjs:12:1
+✖ M12 checkRelPath: no empty, ".", ".." or over-long segments; byte length counted in UTF-8 (1.467584ms)
+  Error [ERR_MODULE_NOT_FOUND]: Cannot find module '$R/web/app/paths.js' imported from $R/web/tests/unit_r2_test.mjs
+      at finalizeResolution (node:internal/modules/esm/resolve:275:11)
+      at moduleResolve (node:internal/modules/esm/resolve:860:10)
+      at defaultResolve (node:internal/modules/esm/resolve:984:11)
+      at ModuleLoader.defaultResolve (node:internal/modules/esm/loader:719:12)
+      at #cachedDefaultResolve (node:internal/modules/esm/loader:643:25)
+      at ModuleLoader.resolve (node:internal/modules/esm/loader:626:38)
+      at ModuleLoader.getModuleJobForImport (node:internal/modules/esm/loader:279:38)
+      at onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:582:36)
+      at TracingChannel.tracePromise (node:diagnostics_channel:344:14)
+      at ModuleLoader.import (node:internal/modules/esm/loader:581:21) {
+    code: 'ERR_MODULE_NOT_FOUND',
+    url: 'file://$R/web/app/paths.js'
+  }
+
+test at tests/unit_r2_test.mjs:22:1
+✖ M11 filesSource: over-long (UTF-8) paths and case duplicates are skipped with a warning, never fatal (9.62825ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+    [
+      'LEGOBionicle.exe',
+      'data/Base.osi',
+  +   'data/base.OSI',
+  +   'data/éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé.blk'
+    ]
+  
+      at TestContext.<anonymous> (file://$R/web/tests/unit_r2_test.mjs:26:10)
+      at async Test.run (node:internal/test_runner/test:981:9)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:678:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [ 'LEGOBionicle.exe', 'data/Base.osi', 'data/base.OSI', 'data/éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé.blk' ],
+    expected: [ 'LEGOBionicle.exe', 'data/Base.osi' ],
+    operator: 'deepStrictEqual'
+  }
+
+test at tests/unit_r2_test.mjs:32:1
+✖ I6 checkCopyManifest / sameFiles: the completion manifest is shape-checked and compared with the copy (0.414917ms)
+  TypeError [Error]: checkCopyManifest is not a function
+      at TestContext.<anonymous> (file://$R/web/tests/unit_r2_test.mjs:35:16)
+      at async Test.run (node:internal/test_runner/test:981:9)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:678:7)
+
+test at tests/unit_r2_test.mjs:47:1
+✖ M2 filterCached: a cached prefetch set over the byte cap is dropped (discovery runs instead) (4.010833ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + undefined
+  - 67108864
+  
+      at TestContext.<anonymous> (file://$R/web/tests/unit_r2_test.mjs:50:10)
+      at async Test.run (node:internal/test_runner/test:981:9)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:678:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: 67108864,
+    operator: 'strictEqual'
+  }
+
+test at tests/unit_test.mjs:28:1
+✖ classify: accepted, rejected-list (named), unknown exe, unknown data (1.247458ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  false !== true
+  
+      at TestContext.<anonymous> (file://$R/web/tests/unit_test.mjs:34:10)
+      at Test.runInAsyncScope (node:async_hooks:211:14)
+      at Test.run (node:internal/test_runner/test:980:25)
+      at Test.start (node:internal/test_runner/test:878:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:297:17) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: 'strictEqual'
+  }

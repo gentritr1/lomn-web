@@ -1,0 +1,38 @@
+start 18:09:32 loadavg { 7.18 12.68 24.85 } (rerun: targeted-check attribution, rebuild after every engine restore, node check incl. unit_r2_test)
+[1] CAUGHT prefetch: containment rejects a read ending at the range end :: unit rc=1 (1 s): k/mut/engine/tests/test_prefetch_fs.cpp:182: ERROR: CHECK( boot_rounds == 2 ) is NOT correct! | $TMP/...
+[2] CAUGHT prefetch: a hit does not stamp the touch generation :: unit rc=1 (1 s): $W/mut/engine/tests/test_prefetch_fs.cpp:208: ERRO
+[3] CAUGHT prefetch: release_untouched frees pinned (boot) ranges :: unit rc=1 (1 s): $W/mut/engine/tests/test_prefetch_fs.cpp:167: ERRO
+[4] CAUGHT prefetch: misses are not deduplicated :: unit rc=1 (1 s): $W/mut/engine/tests/test_prefetch_fs.cpp:97: FATAL
+[5] CAUGHT prefetch: reserve accepts a range past the end of the file :: unit rc=1 (1 s): $W/mut/engine/tests/test_prefetch_fs.cpp:106: ERRO
+[6] CAUGHT prefetch: an empty read is a miss :: unit rc=1 (1 s): $W/mut/engine/tests/test_prefetch_fs.cpp:95: ERROR
+[7] CAUGHT rhi registry: a texture used by a live bind group may be destroyed :: unit rc=1 (1 s): $W/mut/engine/tests/test_rhi_destroy.cpp:89: ERROR
+[8] CAUGHT rhi null: destroy does not remove the object :: unit rc=1 (1 s): <scratch>/ref4-work/mut/engine/tests/test_rhi_destroy.cpp:199: ERROR: 
+[9] CAUGHT rhi webgpu: destroy_bind_group leaves the registry entry :: gpu rc=1 (1 s): FAIL 2. bind group + texture destroyed after the draw was recorded: the frame still shows the texture (green) | FAIL 2. 1 draw, 0 rejected | FAIL 1+2. live objects back to the baseline | FAIL 3. texture loop iteration 0 | FAIL 3. 300 texture+bind group and 100 depth-target create/destroy cycles: cou
+[10] CAUGHT area: release destroys textures/samplers before the bind groups :: unit rc=1 (1 s): $W/mut/engine/tests/test_rhi_destroy.cpp:199: ERRO
+[11] CAUGHT area: upload does not record created textures (release leaks them) :: unit rc=1 (1 s): <scratch>/ref4-work/mut/engine/tests/test_rhi_destroy.cpp:190: ERROR: CHECK( n == live.textures + live.buffers + live.
+[12] CAUGHT fly camera: forward moves backwards :: unit rc=1 (1 s): $W/mut/engine/tests/test_fly_camera.cpp:57: ERROR:
+[13] CAUGHT list_areas: the level blockfile is listed as an area :: unit rc=1 (1 s): $W/mut/engine/tests/test_prefetch_fs.cpp:221: FATA
+[14] CAUGHT js fingerprint: blockfiles not sorted :: node rc=1 (0 s): 
+[15] CAUGHT js fingerprint: table length without the 12-byte header :: node rc=1 (0 s): 
+[16] CAUGHT js classify: accepted list checked before the rejected list :: node rc=1 (0 s): 
+[17] CAUGHT js byo: DLLs are copied / indexed :: node rc=1 (0 s): 
+[18] CAUGHT js engine: negative range offsets accepted :: node rc=1 (0 s): 
+[19] CAUGHT js engine: chunk written one byte late :: browser rc=1 (36 s): FAIL OPFS path: copied, validated and showing levt/test :: area levt/test: area: blk: bad magic (want BLKF) | FAIL test run :: page.waitForFunction: Timeout 30000ms exceeded.
+[20] CAUGHT js byo: quota check always passes :: browser rc=1 (55 s): FAIL quota short -> message, no copy :: Copying 0.0 MiB into browser storage (one time)…
+[21] CAUGHT webgpu: the surface depth buffer is never attached :: browser rc=1 (54 s): FAIL pixels levt/test (OPFS path) vs native :: 154737 of 921600 differ, max delta 255, over tolerance 0: 154737; adapter unknown (set LOMN_PIXEL_TOLERANCE after measuring null + native-vs-browser on this GPU) | FAIL pixels levt/stat (OPFS path, after a switch) vs native :: 183915 of 921600 differ, m
+[22] CAUGHT main_web: area switch never releases the previous area's ranges :: browser rc=1 (57 s): FAIL switch 1: resident file bytes == levt/stat's own read set (previous area released) :: 9173 vs 6815 | FAIL switch 2: resident file bytes == levt/test's own read set (previous area released) :: 9173 vs 3549 | FAIL switch 3: resident file bytes == levt/stat's own read set (previous area released) 
+[23] CAUGHT C1 main_web: a lost device does not reach the page state :: browser rc=1 (70 s): FAIL C1: GPU process crash -> state error with the reason and a Reload button :: area-ready: levt/test; reload visible false; frames 105
+[24] CAUGHT C1 webgpu: the first uncaptured error is not forwarded :: gpu rc=1 (1 s): FAIL 6. the first uncaptured GPU error reaches the lost handler once
+[25] CAUGHT C2 classify: accepted exe + unknown tables hard-rejected again :: node rc=1 (0 s): 
+[26] CAUGHT C2 page: the soft-accept warning is not shown :: browser rc=1 (56 s): FAIL C2: accepted exe + unknown tables -> shown with a warning; the reason is in metrics :: area-ready; warning ""; metrics {"build":"synthetic-test","data":"unknown","warning":"Game data differs from the known build — rendering may differ (.blk table fingerprint 980c3068aa7a… is not in builds.json 
+[27] CAUGHT I1 webgpu: textures released but never destroyed (left to GC) :: browser rc=1 (54 s): FAIL I1: live GPUTexture/GPUBuffer counts flat over 30 switches :: first {"textures":14,"buffers":5,"created":14,"destroyed":0}, last {"textures":154,"buffers":5,"created":154,"destroyed":0}
+[28] CAUGHT I1 webgpu: Destroy not deferred inside an open frame :: gpu rc=1 (1 s): FAIL 2. bind group + texture destroyed after the draw was recorded: the frame still shows the texture (green) | FAIL 5. 8 upload/render/release cycles: identical pixels, flat live counts, 0 rejected destroys
+[29] CAUGHT I2 main_web: expectation from the snapped p50 again (circular) :: browser rc=1 (56 s): FAIL I2: the old circular expectation hides (or understates) the drop :: old: p50 25.6 ms -> snapped 48 Hz -> expected 74.6 vs counted 60 (ratio 0.80); new: display 60 Hz -> expected 74.6 (ratio 0.80)
+[30] CAUGHT I3 page: a moved remembered folder is not caught :: browser rc=1 (85 s): FAIL I3 moved folder (threw) :: page.waitForFunction: Timeout 30000ms exceeded. | FAIL no WebGPU errors or page exceptions :: {"gpu":[],"errors":["A requested file or directory could not be found at the time an operation was processed."]} | FAIL no page exceptions on any page
+[31] CAUGHT I4 page: no Content-Security-Policy :: browser rc=1 (55 s): FAIL CSP meta present (default-src/connect-src self, object-src none) :: none | FAIL I4: the CSP blocks the foreign-origin request itself :: blocked []
+[32] CAUGHT I6 byo: the copy is never compared with its manifest :: node rc=1 (0 s): 
+[33] CAUGHT M3 page: keys move the camera without canvas focus :: browser rc=1 (62 s): FAIL M3: W without canvas focus leaves the camera alone :: moved true
+[34] MISSED no-op control (comment only; must be MISSED)
+restored: native build rc=0, wasm build rc=0, lomn_tests rc=0
+mutations: 33 CAUGHT, 1 MISSED (the no-op control must be among the MISSED)
+rc=0 end 18:22:58 loadavg { 12.21 9.88 15.44 }

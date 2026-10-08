@@ -217,6 +217,51 @@ class Registry {
     return "";
   }
 
+  // ---- M1b: destroy rules (shared by both backends) ----
+  // The first live bind group referencing a texture / sampler / uniform buffer (0 = none). Linear in the number of live
+  // bind groups (an area holds at most a few hundred; destroy runs only on area switches).
+  BindGroupId bind_group_using_texture(TextureId t) const {
+    for (const auto& kv : bind_groups)
+      if (kv.second.desc.texture == t) return kv.first;
+    return 0;
+  }
+  BindGroupId bind_group_using_sampler(SamplerId s) const {
+    for (const auto& kv : bind_groups)
+      if (kv.second.desc.sampler == s) return kv.first;
+    return 0;
+  }
+  BindGroupId bind_group_using_buffer(BufferId b) const {
+    for (const auto& kv : bind_groups)
+      if (kv.second.desc.uniforms == b) return kv.first;
+    return 0;
+  }
+  std::string check_destroy_texture(TextureId t) const {
+    if (!textures.count(t)) return "unknown texture";
+    if (BindGroupId g = bind_group_using_texture(t)) return "in use by bind group " + std::to_string(g);
+    return "";
+  }
+  std::string check_destroy_buffer(BufferId b) const {
+    if (!buffers.count(b)) return "unknown buffer";
+    if (BindGroupId g = bind_group_using_buffer(b)) return "in use by bind group " + std::to_string(g);
+    return "";
+  }
+  std::string check_destroy_pipeline(PipelineId p) const { return pipelines.count(p) ? "" : "unknown pipeline"; }
+  std::string check_destroy_sampler(SamplerId s) const {
+    if (!samplers.count(s)) return "unknown sampler";
+    if (BindGroupId g = bind_group_using_sampler(s)) return "in use by bind group " + std::to_string(g);
+    return "";
+  }
+  std::string check_destroy_bind_group(BindGroupId g) const { return bind_groups.count(g) ? "" : "unknown bind group"; }
+  Device::LiveObjects live() const {
+    Device::LiveObjects o;
+    o.textures = static_cast<uint32_t>(textures.size());
+    o.buffers = static_cast<uint32_t>(buffers.size());
+    o.pipelines = static_cast<uint32_t>(pipelines.size());
+    o.samplers = static_cast<uint32_t>(samplers.size());
+    o.bind_groups = static_cast<uint32_t>(bind_groups.size());
+    return o;
+  }
+
  private:
   uint32_t next_tex_ = 0, next_buf_ = 0, next_pipe_ = 0, next_sampler_ = 0, next_bind_ = 0;
 };

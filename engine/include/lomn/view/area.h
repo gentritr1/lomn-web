@@ -34,6 +34,10 @@ namespace lomn::view {
 // World transform (spec M1 §2.1): RotX(kWorldRotX) then the OBJ record position in _41.._43 (GcArea::GcArea 0x00504220
 // + GcObjectLoader::LoadObjects 0x0053fc60). Constant read from LEGOBionicle.exe .data @0x72a444.
 constexpr float kWorldRotX = -1.5707982f;
+// M1b: the two files every area load reads first (GcGame::LoadArtBlockHeader's Art.blk table, the script file whose
+// area class supplies fog): one definition, shared by load_area and the browser's boot prefetch (lomn/view/prefetch.h).
+constexpr const char* kArtBlkPath = "Root/Data/Art/Art.blk";
+constexpr const char* kBaseOsiPath = "Root/Data/Base.osi";
 constexpr uint32_t kPosStartFlag = 0x1000;
 
 // Caps on what one area may make the renderer allocate (untrusted input, spec §5). Measured over all 123 area
@@ -262,6 +266,10 @@ struct RenderStats {
   // generated one WGSL variant per fixed-function state would need (the uber-shader needs only `pipelines`).
   uint32_t shader_variants = 0;
   uint32_t lit_draws = 0, fogged_draws = 0, blended_draws = 0, alpha_tested_draws = 0, null_texture_draws = 0;
+  // M1b frame-time breakdown (wall clock, CPU side): replay = the SageFrame replay on the D3D8 shim + draw compilation
+  // (pipelines/bind groups looked up, uniforms packed); submit = the rhi calls (uniform write, begin_frame, draws,
+  // end_frame). Not part of any log.
+  double replay_ms = 0, submit_ms = 0;
 };
 
 // Frees the CPU-side vertex/index arrays and texture mip chains once they are on the GPU (upload copies them).
@@ -272,14 +280,17 @@ uint64_t release_cpu_copies(AreaData& area);
 class AreaRenderer {
  public:
   // Creates every GPU object for `area` (which must outlive the renderer's use of it). False on a device failure.
-  // ONE upload per renderer: rhi has no destroy calls, so a repeat upload (after success or failure) is rejected
-  // without creating anything; use a new AreaRenderer (and device) for another area.
+  // ONE upload per renderer until release(): a repeat upload (after success or failure) is rejected without creating
+  // anything. M1b: release() destroys the GPU objects, after which upload() may run again (another area, same device).
   bool upload(rhi::Device& dev, const AreaData& area, const RenderOptions& opt, std::string* err);
   // One frame into `target` (a render target with depth): the SageFrame replay (sage_frame.h) on a d3d::Device8 whose
   // DrawSink compiles every DrawSubset to an rhi draw (pipelines and (texture, sampler) bind groups created on first
   // use, one uniform slot per draw). Returns false, makes no rhi call and logs once on stderr unless upload() succeeded
   // for this very AreaData object. The D3D8 device persists across frames (render states are history-dependent).
   bool render(rhi::Device& dev, rhi::TextureId target, const AreaData& area, const Camera& cam);
+  // M1b: destroys every GPU object this renderer created (also after a failed upload), bind groups first, and resets
+  // the renderer to its never-uploaded state. Returns the objects destroyed; *failures (optional) = rejected destroys.
+  uint32_t release(rhi::Device& dev, uint32_t* failures = nullptr);
   uint32_t pipelines() const { return pipelines_created_; }
   uint64_t uploaded_texture_bytes() const { return uploaded_texture_bytes_; }
   uint32_t textures_created() const { return textures_created_; }
@@ -303,6 +314,8 @@ class AreaRenderer {
   uint32_t uniform_slots_ = 0;
   std::vector<GpuModel> models_;
   std::vector<rhi::TextureId> gpu_textures_;  // per AreaData::textures index
+  std::vector<rhi::TextureId> created_textures_;  // M1b: every texture upload() created (release() destroys them)
+  std::vector<rhi::BufferId> created_buffers_;    // M1b: every vertex/index buffer upload() created
   rhi::TextureId white_texture_ = 0;
   uint32_t pipelines_created_ = 0, textures_created_ = 0, frames_ = 0;
   uint64_t uploaded_texture_bytes_ = 0;

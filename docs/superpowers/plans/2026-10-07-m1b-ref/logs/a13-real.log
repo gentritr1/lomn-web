@@ -1,0 +1,43 @@
+ok   real install: validated, copied to OPFS, lev1/vllg shown :: lev1/vllg
+ok   accepted as beta-1.5.0-installer + beta-1.5.0-data
+ok   pixels lev1/vllg (first visit, OPFS path) vs native :: 0 of 921600 differ, max delta 0; over tolerance 0: 0
+ok   discovery: lev1/vllg fetched exactly its native access log :: 8 rounds, 45 ranges, 2027888 bytes
+ok   lev1/vllg: draws == the area's expected draws, 0 rejected :: draws 31
+ok   pixels lev2/ghut (first visit, OPFS path) vs native :: 0 of 921600 differ, max delta 0; over tolerance 0: 0
+ok   discovery: lev2/ghut fetched exactly its native access log :: 8 rounds, 39 ranges, 2469250 bytes
+ok   lev2/ghut: draws == the area's expected draws, 0 rejected :: draws 30
+ok   pixels lev4/crss (first visit, OPFS path) vs native :: 0 of 921600 differ, max delta 0; over tolerance 0: 0
+ok   discovery: lev4/crss fetched exactly its native access log :: 8 rounds, 59 ranges, 5763178 bytes
+ok   lev4/crss: draws == the area's expected draws, 0 rejected :: draws 42
+ok   pixels lev0/frnt vs native :: 0 of 921600 differ, max delta 0; over tolerance 0: 0
+ok   switch 1 -> lev1/vllg: live objects and resident file bytes flat :: {"textures":28,"buffers":21,"pipelines":3,"samplers":1,"bind_groups":27} fs=2660222
+ok   switch 2 -> lev2/ghut: live objects and resident file bytes flat :: {"textures":31,"buffers":3,"pipelines":2,"samplers":1,"bind_groups":30} fs=3101584
+ok   switch 3 -> lev4/crss: live objects and resident file bytes flat :: {"textures":38,"buffers":29,"pipelines":4,"samplers":1,"bind_groups":37} fs=6395512
+ok   switch 4 -> lev1/vllg: live objects and resident file bytes flat :: {"textures":28,"buffers":21,"pipelines":3,"samplers":1,"bind_groups":27} fs=2660222
+ok   switch 5 -> lev2/ghut: live objects and resident file bytes flat :: {"textures":31,"buffers":3,"pipelines":2,"samplers":1,"bind_groups":30} fs=3101584
+ok   switch 6 -> lev4/crss: live objects and resident file bytes flat :: {"textures":38,"buffers":29,"pipelines":4,"samplers":1,"bind_groups":37} fs=6395512
+ok   switch 7 -> lev1/vllg: live objects and resident file bytes flat :: {"textures":28,"buffers":21,"pipelines":3,"samplers":1,"bind_groups":27} fs=2660222
+ok   switch 8 -> lev2/ghut: live objects and resident file bytes flat :: {"textures":31,"buffers":3,"pipelines":2,"samplers":1,"bind_groups":30} fs=3101584
+ok   switch 9 -> lev4/crss: live objects and resident file bytes flat :: {"textures":38,"buffers":29,"pipelines":4,"samplers":1,"bind_groups":37} fs=6395512
+ok   sweep: all 122 areas load and draw their expected draws with 0 rejected
+ok   network discipline: first visit (OPFS copy) :: 12 responses, 430659 of 430659 build bytes
+ok   revisit: no picker, no copy :: {"kind":"opfs","how":"revisit","name":"lomn-install","files":505,"bytes":1099991943}
+ok   revisit lev1/vllg: cached prefetch set, 1 round :: rounds 1
+ok   pixels lev1/vllg (revisit) vs native :: 0 of 921600 differ, max delta 0; over tolerance 0: 0
+ok   revisit lev2/ghut: cached prefetch set, 1 round :: rounds 1
+ok   pixels lev2/ghut (revisit) vs native :: 0 of 921600 differ, max delta 0; over tolerance 0: 0
+ok   revisit lev4/crss: cached prefetch set, 1 round :: rounds 1
+ok   pixels lev4/crss (revisit) vs native :: 0 of 921600 differ, max delta 0; over tolerance 0: 0
+ok   network discipline: revisit :: 10 responses, 428214 of 430659 build bytes
+ok   handle path: ghut from a directory handle (no copy) :: {"kind":"handle","how":"picked","name":"lomn-install","files":505,"bytes":1099991943}
+ok   pixels lev2/ghut (handle path) vs native :: 0 of 921600 differ, max delta 0; over tolerance 0: 0
+ok   handle revisit from IndexedDB :: {"kind":"handle","how":"revisit","name":"lomn-install","files":505,"bytes":1099991943}
+ok   pixels lev4/crss (handle revisit) vs native :: 0 of 921600 differ, max delta 0; over tolerance 0: 0
+ok   network discipline: handle revisit :: 10 responses, 428214 of 430659 build bytes
+ok   lev1/vllg fps reconciliation: dt samples == frames - 1 :: 601 frames in 9976.9 ms; expected 598.6 intervals at 60 Hz; p50 16.7 p95 16.8
+ok   lev2/ghut fps reconciliation: dt samples == frames - 1 :: 601 frames in 9985.5 ms; expected 599.1 intervals at 60 Hz; p50 16.7 p95 18.2
+ok   lev4/crss fps reconciliation: dt samples == frames - 1 :: 601 frames in 9980.5 ms; expected 598.8 intervals at 60 Hz; p50 16.7 p95 18.3
+ok   network discipline: HUD :: 10 responses, 428214 of 430659 build bytes
+ok   no page exceptions
+a13_real: 41/41 checks passed
+rc=0

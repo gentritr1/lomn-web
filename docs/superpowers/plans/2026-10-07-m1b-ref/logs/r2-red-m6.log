@@ -1,0 +1,13 @@
+Test project $R/build/native
+    Start 17: view_cli_manifest_addressable
+1/1 Test #17: view_cli_manifest_addressable ....***Failed    0.63 sec
+levt/statx listed as an area
+
+
+0% tests passed, 1 tests failed out of 1
+
+Total Test time (real) =   0.65 sec
+
+The following tests FAILED:
+	 17 - view_cli_manifest_addressable (Failed)
+Errors while running CTest

@@ -1,0 +1,4 @@
+adapter=apple/metal-3 frames=144 dt_samples=143 window_ms=3265 p50_dt_ms=16.60 expected_intervals=196 at 60 Hz
+pixels {"centre":[255,128,0,255],"corner":[0,0,64,255]}
+requests ["/index.html","/app/main.514a289e12.js","/app/fingerprint.d343aef215.js","/app/byo.54139dc112.js","/app/engine.4573102bf9.js","/app/idb.ee7e6e00af.js","/app/paths.2f6a6c5095.js","/lomn_web.8bafc7d99a.wasm","/lomn_web.cdc9dac69b.js","/favicon.ico"]
+console_errors [] page_errors []

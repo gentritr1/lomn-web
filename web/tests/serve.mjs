@@ -1,23 +1,43 @@
-// Minimal static server for tests: serves one directory, records every requested path.
+// Minimal static server for tests: serves one directory, records every requested path and (M1b) every response's
+// status and body bytes, so the network-discipline check can sum what the page downloaded, and (review fixes 3 and N2) every
+// request's method, request-body bytes, full URL (path + query) and whether it is the page's own top-level navigation, so it
+// can see an upload, or data carried in a query string.
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
-const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.wasm': 'application/wasm', '.json': 'application/json' };
+const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.wasm': 'application/wasm', '.json': 'application/json' };
 export function serve(rootArg) {
   const root = path.resolve(rootArg);
   const requests = [];
+  const responses = [];  // {path, status, bytes, method, req_bytes, url, top_nav}
   const server = http.createServer((req, res) => {
+    // The request body is read (and counted) before answering, whatever the method.
+    let reqBytes = 0;
+    req.on('data', (c) => { reqBytes += c.length; });
+    req.on('end', () => handle(req, res, reqBytes));
+    req.on('error', () => res.destroy());
+  });
+  const handle = (req, res, reqBytes) => {
+    // Sec-Fetch-* are forbidden request headers: page script cannot set them, so this really is a top-level navigation.
+    const topNav = req.headers['sec-fetch-mode'] === 'navigate' && req.headers['sec-fetch-dest'] === 'document';
+    const rec = (r) => responses.push({ ...r, method: req.method, req_bytes: reqBytes, url: req.url, top_nav: topNav });
     let rel;
     try { rel = decodeURIComponent(new URL(req.url, 'http://x').pathname); }
-    catch { res.writeHead(400); return res.end(); }   // malformed %-escape: answer 400, never throw
+    catch { rec({ path: req.url, status: 400, bytes: 0 }); res.writeHead(400); return res.end(); }   // malformed %-escape: answer 400, never throw
     requests.push(rel);
     if (rel === '/') rel = '/index.html';
     const file = path.resolve(root, '.' + rel);
     const inside = file === root || file.startsWith(root + path.sep);   // `root + sep`: "site-secret" is not inside "site"
-    if (!inside || !fs.existsSync(file) || fs.statSync(file).isDirectory()) { res.writeHead(404); return res.end(); }
-    res.writeHead(200, { 'content-type': TYPES[path.extname(file)] || 'application/octet-stream' });
+    if (!inside || !fs.existsSync(file) || fs.statSync(file).isDirectory()) {
+      rec({ path: rel, status: 404, bytes: 0 });
+      res.writeHead(404);
+      return res.end();
+    }
+    const bytes = fs.statSync(file).size;
+    rec({ path: rel, status: 200, bytes });
+    res.writeHead(200, { 'content-type': TYPES[path.extname(file)] || 'application/octet-stream', 'content-length': bytes, 'cache-control': 'no-store' });
     fs.createReadStream(file).pipe(res);
-  });
+  };
   return new Promise((resolve) => server.listen(0, '127.0.0.1', () =>
-    resolve({ url: `http://127.0.0.1:${server.address().port}/`, requests, close: () => { server.close(); server.closeAllConnections(); } })));
+    resolve({ url: `http://127.0.0.1:${server.address().port}/`, requests, responses, close: () => { server.close(); server.closeAllConnections(); } })));
 }

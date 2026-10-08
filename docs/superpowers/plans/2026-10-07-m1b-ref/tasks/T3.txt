@@ -1,0 +1,14 @@
+T3: fs range logger, PrefetchFileSystem, boot/record/list helpers, lomn_view --manifest (r2 M6: addressable areas only)
+  full     engine/include/lomn/fs.h
+  full     engine/src/fs/memory_fs.cpp
+  full     engine/src/fs/disk_fs.cpp
+  full     engine/include/lomn/prefetch_fs.h
+  full     engine/src/fs/prefetch_fs.cpp
+  full     engine/include/lomn/view/prefetch.h
+  full     engine/src/view/prefetch.cpp
+  full     engine/include/lomn/view/area.h
+  full     engine/src/view/area.cpp
+  full     engine/tools/lomn_view.cpp
+  full     engine/tests/test_prefetch_fs.cpp
+  partial  engine/CMakeLists.txt  (+ prefetch_fs.cpp, prefetch.cpp, test_prefetch_fs.cpp)
+  partial  Makefile  (+ the manifest target)

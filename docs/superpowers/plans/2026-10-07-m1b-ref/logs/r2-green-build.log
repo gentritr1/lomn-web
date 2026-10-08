@@ -1,0 +1,16 @@
+native rc=
+100% tests passed, 0 tests failed out of 30
+ok   1. texture/sampler/uniform buffer referenced by a live bind group: 3 rejected destroys
+ok   1. nothing freed by the rejections
+ok   2. bind group + texture destroyed after the draw was recorded: the frame still shows the texture (green)
+ok   2. 1 draw, 0 rejected
+ok   2. the render target (with its depth buffer) is destroyable
+ok   1+2. live objects back to the baseline
+ok   3. 300 texture+bind group and 100 depth-target create/destroy cycles: counts flat
+ok   4. set_surface_depth / resize without a surface: counted rejections
+ok   5. 8 upload/render/release cycles: identical pixels, flat live counts, 0 rejected destroys
+ok   5. no rejected call in the last frame
+     lost handler: 1 call(s): GPU error (validation): Error while parsing WGSL: :1:1 error: unexpected token
+ok   6. the first uncaptured GPU error reaches the lost handler once
+wasm rc=
+100% tests passed, 0 tests failed out of 7

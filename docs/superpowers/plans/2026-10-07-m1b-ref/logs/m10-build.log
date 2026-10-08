@@ -1,0 +1,33 @@
+emcmake: cmake -S engine -B build/wasm-o2 -G Ninja -DCMAKE_BUILD_TYPE=Release '-DCMAKE_CXX_FLAGS_RELEASE=-O2 -DNDEBUG' <ws>/lomn-web/.toolchain/emsdk/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake' <ws>/lomn-web/.toolchain/emsdk/node/24.19.0_64bit/bin/node' in directory $R
+[1/27] Building CXX object CMakeFiles/lomn_core.dir/src/fs/memory_fs.cpp.o
+[2/27] Building CXX object CMakeFiles/lomn_core.dir/src/app/loop.cpp.o
+[3/27] Building CXX object CMakeFiles/lomn_core.dir/src/rhi/null_device.cpp.o
+[4/27] Building CXX object CMakeFiles/lomn_core.dir/src/fs/prefetch_fs.cpp.o
+[5/27] Linking CXX static library liblomn_core.a
+[6/27] Building CXX object CMakeFiles/lomn_sage.dir/src/sage/blockchain.cpp.o
+[7/27] Building CXX object CMakeFiles/lomn_sage.dir/src/sage/blockfile.cpp.o
+[8/27] Building CXX object CMakeFiles/lomn_sage.dir/src/sage/slb.cpp.o
+[9/27] Building CXX object CMakeFiles/lomn_d3d.dir/src/view/math.cpp.o
+[10/27] Building CXX object CMakeFiles/lomn_sage.dir/src/sage/image.cpp.o
+[11/27] Building CXX object CMakeFiles/lomn_sage.dir/src/sage/xfile.cpp.o
+[12/27] Building CXX object CMakeFiles/lomn_d3d.dir/src/d3d/device8.cpp.o
+[13/27] Building CXX object CMakeFiles/lomn_sage.dir/src/sage/osi.cpp.o
+[14/27] Linking CXX static library liblomn_sage.a
+[15/27] Building CXX object CMakeFiles/lomn_d3d.dir/src/d3d/ffp.cpp.o
+[16/27] Building CXX object CMakeFiles/lomn_area.dir/src/view/mips.cpp.o
+[17/27] Linking CXX static library liblomn_d3d.a
+[18/27] Building CXX object CMakeFiles/lomn_area.dir/src/view/sage_frame.cpp.o
+[19/27] Building CXX object CMakeFiles/lomn_area.dir/src/view/fly_camera.cpp.o
+[20/27] Building CXX object CMakeFiles/lomn_area.dir/src/view/area.cpp.o
+[21/27] Building CXX object CMakeFiles/lomn_area.dir/src/view/synthetic.cpp.o
+[22/27] Building CXX object CMakeFiles/lomn_area.dir/src/view/prefetch.cpp.o
+[23/27] Linking CXX static library liblomn_area.a
+[24/27] Building CXX object CMakeFiles/lomn_web.dir/src/app/main_web.cpp.o
+[25/27] Building CXX object CMakeFiles/lomn_webgpu.dir/src/rhi/webgpu_device.cpp.o
+[26/27] Linking CXX static library liblomn_webgpu.a
+[27/27] Linking CXX executable lomn_web.js
+rc=0
+  61 -O2
+  61 -O3
+-rwxr-xr-x@ 1 user  wheel  344390 Oct  7 17:23 build/wasm-o2/lomn_web.wasm
+-rwxr-xr-x@ 1 user  wheel  332641 Oct  7 17:22 build/wasm/lomn_web.wasm

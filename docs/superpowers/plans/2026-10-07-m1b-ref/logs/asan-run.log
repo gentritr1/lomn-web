@@ -1,0 +1,53 @@
+loadavg start: 15:59  up 40 days,  5:48, 1 user, load averages: 8.14 9.36 8.82
+build rc=0
+13/29 Test #13: view_cli_stale_outputs ...........   Passed    0.50 sec
+      Start 14: view_cli_null_frames
+14/29 Test #14: view_cli_null_frames .............   Passed    0.26 sec
+      Start 15: view_cli_paths
+15/29 Test #15: view_cli_paths ...................   Passed    0.93 sec
+      Start 16: datacheck_no_tmpdir
+16/29 Test #16: datacheck_no_tmpdir ..............   Passed    0.66 sec
+      Start 17: view_cli_survey_empty
+17/29 Test #17: view_cli_survey_empty ............   Passed    0.13 sec
+      Start 18: view_cli_camera_json
+18/29 Test #18: view_cli_camera_json .............   Passed    1.37 sec
+      Start 19: cli_dangling_flag
+19/29 Test #19: cli_dangling_flag ................   Passed    0.11 sec
+      Start 20: gpu_triangle
+20/29 Test #20: gpu_triangle .....................   Passed    0.91 sec
+      Start 21: gpu_no_adapter
+21/29 Test #21: gpu_no_adapter ...................   Passed    0.13 sec
+      Start 22: a7_gpu_pixels
+22/29 Test #22: a7_gpu_pixels ....................   Passed    0.93 sec
+      Start 23: gpu_mesh
+23/29 Test #23: gpu_mesh .........................   Passed    0.84 sec
+      Start 24: gpu_ffp
+24/29 Test #24: gpu_ffp ..........................   Passed    0.79 sec
+      Start 25: gpu_destroy
+25/29 Test #25: gpu_destroy ......................   Passed    1.75 sec
+      Start 26: a7_gpu_no_adapter
+26/29 Test #26: a7_gpu_no_adapter ................   Passed    0.14 sec
+      Start 27: unit
+27/29 Test #27: unit .............................   Passed   17.81 sec
+      Start 28: osi_probe
+28/29 Test #28: osi_probe ........................   Passed   10.49 sec
+      Start 29: slb_probe
+29/29 Test #29: slb_probe ........................   Passed    2.83 sec
+
+100% tests passed, 0 tests failed out of 29
+
+Label Time Summary:
+gpu    =   5.49 sec*proc (7 tests)
+
+Total Test time (real) =  62.23 sec
+--- manifest (ASan)
+manifest: 123 areas, 0 failures, boot 632334 bytes, max 13066416 bytes (lev0/frnt) -> build/asan/manifest.json
+manifest rc=0 stderr_bytes=       0
+ASan manifest == Release manifest (wall_ms excluded)
+vllg rc=0 stderr_bytes=       0
+vllg ASan render == M1a-3 evidence (byte-identical)
+ghut rc=0 stderr_bytes=       0
+ghut ASan render == M1a-3 evidence (byte-identical)
+crss rc=0 stderr_bytes=       0
+crss ASan render == M1a-3 evidence (byte-identical)
+loadavg end: 16:03  up 40 days,  5:52, 1 user, load averages: 14.00 10.90 9.53

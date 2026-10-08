@@ -1,0 +1,27 @@
+loadavg start: { 13.17 16.51 19.44 }
+build rc=0
+28/30 Test #28: unit .............................   Passed   17.30 sec
+      Start 29: osi_probe
+29/30 Test #29: osi_probe ........................   Passed   10.49 sec
+      Start 30: slb_probe
+30/30 Test #30: slb_probe ........................   Passed    2.54 sec
+
+100% tests passed, 0 tests failed out of 30
+
+Label Time Summary:
+gpu    =   7.19 sec*proc (7 tests)
+
+Total Test time (real) =  67.59 sec
+manifest: 122 areas, 0 failures, boot 632334 bytes, max 13066416 bytes (lev0/frnt) -> build/asan/manifest.json
+manifest rc=0 stderr_bytes=       0
+ASan manifest == Release manifest (wall_ms excluded)
+manifest areas 122 not_addressable ['lev4/lev4c']
+vllg rc=0 stderr_bytes=       0
+vllg ASan render == M1a-3 evidence (byte-identical)
+ghut rc=0 stderr_bytes=       0
+ghut ASan render == M1a-3 evidence (byte-identical)
+crss rc=0 stderr_bytes=       0
+crss ASan render == M1a-3 evidence (byte-identical)
+survey rc=0 stderr_bytes=       0
+survey areas_total 123 addressable 122 failures 0
+loadavg end: { 10.17 11.58 16.05 }

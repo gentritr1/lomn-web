@@ -92,7 +92,7 @@ class Loader {
     out_.area = std::string(area.substr(0, 4));
     std::string e;
     // GcGame::LoadArtBlockHeader: Art.blk is the global fallback of both lookup orders. Optional here.
-    out_.art_blk = chain_.open_art("Root/Data/Art/Art.blk", &e);
+    out_.art_blk = chain_.open_art(kArtBlkPath, &e);
     if (!out_.art_blk) warn("art.blk not opened: " + e);
     if (!chain_.enter_area(out_.level, out_.area, &e)) {
       kind_ = enter_failure_kind();
@@ -415,7 +415,7 @@ class Loader {
   // map to an existing area this way (tools/research/osi.py).
   void load_script() {
     std::vector<uint8_t> bytes;
-    if (fs_.read("Root/Data/Base.osi", bytes) != fs::Error::None) {
+    if (fs_.read(kBaseOsiPath, bytes) != fs::Error::None) {
       warn("osi: Root/Data/Base.osi not readable (fog/cave lighting from defaults)");
       return;
     }
@@ -1025,8 +1025,8 @@ AreaRenderer::~AreaRenderer() = default;
 
 bool AreaRenderer::upload(rhi::Device& dev, const AreaData& a, const RenderOptions& opt, std::string* err) {
   if (a.cpu_released) return fail(err, "render: area CPU copies were already released");
-  // rhi has no destroy calls: a second upload would leak the first one's GPU objects, so it is rejected.
-  if (upload_attempted_) return fail(err, "render: renderer already uploaded (one upload per AreaRenderer)");
+  // A second upload would leak the first one's GPU objects, so it is rejected until release() (M1b) has run.
+  if (upload_attempted_) return fail(err, "render: renderer already uploaded (call release() first)");
   upload_attempted_ = true;
   opt_ = opt;
   uniform_slots_ = a.stats.draws ? a.stats.draws : 1;
@@ -1044,6 +1044,7 @@ bool AreaRenderer::upload(rhi::Device& dev, const AreaData& a, const RenderOptio
     const MipLevel& top = t.mips.front();
     rhi::TextureId id = dev.create_texture(top.width, top.height, static_cast<uint32_t>(t.mips.size()));
     if (!id) return fail(err, "render: texture rejected: " + t.request);
+    created_textures_.push_back(id);  // M1b: every created object is owned (release() frees it) even if upload fails later
     for (uint32_t m = 0; m < t.mips.size(); ++m) {
       if (!dev.write_texture(id, m, t.mips[m].rgba.data(), t.mips[m].rgba.size())) return fail(err, "render: mip upload rejected: " + t.request);
       uploaded_texture_bytes_ += t.mips[m].rgba.size();
@@ -1059,6 +1060,8 @@ bool AreaRenderer::upload(rhi::Device& dev, const AreaData& a, const RenderOptio
     const uint32_t vbytes = static_cast<uint32_t>(m.vertices.size() * 4), ibytes = static_cast<uint32_t>(m.indices.size() * 4);
     g.vb = dev.create_vertex_buffer(vbytes);
     g.ib = dev.create_index_buffer(ibytes);
+    if (g.vb) created_buffers_.push_back(g.vb);  // M1b (see created_textures_)
+    if (g.ib) created_buffers_.push_back(g.ib);
     if (!g.vb || !g.ib) return fail(err, "render: buffer rejected for model " + m.id);
     dev.write_buffer(g.vb, 0, m.vertices.data(), vbytes);
     dev.write_buffer(g.ib, 0, m.indices.data(), ibytes);
@@ -1088,6 +1091,7 @@ bool AreaRenderer::render(rhi::Device& dev, rhi::TextureId target, const AreaDat
     // The area script's GcAreaDirector::SetFog only stores the statics (SetFogValue); SetFog(true) applies them.
     im.sage.set_fog_value(a.fog.color, a.fog.start, a.fog.end, a.fog.density);
   }
+  const auto t_replay = Clock::now();  // M1b: frame-time breakdown (replay = SageFrame + draw compilation, submit = rhi)
   Sink sink(*this, dev, a);
   im.dev8.set_sink(&sink);
   const uint32_t calls0 = im.dev8.state_calls();
@@ -1102,6 +1106,8 @@ bool AreaRenderer::render(rhi::Device& dev, rhi::TextureId target, const AreaDat
   }
   const uint32_t n = static_cast<uint32_t>(sink.draws.size());
   stats_.rhi_draws = n;
+  const auto t_submit = Clock::now();
+  stats_.replay_ms = std::chrono::duration<double, std::milli>(t_submit - t_replay).count();
   if (n) dev.write_buffer(uniforms_, 0, uniform_data_.data(), n * kSlot);
   // The frame starts from the last whole-viewport clear (ScRenderer::ClearRect: 0x00000000, z 1.0). Its alpha is not
   // kept: the D3D8 back buffer is X8R8G8B8, so the PNG gets alpha 1 like every opaque draw.
@@ -1121,7 +1127,46 @@ bool AreaRenderer::render(rhi::Device& dev, rhi::TextureId target, const AreaDat
     dev.draw_indexed(d);
   }
   dev.end_frame();
+  stats_.submit_ms = ms_since(t_submit);
   return true;
+}
+
+// ---- M1b: area switching ----
+// Destroys every rhi object this renderer created, in dependency order: bind groups first (they reference the uniform
+// buffer, textures and samplers; rhi rejects destroying a referenced object), then pipelines, samplers, textures and
+// buffers. Clears the pipeline / sampler / bind-group caches and the D3D8 device (a new upload starts from init_device,
+// as GcAreaLoader::LoadArea runs with a fresh frame state). Works after a failed upload too (objects created before
+// the failure are owned). Returns the number of objects destroyed; *failures counts rejected destroys (0 when the
+// device and this renderer agree).
+uint32_t AreaRenderer::release(rhi::Device& dev, uint32_t* failures) {
+  uint32_t destroyed = 0, failed = 0;
+  auto count = [&](bool ok) { ok ? ++destroyed : ++failed; };
+  if (impl_) {
+    for (const auto& kv : impl_->groups) count(dev.destroy_bind_group(kv.second));
+    for (const auto& kv : impl_->pipelines) count(dev.destroy_pipeline(kv.second));
+    for (const auto& kv : impl_->samplers) count(dev.destroy_sampler(kv.second));
+  }
+  for (rhi::TextureId t : created_textures_) count(dev.destroy_texture(t));
+  if (white_texture_) count(dev.destroy_texture(white_texture_));
+  for (rhi::BufferId b : created_buffers_) count(dev.destroy_buffer(b));
+  if (uniforms_) count(dev.destroy_buffer(uniforms_));
+  impl_.reset();
+  created_textures_.clear();
+  created_buffers_.clear();
+  gpu_textures_.clear();
+  models_.clear();
+  uniform_data_.clear();
+  uniforms_ = 0;
+  white_texture_ = 0;
+  uniform_slots_ = 0;
+  pipelines_created_ = textures_created_ = frames_ = 0;
+  uploaded_texture_bytes_ = 0;
+  uploaded_ = nullptr;
+  upload_attempted_ = false;
+  render_refused_logged_ = false;
+  stats_ = RenderStats();
+  if (failures) *failures = failed;
+  return destroyed;
 }
 
 }  // namespace lomn::view

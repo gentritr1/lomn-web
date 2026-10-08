@@ -1,0 +1,134 @@
+timeout 600 cmake -S engine -B build/native -G Ninja -DCMAKE_BUILD_TYPE=Release && timeout 1800 cmake --build build/native
+-- Configuring done (0.2s)
+-- Generating done (0.0s)
+-- Build files have been written to: $W/chain/build/native
+ninja: no work to do.
+ctest --test-dir build/native --output-on-failure --timeout 300
+Test project $W/chain/build/native
+      Start  1: determinism_null
+ 1/30 Test  #1: determinism_null .................   Passed    0.10 sec
+      Start  2: ffp_oracle
+ 2/30 Test  #2: ffp_oracle .......................   Passed    0.37 sec
+      Start  3: a7_null_calls
+ 3/30 Test  #3: a7_null_calls ....................   Passed    0.09 sec
+      Start  4: a9_state_log
+ 4/30 Test  #4: a9_state_log .....................   Passed    0.15 sec
+      Start  5: a9_oracle_synthetic
+ 5/30 Test  #5: a9_oracle_synthetic ..............   Passed    0.36 sec
+      Start  6: a9_oracle_real
+ 6/30 Test  #6: a9_oracle_real ...................   Passed    2.14 sec
+      Start  7: osi_all_methods
+ 7/30 Test  #7: osi_all_methods ..................   Passed    0.89 sec
+      Start  8: view_cli_dangling_flag
+ 8/30 Test  #8: view_cli_dangling_flag ...........   Passed    0.02 sec
+      Start  9: view_cli_missing_install
+ 9/30 Test  #9: view_cli_missing_install .........   Passed    0.02 sec
+      Start 10: view_cli_nonfinite
+10/30 Test #10: view_cli_nonfinite ...............   Passed    0.30 sec
+      Start 11: view_cli_modes
+11/30 Test #11: view_cli_modes ...................   Passed    0.09 sec
+      Start 12: view_cli_ints
+12/30 Test #12: view_cli_ints ....................   Passed    0.14 sec
+      Start 13: view_cli_stale_outputs
+13/30 Test #13: view_cli_stale_outputs ...........   Passed    0.08 sec
+      Start 14: view_cli_null_frames
+14/30 Test #14: view_cli_null_frames .............   Passed    0.04 sec
+      Start 15: view_cli_paths
+15/30 Test #15: view_cli_paths ...................   Passed    0.15 sec
+      Start 16: datacheck_no_tmpdir
+16/30 Test #16: datacheck_no_tmpdir ..............   Passed    0.04 sec
+      Start 17: view_cli_manifest_addressable
+17/30 Test #17: view_cli_manifest_addressable ....   Passed    0.07 sec
+      Start 18: view_cli_survey_empty
+18/30 Test #18: view_cli_survey_empty ............   Passed    0.04 sec
+      Start 19: view_cli_camera_json
+19/30 Test #19: view_cli_camera_json .............   Passed    0.25 sec
+      Start 20: cli_dangling_flag
+20/30 Test #20: cli_dangling_flag ................   Passed    0.02 sec
+      Start 21: gpu_triangle
+21/30 Test #21: gpu_triangle .....................   Passed    0.08 sec
+      Start 22: gpu_no_adapter
+22/30 Test #22: gpu_no_adapter ...................   Passed    0.03 sec
+      Start 23: a7_gpu_pixels
+23/30 Test #23: a7_gpu_pixels ....................   Passed    0.09 sec
+      Start 24: gpu_mesh
+24/30 Test #24: gpu_mesh .........................   Passed    0.09 sec
+      Start 25: gpu_ffp
+25/30 Test #25: gpu_ffp ..........................   Passed    0.07 sec
+      Start 26: gpu_destroy
+26/30 Test #26: gpu_destroy ......................   Passed    0.13 sec
+      Start 27: a7_gpu_no_adapter
+27/30 Test #27: a7_gpu_no_adapter ................   Passed    0.03 sec
+      Start 28: unit
+28/30 Test #28: unit .............................   Passed    0.49 sec
+      Start 29: osi_probe
+29/30 Test #29: osi_probe ........................   Passed    0.08 sec
+      Start 30: slb_probe
+30/30 Test #30: slb_probe ........................   Passed    0.03 sec
+
+100% tests passed, 0 tests failed out of 30
+
+Label Time Summary:
+gpu    =   0.53 sec*proc (7 tests)
+
+Total Test time (real) =   6.52 sec
+source .toolchain/emsdk/emsdk_env.sh >/dev/null 2>&1 && timeout 600 emcmake cmake -S engine -B build/wasm -G Ninja -DCMAKE_BUILD_TYPE=Release && timeout 1800 cmake --build build/wasm
+emcmake: cmake -S engine -B build/wasm -G Ninja -DCMAKE_BUILD_TYPE=Release <ws>/lomn-web/.toolchain/emsdk/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake' <ws>/lomn-web/.toolchain/emsdk/node/24.19.0_64bit/bin/node' in directory $W/chain
+-- Configuring done (1.3s)
+-- Generating done (0.0s)
+-- Build files have been written to: $W/chain/build/wasm
+ninja: no work to do.
+source .toolchain/emsdk/emsdk_env.sh >/dev/null 2>&1 && ctest --test-dir build/wasm --output-on-failure --timeout 300
+Test project $W/chain/build/wasm
+    Start 1: determinism_null
+1/7 Test #1: determinism_null .................   Passed    0.19 sec
+    Start 2: a7_null_calls
+2/7 Test #2: a7_null_calls ....................   Passed    0.23 sec
+    Start 3: a9_state_log
+3/7 Test #3: a9_state_log .....................   Passed    0.31 sec
+    Start 4: view_cli_write_install_wasm
+4/7 Test #4: view_cli_write_install_wasm ......   Passed    0.08 sec
+    Start 5: unit
+5/7 Test #5: unit .............................   Passed    0.89 sec
+    Start 6: osi_probe
+6/7 Test #6: osi_probe ........................   Passed    0.15 sec
+    Start 7: slb_probe
+7/7 Test #7: slb_probe ........................   Passed    0.13 sec
+
+100% tests passed, 0 tests failed out of 7
+
+Total Test time (real) =   2.00 sec
+timeout 120 .venv/bin/python tools/harness/compare.py trace build/native/determinism/a/trace.jsonl build/wasm/determinism/a/trace.jsonl
+traces identical
+cmp build/native/determinism/a/calls.txt build/wasm/determinism/a/calls.txt
+cmp build/native/a7/a/calls.txt build/wasm/a7/a/calls.txt
+cmp build/native/a9/a/state.txt build/wasm/a9/a/state.txt
+cmp build/native/a9/a/calls.txt build/wasm/a9/a/calls.txt
+cmp build/native/a9/f2/state.txt build/wasm/a9/f2/state.txt
+rm -rf build/site && mkdir -p build/site && cp web/index.html build/wasm/lomn_web.js build/wasm/lomn_web.wasm build/site/
+cd web && timeout 60 node --test tests/serve_test.mjs tests/unit_test.mjs tests/unit_r2_test.mjs
+✔ serves index.html for / and by name (23.508541ms)
+✔ sibling directory sharing the root prefix is not reachable (..%2f) (2.073708ms)
+✔ sibling directory is not reachable (%2e%2e%2f) (1.745791ms)
+✔ malformed percent escape answers 400 and the server keeps serving (3.961917ms)
+✔ M12 checkRelPath: no empty, ".", ".." or over-long segments; byte length counted in UTF-8 (7.075375ms)
+✔ M11 filesSource: over-long (UTF-8) paths and case duplicates are skipped with a warning, never fatal (6.3295ms)
+✔ I6 checkCopyManifest / sameFiles: the completion manifest is shape-checked and compared with the copy (0.570625ms)
+✔ classify: accepted, rejected-list (named), unknown exe, unknown data (1.371458ms)
+✔ checkBuilds rejects malformed lists (0.420917ms)
+✔ blkTablesFingerprint: order-independent, path-case-insensitive, bounded (11.954917ms)
+✔ wanted(): the exe at the top and data/ except dot files, exes and DLLs (0.17025ms)
+✔ filesSource: strips the picked folder, keeps only wanted files (0.826917ms)
+ℹ tests 12
+ℹ suites 0
+ℹ pass 12
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 173.233334
+cd web && timeout 180 node tests/smoke.mjs ../build/site ../build/pw-profile
+adapter=apple/metal-3 frames=120 dt_samples=119 window_ms=1983 p50_dt_ms=16.70 expected_at_60hz=119
+pixels {"centre":[255,128,0,255],"corner":[0,0,64,255]}
+requests ["/index.html","/lomn_web.js","/lomn_web.wasm","/favicon.ico"]
+console_errors [] page_errors []

@@ -1,0 +1,2982 @@
+diff -ruN base/engine/CMakeLists.txt ref/engine/CMakeLists.txt
+--- base/engine/CMakeLists.txt	2026-10-07 15:21:46
++++ ref/engine/CMakeLists.txt	2026-10-07 17:26:12
+@@ -6,9 +6,15 @@
+ # Pinned third-party inputs are fetched by tools/toolchain.sh into .toolchain/ (see deps.lock).
+ set(LOMN_TOOLCHAIN_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../.toolchain" CACHE PATH "pinned toolchain root")
+ option(LOMN_WEBGPU "build the WebGPU backend" ON)
++# M1b: the browser viewer's initial wasm memory (bytes, a multiple of 64 KiB). Measured 2026-10-07 (REF4 REPORT "Memory
++# budget", Chromium/Metal, 16 MiB start): boot set resident 16 MiB (no growth), after lev1/vllg 16, lev2/ghut 19.25,
++# lev4/crss 40, lev0/frnt (largest texture set, 57.0 MB with mips) 83.06 MiB = the high-water mark; a sweep of all 122
++# browser-addressable areas afterwards never grew it. 96 MiB = that mark + 15.6% headroom, so growth (a heap copy without
++# pthreads, spec §4.6) does not happen in normal use; MAXIMUM_MEMORY stays 2 GB for anything larger.
++set(LOMN_WEB_INITIAL_MEMORY 100663296)
+ enable_testing()
+ 
+-add_library(lomn_core STATIC src/fs/memory_fs.cpp src/rhi/null_device.cpp src/app/loop.cpp)
++add_library(lomn_core STATIC src/fs/memory_fs.cpp src/fs/prefetch_fs.cpp src/rhi/null_device.cpp src/app/loop.cpp)
+ target_include_directories(lomn_core PUBLIC include PRIVATE "${LOMN_TOOLCHAIN_DIR}/include")
+ target_compile_options(lomn_core PRIVATE -Wall -Wextra)
+ # Native clang fuses a*b+c into FMA by default and wasm never does; forbid it so native == wasm32 bit for bit.
+@@ -28,7 +34,8 @@
+ target_compile_options(lomn_d3d PRIVATE -Wall -Wextra)
+ 
+ # M1a-2 first pixels + M1a-3: CPU mips, area loader, the SAGE frame replay on the shim, the A7/A9 synthetic scene.
+-add_library(lomn_area STATIC src/view/mips.cpp src/view/area.cpp src/view/sage_frame.cpp src/view/synthetic.cpp)
++add_library(lomn_area STATIC src/view/mips.cpp src/view/area.cpp src/view/sage_frame.cpp src/view/synthetic.cpp
++            src/view/fly_camera.cpp src/view/prefetch.cpp)  # M1b: free-fly camera, prefetch helpers
+ target_link_libraries(lomn_area PUBLIC lomn_sage lomn_d3d)
+ target_compile_options(lomn_area PRIVATE -Wall -Wextra)
+ 
+@@ -56,9 +63,24 @@
+ 
+ if(EMSCRIPTEN)
+   if(LOMN_WEBGPU)
++    # M1b viewer: an ES module factory (web/app/engine.js imports it); INVOKE_RUN=0 so the boot set is prefetched into
++    # the heap before main(). INITIAL_MEMORY is set from measurement (REF4 REPORT "Memory budget").
++    # Optimisation (REF4 r2 decision D14, amends parent spec §4.6 "-O2 + wasm-opt"): the Release build (-O3; emcc runs
++    # wasm-opt at link for both levels) measured against -O2, 4 interleaved reps per arm (web/tests/measure_arms.mjs,
++    # loadavg 13-20): load of 4 areas median 613 vs 605 ms (spread 236 / 525 ms), frame CPU p50 0.7 vs 0.7 ms (spread
++    # 0.1): indistinguishable; wasm 332,641 vs 344,390 B, the only difference beyond the (zero) null spread: -O3 kept.
++    # -sDYNAMIC_EXECUTION=0: no eval/new Function in the glue (the page's CSP allows only 'wasm-unsafe-eval').
+     add_executable(lomn_web src/app/main_web.cpp)
+-    target_link_libraries(lomn_web PRIVATE lomn_webgpu)
+-    target_link_options(lomn_web PRIVATE -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=2GB)
++    target_link_libraries(lomn_web PRIVATE lomn_area lomn_webgpu)
++    target_include_directories(lomn_web PRIVATE src/app)
++    # The measured configuration, readable at runtime (lomn_build_info -> window.__lomn.metrics.build and the HUD).
++    string(TOUPPER "${CMAKE_BUILD_TYPE}" _lomn_bt)
++    string(STRIP "${CMAKE_CXX_FLAGS} ${CMAKE_CXX_FLAGS_${_lomn_bt}}" _lomn_flags)
++    target_compile_definitions(lomn_web PRIVATE "LOMN_BUILD_TYPE=\"${CMAKE_BUILD_TYPE}\"" "LOMN_BUILD_FLAGS=\"${_lomn_flags}\"")
++    target_link_options(lomn_web PRIVATE -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=2GB -sINITIAL_MEMORY=${LOMN_WEB_INITIAL_MEMORY}
++                        -sMODULARIZE=1 -sEXPORT_ES6=1 -sEXPORT_NAME=createLomn -sINVOKE_RUN=0 -sENVIRONMENT=web -sDYNAMIC_EXECUTION=0
++                        "SHELL:-sEXPORTED_FUNCTIONS=_main,_malloc,_free"
++                        "SHELL:-sEXPORTED_RUNTIME_METHODS=callMain,UTF8ToString,stringToNewUTF8,HEAPU8")
+   endif()
+   # Null-backend runner under Node: its trace/calls must be byte-identical to the native runner's.
+   add_executable(lomn_native src/app/main_native.cpp)
+@@ -180,6 +202,11 @@
+   add_test(NAME datacheck_no_tmpdir COMMAND sh -c
+            "rm -rf \"$2\"; \"$1\" --synthetic 2 --backend null --out \"$2.txt\" --write-install \"$2\" >/dev/null 2>&1 || exit 1; TMPDIR=/nonexistent/lomn-tmp \"$0\" \"$2\" --areas levt/stat > \"$2.json\" 2>\"$2.err\"; rc=$?; [ $rc -eq 0 ] || { echo \"rc=$rc\"; cat \"$2.err\"; exit 1; }; grep -q '\"blk\"' \"$2.json\" || { echo 'no JSON'; exit 1; }"
+            $<TARGET_FILE:lomn_datacheck> $<TARGET_FILE:lomn_view> ${CMAKE_CURRENT_BINARY_DIR}/datacheck_tmpdir)
++  # REF4 r2 M6: --manifest lists only the areas the game can address (view::list_areas: ids of 1..4 characters, the level
++  # blockfile excluded), like the browser; a longer stem (lev4c on Beta 1.5.0) is reported under not_addressable.
++  add_test(NAME view_cli_manifest_addressable COMMAND sh -c
++           "rm -rf \"$1\"; \"$0\" --synthetic 2 --backend null --out \"$1.txt\" --write-install \"$1\" >/dev/null 2>&1 || exit 1; cp \"$1/data/levels/levt/stat.blk\" \"$1/data/levels/levt/statx.blk\" || exit 1; \"$0\" --install \"$1\" --manifest 1 --out \"$1.json\" >/dev/null 2>&1 || { echo 'manifest failed'; exit 1; }; grep -q 'levt/statx\"' \"$1.json\" || { echo 'statx not reported'; exit 1; }; grep -q '\"area\":\"levt/statx\"' \"$1.json\" && { echo 'levt/statx listed as an area'; exit 1; }; grep -q '\"not_addressable\":\\[\"levt/statx\"\\]' \"$1.json\" || { echo 'not_addressable missing'; exit 1; }; grep -q '\"areas\":2,' \"$1.json\" || { echo 'area count != 2'; exit 1; }"
++           $<TARGET_FILE:lomn_view> ${CMAKE_CURRENT_BINARY_DIR}/view_manifest_addr)
+   # C8: a survey that finds no area is an environment error (exit 3), not an empty success.
+   add_test(NAME view_cli_survey_empty COMMAND sh -c
+            "rm -rf \"$1\"; mkdir -p \"$1/Data/Levels/lev1\" || exit 1; \"$0\" --install \"$1\" --survey 1 --out \"$1/s.json\" >/dev/null 2>&1; rc=$?; [ $rc -eq 3 ] || { echo \"rc=$rc (want 3)\"; exit 1; }"
+@@ -221,6 +248,13 @@
+     target_link_libraries(lomn_gpu_ffp_test PRIVATE lomn_d3d lomn_webgpu)
+     add_test(NAME gpu_ffp COMMAND lomn_gpu_ffp_test)
+     set_tests_properties(gpu_ffp PROPERTIES SKIP_RETURN_CODE 77 LABELS gpu)
++    # M1b: destroy_* on Dawn (dependency rule, ids never reused, live counts), a depth-target re-creation leak loop,
++    # surface calls rejected headless, and AreaRenderer::release over N uploads of the synthetic scene (flat counts,
++    # pixels unchanged).
++    add_executable(lomn_gpu_destroy_test tests/test_gpu_destroy.cpp)
++    target_link_libraries(lomn_gpu_destroy_test PRIVATE lomn_area lomn_webgpu)
++    add_test(NAME gpu_destroy COMMAND lomn_gpu_destroy_test)
++    set_tests_properties(gpu_destroy PROPERTIES SKIP_RETURN_CODE 77 LABELS gpu)
+     add_test(NAME a7_gpu_no_adapter COMMAND sh -c
+              "out=$(\"$0\" --synthetic 1 --out \"$1\" 2>&1); rc=$?; printf '%s\\n' \"$out\"; [ \"$rc\" -eq 3 ] && printf '%s' \"$out\" | grep -q \"webgpu unavailable: no WebGPU adapter\""
+              $<TARGET_FILE:lomn_view> ${CMAKE_CURRENT_BINARY_DIR}/a7_noadapter.png)
+@@ -231,7 +265,8 @@
+ # Unit tests: natively, and under Node when cross-compiled with emcmake (CMAKE_CROSSCOMPILING_EMULATOR=node).
+ add_executable(lomn_tests tests/test_main.cpp tests/test_fs.cpp tests/test_rhi_null.cpp tests/test_loop.cpp tests/test_sage_blockfile.cpp tests/test_sage_blockchain.cpp tests/test_sage_slb.cpp tests/test_sage_xfile.cpp tests/test_sage_image.cpp
+                tests/test_rhi_mesh.cpp tests/test_view_mips.cpp tests/test_view_area.cpp tests/test_d3d.cpp tests/test_sage_osi.cpp
+-               tests/test_area_states.cpp tests/test_sage_frame.cpp)
++               tests/test_area_states.cpp tests/test_sage_frame.cpp
++               tests/test_rhi_destroy.cpp tests/test_prefetch_fs.cpp tests/test_fly_camera.cpp)  # M1b
+ target_link_libraries(lomn_tests PRIVATE lomn_area)
+ target_include_directories(lomn_tests PRIVATE "${LOMN_TOOLCHAIN_DIR}/include")
+ if(EMSCRIPTEN)
+diff -ruN base/engine/include/lomn/fs.h ref/engine/include/lomn/fs.h
+--- base/engine/include/lomn/fs.h	2026-10-07 15:21:46
++++ ref/engine/include/lomn/fs.h	2026-10-07 15:35:48
+@@ -32,14 +32,25 @@
+   virtual Error read_range(std::string_view path, uint64_t offset, uint64_t size, std::vector<uint8_t>& out) const;
+   // Called with the normalised path on every successful read (drives the per-area prefetch manifest).
+   void set_access_logger(std::function<void(const std::string&)> logger) { logger_ = std::move(logger); }
++  // Additive (M1b): (normalised path, offset, length) of every successful read -> the per-area prefetch manifest at
++  // byte-range granularity. read() reports [0, file size); read_range() its own range. size() and exists() are not
++  // reads (they never move bytes) and are not reported.
++  using RangeLogger = std::function<void(const std::string&, uint64_t offset, uint64_t length)>;
++  void set_range_logger(RangeLogger logger) { range_logger_ = std::move(logger); }
+ 
+  protected:
+   void log_access(const std::string& normalised) const {
+     if (logger_) logger_(normalised);
+   }
++  // M1b: one successful read of [offset, offset + length): both loggers.
++  void log_read(const std::string& normalised, uint64_t offset, uint64_t length) const {
++    log_access(normalised);
++    if (range_logger_) range_logger_(normalised, offset, length);
++  }
+ 
+  private:
+   std::function<void(const std::string&)> logger_;
++  RangeLogger range_logger_;
+ };
+ 
+ // In-memory file system used by the browser build (bytes prefetched from OPFS / the player's folder) and tests.
+diff -ruN base/engine/include/lomn/prefetch_fs.h ref/engine/include/lomn/prefetch_fs.h
+--- base/engine/include/lomn/prefetch_fs.h	1970-01-01 01:00:00
++++ ref/engine/include/lomn/prefetch_fs.h	2026-10-07 15:36:17
+@@ -0,0 +1,124 @@
++// M1b: the browser's file system (spec §4.3 "sync I/O solution"). The engine keeps its synchronous lomn::fs API; the
++// bytes come from the player's own files, which JavaScript reads asynchronously (File System Access handle or OPFS) and
++// writes straight into buffers this class allocates in the wasm heap, chunk by chunk (no whole-file JS buffer).
++//
++// Model:
++//  - an INDEX of every file of the install (normalised path -> size), registered before anything is read: exists()
++//    and size() answer from it, so blockfile headers can be sized without any bytes being resident;
++//  - RESIDENT byte ranges: reserve(path, offset, length) allocates the destination, JS fills it, commit() makes it
++//    readable. read()/read_range() succeed only when ONE resident range contains the whole request;
++//  - a read of an indexed file outside the resident set is a MISS: it fails with Error::Io (never blocks, never hangs)
++//    and is recorded (distinct, in first-seen order). JS fetches the misses and re-runs the load: the engine's own
++//    reads drive the prefetch ("discovery"), so no manifest has to be shipped (REF4 decision D2);
++//  - TOUCH GENERATIONS: every successful read stamps the range it hit with the current generation. After an area load
++//    whose last round had no miss, release_untouched() frees every unpinned range that load did not read: the previous
++//    area's buffers go, files shared with the new area stay (spec §4.3 "release on area switch"). pin_touched() marks
++//    the boot set (never released).
++// Untrusted input: paths, offsets and lengths come from JS (ultimately from the player's folder or a cached manifest).
++// Every count, length and total is capped (constants below, each with the measured real value) and all range arithmetic
++// is u64 (wasm32 size_t is 32-bit); a rejected call changes nothing.
++#pragma once
++#include <cstdint>
++#include <map>
++#include <memory>
++#include <set>
++#include <string>
++#include <string_view>
++#include <tuple>
++#include <vector>
++
++#include "lomn/fs.h"
++
++namespace lomn::fs {
++
++struct ByteRange {
++  std::string path;  // normalised ("root/data/...")
++  uint64_t offset = 0, length = 0;
++  bool operator<(const ByteRange& o) const { return std::tie(path, offset, length) < std::tie(o.path, o.offset, o.length); }
++  bool operator==(const ByteRange& o) const { return path == o.path && offset == o.offset && length == o.length; }
++};
++
++class PrefetchFileSystem final : public FileSystem {
++ public:
++  // Caps. Measured on the Beta 1.5.0 install (2026-10-07): 529 files (incl. 2 .DS_Store), longest relative path 54 bytes,
++  // largest single engine read 2,511,728 bytes (the largest blockfile entry; Base.osi 486,274), at most a few hundred
++  // distinct reads per area (lomn_view --manifest, REF4 REPORT). Headroom >= 16x everywhere.
++  static constexpr uint32_t kMaxFiles = 65536;
++  static constexpr uint32_t kMaxPathBytes = 1024;
++  static constexpr uint64_t kMaxRangeBytes = 64ull << 20;   // = sage::kMaxEntrySize, the largest entry the engine reads
++  static constexpr uint32_t kMaxResidentRanges = 65536;     // resident + pending
++  static constexpr uint32_t kMaxMissesPerGeneration = 4096; // distinct misses kept; more are counted, not stored
++  static constexpr uint64_t kDefaultBudgetBytes = 1536ull << 20;  // resident + pending bytes (wasm32 heap max is 2 GB)
++
++  explicit PrefetchFileSystem(uint64_t budget_bytes = kDefaultBudgetBytes);
++  PrefetchFileSystem(const PrefetchFileSystem&) = delete;
++  PrefetchFileSystem& operator=(const PrefetchFileSystem&) = delete;
++
++  // ---- index ----
++  // path must normalise to "root/..."; size <= 2^53 (a JS number). Re-adding a path is an error. False + *err on reject.
++  bool add_file(std::string_view path, uint64_t size, std::string* err = nullptr);
++  size_t file_count() const { return index_.size(); }
++
++  // ---- resident data ----
++  // Allocates [offset, offset+length) of an indexed file (length 1..kMaxRangeBytes, inside the file, within the budget
++  // and the range cap) and returns a writable pointer, the handle for commit()/abort(). nullptr + *err on reject, also
++  // when the range is already resident (is_resident()).
++  uint8_t* reserve(std::string_view path, uint64_t offset, uint64_t length, std::string* err = nullptr);
++  bool commit(const uint8_t* handle);  // the bytes are written: readable from now on. False for an unknown handle.
++  bool abort(const uint8_t* handle);   // frees a reservation that will not be filled
++  bool is_resident(std::string_view path, uint64_t offset, uint64_t length) const;
++
++  // ---- generations, release, boot pinning ----
++  void next_generation();          // starts a new touch generation and clears the miss list
++  uint32_t generation() const { return generation_; }
++  uint32_t pin_touched();          // pins the ranges touched in the current generation; returns how many
++  uint64_t release_untouched();    // frees unpinned committed ranges not touched in the current generation; bytes freed
++  std::vector<ByteRange> touched() const;  // ranges touched in the current generation, sorted
++
++  // ---- misses ----
++  const std::vector<ByteRange>& misses() const { return misses_; }
++  uint64_t misses_dropped() const { return misses_dropped_; }  // current generation, beyond kMaxMissesPerGeneration
++  uint64_t misses_total() const { return misses_total_; }      // since construction
++
++  // ---- stats ----
++  uint64_t resident_bytes() const { return resident_bytes_; }  // committed
++  uint64_t pending_bytes() const { return pending_bytes_; }
++  uint64_t peak_bytes() const { return peak_bytes_; }          // max of committed + pending
++  uint32_t resident_ranges() const { return static_cast<uint32_t>(committed_count_); }
++  uint64_t pinned_bytes() const;
++
++  // ---- FileSystem ----
++  bool exists(std::string_view path) const override;
++  Error read(std::string_view path, std::vector<uint8_t>& out) const override;
++  Error write(std::string_view path, const uint8_t* data, size_t size) override;  // root/: ReadOnly; user/: in memory
++  Error size(std::string_view path, uint64_t& out) const override;
++  Error read_range(std::string_view path, uint64_t offset, uint64_t size, std::vector<uint8_t>& out) const override;
++
++ private:
++  struct Range {
++    uint64_t offset = 0, length = 0;
++    std::unique_ptr<uint8_t[]> bytes;
++    bool committed = false, pinned = false;
++    mutable uint32_t touched_gen = 0;  // 0 = never
++  };
++  struct File {
++    uint64_t size = 0;
++    std::vector<std::unique_ptr<Range>> ranges;  // unsorted; a handful to a few hundred per file
++  };
++  const Range* find(const File& f, uint64_t offset, uint64_t length) const;  // a committed range containing the request
++  Error read_at(const std::string& n, uint64_t offset, uint64_t length, std::vector<uint8_t>& out) const;
++  void note_miss(const std::string& n, uint64_t offset, uint64_t length) const;
++
++  uint64_t budget_;
++  std::map<std::string, File> index_;
++  std::map<std::string, std::vector<uint8_t>> user_;
++  std::map<const uint8_t*, std::pair<std::string, Range*>> pending_;  // handle -> (path, range)
++  uint32_t generation_ = 1;
++  uint64_t resident_bytes_ = 0, pending_bytes_ = 0, peak_bytes_ = 0;
++  size_t range_count_ = 0, committed_count_ = 0;
++  mutable std::vector<ByteRange> misses_;
++  mutable std::set<ByteRange> miss_set_;
++  mutable uint64_t misses_dropped_ = 0, misses_total_ = 0;
++};
++
++}  // namespace lomn::fs
+diff -ruN base/engine/include/lomn/rhi.h ref/engine/include/lomn/rhi.h
+--- base/engine/include/lomn/rhi.h	2026-10-07 15:21:46
++++ ref/engine/include/lomn/rhi.h	2026-10-07 17:12:48
+@@ -2,6 +2,8 @@
+ // deterministic call log, no GPU) and "webgpu" (Dawn natively, emdawnwebgpu in the browser).
+ // M0 surface: render targets, one uniform block per pipeline (dynamic offset, 256-byte aligned), non-indexed draws.
+ // M1a-3 additive: MeshPipelineDesc.front_face and .depth_bias (D3D CW front faces, D3DRS_ZBIAS).
++// M1b additive: destroy_* (with a dependency rule), live_objects(), and a presentation-surface depth buffer + resize.
++// REF4 r2 additive: set_lost_handler (device loss / first uncaptured error reaches the caller).
+ // M1a-2 additive surface (unlit textured indexed draws): vertex/index buffers, RGBA8 textures with a CPU-supplied mip
+ // chain, samplers, render targets with a depth buffer, mesh pipelines (vertex layout, blend, depth, cull), bind groups
+ // {dynamic-offset uniform block, texture, sampler} and indexed draws. Every M0 call keeps its behaviour and log text.
+@@ -194,6 +196,45 @@
+   // executes (WebGPU), so rewriting the same range between two draws feeds the last value to both. Give each draw its
+   // own dynamic offset.
+   virtual void draw_indexed(const DrawIndexedDesc&) {}
++
++  // ---- M1b additive calls (area switching and browser presentation) ----
++  // NOT pure virtual (as the M1a-2 calls): a Device written against an older surface reports them unsupported.
++  // destroy_*: frees the object; ids are still never reused. Returns true when the object was destroyed. Rejected
++  // (counted in FrameStats::rejected, logged by the null backend, reported on stderr by WebGPU; nothing is freed):
++  //  - an unknown or already-destroyed id (0 included; the presentation surface is not a texture that can be destroyed);
++  //  - DEPENDENCY RULE: a sampled texture, a sampler or a uniform buffer still referenced by a LIVE bind group. Destroy the
++  //    bind group first. Rejection was chosen over cascading: a cascade would silently invalidate a bind group id that
++  //    another owner still holds, while a rejection is visible and testable. Pipelines are referenced by no rhi object.
++  // Inside an open frame a destroy is allowed: draws already recorded keep their objects alive (WebGPU reference
++  // counting); a later draw that names a destroyed id is rejected like any unknown id.
++  virtual bool destroy_texture(TextureId) { return false; }  // sampled textures and render targets (+ their depth buffer)
++  virtual bool destroy_buffer(BufferId) { return false; }    // uniform, vertex and index buffers
++  virtual bool destroy_pipeline(PipelineId) { return false; }  // M0 and mesh pipelines (+ every per-format variant)
++  virtual bool destroy_sampler(SamplerId) { return false; }
++  virtual bool destroy_bind_group(BindGroupId) { return false; }
++  // Live objects per kind (created and not destroyed): the leak check of area switching (counts must return to the
++  // same values after N switches). Render targets count as textures.
++  struct LiveObjects {
++    uint32_t textures = 0, buffers = 0, pipelines = 0, samplers = 0, bind_groups = 0;
++    bool operator==(const LiveObjects& o) const {
++      return textures == o.textures && buffers == o.buffers && pipelines == o.pipelines && samplers == o.samplers &&
++             bind_groups == o.bind_groups;
++    }
++  };
++  virtual LiveObjects live_objects() const { return LiveObjects(); }
++  // Presentation surface (browser canvas; target 0). Both are counted rejections returning false on a device without a
++  // surface (headless WebGPU, null) and inside an open frame.
++  // set_surface_depth: gives frames on target 0 a Depth32Float depth buffer (the same format, pipeline variants and
++  // depth-bias units as create_render_target_ex), cleared to clear_depth (0..1) at every begin_frame(0); false turns it off.
++  virtual bool set_surface_depth(bool /*enabled*/, float /*clear_depth*/) { return false; }
++  // resize: reconfigures the surface to width x height (1..kMaxRenderTargetSize; in the browser this also sets the
++  // canvas drawing-buffer size) and recreates the surface depth buffer at the new size when it is enabled.
++  virtual bool resize(uint32_t /*width*/, uint32_t /*height*/) { return false; }
++  // REF4 r2 (C1): called at most once, with a readable reason, when the device becomes unusable: a device loss for any
++  // reason other than the device's own destruction, or the first uncaptured GPU error (a validation error the shared
++  // checks could not see, e.g. bad WGSL). A loss that happened before the handler was set is delivered when it is set.
++  // The null backend never loses its device (it logs the call). Default: no-op.
++  virtual void set_lost_handler(std::function<void(const std::string& reason)> /*handler*/) {}
+ };
+ 
+ // Null backend: appends one line per call to *call_log (if non-null). Lines are stable text, so two runs
+diff -ruN base/engine/include/lomn/view/area.h ref/engine/include/lomn/view/area.h
+--- base/engine/include/lomn/view/area.h	2026-10-07 15:21:46
++++ ref/engine/include/lomn/view/area.h	2026-10-07 15:37:15
+@@ -34,6 +34,10 @@
+ // World transform (spec M1 §2.1): RotX(kWorldRotX) then the OBJ record position in _41.._43 (GcArea::GcArea 0x00504220
+ // + GcObjectLoader::LoadObjects 0x0053fc60). Constant read from LEGOBionicle.exe .data @0x72a444.
+ constexpr float kWorldRotX = -1.5707982f;
++// M1b: the two files every area load reads first (GcGame::LoadArtBlockHeader's Art.blk table, the script file whose
++// area class supplies fog): one definition, shared by load_area and the browser's boot prefetch (lomn/view/prefetch.h).
++constexpr const char* kArtBlkPath = "Root/Data/Art/Art.blk";
++constexpr const char* kBaseOsiPath = "Root/Data/Base.osi";
+ constexpr uint32_t kPosStartFlag = 0x1000;
+ 
+ // Caps on what one area may make the renderer allocate (untrusted input, spec §5). Measured over all 123 area
+@@ -250,6 +254,10 @@
+   // generated one WGSL variant per fixed-function state would need (the uber-shader needs only `pipelines`).
+   uint32_t shader_variants = 0;
+   uint32_t lit_draws = 0, fogged_draws = 0, blended_draws = 0, alpha_tested_draws = 0, null_texture_draws = 0;
++  // M1b frame-time breakdown (wall clock, CPU side): replay = the SageFrame replay on the D3D8 shim + draw compilation
++  // (pipelines/bind groups looked up, uniforms packed); submit = the rhi calls (uniform write, begin_frame, draws,
++  // end_frame). Not part of any log.
++  double replay_ms = 0, submit_ms = 0;
+ };
+ 
+ // Frees the CPU-side vertex/index arrays and texture mip chains once they are on the GPU (upload copies them).
+@@ -260,14 +268,17 @@
+ class AreaRenderer {
+  public:
+   // Creates every GPU object for `area` (which must outlive the renderer's use of it). False on a device failure.
+-  // ONE upload per renderer: rhi has no destroy calls, so a repeat upload (after success or failure) is rejected
+-  // without creating anything; use a new AreaRenderer (and device) for another area.
++  // ONE upload per renderer until release(): a repeat upload (after success or failure) is rejected without creating
++  // anything. M1b: release() destroys the GPU objects, after which upload() may run again (another area, same device).
+   bool upload(rhi::Device& dev, const AreaData& area, const RenderOptions& opt, std::string* err);
+   // One frame into `target` (a render target with depth): the SageFrame replay (sage_frame.h) on a d3d::Device8 whose
+   // DrawSink compiles every DrawSubset to an rhi draw (pipelines and (texture, sampler) bind groups created on first
+   // use, one uniform slot per draw). Returns false, makes no rhi call and logs once on stderr unless upload() succeeded
+   // for this very AreaData object. The D3D8 device persists across frames (render states are history-dependent).
+   bool render(rhi::Device& dev, rhi::TextureId target, const AreaData& area, const Camera& cam);
++  // M1b: destroys every GPU object this renderer created (also after a failed upload), bind groups first, and resets
++  // the renderer to its never-uploaded state. Returns the objects destroyed; *failures (optional) = rejected destroys.
++  uint32_t release(rhi::Device& dev, uint32_t* failures = nullptr);
+   uint32_t pipelines() const { return pipelines_created_; }
+   uint64_t uploaded_texture_bytes() const { return uploaded_texture_bytes_; }
+   uint32_t textures_created() const { return textures_created_; }
+@@ -291,6 +302,8 @@
+   uint32_t uniform_slots_ = 0;
+   std::vector<GpuModel> models_;
+   std::vector<rhi::TextureId> gpu_textures_;  // per AreaData::textures index
++  std::vector<rhi::TextureId> created_textures_;  // M1b: every texture upload() created (release() destroys them)
++  std::vector<rhi::BufferId> created_buffers_;    // M1b: every vertex/index buffer upload() created
+   rhi::TextureId white_texture_ = 0;
+   uint32_t pipelines_created_ = 0, textures_created_ = 0, frames_ = 0;
+   uint64_t uploaded_texture_bytes_ = 0;
+diff -ruN base/engine/include/lomn/view/fly_camera.h ref/engine/include/lomn/view/fly_camera.h
+--- base/engine/include/lomn/view/fly_camera.h	1970-01-01 01:00:00
++++ ref/engine/include/lomn/view/fly_camera.h	2026-10-07 15:37:26
+@@ -0,0 +1,40 @@
++// M1b viewer: free-fly camera (mouse look + WASD) on top of make_camera (area.h). Until the player moves, settings()
++// returns the base settings unchanged, so the first frames are the POS-start / exe-default view bit for bit (the same
++// view lomn_view renders natively). Once moved it overrides eye, yaw and pitch (eye_set / yaw_set, eye_height unused).
++// Conventions are make_camera's: yaw 0 looks along -Z, 90 along +X; positive pitch looks up; Y is up.
++#pragma once
++#include "lomn/view/area.h"
++
++namespace lomn::view {
++
++struct FlyInput {
++  bool forward = false, back = false, left = false, right = false, up = false, down = false, fast = false;
++  float look_dx = 0, look_dy = 0;  // pointer movement in CSS pixels since the last update (right / down positive)
++};
++
++struct FlySpeeds {
++  float units_per_s = 12.0f;      // walking speed in world units (area extents are hundreds of units)
++  float fast_multiplier = 5.0f;   // Shift
++  float deg_per_pixel = 0.15f;    // mouse look
++};
++
++class FlyCamera {
++ public:
++  // Starts from the camera make_camera produced for the base settings (eye, yaw and clamped pitch).
++  void reset(const Camera& start);
++  // dt_s is clamped to [0, 0.25] s so a stalled tab does not teleport the camera. Non-finite inputs are ignored.
++  void update(const FlyInput& in, double dt_s, const FlySpeeds& sp = FlySpeeds());
++  bool moved() const { return moved_; }
++  // base unchanged until the first movement; then base with eye/yaw/pitch overridden.
++  CameraSettings settings(const CameraSettings& base) const;
++  const float* eye() const { return eye_; }
++  float yaw_deg() const { return yaw_; }
++  float pitch_deg() const { return pitch_; }
++
++ private:
++  float eye_[3] = {0, 0, 0};
++  float yaw_ = 0, pitch_ = 0;
++  bool moved_ = false;
++};
++
++}  // namespace lomn::view
+diff -ruN base/engine/include/lomn/view/prefetch.h ref/engine/include/lomn/view/prefetch.h
+--- base/engine/include/lomn/view/prefetch.h	1970-01-01 01:00:00
++++ ref/engine/include/lomn/view/prefetch.h	2026-10-07 15:37:56
+@@ -0,0 +1,37 @@
++// M1b: what the engine reads, at (path, offset, length) granularity. Used two ways:
++//  - natively, `lomn_view --manifest 1` records every area's reads over the disk file system (the measurement and the
++//    oracle: boot set vs the census, per-area prefetch bytes);
++//  - in the browser, the same reads drive the prefetch through PrefetchFileSystem misses (lomn/prefetch_fs.h).
++#pragma once
++#include <functional>
++#include <string>
++#include <string_view>
++#include <vector>
++
++#include "lomn/fs.h"
++#include "lomn/prefetch_fs.h"
++
++namespace lomn::view {
++
++// The boot reads: what every area load reads before anything area-specific (load_area: the Art.blk header and table,
++// and Base.osi). The browser prefetches and pins them before main() (spec §4.3 "boot set").
++void boot_reads(const fs::FileSystem& fs);
++
++// Runs fn with a range logger installed on fs and returns the distinct ranges it read, sorted (path, offset, length).
++// The previous range logger is removed afterwards.
++std::vector<fs::ByteRange> record_reads(fs::FileSystem& fs, const std::function<void()>& fn);
++
++struct AreaRef {
++  std::string level, area;  // lower-case, as the paths are normalised
++  bool operator<(const AreaRef& o) const { return level != o.level ? level < o.level : area < o.area; }
++  bool operator==(const AreaRef& o) const { return level == o.level && area == o.area; }
++};
++// Areas of an install from its normalised file paths: every root/data/levels/<lev>/<area>.blk except <lev>.blk itself
++// (the rule lomn_view --survey uses). Sorted, distinct. Ids are cut to their first 4 characters by load_area, so only
++// names of 1..4 characters are listed; longer ones are ignored (none in Beta 1.5.0).
++std::vector<AreaRef> list_areas(const std::vector<std::string>& normalised_paths);
++
++// One line per range, "path\toffset\tlength\n" (decimal): the text the browser bridge hands to JavaScript.
++std::string ranges_text(const std::vector<fs::ByteRange>& ranges);
++
++}  // namespace lomn::view
+diff -ruN base/engine/src/app/main_web.cpp ref/engine/src/app/main_web.cpp
+--- base/engine/src/app/main_web.cpp	2026-10-07 15:21:46
++++ ref/engine/src/app/main_web.cpp	2026-10-07 17:36:03
+@@ -1,45 +1,480 @@
+-// Browser entry: acquire the WebGPU device asynchronously, then run the triangle scene on #canvas each
+-// animation frame with the deterministic fake-delta step. Publishes window.__lomn = {state, frames, metrics}.
++// Browser entry (M1b viewer). Linked with INVOKE_RUN=0: web/app/engine.js instantiates the module, registers the
++// install's file index (lomn_fs_add_file), prefetches the boot set into the wasm heap (lomn_boot_probe rounds, see
++// below), and only then calls main(). main() acquires the WebGPU device asynchronously (no Asyncify) and starts the
++// frame loop from the device callback.
++//
++// File bridge (lomn/prefetch_fs.h): reads come from a PrefetchFileSystem. A load runs in ROUNDS: each round starts a
++// touch generation and runs the real load; every read whose bytes are not resident fails as a recorded MISS (the
++// loader treats it like a missing file and continues). JavaScript fetches the misses (lomn_fs_misses) straight into
++// heap buffers (lomn_fs_reserve -> HEAPU8.set per chunk -> lomn_fs_commit) and runs the next round, until a round has
++// no miss. That round's reads are exactly the native access log of the same load (the Playwright smoke compares them
++// with `lomn_view --manifest`). Bounded: JS stops after kMaxRounds rounds or a round that fetched nothing new.
++//
++// Viewer: one area at a time. lomn_area_show() releases the previous area's GPU objects (AreaRenderer::release), uploads
++// the new one, frees its CPU copies and releases the previous area's prefetched ranges that the new load did not read
++// (files shared by both stay resident). Free-fly camera: view::FlyCamera from the POS-start / exe-default camera.
++// Metrics: lomn_metrics_json() (window.__lomn.metrics and the ?hud=1 overlay read it).
++// Triangle mode (lomn_configure(..., 1)): the M0 scene, unchanged, for web/tests/smoke.mjs.
+ #include <emscripten/emscripten.h>
++#include <emscripten/heap.h>
++#include <malloc.h>
+ 
++#include <algorithm>
++#include <chrono>
++#include <cmath>
++#include <cstdio>
+ #include <memory>
++#include <string>
++#include <vector>
+ 
++#include "json_escape.h"
+ #include "lomn/loop.h"
++#include "lomn/prefetch_fs.h"
+ #include "lomn/rhi.h"
++#include "lomn/view/area.h"
++#include "lomn/view/fly_camera.h"
++#include "lomn/view/prefetch.h"
+ 
++using namespace lomn;
++
+ namespace {
+-std::unique_ptr<lomn::rhi::Device> g_dev;
+-lomn::TriangleScene g_scene;
+-double g_sim_time = 0;
+-uint32_t g_frames = 0;
+-double g_last_ms = 0;
+ 
++constexpr uint32_t kDtRing = 1200;  // last 1200 frame intervals (20 s at 60 Hz) for fps / percentiles
++
++struct State {
++  fs::PrefetchFileSystem fs;
++  std::vector<std::string> paths;  // normalised index paths (the area list)
++  std::unique_ptr<rhi::Device> dev;
++  std::string error, text;
++  bool triangle = false;
++  TriangleScene tri;
++  double sim_time = 0;
++  uint32_t width = 1280, height = 720;
++  // area loading
++  std::string probe_level, probe_area;
++  view::AreaData probe;  // the last round's result
++  bool probe_ok = false;
++  uint32_t probe_rounds = 0;
++  double probe_ms = 0;
++  // shown area
++  view::AreaData area;
++  bool has_area = false;
++  view::AreaRenderer ren;
++  view::RenderOptions render_opts;  // lomn_set_fog (the pixel gate's positive control: ?fog=off)
++  uint32_t debug_leaked = 0;        // lomn_debug_leak_texture (the leak detector's positive control)
++  double upload_ms = 0, show_ms = 0;
++  uint64_t cpu_released = 0, fs_released = 0;
++  uint32_t areas_shown = 0, release_failures = 0, objects_released = 0;
++  // camera / input
++  view::FlyCamera fly;
++  view::FlyInput in;
++  // frame metrics
++  uint64_t frames = 0, frames_since_show = 0;
++  double last_ms = 0;
++  double dt[kDtRing] = {};
++  uint32_t dt_count = 0, dt_head = 0;
++  double replay_ms[kDtRing] = {}, submit_ms[kDtRing] = {}, cpu_ms[kDtRing] = {};
++  uint32_t rejected_last = 0, draws_last = 0;
++  // REF4 r2 (I2): the display rate, measured once from the empty-canvas frames before the first area (the reference the
++  // fps is reconciled against; deriving it from the measured frames themselves would call any steady rate "no drops").
++  static constexpr uint32_t kDisplaySkip = 10, kDisplaySamples = 90;
++  double display_dt[kDisplaySamples] = {};
++  uint32_t display_seen = 0, display_n = 0;
++  double display_hz = 0, display_p10_ms = 0;
++  double spin_ms = 0;  // debug: busy-wait per frame (?debug=1&debug_spin=MS), to show the DROPPING flag fires
++  // REF4 r2 (C1)
++  bool lost = false;
++  std::string lost_reason;
++};
++State* g = nullptr;  // created in lomn_configure (or main) so static init stays trivial
++
++State& st() {
++  if (!g) g = new State();
++  return *g;
++}
++
++const char* keep(std::string s) {
++  st().text = std::move(s);
++  return st().text.c_str();
++}
++// JS numbers: finite, integral, 0..2^53.
++bool to_u64(double d, uint64_t& out) {
++  if (!std::isfinite(d) || d < 0 || d > 9007199254740991.0 || std::floor(d) != d) return false;
++  out = static_cast<uint64_t>(d);
++  return true;
++}
++void set_state(const char* state, const std::string& detail) {
++  EM_ASM({ if (Module.onLomnState) Module.onLomnState(UTF8ToString($0), UTF8ToString($1)); }, state, detail.c_str());
++}
++
++double pct(const double* v, uint32_t n, double p) {
++  if (!n) return 0;
++  std::vector<double> s(v, v + n);
++  std::sort(s.begin(), s.end());
++  return s[std::min<size_t>(n - 1, static_cast<size_t>(p * (n - 1) + 0.5))];
++}
++std::string num(double v) {
++  if (!std::isfinite(v)) return "null";
++  char b[64];
++  std::snprintf(b, sizeof b, "%.3f", v);
++  return b;
++}
++std::string js(const std::string& s) { return "\"" + json_escape(s) + "\""; }
++// The display rate the frame intervals imply: 1000 / p50, snapped to the nearest common refresh rate.
++double nominal_hz(double p50_ms) {
++  static const double rates[] = {24, 30, 48, 50, 60, 72, 75, 90, 100, 120, 144, 165, 240};
++  if (!(p50_ms > 0)) return 0;
++  const double hz = 1000.0 / p50_ms;
++  double best = rates[0];
++  for (double r : rates)
++    if (std::fabs(r - hz) < std::fabs(best - hz)) best = r;
++  return best;
++}
++
++view::Camera current_camera() {
++  State& s = st();
++  const float aspect = static_cast<float>(s.width) / static_cast<float>(s.height ? s.height : 1);
++  return view::make_camera(s.area, s.fly.settings(view::CameraSettings()), aspect);
++}
++
+ void frame() {
+-  double now = emscripten_get_now();
+-  double dt = g_last_ms ? now - g_last_ms : 0;
+-  g_last_ms = now;
+-  g_sim_time += lomn::kFakeDeltaTime;
+-  g_scene.render(*g_dev, 0, g_sim_time);
+-  ++g_frames;
+-  EM_ASM({
+-    const l = (window.__lomn = window.__lomn || {});
+-    l.frames = $0;
+-    l.metrics = l.metrics || {dts: []};
+-    if ($1 > 0) l.metrics.dts.push($1);
+-    if ($0 >= 3) l.state = 'running';
+-  }, g_frames, dt);
++  State& s = st();
++  const double t0 = emscripten_get_now();
++  const double dt = s.last_ms ? t0 - s.last_ms : 0;
++  s.last_ms = t0;
++  ++s.frames;
++  if (s.triangle) {
++    s.sim_time += kFakeDeltaTime;
++    s.tri.render(*s.dev, 0, s.sim_time);
++    if (dt > 0) {
++      s.dt[s.dt_head] = dt;
++      s.dt_head = (s.dt_head + 1) % kDtRing;
++      s.dt_count = std::min(s.dt_count + 1, kDtRing);
++    }
++    return;
++  }
++  double replay = 0, submit = 0;
++  if (s.has_area) {
++    s.fly.update(s.in, dt / 1000.0);
++    s.in.look_dx = s.in.look_dy = 0;
++    s.ren.render(*s.dev, 0, s.area, current_camera());
++    replay = s.ren.last_stats().replay_ms;
++    submit = s.ren.last_stats().submit_ms;
++    ++s.frames_since_show;
++  } else {
++    const float black[4] = {0, 0, 0, 1};
++    s.dev->begin_frame(0, black);
++    s.dev->end_frame();
++    // I2: before the first area, the empty frames measure the display (the first kDisplaySkip are startup noise).
++    if (dt > 0 && s.areas_shown == 0 && s.display_n < State::kDisplaySamples && ++s.display_seen > State::kDisplaySkip) {
++      s.display_dt[s.display_n++] = dt;
++      if (s.display_n == State::kDisplaySamples) {
++        // The 10th percentile, not the median: a busy page (boot work, a loaded host) drops frames, and a dropped frame
++        // only ever LENGTHENS an interval, so the short end of the distribution is the refresh period (REF4 r2: a run at
++        // loadavg 15 measured a p50 of 33 ms = "30 Hz" on a 60 Hz display; its p10 was the 16.7 ms period).
++        s.display_p10_ms = pct(s.display_dt, s.display_n, 0.1);
++        s.display_hz = nominal_hz(s.display_p10_ms);
++      }
++    }
++  }
++  if (s.spin_ms > 0 && s.has_area)  // never during the display measurement before the first area
++    while (emscripten_get_now() - t0 < s.spin_ms) {
++    }
++  const rhi::FrameStats fs = s.dev->last_frame_stats();
++  s.rejected_last = fs.rejected;
++  s.draws_last = fs.draws;
++  // dt samples only between two frames of the same shown area: the reconciliation window restarts at every show.
++  if (dt > 0 && s.frames_since_show >= 2) {
++    s.dt[s.dt_head] = dt;
++    s.replay_ms[s.dt_head] = replay;
++    s.submit_ms[s.dt_head] = submit;
++    s.cpu_ms[s.dt_head] = emscripten_get_now() - t0;
++    s.dt_head = (s.dt_head + 1) % kDtRing;
++    s.dt_count = std::min(s.dt_count + 1, kDtRing);
++  }
+ }
++
+ }  // namespace
+ 
++extern "C" {
++
++// Before main(): canvas drawing-buffer size and mode (triangle = the M0 smoke scene).
++EMSCRIPTEN_KEEPALIVE void lomn_configure(int width, int height, int triangle) {
++  State& s = st();
++  if (width > 0 && height > 0 && width <= int(rhi::kMaxRenderTargetSize) && height <= int(rhi::kMaxRenderTargetSize)) {
++    s.width = static_cast<uint32_t>(width);
++    s.height = static_cast<uint32_t>(height);
++  }
++  s.triangle = triangle != 0;
++}
++
++EMSCRIPTEN_KEEPALIVE const char* lomn_last_error() { return st().error.c_str(); }
++
++// ---- file bridge ----
++EMSCRIPTEN_KEEPALIVE int lomn_fs_add_file(const char* path, double size) {
++  uint64_t n = 0;
++  if (!path || !to_u64(size, n)) return st().error = "lomn_fs_add_file: bad arguments", 0;
++  if (!st().fs.add_file(path, n, &st().error)) return 0;
++  st().paths.push_back(fs::normalize(path));
++  return 1;
++}
++// Returns the heap address to fill (also the handle), or 0 (lomn_last_error says why).
++EMSCRIPTEN_KEEPALIVE uintptr_t lomn_fs_reserve(const char* path, double offset, double length) {
++  uint64_t o = 0, l = 0;
++  if (!path || !to_u64(offset, o) || !to_u64(length, l)) return st().error = "lomn_fs_reserve: bad arguments", 0;
++  return reinterpret_cast<uintptr_t>(st().fs.reserve(path, o, l, &st().error));
++}
++EMSCRIPTEN_KEEPALIVE int lomn_fs_commit(uintptr_t handle) { return st().fs.commit(reinterpret_cast<const uint8_t*>(handle)) ? 1 : 0; }
++EMSCRIPTEN_KEEPALIVE int lomn_fs_abort(uintptr_t handle) { return st().fs.abort(reinterpret_cast<const uint8_t*>(handle)) ? 1 : 0; }
++EMSCRIPTEN_KEEPALIVE int lomn_fs_is_resident(const char* path, double offset, double length) {
++  uint64_t o = 0, l = 0;
++  return path && to_u64(offset, o) && to_u64(length, l) && st().fs.is_resident(path, o, l) ? 1 : 0;
++}
++// "path\toffset\tlength\n" lines (lomn::view::ranges_text).
++EMSCRIPTEN_KEEPALIVE const char* lomn_fs_misses() { return keep(view::ranges_text(st().fs.misses())); }
++EMSCRIPTEN_KEEPALIVE const char* lomn_fs_touched() { return keep(view::ranges_text(st().fs.touched())); }
++EMSCRIPTEN_KEEPALIVE double lomn_fs_misses_dropped() { return static_cast<double>(st().fs.misses_dropped()); }
++// Area list from the index (levels/<lev>/<area>.blk): "lev\tarea\n" lines.
++EMSCRIPTEN_KEEPALIVE const char* lomn_list_areas() {
++  std::string o;
++  for (const view::AreaRef& a : view::list_areas(st().paths)) o += a.level + "\t" + a.area + "\n";
++  return keep(o);
++}
++
++// ---- boot (before main) ----
++// One round: returns the number of misses (> 0: fetch them and call again), 0 when the boot set is resident.
++EMSCRIPTEN_KEEPALIVE int lomn_boot_probe() {
++  State& s = st();
++  s.fs.next_generation();
++  view::boot_reads(s.fs);
++  return static_cast<int>(s.fs.misses().size() + s.fs.misses_dropped());
++}
++// Pins the last boot round's ranges (never released); returns the pinned byte count.
++EMSCRIPTEN_KEEPALIVE double lomn_boot_done() {
++  State& s = st();
++  s.fs.pin_touched();
++  return static_cast<double>(s.fs.pinned_bytes());
++}
++
++// ---- areas ----
++EMSCRIPTEN_KEEPALIVE void lomn_area_begin(const char* level, const char* area) {
++  State& s = st();
++  s.probe_level = level ? level : "";
++  s.probe_area = area ? area : "";
++  s.probe_rounds = 0;
++  s.probe_ms = 0;
++  s.probe_ok = false;
++}
++// One load round. Returns the miss count (> 0: fetch and call again); 0 = loaded without a miss (lomn_area_show next);
++// -1 = the load failed without a miss (a real error: lomn_last_error).
++EMSCRIPTEN_KEEPALIVE int lomn_area_probe() {
++  State& s = st();
++  s.fs.next_generation();
++  const double t0 = emscripten_get_now();
++  std::string err;
++  s.probe_ok = view::load_area(s.fs, s.probe_level, s.probe_area, view::AreaOptions(), s.probe, &err);
++  s.probe_ms += emscripten_get_now() - t0;
++  ++s.probe_rounds;
++  const size_t misses = s.fs.misses().size() + s.fs.misses_dropped();
++  if (misses) return static_cast<int>(misses);
++  if (!s.probe_ok) {
++    s.error = "area " + s.probe_level + "/" + s.probe_area + ": " + err;
++    return -1;
++  }
++  return 0;
++}
++// Shows the area the last probe loaded. 1 on success; 0 on failure (lomn_last_error).
++EMSCRIPTEN_KEEPALIVE int lomn_area_show() {
++  State& s = st();
++  if (!s.dev) return s.error = "no device yet", 0;
++  if (!s.probe_ok || !s.fs.misses().empty()) return s.error = "no completed probe", 0;
++  const double t0 = emscripten_get_now();
++  uint32_t failures = 0;
++  s.objects_released += s.ren.release(*s.dev, &failures);
++  s.release_failures += failures;
++  s.area = std::move(s.probe);
++  s.probe = view::AreaData();
++  s.probe_ok = false;
++  s.has_area = false;
++  const double tu = emscripten_get_now();
++  std::string err;
++  if (!s.ren.upload(*s.dev, s.area, s.render_opts, &err)) {
++    s.error = "upload: " + err;
++    s.ren.release(*s.dev, &failures);
++    return 0;
++  }
++  s.upload_ms = emscripten_get_now() - tu;
++  s.cpu_released = view::release_cpu_copies(s.area);
++  // The touch generation is still the successful probe's: drop every prefetched range it did not read.
++  s.fs_released = s.fs.release_untouched();
++  const float aspect = static_cast<float>(s.width) / static_cast<float>(s.height ? s.height : 1);
++  s.fly.reset(view::make_camera(s.area, view::CameraSettings(), aspect));
++  s.has_area = true;
++  ++s.areas_shown;
++  s.frames_since_show = 0;
++  s.dt_count = s.dt_head = 0;
++  s.show_ms = emscripten_get_now() - t0;
++  return 1;
++}
++
++// ---- input / surface ----
++// keys bit mask: 1 forward, 2 back, 4 left, 8 right, 16 up, 32 down, 64 fast.
++EMSCRIPTEN_KEEPALIVE void lomn_input(int keys, double look_dx, double look_dy) {
++  State& s = st();
++  s.in.forward = keys & 1;
++  s.in.back = keys & 2;
++  s.in.left = keys & 4;
++  s.in.right = keys & 8;
++  s.in.up = keys & 16;
++  s.in.down = keys & 32;
++  s.in.fast = keys & 64;
++  if (std::isfinite(look_dx) && std::isfinite(look_dy) && std::fabs(look_dx) < 1e5 && std::fabs(look_dy) < 1e5) {
++    s.in.look_dx += static_cast<float>(look_dx);
++    s.in.look_dy += static_cast<float>(look_dy);
++  }
++}
++// Debug switch (RenderOptions::fog): 0 drops fog from every draw of areas shown afterwards. The browser tests use it as
++// the pixel gate's positive control (a change the tolerance must see). Default on (faithful).
++EMSCRIPTEN_KEEPALIVE void lomn_set_fog(int on) { st().render_opts.fog = on != 0; }
++// Debug: creates one 1x1 texture that nothing owns or destroys (a deliberate leak). The browser tests call it once to
++// prove the live-object leak check fires. Returns the texture id (0 without a device).
++EMSCRIPTEN_KEEPALIVE int lomn_debug_leak_texture() {
++  State& s = st();
++  if (!s.dev) return 0;
++  ++s.debug_leaked;
++  return static_cast<int>(s.dev->create_texture(1, 1, 1));
++}
++// The build flavour compiled into this module (CMake: LOMN_BUILD_TYPE / LOMN_BUILD_FLAGS); the page adds the SHA-256 of
++// the wasm bytes it instantiated.
++EMSCRIPTEN_KEEPALIVE const char* lomn_build_info() {
++#if !defined(LOMN_BUILD_TYPE)
++#define LOMN_BUILD_TYPE "unknown"
++#define LOMN_BUILD_FLAGS ""
++#endif
++  return keep(std::string("{\"type\":") + js(LOMN_BUILD_TYPE) + ",\"cxx_flags\":" + js(LOMN_BUILD_FLAGS) + ",\"emscripten\":\"" +
++              std::to_string(__EMSCRIPTEN_MAJOR__) + "." + std::to_string(__EMSCRIPTEN_MINOR__) + "." + std::to_string(__EMSCRIPTEN_TINY__) +
++              "\",\"compiler\":" + js(__VERSION__) + "}");
++}
++// Debug (REF4 r2, I2): busy-wait this long in every frame (0..200 ms), to show that the DROPPING flag fires.
++EMSCRIPTEN_KEEPALIVE void lomn_debug_spin(double ms) { st().spin_ms = std::isfinite(ms) ? std::max(0.0, std::min(200.0, ms)) : 0; }
++EMSCRIPTEN_KEEPALIVE void lomn_camera_reset() {
++  State& s = st();
++  if (!s.has_area) return;
++  const float aspect = static_cast<float>(s.width) / static_cast<float>(s.height ? s.height : 1);
++  s.fly.reset(view::make_camera(s.area, view::CameraSettings(), aspect));
++}
++EMSCRIPTEN_KEEPALIVE int lomn_resize(int w, int h) {
++  State& s = st();
++  if (!s.dev || w <= 0 || h <= 0) return 0;
++  if (!s.dev->resize(static_cast<uint32_t>(w), static_cast<uint32_t>(h))) return 0;
++  s.width = static_cast<uint32_t>(w);
++  s.height = static_cast<uint32_t>(h);
++  return 1;
++}
++
++// ---- metrics ----
++EMSCRIPTEN_KEEPALIVE const char* lomn_metrics_json() {
++  State& s = st();
++  const uint32_t n = s.dt_count;
++  double window = 0;
++  std::vector<double> dts, rep, sub, cpu;
++  for (uint32_t i = 0; i < n; ++i) {
++    const uint32_t k = (s.dt_head + kDtRing - n + i) % kDtRing;
++    window += s.dt[k];
++    dts.push_back(s.dt[k]);
++    rep.push_back(s.replay_ms[k]);
++    sub.push_back(s.submit_ms[k]);
++    cpu.push_back(s.cpu_ms[k]);
++  }
++  const double p50 = pct(dts.data(), n, 0.5), p95 = pct(dts.data(), n, 0.95);
++  // Reconciliation (REF4 r2, I2): a window of n intervals spans n + 1 frames; at the DISPLAY rate measured before the
++  // first area it should hold window * display_hz / 1000 intervals. counted / expected < 0.95 = DROPPING. Without a
++  // display measurement the snapped p50 is used and labelled as such (it cannot detect a steady lower rate).
++  const bool measured = s.display_hz > 0;
++  const double hz = measured ? s.display_hz : nominal_hz(p50);
++  const double expected = window * hz / 1000.0;
++  const double fps = window > 0 ? n * 1000.0 / window : 0;
++  const bool dropping = measured && n >= 30 && expected > 0 && n < 0.95 * expected;
++  const rhi::Device::LiveObjects lo = s.dev ? s.dev->live_objects() : rhi::Device::LiveObjects();
++  const view::RenderStats& rs = s.ren.last_stats();
++  const struct mallinfo mi = mallinfo();
++  std::string o = "{";
++  o += "\"frames\":" + std::to_string(s.frames) + ",\"frames_since_show\":" + std::to_string(s.frames_since_show);
++  o += ",\"fps\":{\"dt_samples\":" + std::to_string(n) + ",\"frames_in_window\":" + std::to_string(n ? n + 1 : 0) +
++       ",\"window_ms\":" + num(window) + ",\"p50_ms\":" + num(p50) + ",\"p95_ms\":" + num(p95) + ",\"nominal_hz\":" + num(hz) +
++       ",\"display_hz\":" + num(s.display_hz) + ",\"display_p10_ms\":" + num(s.display_p10_ms) + ",\"display_samples\":" +
++       std::to_string(s.display_n) + ",\"hz_source\":" + js(measured ? "display measured before the first area" : "snapped p50 (display not measured)") +
++       ",\"expected_intervals\":" + num(expected) + ",\"fps\":" + num(fps) + ",\"dropping\":" + (dropping ? "true" : "false") +
++       ",\"spin_ms\":" + num(s.spin_ms) + "}";
++  o += ",\"breakdown_ms\":{\"script\":0,\"physics\":0,\"replay_p50\":" + num(pct(rep.data(), n, 0.5)) + ",\"replay_p95\":" +
++       num(pct(rep.data(), n, 0.95)) + ",\"submit_p50\":" + num(pct(sub.data(), n, 0.5)) + ",\"submit_p95\":" +
++       num(pct(sub.data(), n, 0.95)) + ",\"frame_cpu_p50\":" + num(pct(cpu.data(), n, 0.5)) + ",\"frame_cpu_p95\":" +
++       num(pct(cpu.data(), n, 0.95)) + "}";
++  o += ",\"draws\":" + std::to_string(s.draws_last) + ",\"rejected_last_frame\":" + std::to_string(s.rejected_last) +
++       ",\"pipelines\":" + std::to_string(s.ren.pipelines()) + ",\"textures\":" + std::to_string(s.ren.textures_created()) +
++       ",\"texture_bytes\":" + std::to_string(s.ren.uploaded_texture_bytes()) + ",\"state_calls\":" + std::to_string(rs.state_calls);
++  o += ",\"live_objects\":{\"textures\":" + std::to_string(lo.textures) + ",\"buffers\":" + std::to_string(lo.buffers) +
++       ",\"pipelines\":" + std::to_string(lo.pipelines) + ",\"samplers\":" + std::to_string(lo.samplers) +
++       ",\"bind_groups\":" + std::to_string(lo.bind_groups) + "}";
++  o += ",\"heap\":{\"wasm_memory_bytes\":" + std::to_string(emscripten_get_heap_size()) + ",\"malloc_in_use_bytes\":" +
++       std::to_string(static_cast<uint64_t>(mi.uordblks)) + ",\"malloc_arena_bytes\":" + std::to_string(static_cast<uint64_t>(mi.arena)) +
++       ",\"fs_resident_bytes\":" + std::to_string(s.fs.resident_bytes()) + ",\"fs_pinned_bytes\":" + std::to_string(s.fs.pinned_bytes()) +
++       ",\"fs_peak_bytes\":" + std::to_string(s.fs.peak_bytes()) + ",\"fs_ranges\":" + std::to_string(s.fs.resident_ranges()) + "}";
++  o += ",\"fs\":{\"files\":" + std::to_string(s.fs.file_count()) + ",\"misses_total\":" + std::to_string(s.fs.misses_total()) +
++       ",\"generation\":" + std::to_string(s.fs.generation()) + "}";
++  o += ",\"area\":";
++  if (s.has_area) {
++    const view::Camera c = current_camera();
++    o += "{\"level\":" + js(s.area.level) + ",\"area\":" + js(s.area.area) + ",\"rounds\":" + std::to_string(s.probe_rounds) +
++         ",\"probe_ms\":" + num(s.probe_ms) + ",\"load_ms\":" + num(s.area.stats.load_ms) + ",\"decode_ms\":" +
++         num(s.area.stats.decode_ms) + ",\"upload_ms\":" + num(s.upload_ms) + ",\"show_ms\":" + num(s.show_ms) +
++         ",\"cpu_bytes_released\":" + std::to_string(s.cpu_released) + ",\"fs_bytes_released\":" + std::to_string(s.fs_released) +
++         ",\"draws_expected\":" + std::to_string(s.area.stats.draws) + ",\"warnings\":" + std::to_string(s.area.warnings.size()) +
++         ",\"camera\":{\"moved\":" + (s.fly.moved() ? "true" : "false") + ",\"eye\":[" + num(c.eye[0]) + "," + num(c.eye[1]) + "," +
++         num(c.eye[2]) + "],\"yaw_deg\":" + num(c.yaw_deg) + ",\"pitch_deg\":" + num(c.pitch_deg) + ",\"fov_deg\":" + num(c.fov_deg) +
++         ",\"eye_source\":" + js(c.eye_source) + "}}";
++  } else {
++    o += "null";
++  }
++  o += ",\"areas_shown\":" + std::to_string(s.areas_shown) + ",\"objects_released\":" + std::to_string(s.objects_released) +
++       ",\"release_failures\":" + std::to_string(s.release_failures);
++  o += ",\"surface\":{\"width\":" + std::to_string(s.width) + ",\"height\":" + std::to_string(s.height) + "}";
++  o += ",\"render\":{\"fog\":" + std::string(s.render_opts.fog ? "true" : "false") + ",\"debug_leaked_textures\":" +
++       std::to_string(s.debug_leaked) + "}";
++  o += ",\"lost\":" + std::string(s.lost ? "true" : "false") + ",\"lost_reason\":" + js(s.lost_reason);
++  o += ",\"adapter\":" + js(s.dev ? s.dev->adapter() : std::string()) + "}";
++  return keep(o);
++}
++
++}  // extern "C"
++
+ int main() {
+-  EM_ASM({ (window.__lomn = window.__lomn || {}).state = 'starting'; });
+-  lomn::rhi::create_webgpu_device("#canvas", 64, 64, [](std::unique_ptr<lomn::rhi::Device> d, std::string err) {
++  State& s = st();
++  set_state("starting", "");
++  rhi::create_webgpu_device("#canvas", s.width, s.height, [](std::unique_ptr<rhi::Device> d, std::string err) {
++    State& s2 = st();
+     if (!d) {
+-      EM_ASM({ window.__lomn.state = 'error'; window.__lomn.error = UTF8ToString($0); }, err.c_str());
++      set_state("error", err);
+       return;
+     }
+-    g_dev = std::move(d);
+-    g_scene.init(*g_dev);
++    s2.dev = std::move(d);
++    // REF4 r2 (C1): a lost device (or the first uncaptured GPU error) stops the loop and tells the page.
++    s2.dev->set_lost_handler([](const std::string& why) {
++      State& s3 = st();
++      if (s3.lost) return;
++      s3.lost = true;
++      s3.lost_reason = why;
++      s3.has_area = false;
++      emscripten_cancel_main_loop();
++      set_state("error", why);
++    });
++    if (s2.triangle) {
++      s2.tri.init(*s2.dev);
++    } else if (!s2.dev->set_surface_depth(true, 1.0f)) {
++      set_state("error", "surface depth buffer rejected");
++      return;
++    }
++    set_state("ready", s2.dev->adapter());
+     emscripten_set_main_loop(frame, 0, false);
+   });
+   return 0;
+diff -ruN base/engine/src/fs/disk_fs.cpp ref/engine/src/fs/disk_fs.cpp
+--- base/engine/src/fs/disk_fs.cpp	2026-10-07 15:21:46
++++ ref/engine/src/fs/disk_fs.cpp	2026-10-07 15:35:48
+@@ -49,7 +49,7 @@
+       if (f.bad() || static_cast<std::uintmax_t>(f.gcount()) != size) return Error::Io;  // truncated read
+     }
+     out = std::move(buf);
+-    log_access(n);
++    log_read(n, 0, size);
+     return Error::None;
+   }
+   Error size(std::string_view path, uint64_t& out) const override {
+@@ -78,7 +78,7 @@
+     if (len) f.read(reinterpret_cast<char*>(buf.data()), static_cast<std::streamsize>(len));
+     if (!f) return Error::Io;
+     out = std::move(buf);
+-    log_access(n);
++    log_read(n, offset, len);
+     return Error::None;
+   }
+   Error write(std::string_view path, const uint8_t* data, size_t size) override {
+diff -ruN base/engine/src/fs/memory_fs.cpp ref/engine/src/fs/memory_fs.cpp
+--- base/engine/src/fs/memory_fs.cpp	2026-10-07 15:21:46
++++ ref/engine/src/fs/memory_fs.cpp	2026-10-07 15:35:48
+@@ -78,7 +78,7 @@
+   auto it = files_.find(n);
+   if (it == files_.end()) return Error::NotFound;
+   out = it->second;
+-  log_access(n);
++  log_read(n, 0, out.size());
+   return Error::None;
+ }
+ 
+@@ -99,7 +99,7 @@
+   if (!range_ok(it->second.size(), offset, size)) return Error::Io;
+   auto first = it->second.begin() + static_cast<std::ptrdiff_t>(offset);
+   out.assign(first, first + static_cast<std::ptrdiff_t>(size));
+-  log_access(n);
++  log_read(n, offset, size);
+   return Error::None;
+ }
+ 
+diff -ruN base/engine/src/fs/prefetch_fs.cpp ref/engine/src/fs/prefetch_fs.cpp
+--- base/engine/src/fs/prefetch_fs.cpp	1970-01-01 01:00:00
++++ ref/engine/src/fs/prefetch_fs.cpp	2026-10-07 15:36:57
+@@ -0,0 +1,238 @@
++#include "lomn/prefetch_fs.h"
++
++#include <algorithm>
++#include <cstring>
++#include <new>
++
++namespace lomn::fs {
++namespace {
++
++bool starts_with(const std::string& s, std::string_view p) { return s.compare(0, p.size(), p) == 0; }
++bool set_err(std::string* err, const std::string& m) {
++  if (err) *err = m;
++  return false;
++}
++constexpr uint64_t kMaxJsSafeInteger = (1ull << 53) - 1;
++
++}  // namespace
++
++PrefetchFileSystem::PrefetchFileSystem(uint64_t budget_bytes) : budget_(budget_bytes) {}
++
++bool PrefetchFileSystem::add_file(std::string_view path, uint64_t size, std::string* err) {
++  if (path.size() > kMaxPathBytes) return set_err(err, "path longer than kMaxPathBytes");
++  const std::string n = normalize(path);
++  if (!starts_with(n, "root/") || n.size() <= 5) return set_err(err, "path outside root/: " + n);
++  if (size > kMaxJsSafeInteger) return set_err(err, "size out of range: " + n);
++  if (index_.size() >= kMaxFiles) return set_err(err, "more than kMaxFiles files");
++  if (index_.count(n)) return set_err(err, "duplicate path: " + n);
++  index_[n].size = size;
++  return true;
++}
++
++const PrefetchFileSystem::Range* PrefetchFileSystem::find(const File& f, uint64_t offset, uint64_t length) const {
++  for (const auto& r : f.ranges)
++    if (r->committed && offset >= r->offset && length <= r->length && offset - r->offset <= r->length - length) return r.get();
++  return nullptr;
++}
++
++bool PrefetchFileSystem::is_resident(std::string_view path, uint64_t offset, uint64_t length) const {
++  auto it = index_.find(normalize(path));
++  return it != index_.end() && find(it->second, offset, length) != nullptr;
++}
++
++uint8_t* PrefetchFileSystem::reserve(std::string_view path, uint64_t offset, uint64_t length, std::string* err) {
++  if (path.size() > kMaxPathBytes) return set_err(err, "path longer than kMaxPathBytes"), nullptr;
++  const std::string n = normalize(path);
++  auto it = index_.find(n);
++  if (it == index_.end()) return set_err(err, "not in the index: " + n), nullptr;
++  File& f = it->second;
++  if (length == 0 || length > kMaxRangeBytes) return set_err(err, "length out of range: " + n), nullptr;
++  if (offset > f.size || length > f.size - offset) return set_err(err, "range outside the file: " + n), nullptr;
++  if (find(f, offset, length)) return set_err(err, "already resident: " + n), nullptr;
++  if (range_count_ >= kMaxResidentRanges) return set_err(err, "more than kMaxResidentRanges ranges"), nullptr;
++  if (length > budget_ - std::min(budget_, resident_bytes_ + pending_bytes_)) return set_err(err, "over the byte budget"), nullptr;
++  auto r = std::make_unique<Range>();
++  r->offset = offset;
++  r->length = length;
++  r->bytes.reset(new (std::nothrow) uint8_t[static_cast<size_t>(length)]);
++  if (!r->bytes) return set_err(err, "allocation failed"), nullptr;
++  uint8_t* handle = r->bytes.get();
++  pending_[handle] = {n, r.get()};
++  f.ranges.push_back(std::move(r));
++  ++range_count_;
++  pending_bytes_ += length;
++  peak_bytes_ = std::max(peak_bytes_, resident_bytes_ + pending_bytes_);
++  return handle;
++}
++
++bool PrefetchFileSystem::commit(const uint8_t* handle) {
++  auto it = pending_.find(handle);
++  if (it == pending_.end()) return false;
++  Range* r = it->second.second;
++  r->committed = true;
++  pending_bytes_ -= r->length;
++  resident_bytes_ += r->length;
++  ++committed_count_;
++  pending_.erase(it);
++  return true;
++}
++
++bool PrefetchFileSystem::abort(const uint8_t* handle) {
++  auto it = pending_.find(handle);
++  if (it == pending_.end()) return false;
++  File& f = index_.at(it->second.first);
++  Range* r = it->second.second;
++  pending_bytes_ -= r->length;
++  f.ranges.erase(std::find_if(f.ranges.begin(), f.ranges.end(), [r](const std::unique_ptr<Range>& x) { return x.get() == r; }));
++  --range_count_;
++  pending_.erase(it);
++  return true;
++}
++
++void PrefetchFileSystem::next_generation() {
++  ++generation_;
++  misses_.clear();
++  miss_set_.clear();
++  misses_dropped_ = 0;
++}
++
++uint32_t PrefetchFileSystem::pin_touched() {
++  uint32_t n = 0;
++  for (auto& kv : index_)
++    for (auto& r : kv.second.ranges)
++      if (r->committed && r->touched_gen == generation_ && !r->pinned) {
++        r->pinned = true;
++        ++n;
++      }
++  return n;
++}
++
++uint64_t PrefetchFileSystem::release_untouched() {
++  uint64_t freed = 0;
++  for (auto& kv : index_) {
++    auto& v = kv.second.ranges;
++    for (auto it = v.begin(); it != v.end();) {
++      Range& r = **it;
++      if (r.committed && !r.pinned && r.touched_gen != generation_) {
++        freed += r.length;
++        resident_bytes_ -= r.length;
++        --committed_count_;
++        --range_count_;
++        it = v.erase(it);
++      } else {
++        ++it;
++      }
++    }
++  }
++  return freed;
++}
++
++std::vector<ByteRange> PrefetchFileSystem::touched() const {
++  std::vector<ByteRange> out;
++  for (const auto& kv : index_)
++    for (const auto& r : kv.second.ranges)
++      if (r->committed && r->touched_gen == generation_) out.push_back({kv.first, r->offset, r->length});
++  std::sort(out.begin(), out.end());
++  return out;
++}
++
++uint64_t PrefetchFileSystem::pinned_bytes() const {
++  uint64_t n = 0;
++  for (const auto& kv : index_)
++    for (const auto& r : kv.second.ranges)
++      if (r->committed && r->pinned) n += r->length;
++  return n;
++}
++
++void PrefetchFileSystem::note_miss(const std::string& n, uint64_t offset, uint64_t length) const {
++  ++misses_total_;
++  ByteRange b{n, offset, length};
++  if (miss_set_.count(b)) return;
++  if (misses_.size() >= kMaxMissesPerGeneration) {
++    ++misses_dropped_;
++    return;
++  }
++  miss_set_.insert(b);
++  misses_.push_back(std::move(b));
++}
++
++Error PrefetchFileSystem::read_at(const std::string& n, uint64_t offset, uint64_t length, std::vector<uint8_t>& out) const {
++  auto it = index_.find(n);
++  if (it == index_.end()) return Error::NotFound;
++  const File& f = it->second;
++  if (offset > f.size || length > f.size - offset) return Error::Io;  // outside the file: a caller error, not a miss
++  if (length == 0) {  // nothing to move (e.g. the 6 zero-byte blockfile entries): never a miss, nothing to fetch
++    out.clear();
++    log_read(n, offset, 0);
++    return Error::None;
++  }
++  const Range* r = find(f, offset, length);
++  if (!r) {
++    note_miss(n, offset, length);
++    return Error::Io;
++  }
++  r->touched_gen = generation_;
++  const uint8_t* first = r->bytes.get() + (offset - r->offset);
++  out.assign(first, first + static_cast<size_t>(length));
++  log_read(n, offset, length);
++  return Error::None;
++}
++
++bool PrefetchFileSystem::exists(std::string_view path) const {
++  const std::string n = normalize(path);
++  return index_.count(n) != 0 || user_.count(n) != 0;
++}
++
++Error PrefetchFileSystem::size(std::string_view path, uint64_t& out) const {
++  const std::string n = normalize(path);
++  if (starts_with(n, "user/")) {
++    auto u = user_.find(n);
++    if (u == user_.end()) return Error::NotFound;
++    out = u->second.size();
++    return Error::None;
++  }
++  if (!starts_with(n, "root/")) return Error::BadMount;
++  auto it = index_.find(n);
++  if (it == index_.end()) return Error::NotFound;
++  out = it->second.size;
++  return Error::None;
++}
++
++Error PrefetchFileSystem::read(std::string_view path, std::vector<uint8_t>& out) const {
++  const std::string n = normalize(path);
++  if (starts_with(n, "user/")) {
++    auto u = user_.find(n);
++    if (u == user_.end()) return Error::NotFound;
++    out = u->second;
++    log_read(n, 0, out.size());
++    return Error::None;
++  }
++  if (!starts_with(n, "root/")) return Error::BadMount;
++  auto it = index_.find(n);
++  if (it == index_.end()) return Error::NotFound;
++  return read_at(n, 0, it->second.size, out);
++}
++
++Error PrefetchFileSystem::read_range(std::string_view path, uint64_t offset, uint64_t size, std::vector<uint8_t>& out) const {
++  const std::string n = normalize(path);
++  if (starts_with(n, "user/")) {
++    auto u = user_.find(n);
++    if (u == user_.end()) return Error::NotFound;
++    if (offset > u->second.size() || size > u->second.size() - offset) return Error::Io;
++    out.assign(u->second.begin() + static_cast<std::ptrdiff_t>(offset), u->second.begin() + static_cast<std::ptrdiff_t>(offset + size));
++    log_read(n, offset, size);
++    return Error::None;
++  }
++  if (!starts_with(n, "root/")) return Error::BadMount;
++  return read_at(n, offset, size, out);
++}
++
++Error PrefetchFileSystem::write(std::string_view path, const uint8_t* data, size_t size) {
++  const std::string n = normalize(path);
++  if (starts_with(n, "root/")) return Error::ReadOnly;
++  if (!starts_with(n, "user/")) return Error::BadMount;
++  user_[n].assign(data, data + size);
++  return Error::None;
++}
++
++}  // namespace lomn::fs
+diff -ruN base/engine/src/rhi/null_device.cpp ref/engine/src/rhi/null_device.cpp
+--- base/engine/src/rhi/null_device.cpp	2026-10-07 15:21:46
++++ ref/engine/src/rhi/null_device.cpp	2026-10-07 17:12:48
+@@ -203,7 +203,44 @@
+         d.index_count, d.bind_group, d.uniform_offset);
+   }
+ 
++  // ---- M1b ----
++  bool destroy_texture(TextureId t) override { return destroy("destroy_texture", t, reg_.check_destroy_texture(t), reg_.textures); }
++  bool destroy_buffer(BufferId b) override { return destroy("destroy_buffer", b, reg_.check_destroy_buffer(b), reg_.buffers); }
++  bool destroy_pipeline(PipelineId p) override { return destroy("destroy_pipeline", p, reg_.check_destroy_pipeline(p), reg_.pipelines); }
++  bool destroy_sampler(SamplerId s) override { return destroy("destroy_sampler", s, reg_.check_destroy_sampler(s), reg_.samplers); }
++  bool destroy_bind_group(BindGroupId g) override {
++    return destroy("destroy_bind_group", g, reg_.check_destroy_bind_group(g), reg_.bind_groups);
++  }
++  LiveObjects live_objects() const override { return reg_.live(); }
++  // The null device never has a presentation surface: both are counted rejections with stable log lines.
++  bool set_surface_depth(bool on, float clear_depth) override {
++    ++stats_.rejected;
++    rec("set_surface_depth %d clear_depth=%.3f rejected: no presentation surface (headless device)", int(on), clear_depth);
++    return false;
++  }
++  bool resize(uint32_t w, uint32_t h) override {
++    ++stats_.rejected;
++    rec("resize %ux%u rejected: no presentation surface (headless device)", w, h);
++    return false;
++  }
++  // REF4 r2: the null device is never lost; the call is logged (the handler is kept, never invoked).
++  void set_lost_handler(std::function<void(const std::string&)> h) override {
++    lost_handler_ = std::move(h);
++    rec("set_lost_handler %s", lost_handler_ ? "set" : "cleared");
++  }
++
+  private:
++  template <typename Map>
++  bool destroy(const char* what, uint32_t id, const std::string& why, Map& table) {
++    if (!why.empty()) {
++      ++stats_.rejected;
++      rec("%s %u rejected: %s", what, id, why.c_str());
++      return false;
++    }
++    table.erase(id);
++    rec("%s %u", what, id);
++    return true;
++  }
+   BufferId make_buffer(const char* what, BufKind kind, uint32_t bytes) {
+     std::string why = Registry::check_buffer_bytes(bytes);
+     if (!why.empty()) {
+@@ -240,6 +277,7 @@
+   FrameStats stats_;
+   bool frame_rejected_ = false;  // the current frame's begin_frame was rejected
+   bool frame_open_ = false;      // between begin_frame and end_frame
++  std::function<void(const std::string&)> lost_handler_;
+ };
+ 
+ }  // namespace
+diff -ruN base/engine/src/rhi/registry.h ref/engine/src/rhi/registry.h
+--- base/engine/src/rhi/registry.h	2026-10-07 15:21:46
++++ ref/engine/src/rhi/registry.h	2026-10-07 15:32:15
+@@ -217,6 +217,51 @@
+     return "";
+   }
+ 
++  // ---- M1b: destroy rules (shared by both backends) ----
++  // The first live bind group referencing a texture / sampler / uniform buffer (0 = none). Linear in the number of live
++  // bind groups (an area holds at most a few hundred; destroy runs only on area switches).
++  BindGroupId bind_group_using_texture(TextureId t) const {
++    for (const auto& kv : bind_groups)
++      if (kv.second.desc.texture == t) return kv.first;
++    return 0;
++  }
++  BindGroupId bind_group_using_sampler(SamplerId s) const {
++    for (const auto& kv : bind_groups)
++      if (kv.second.desc.sampler == s) return kv.first;
++    return 0;
++  }
++  BindGroupId bind_group_using_buffer(BufferId b) const {
++    for (const auto& kv : bind_groups)
++      if (kv.second.desc.uniforms == b) return kv.first;
++    return 0;
++  }
++  std::string check_destroy_texture(TextureId t) const {
++    if (!textures.count(t)) return "unknown texture";
++    if (BindGroupId g = bind_group_using_texture(t)) return "in use by bind group " + std::to_string(g);
++    return "";
++  }
++  std::string check_destroy_buffer(BufferId b) const {
++    if (!buffers.count(b)) return "unknown buffer";
++    if (BindGroupId g = bind_group_using_buffer(b)) return "in use by bind group " + std::to_string(g);
++    return "";
++  }
++  std::string check_destroy_pipeline(PipelineId p) const { return pipelines.count(p) ? "" : "unknown pipeline"; }
++  std::string check_destroy_sampler(SamplerId s) const {
++    if (!samplers.count(s)) return "unknown sampler";
++    if (BindGroupId g = bind_group_using_sampler(s)) return "in use by bind group " + std::to_string(g);
++    return "";
++  }
++  std::string check_destroy_bind_group(BindGroupId g) const { return bind_groups.count(g) ? "" : "unknown bind group"; }
++  Device::LiveObjects live() const {
++    Device::LiveObjects o;
++    o.textures = static_cast<uint32_t>(textures.size());
++    o.buffers = static_cast<uint32_t>(buffers.size());
++    o.pipelines = static_cast<uint32_t>(pipelines.size());
++    o.samplers = static_cast<uint32_t>(samplers.size());
++    o.bind_groups = static_cast<uint32_t>(bind_groups.size());
++    return o;
++  }
++
+  private:
+   uint32_t next_tex_ = 0, next_buf_ = 0, next_pipe_ = 0, next_sampler_ = 0, next_bind_ = 0;
+ };
+diff -ruN base/engine/src/rhi/webgpu_device.cpp ref/engine/src/rhi/webgpu_device.cpp
+--- base/engine/src/rhi/webgpu_device.cpp	2026-10-07 15:21:46
++++ ref/engine/src/rhi/webgpu_device.cpp	2026-10-07 17:13:37
+@@ -3,6 +3,8 @@
+ // is callback-driven and the caller starts its frame loop from the callback).
+ // M1a-2: indexed meshes (vertex/index buffers, sampled RGBA8 textures with CPU mips, samplers, depth targets, mesh
+ // pipelines, bind groups). Validation is shared with the null backend (registry.h): a rejected call never reaches Dawn.
++// M1b: destroy_* (registry dependency rule; the backend's private M0 bind-group cache is released with its pipeline or
++// buffer), live_objects(), a Depth32Float depth buffer for the presentation surface and resize().
+ #include <webgpu/webgpu.h>
+ 
+ #include <cstdio>
+@@ -80,12 +82,28 @@
+   return a == AddressMode::Wrap ? WGPUAddressMode_Repeat : a == AddressMode::Clamp ? WGPUAddressMode_ClampToEdge : WGPUAddressMode_MirrorRepeat;
+ }
+ 
++// REF4 r2 (C1): where the device-lost and uncaptured-error callbacks report. It is the callbacks' userdata, so it is
++// created before the device and deliberately never freed (Dawn may still deliver a Destroyed loss while the device is
++// released; one small object per device, and a page creates one device).
++struct LostSink {
++  std::function<void(const std::string&)> handler;
++  bool fired = false;
++  std::string pending;  // a loss before set_lost_handler: delivered when the handler is set
++  void notify(std::string why) {
++    if (fired) return;
++    fired = true;
++    if (handler) handler(why);
++    else pending = std::move(why);
++  }
++};
++
+ class WebGpuDevice final : public Device {
+  public:
+   WebGpuDevice(WGPUInstance inst, WGPUAdapter adapter, WGPUDevice dev, WGPUSurface surface, WGPUTextureFormat surface_format,
+-               std::string adapter_desc)
++               std::string adapter_desc, uint32_t surface_width = 0, uint32_t surface_height = 0, LostSink* lost = nullptr)
+       : inst_(inst), adapter_(adapter), dev_(dev), queue_(wgpuDeviceGetQueue(dev)), surface_(surface),
+-        surface_format_(surface_format), adapter_desc_(std::move(adapter_desc)) {}
++        surface_format_(surface_format), adapter_desc_(std::move(adapter_desc)), surface_w_(surface_width), surface_h_(surface_height),
++        lost_(lost) {}
+ 
+   // Releases every owned handle in reverse order of creation (children before the device, then
+   // queue, device, adapter, instance).
+@@ -95,6 +113,7 @@
+   WebGpuDevice& operator=(WebGpuDevice&&) = delete;
+ 
+   ~WebGpuDevice() override {
++    flush_deferred_destroys();
+     if (pass_) {
+       wgpuRenderPassEncoderEnd(pass_);
+       wgpuRenderPassEncoderRelease(pass_);
+@@ -102,6 +121,7 @@
+     if (enc_) wgpuCommandEncoderRelease(enc_);
+     if (frame_surface_view_) wgpuTextureViewRelease(frame_surface_view_);
+     if (frame_surface_texture_) wgpuTextureRelease(frame_surface_texture_);
++    release_surface_depth();
+     for (auto& kv : bind_groups_) wgpuBindGroupRelease(kv.second);
+     for (auto& kv : mesh_bind_groups_) wgpuBindGroupRelease(kv.second);
+     for (auto& kv : pipelines_) {
+@@ -274,6 +294,20 @@
+       frame_surface_texture_ = st.texture;
+       frame_surface_view_ = view = wgpuTextureCreateView(st.texture, nullptr);
+       pass_format_ = surface_format_;
++      // M1b: the surface depth buffer (set_surface_depth) has the configured surface size; a surface texture of another
++      // size (the canvas resized behind resize()'s back) would fail validation, so that frame is skipped instead.
++      if (surface_depth_view_) {
++        const uint32_t tw = wgpuTextureGetWidth(st.texture), th = wgpuTextureGetHeight(st.texture);
++        if (tw != surface_depth_w_ || th != surface_depth_h_) {
++          log_skip_once("surface texture " + std::to_string(tw) + "x" + std::to_string(th) + " != depth buffer " +
++                        std::to_string(surface_depth_w_) + "x" + std::to_string(surface_depth_h_) + " (call resize)");
++          wgpuTextureViewRelease(frame_surface_view_);
++          wgpuTextureRelease(frame_surface_texture_);
++          frame_surface_view_ = nullptr;
++          frame_surface_texture_ = nullptr;
++          return;
++        }
++      }
+     } else {
+       auto it = targets_.find(target);
+       if (it == targets_.end()) return reject("begin_frame", "unknown render target");  // registry and targets_ agree
+@@ -291,11 +325,12 @@
+     rp.colorAttachmentCount = 1;
+     rp.colorAttachments = &ca;
+     WGPURenderPassDepthStencilAttachment da = WGPU_RENDER_PASS_DEPTH_STENCIL_ATTACHMENT_INIT;
+-    if (tgt && tgt->depth_view) {
+-      da.view = tgt->depth_view;
++    WGPUTextureView depth_view = tgt ? tgt->depth_view : surface_depth_view_;
++    if (depth_view) {
++      da.view = depth_view;
+       da.depthLoadOp = WGPULoadOp_Clear;
+       da.depthStoreOp = WGPUStoreOp_Discard;
+-      da.depthClearValue = tgt->clear_depth;
++      da.depthClearValue = tgt ? tgt->clear_depth : surface_clear_depth_;
+       rp.depthStencilAttachment = &da;
+       pass_depth_ = true;
+     }
+@@ -319,7 +354,7 @@
+ 
+   void end_frame() override {
+     frame_open_ = false;
+-    if (!frame_active_) return;
++    if (!frame_active_) return flush_deferred_destroys();
+     frame_active_ = false;
+     wgpuRenderPassEncoderEnd(pass_);
+     wgpuRenderPassEncoderRelease(pass_);
+@@ -335,6 +370,7 @@
+       frame_surface_view_ = nullptr;
+       frame_surface_texture_ = nullptr;
+     }
++    flush_deferred_destroys();  // REF4 r2 (I1): after the submit that may still reference them
+   }
+ 
+   bool read_pixels(TextureId target, std::vector<uint8_t>& rgba) override {
+@@ -560,7 +596,177 @@
+     stats_.indices += d.index_count;
+   }
+ 
++  // ---- M1b ----
++  bool destroy_texture(TextureId t) override {
++    std::string why = reg_.check_destroy_texture(t);
++    if (!why.empty()) return reject("destroy_texture", why), false;
++    auto ti = targets_.find(t);
++    if (ti != targets_.end()) {
++      if (ti->second.depth_view) wgpuTextureViewRelease(ti->second.depth_view);
++      if (ti->second.depth) destroy_now_or_after_frame(ti->second.depth);
++      if (ti->second.view) wgpuTextureViewRelease(ti->second.view);
++      if (ti->second.texture) destroy_now_or_after_frame(ti->second.texture);
++      targets_.erase(ti);
++    }
++    auto si = sampled_.find(t);
++    if (si != sampled_.end()) {
++      if (si->second.view) wgpuTextureViewRelease(si->second.view);
++      if (si->second.texture) destroy_now_or_after_frame(si->second.texture);
++      sampled_.erase(si);
++    }
++    reg_.textures.erase(t);
++    return true;
++  }
++  bool destroy_buffer(BufferId b) override {
++    std::string why = reg_.check_destroy_buffer(b);
++    if (!why.empty()) return reject("destroy_buffer", why), false;
++    // The backend's private M0 bind groups (per pipeline x uniform buffer) are a cache, not rhi objects: released here.
++    for (auto it = bind_groups_.begin(); it != bind_groups_.end();) {
++      if (static_cast<BufferId>(it->first & 0xffffffffu) == b) {
++        wgpuBindGroupRelease(it->second);
++        it = bind_groups_.erase(it);
++      } else {
++        ++it;
++      }
++    }
++    auto bi = buffers_.find(b);  // absent for a uniform buffer registered without storage
++    if (bi != buffers_.end()) {
++      destroy_now_or_after_frame(bi->second);
++      buffers_.erase(bi);
++    }
++    reg_.buffers.erase(b);
++    return true;
++  }
++  bool destroy_pipeline(PipelineId pid) override {
++    std::string why = reg_.check_destroy_pipeline(pid);
++    if (!why.empty()) return reject("destroy_pipeline", why), false;
++    for (auto it = bind_groups_.begin(); it != bind_groups_.end();) {
++      if (static_cast<PipelineId>(it->first >> 32) == pid) {
++        wgpuBindGroupRelease(it->second);
++        it = bind_groups_.erase(it);
++      } else {
++        ++it;
++      }
++    }
++    auto pi = pipelines_.find(pid);
++    if (pi != pipelines_.end()) {
++      Pipeline& p = pi->second;
++      for (auto& v : p.by_format) wgpuRenderPipelineRelease(v.second);
++      if (p.pipeline_layout) wgpuPipelineLayoutRelease(p.pipeline_layout);
++      if (p.layout && !p.mesh) wgpuBindGroupLayoutRelease(p.layout);  // mesh layouts are shared (mesh_layouts_)
++      if (p.module) wgpuShaderModuleRelease(p.module);
++      pipelines_.erase(pi);
++    }
++    reg_.pipelines.erase(pid);
++    return true;
++  }
++  bool destroy_sampler(SamplerId s) override {
++    std::string why = reg_.check_destroy_sampler(s);
++    if (!why.empty()) return reject("destroy_sampler", why), false;
++    auto si = samplers_.find(s);
++    if (si != samplers_.end()) {
++      wgpuSamplerRelease(si->second);
++      samplers_.erase(si);
++    }
++    reg_.samplers.erase(s);
++    return true;
++  }
++  bool destroy_bind_group(BindGroupId g) override {
++    std::string why = reg_.check_destroy_bind_group(g);
++    if (!why.empty()) return reject("destroy_bind_group", why), false;
++    auto gi = mesh_bind_groups_.find(g);
++    if (gi != mesh_bind_groups_.end()) {
++      wgpuBindGroupRelease(gi->second);
++      mesh_bind_groups_.erase(gi);
++    }
++    reg_.bind_groups.erase(g);
++    return true;
++  }
++  LiveObjects live_objects() const override { return reg_.live(); }
++
++  void set_lost_handler(std::function<void(const std::string&)> h) override {
++    if (!lost_) return;
++    lost_->handler = std::move(h);
++    if (lost_->handler && !lost_->pending.empty()) {
++      std::string why = std::move(lost_->pending);
++      lost_->pending.clear();
++      lost_->handler(why);
++    }
++  }
++
++  bool set_surface_depth(bool on, float clear_depth) override {
++    if (!surface_) return reject("set_surface_depth", "no presentation surface (headless device)"), false;
++    if (frame_open_) return reject("set_surface_depth", "inside a frame"), false;
++    if (!(clear_depth >= 0.0f && clear_depth <= 1.0f)) return reject("set_surface_depth", "clear_depth outside [0,1]"), false;
++    release_surface_depth();
++    surface_clear_depth_ = clear_depth;
++    if (on) make_surface_depth();
++    return true;
++  }
++  bool resize(uint32_t w, uint32_t h) override {
++    if (!surface_) return reject("resize", "no presentation surface (headless device)"), false;
++    if (frame_open_) return reject("resize", "inside a frame"), false;
++    if (w == 0 || h == 0 || w > kMaxRenderTargetSize || h > kMaxRenderTargetSize) return reject("resize", "size out of range"), false;
++    WGPUSurfaceConfiguration cfg = WGPU_SURFACE_CONFIGURATION_INIT;
++    cfg.device = dev_;
++    cfg.format = surface_format_;
++    cfg.width = w;
++    cfg.height = h;
++    wgpuSurfaceConfigure(surface_, &cfg);
++    surface_w_ = w;
++    surface_h_ = h;
++    if (surface_depth_view_) {
++      release_surface_depth();
++      make_surface_depth();
++    }
++    return true;
++  }
++
+  private:
++  // REF4 r2 (I1): GPU memory goes back at destroy time, not when a JS wrapper is garbage-collected (emdawnwebgpu) or
++  // the last reference drops: an explicit Destroy, then Release. Inside an open frame the object may be referenced by
++  // the command buffer end_frame() submits, and destroying it before that submit would fail validation, so the Destroy
++  // (and the handle) wait for end_frame(). Same semantics for callers: "destroy inside an open frame is allowed".
++  void destroy_now_or_after_frame(WGPUTexture t) {
++    if (frame_open_) return deferred_textures_.push_back(t);
++    wgpuTextureDestroy(t);
++    wgpuTextureRelease(t);
++  }
++  void destroy_now_or_after_frame(WGPUBuffer b) {
++    if (frame_open_) return deferred_buffers_.push_back(b);
++    wgpuBufferDestroy(b);
++    wgpuBufferRelease(b);
++  }
++  void flush_deferred_destroys() {
++    for (WGPUTexture t : deferred_textures_) {
++      wgpuTextureDestroy(t);
++      wgpuTextureRelease(t);
++    }
++    for (WGPUBuffer b : deferred_buffers_) {
++      wgpuBufferDestroy(b);
++      wgpuBufferRelease(b);
++    }
++    deferred_textures_.clear();
++    deferred_buffers_.clear();
++  }
++  void release_surface_depth() {
++    if (surface_depth_view_) wgpuTextureViewRelease(surface_depth_view_);
++    if (surface_depth_) wgpuTextureRelease(surface_depth_);
++    surface_depth_view_ = nullptr;
++    surface_depth_ = nullptr;
++    surface_depth_w_ = surface_depth_h_ = 0;
++  }
++  void make_surface_depth() {
++    WGPUTextureDescriptor td = WGPU_TEXTURE_DESCRIPTOR_INIT;
++    td.size = {surface_w_, surface_h_, 1};
++    td.format = kDepthFormat;
++    td.usage = WGPUTextureUsage_RenderAttachment;
++    surface_depth_ = wgpuDeviceCreateTexture(dev_, &td);
++    surface_depth_view_ = wgpuTextureCreateView(surface_depth_, nullptr);
++    surface_depth_w_ = surface_w_;
++    surface_depth_h_ = surface_h_;
++  }
++
+   Target make_target(uint32_t w, uint32_t h) {
+     WGPUTextureDescriptor td = WGPU_TEXTURE_DESCRIPTOR_INIT;
+     td.size = {w, h, 1};
+@@ -668,6 +874,8 @@
+   WGPUTextureFormat surface_format_;
+   std::string adapter_desc_;
+   Registry reg_;
++  std::vector<WGPUTexture> deferred_textures_;  // REF4 r2 (I1): destroyed after the open frame's submit
++  std::vector<WGPUBuffer> deferred_buffers_;
+   std::map<TextureId, Target> targets_;
+   std::map<TextureId, Sampled> sampled_;
+   std::map<BufferId, WGPUBuffer> buffers_;
+@@ -687,6 +895,13 @@
+   bool frame_open_ = false;  // M1a-3: between begin_frame and end_frame (null-backend parity for out-of-frame draws)
+   bool logged_skip_ = false;
+   uint32_t rejects_ = 0;
++  // M1b: presentation-surface size and optional depth buffer.
++  uint32_t surface_w_ = 0, surface_h_ = 0;
++  WGPUTexture surface_depth_ = nullptr;
++  WGPUTextureView surface_depth_view_ = nullptr;
++  uint32_t surface_depth_w_ = 0, surface_depth_h_ = 0;
++  float surface_clear_depth_ = 1.0f;
++  LostSink* lost_ = nullptr;  // REF4 r2 (C1): not owned (see LostSink)
+ };
+ 
+ struct Pending {
+@@ -697,6 +912,7 @@
+   std::string canvas;
+   uint32_t width = 0, height = 0;
+   DeviceCallback done;
++  LostSink* lost = new LostSink();  // REF4 r2 (C1): handed to the device; never freed (see LostSink)
+ };
+ 
+ // Releases whatever creation acquired so far, reports the error and frees p. Never leaks instance/adapter.
+@@ -742,7 +958,7 @@
+   wgpuAdapterGetInfo(p->adapter, &info);
+   std::string desc = str(info.vendor) + "/" + str(info.architecture) + "/" + str(info.description);
+   wgpuAdapterInfoFreeMembers(info);
+-  auto device = std::make_unique<WebGpuDevice>(p->inst, p->adapter, dev, surface, fmt, desc);  // takes ownership of all handles
++  auto device = std::make_unique<WebGpuDevice>(p->inst, p->adapter, dev, surface, fmt, desc, p->width, p->height, p->lost);  // owns all handles
+   DeviceCallback done = std::move(p->done);
+   delete p;
+   done(std::move(device), "");
+@@ -791,13 +1007,17 @@
+     // Visible errors: bad WGSL / validation failures would otherwise be a silent blank frame.
+     WGPUDeviceDescriptor dd = WGPU_DEVICE_DESCRIPTOR_INIT;
+     dd.deviceLostCallbackInfo.mode = WGPUCallbackMode_AllowSpontaneous;
+-    dd.deviceLostCallbackInfo.callback = [](WGPUDevice const*, WGPUDeviceLostReason reason, WGPUStringView m, void*, void*) {
++    dd.deviceLostCallbackInfo.userdata1 = p->lost;
++    dd.deviceLostCallbackInfo.callback = [](WGPUDevice const*, WGPUDeviceLostReason reason, WGPUStringView m, void* u1, void*) {
+       // Destroyed / CallbackCancelled are the normal teardown path, not a loss.
+       if (reason == WGPUDeviceLostReason_Destroyed || reason == WGPUDeviceLostReason_CallbackCancelled) return;
+       std::fprintf(stderr, "[webgpu] device lost (reason %d): %s\n", int(reason), str(m).c_str());
++      static_cast<LostSink*>(u1)->notify("GPU device lost (reason " + std::to_string(int(reason)) + "): " + str(m));
+     };
+-    dd.uncapturedErrorCallbackInfo.callback = [](WGPUDevice const*, WGPUErrorType type, WGPUStringView m, void*, void*) {
++    dd.uncapturedErrorCallbackInfo.userdata1 = p->lost;
++    dd.uncapturedErrorCallbackInfo.callback = [](WGPUDevice const*, WGPUErrorType type, WGPUStringView m, void* u1, void*) {
+       std::fprintf(stderr, "[webgpu] uncaptured %s error: %s\n", error_type_name(type), str(m).c_str());
++      static_cast<LostSink*>(u1)->notify(std::string("GPU error (") + error_type_name(type) + "): " + str(m));
+     };
+     WGPURequestDeviceCallbackInfo dcb = WGPU_REQUEST_DEVICE_CALLBACK_INFO_INIT;
+     dcb.mode = LOMN_CB_MODE;
+diff -ruN base/engine/src/view/area.cpp ref/engine/src/view/area.cpp
+--- base/engine/src/view/area.cpp	2026-10-07 15:21:46
++++ ref/engine/src/view/area.cpp	2026-10-07 15:37:15
+@@ -90,7 +90,7 @@
+     out_.area = std::string(area.substr(0, 4));
+     std::string e;
+     // GcGame::LoadArtBlockHeader: Art.blk is the global fallback of both lookup orders. Optional here.
+-    out_.art_blk = chain_.open_art("Root/Data/Art/Art.blk", &e);
++    out_.art_blk = chain_.open_art(kArtBlkPath, &e);
+     if (!out_.art_blk) warn("art.blk not opened: " + e);
+     if (!chain_.enter_area(out_.level, out_.area, &e)) {
+       kind_ = enter_failure_kind();
+@@ -393,7 +393,7 @@
+   // map to an existing area this way (tools/research/osi.py).
+   void load_script() {
+     std::vector<uint8_t> bytes;
+-    if (fs_.read("Root/Data/Base.osi", bytes) != fs::Error::None) {
++    if (fs_.read(kBaseOsiPath, bytes) != fs::Error::None) {
+       warn("osi: Root/Data/Base.osi not readable (fog/cave lighting from defaults)");
+       return;
+     }
+@@ -916,8 +916,8 @@
+ 
+ bool AreaRenderer::upload(rhi::Device& dev, const AreaData& a, const RenderOptions& opt, std::string* err) {
+   if (a.cpu_released) return fail(err, "render: area CPU copies were already released");
+-  // rhi has no destroy calls: a second upload would leak the first one's GPU objects, so it is rejected.
+-  if (upload_attempted_) return fail(err, "render: renderer already uploaded (one upload per AreaRenderer)");
++  // A second upload would leak the first one's GPU objects, so it is rejected until release() (M1b) has run.
++  if (upload_attempted_) return fail(err, "render: renderer already uploaded (call release() first)");
+   upload_attempted_ = true;
+   opt_ = opt;
+   uniform_slots_ = a.stats.draws ? a.stats.draws : 1;
+@@ -935,6 +935,7 @@
+     const MipLevel& top = t.mips.front();
+     rhi::TextureId id = dev.create_texture(top.width, top.height, static_cast<uint32_t>(t.mips.size()));
+     if (!id) return fail(err, "render: texture rejected: " + t.request);
++    created_textures_.push_back(id);  // M1b: every created object is owned (release() frees it) even if upload fails later
+     for (uint32_t m = 0; m < t.mips.size(); ++m) {
+       if (!dev.write_texture(id, m, t.mips[m].rgba.data(), t.mips[m].rgba.size())) return fail(err, "render: mip upload rejected: " + t.request);
+       uploaded_texture_bytes_ += t.mips[m].rgba.size();
+@@ -950,6 +951,8 @@
+     const uint32_t vbytes = static_cast<uint32_t>(m.vertices.size() * 4), ibytes = static_cast<uint32_t>(m.indices.size() * 4);
+     g.vb = dev.create_vertex_buffer(vbytes);
+     g.ib = dev.create_index_buffer(ibytes);
++    if (g.vb) created_buffers_.push_back(g.vb);  // M1b (see created_textures_)
++    if (g.ib) created_buffers_.push_back(g.ib);
+     if (!g.vb || !g.ib) return fail(err, "render: buffer rejected for model " + m.id);
+     dev.write_buffer(g.vb, 0, m.vertices.data(), vbytes);
+     dev.write_buffer(g.ib, 0, m.indices.data(), ibytes);
+@@ -979,6 +982,7 @@
+     // The area script's GcAreaDirector::SetFog only stores the statics (SetFogValue); SetFog(true) applies them.
+     im.sage.set_fog_value(a.fog.color, a.fog.start, a.fog.end, a.fog.density);
+   }
++  const auto t_replay = Clock::now();  // M1b: frame-time breakdown (replay = SageFrame + draw compilation, submit = rhi)
+   Sink sink(*this, dev, a);
+   im.dev8.set_sink(&sink);
+   const uint32_t calls0 = im.dev8.state_calls();
+@@ -993,6 +997,8 @@
+   }
+   const uint32_t n = static_cast<uint32_t>(sink.draws.size());
+   stats_.rhi_draws = n;
++  const auto t_submit = Clock::now();
++  stats_.replay_ms = std::chrono::duration<double, std::milli>(t_submit - t_replay).count();
+   if (n) dev.write_buffer(uniforms_, 0, uniform_data_.data(), n * kSlot);
+   // The frame starts from the last whole-viewport clear (ScRenderer::ClearRect: 0x00000000, z 1.0). Its alpha is not
+   // kept: the D3D8 back buffer is X8R8G8B8, so the PNG gets alpha 1 like every opaque draw.
+@@ -1012,7 +1018,46 @@
+     dev.draw_indexed(d);
+   }
+   dev.end_frame();
++  stats_.submit_ms = ms_since(t_submit);
+   return true;
++}
++
++// ---- M1b: area switching ----
++// Destroys every rhi object this renderer created, in dependency order: bind groups first (they reference the uniform
++// buffer, textures and samplers; rhi rejects destroying a referenced object), then pipelines, samplers, textures and
++// buffers. Clears the pipeline / sampler / bind-group caches and the D3D8 device (a new upload starts from init_device,
++// as GcAreaLoader::LoadArea runs with a fresh frame state). Works after a failed upload too (objects created before
++// the failure are owned). Returns the number of objects destroyed; *failures counts rejected destroys (0 when the
++// device and this renderer agree).
++uint32_t AreaRenderer::release(rhi::Device& dev, uint32_t* failures) {
++  uint32_t destroyed = 0, failed = 0;
++  auto count = [&](bool ok) { ok ? ++destroyed : ++failed; };
++  if (impl_) {
++    for (const auto& kv : impl_->groups) count(dev.destroy_bind_group(kv.second));
++    for (const auto& kv : impl_->pipelines) count(dev.destroy_pipeline(kv.second));
++    for (const auto& kv : impl_->samplers) count(dev.destroy_sampler(kv.second));
++  }
++  for (rhi::TextureId t : created_textures_) count(dev.destroy_texture(t));
++  if (white_texture_) count(dev.destroy_texture(white_texture_));
++  for (rhi::BufferId b : created_buffers_) count(dev.destroy_buffer(b));
++  if (uniforms_) count(dev.destroy_buffer(uniforms_));
++  impl_.reset();
++  created_textures_.clear();
++  created_buffers_.clear();
++  gpu_textures_.clear();
++  models_.clear();
++  uniform_data_.clear();
++  uniforms_ = 0;
++  white_texture_ = 0;
++  uniform_slots_ = 0;
++  pipelines_created_ = textures_created_ = frames_ = 0;
++  uploaded_texture_bytes_ = 0;
++  uploaded_ = nullptr;
++  upload_attempted_ = false;
++  render_refused_logged_ = false;
++  stats_ = RenderStats();
++  if (failures) *failures = failed;
++  return destroyed;
+ }
+ 
+ }  // namespace lomn::view
+diff -ruN base/engine/src/view/fly_camera.cpp ref/engine/src/view/fly_camera.cpp
+--- base/engine/src/view/fly_camera.cpp	1970-01-01 01:00:00
++++ ref/engine/src/view/fly_camera.cpp	2026-10-07 15:37:38
+@@ -0,0 +1,61 @@
++#include "lomn/view/fly_camera.h"
++
++#include <algorithm>
++#include <cmath>
++#include <cstring>
++
++namespace lomn::view {
++namespace {
++constexpr double kDeg = 3.14159265358979323846 / 180.0;
++float wrap_yaw(double y) {
++  y = std::fmod(y, 360.0);
++  if (y > 180.0) y -= 360.0;
++  if (y <= -180.0) y += 360.0;
++  return static_cast<float>(y);
++}
++}  // namespace
++
++void FlyCamera::reset(const Camera& start) {
++  std::memcpy(eye_, start.eye, sizeof eye_);
++  yaw_ = start.yaw_deg;
++  pitch_ = start.pitch_deg;
++  moved_ = false;
++}
++
++void FlyCamera::update(const FlyInput& in, double dt_s, const FlySpeeds& sp) {
++  if (!std::isfinite(dt_s)) dt_s = 0;
++  dt_s = std::max(0.0, std::min(0.25, dt_s));
++  const bool look = std::isfinite(in.look_dx) && std::isfinite(in.look_dy) && (in.look_dx != 0 || in.look_dy != 0);
++  if (look) {
++    yaw_ = wrap_yaw(static_cast<double>(yaw_) + static_cast<double>(in.look_dx) * sp.deg_per_pixel);
++    const double p = static_cast<double>(pitch_) - static_cast<double>(in.look_dy) * sp.deg_per_pixel;
++    pitch_ = static_cast<float>(std::max<double>(-kMaxPitchDeg, std::min<double>(kMaxPitchDeg, p)));
++    moved_ = true;
++  }
++  const float f = (in.forward ? 1.0f : 0.0f) - (in.back ? 1.0f : 0.0f);
++  const float r = (in.right ? 1.0f : 0.0f) - (in.left ? 1.0f : 0.0f);
++  const float u = (in.up ? 1.0f : 0.0f) - (in.down ? 1.0f : 0.0f);
++  if ((f != 0 || r != 0 || u != 0) && dt_s > 0) {
++    const double step = static_cast<double>(sp.units_per_s) * (in.fast ? sp.fast_multiplier : 1.0f) * dt_s;
++    const double y = yaw_ * kDeg, p = pitch_ * kDeg;
++    // make_camera's forward: (sin y cos p, sin p, -cos y cos p); right = forward x up projected on xz: (cos y, 0, sin y).
++    const double fwd[3] = {std::sin(y) * std::cos(p), std::sin(p), -std::cos(y) * std::cos(p)};
++    const double right[3] = {std::cos(y), 0.0, std::sin(y)};
++    for (int k = 0; k < 3; ++k)
++      eye_[k] = static_cast<float>(eye_[k] + step * (f * fwd[k] + r * right[k] + (k == 1 ? u : 0.0f)));
++    moved_ = true;
++  }
++}
++
++CameraSettings FlyCamera::settings(const CameraSettings& base) const {
++  if (!moved_) return base;
++  CameraSettings s = base;
++  s.eye_set = true;
++  std::memcpy(s.eye, eye_, sizeof s.eye);
++  s.yaw_set = true;
++  s.yaw_deg = yaw_;
++  s.pitch_deg = pitch_;
++  return s;
++}
++
++}  // namespace lomn::view
+diff -ruN base/engine/src/view/prefetch.cpp ref/engine/src/view/prefetch.cpp
+--- base/engine/src/view/prefetch.cpp	1970-01-01 01:00:00
++++ ref/engine/src/view/prefetch.cpp	2026-10-07 15:38:06
+@@ -0,0 +1,49 @@
++#include "lomn/view/prefetch.h"
++
++#include <algorithm>
++#include <set>
++
++#include "lomn/sage/blockchain.h"
++#include "lomn/view/area.h"
++
++namespace lomn::view {
++
++void boot_reads(const fs::FileSystem& fs) {
++  sage::BlockChain chain(fs);
++  chain.open_art(kArtBlkPath, nullptr);  // header + table (GcGame::LoadArtBlockHeader); absent on a synthetic install
++  std::vector<uint8_t> bytes;
++  fs.read(kBaseOsiPath, bytes);
++}
++
++std::vector<fs::ByteRange> record_reads(fs::FileSystem& fs, const std::function<void()>& fn) {
++  std::set<fs::ByteRange> seen;
++  fs.set_range_logger([&seen](const std::string& p, uint64_t off, uint64_t len) { seen.insert({p, off, len}); });
++  fn();
++  fs.set_range_logger(nullptr);
++  return std::vector<fs::ByteRange>(seen.begin(), seen.end());
++}
++
++std::vector<AreaRef> list_areas(const std::vector<std::string>& paths) {
++  static const std::string kPrefix = "root/data/levels/";
++  std::set<AreaRef> out;
++  for (const std::string& p : paths) {
++    if (p.compare(0, kPrefix.size(), kPrefix) != 0) continue;
++    const std::string rest = p.substr(kPrefix.size());
++    const size_t slash = rest.find('/');
++    if (slash == std::string::npos || rest.find('/', slash + 1) != std::string::npos) continue;
++    const std::string lev = rest.substr(0, slash), file = rest.substr(slash + 1);
++    if (file.size() < 5 || file.compare(file.size() - 4, 4, ".blk") != 0) continue;
++    const std::string stem = file.substr(0, file.size() - 4);
++    if (stem == lev || lev.empty() || lev.size() > 4 || stem.size() > 4) continue;
++    out.insert({lev, stem});
++  }
++  return std::vector<AreaRef>(out.begin(), out.end());
++}
++
++std::string ranges_text(const std::vector<fs::ByteRange>& ranges) {
++  std::string o;
++  for (const fs::ByteRange& r : ranges) o += r.path + "\t" + std::to_string(r.offset) + "\t" + std::to_string(r.length) + "\n";
++  return o;
++}
++
++}  // namespace lomn::view
+diff -ruN base/engine/tests/test_fly_camera.cpp ref/engine/tests/test_fly_camera.cpp
+--- base/engine/tests/test_fly_camera.cpp	1970-01-01 01:00:00
++++ ref/engine/tests/test_fly_camera.cpp	2026-10-07 15:43:34
+@@ -0,0 +1,102 @@
++// M1b: the viewer's free-fly camera (lomn/view/fly_camera.h).
++#include <cmath>
++#include <cstring>
++
++#include "doctest.h"
++#include "lomn/fs.h"
++#include "lomn/view/fly_camera.h"
++#include "lomn/view/synthetic.h"
++
++using namespace lomn::view;
++
++namespace {
++Camera start_camera(float yaw, float pitch) {
++  Camera c;
++  c.eye[0] = 1;
++  c.eye[1] = 2;
++  c.eye[2] = 3;
++  c.yaw_deg = yaw;
++  c.pitch_deg = pitch;
++  return c;
++}
++}  // namespace
++
++TEST_CASE("fly camera: untouched it returns the base settings, so the first view is the default camera bit for bit") {
++  lomn::fs::MemoryFileSystem m;
++  REQUIRE(mount_synthetic_install(m));
++  AreaData a;
++  std::string err;
++  REQUIRE(load_area(m, kSyntheticLevel, kSyntheticArea, AreaOptions(), a, &err));
++  const Camera base = make_camera(a, CameraSettings(), 16.0f / 9.0f);
++  FlyCamera f;
++  f.reset(base);
++  FlyInput none;
++  f.update(none, 0.016);
++  CHECK_FALSE(f.moved());
++  const Camera again = make_camera(a, f.settings(CameraSettings()), 16.0f / 9.0f);
++  CHECK(std::memcmp(again.view.m, base.view.m, sizeof base.view.m) == 0);
++  CHECK(std::memcmp(again.proj.m, base.proj.m, sizeof base.proj.m) == 0);
++  CHECK(again.eye_source == "pos_start");
++  // After a move the overrides take over: eye exactly the fly eye (no eye_height added), yaw/pitch as flown.
++  FlyInput w;
++  w.forward = true;
++  f.update(w, 0.5);
++  REQUIRE(f.moved());
++  const Camera moved = make_camera(a, f.settings(CameraSettings()), 16.0f / 9.0f);
++  CHECK(moved.eye_source == "cli");
++  for (int k = 0; k < 3; ++k) CHECK(moved.eye[k] == f.eye()[k]);
++  CHECK(moved.yaw_deg == doctest::Approx(base.yaw_deg));
++}
++
++TEST_CASE("fly camera: WASD moves along make_camera's forward/right, Q/E (up/down) along world Y, Shift is faster") {
++  FlyCamera f;
++  f.reset(start_camera(0, 0));  // looking along -Z
++  FlyInput in;
++  in.forward = true;
++  f.update(in, 1.0 / 8);  // 12 u/s * 0.125 s
++  CHECK(f.eye()[2] == doctest::Approx(3 - 1.5));
++  CHECK(f.eye()[0] == doctest::Approx(1));
++  in = FlyInput();
++  in.right = true;
++  in.fast = true;
++  f.update(in, 0.1);  // +X at 60 u/s
++  CHECK(f.eye()[0] == doctest::Approx(1 + 6));
++  in = FlyInput();
++  in.up = true;
++  f.update(in, 0.25);
++  CHECK(f.eye()[1] == doctest::Approx(2 + 3));
++  // yaw 90 looks along +X: forward moves +X.
++  f.reset(start_camera(90, 0));
++  in = FlyInput();
++  in.forward = true;
++  f.update(in, 0.25);
++  CHECK(f.eye()[0] == doctest::Approx(1 + 3));
++  CHECK(f.eye()[2] == doctest::Approx(3).epsilon(1e-5));
++}
++
++TEST_CASE("fly camera: mouse look, pitch clamp, dt clamp, non-finite input ignored") {
++  FlyCamera f;
++  f.reset(start_camera(170, 0));
++  FlyInput in;
++  in.look_dx = 100;  // 15 degrees: wraps past 180
++  in.look_dy = -100; // up 15 degrees
++  f.update(in, 0.016);
++  CHECK(f.yaw_deg() == doctest::Approx(-175));
++  CHECK(f.pitch_deg() == doctest::Approx(15));
++  in.look_dx = 0;
++  in.look_dy = -10000;
++  f.update(in, 0.016);
++  CHECK(f.pitch_deg() == doctest::Approx(kMaxPitchDeg));
++  f.reset(start_camera(0, 0));
++  in = FlyInput();
++  in.forward = true;
++  f.update(in, 10.0);  // a stalled tab: at most 0.25 s of movement
++  CHECK(f.eye()[2] == doctest::Approx(3 - 3));
++  f.reset(start_camera(0, 0));
++  f.update(in, std::nan(""));
++  CHECK_FALSE(f.moved());
++  in = FlyInput();
++  in.look_dx = std::nanf("");
++  f.update(in, 0.016);
++  CHECK_FALSE(f.moved());
++}
+diff -ruN base/engine/tests/test_gpu_destroy.cpp ref/engine/tests/test_gpu_destroy.cpp
+--- base/engine/tests/test_gpu_destroy.cpp	1970-01-01 01:00:00
++++ ref/engine/tests/test_gpu_destroy.cpp	2026-10-07 17:15:59
+@@ -0,0 +1,199 @@
++// M1b rhi on Dawn (headless). Exits 77 (ctest SKIP) without an adapter.
++//  1. destroy_* with the dependency rule: a texture/sampler/uniform buffer referenced by a live bind group is rejected
++//     (counted, nothing freed); after the bind group goes, all of them go; live_objects() follows.
++//  2. Destroy inside an open frame: the bind group and texture of a draw already recorded are destroyed before
++//     end_frame; the frame still renders that texture (WebGPU keeps recorded objects alive) with no Dawn error.
++//  3. Leak loops: 300 x (texture + bind group) and 100 x (depth render target) created and destroyed: live counts flat.
++//  4. Surface calls on a headless device are counted rejections.
++//  5. AreaRenderer::release: the synthetic A7 scene uploaded, rendered, read back and released 8 times on one device:
++//     pixels byte-identical every cycle, live counts back to the baseline after every release.
++//  REF4 r2: destroy_texture/destroy_buffer now Destroy the GPU object (deferred to end_frame inside a frame): probes 2
++//  and 5 cover both paths. 6. the lost handler receives the first uncaptured GPU error once.
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++#include <vector>
++
++#include "lomn/fs.h"
++#include "lomn/rhi.h"
++#include "lomn/view/area.h"
++#include "lomn/view/synthetic.h"
++
++using namespace lomn;
++using namespace lomn::rhi;
++
++namespace {
++
++const char* kWgsl = R"(
++struct U { tint: vec4f }
++@group(0) @binding(0) var<uniform> u: U;
++@group(0) @binding(1) var tex: texture_2d<f32>;
++@group(0) @binding(2) var samp: sampler;
++struct VOut { @builtin(position) pos: vec4f }
++@vertex fn vs(@location(0) p: vec3f) -> VOut { var o: VOut; o.pos = vec4f(p, 1.0); return o; }
++@fragment fn fs(i: VOut) -> @location(0) vec4f { return vec4f(textureSample(tex, samp, vec2f(0.5, 0.5)).rgb * u.tint.rgb, 1.0); }
++)";
++
++bool same(const Device::LiveObjects& a, const Device::LiveObjects& b) { return a == b; }
++void print(const char* what, const Device::LiveObjects& o) {
++  std::printf("     %s: textures=%u buffers=%u pipelines=%u samplers=%u bind_groups=%u\n", what, o.textures, o.buffers, o.pipelines,
++              o.samplers, o.bind_groups);
++}
++
++}  // namespace
++
++int main() {
++  std::unique_ptr<Device> dev;
++  std::string err;
++  create_webgpu_device(nullptr, 0, 0, [&](std::unique_ptr<Device> d, std::string e) {
++    dev = std::move(d);
++    err = std::move(e);
++  });
++  if (!dev) {
++    std::printf("SKIPPED (no WebGPU adapter: %s)\n", err.c_str());
++    return 77;
++  }
++  bool ok = true;
++  auto check = [&](bool hit, const char* what) {
++    std::printf("%s %s\n", hit ? "ok  " : "FAIL", what);
++    ok = ok && hit;
++  };
++
++  // 1. Dependency rule.
++  MeshPipelineDesc pd;
++  pd.wgsl = kWgsl;
++  pd.uniform_bytes = 16;
++  pd.vertex_stride = 12;
++  pd.attributes = {{VertexFormat::Float32x3, 0, 0}};
++  const PipelineId pipe = dev->create_mesh_pipeline(pd);
++  const float quad[4][3] = {{-1, -1, 0.5f}, {1, -1, 0.5f}, {1, 1, 0.5f}, {-1, 1, 0.5f}};
++  const uint32_t idx[6] = {0, 1, 2, 0, 2, 3};
++  const BufferId vb = dev->create_vertex_buffer(sizeof quad), ib = dev->create_index_buffer(sizeof idx);
++  const BufferId ub = dev->create_uniform_buffer(kUniformAlign);
++  dev->write_buffer(vb, 0, quad, sizeof quad);
++  dev->write_buffer(ib, 0, idx, sizeof idx);
++  const float tint[4] = {1, 1, 1, 1};
++  dev->write_buffer(ub, 0, tint, sizeof tint);
++  const SamplerId samp = dev->create_sampler(SamplerDesc());
++  const Device::LiveObjects base = dev->live_objects();
++  const TextureId tex = dev->create_texture(1, 1, 1);
++  const uint8_t green[4] = {0, 255, 0, 255};
++  dev->write_texture(tex, 0, green, 4);
++  const BindGroupId bg = dev->create_bind_group({ub, 16, tex, samp});
++  if (!pipe || !vb || !ib || !ub || !samp || !tex || !bg) return std::printf("FAIL setup\n"), 1;
++  const uint32_t rej0 = dev->last_frame_stats().rejected;
++  check(!dev->destroy_texture(tex) && !dev->destroy_sampler(samp) && !dev->destroy_buffer(ub) &&
++            dev->last_frame_stats().rejected == rej0 + 3,
++        "1. texture/sampler/uniform buffer referenced by a live bind group: 3 rejected destroys");
++  check(dev->live_objects().textures == base.textures + 1 && dev->live_objects().bind_groups == 1, "1. nothing freed by the rejections");
++
++  // 2. Destroy inside an open frame, after the draw was recorded.
++  const TextureId rt = dev->create_render_target_ex(RenderTargetDesc{8, 8, true, 1.0f});
++  const float clear[4] = {0, 0, 0.25f, 1};
++  dev->begin_frame(rt, clear);
++  dev->draw_indexed({pipe, vb, ib, 0, 6, bg, 0});
++  const bool d1 = dev->destroy_bind_group(bg), d2 = dev->destroy_texture(tex);
++  dev->end_frame();
++  std::vector<uint8_t> px;
++  const bool read = dev->read_pixels(rt, px);
++  check(d1 && d2 && read && px.size() == 8 * 8 * 4 && px[(4 * 8 + 4) * 4 + 1] >= 253 && px[(4 * 8 + 4) * 4 + 0] <= 2,
++        "2. bind group + texture destroyed after the draw was recorded: the frame still shows the texture (green)");
++  check(dev->last_frame_stats().draws == 1 && dev->last_frame_stats().rejected == 0, "2. 1 draw, 0 rejected");
++  check(dev->destroy_texture(rt), "2. the render target (with its depth buffer) is destroyable");
++  check(same(dev->live_objects(), base), "1+2. live objects back to the baseline");
++
++  // 3. Leak loops.
++  for (int i = 0; i < 300; ++i) {
++    const TextureId t = dev->create_texture(256, 256, 9);
++    const BindGroupId g = dev->create_bind_group({ub, 16, t, samp});
++    if (!t || !g || !dev->destroy_bind_group(g) || !dev->destroy_texture(t)) {
++      ok = false;
++      std::printf("FAIL 3. texture loop iteration %d\n", i);
++      break;
++    }
++  }
++  for (int i = 0; i < 100; ++i) {
++    const TextureId t = dev->create_render_target_ex(RenderTargetDesc{640, 480, true, 1.0f});
++    if (!t || !dev->destroy_texture(t)) {
++      ok = false;
++      std::printf("FAIL 3. render-target loop iteration %d\n", i);
++      break;
++    }
++  }
++  check(same(dev->live_objects(), base), "3. 300 texture+bind group and 100 depth-target create/destroy cycles: counts flat");
++
++  // 4. Surface calls headless.
++  const uint32_t rej1 = dev->last_frame_stats().rejected;
++  check(!dev->set_surface_depth(true, 1.0f) && !dev->resize(64, 64) && dev->last_frame_stats().rejected == rej1 + 2,
++        "4. set_surface_depth / resize without a surface: counted rejections");
++
++  // 5. AreaRenderer::release cycles on the synthetic A7 scene.
++  fs::MemoryFileSystem mfs;
++  view::AreaData area;
++  if (!view::mount_synthetic_install(mfs) || !view::load_area(mfs, view::kSyntheticLevel, view::kSyntheticArea, view::AreaOptions(), area, &err))
++    return std::printf("FAIL load: %s\n", err.c_str()), 1;
++  const TextureId art = dev->create_render_target_ex(RenderTargetDesc{64, 64, true, 1.0f});
++  const Device::LiveObjects before = dev->live_objects();
++  view::AreaRenderer r;
++  std::vector<uint8_t> first;
++  Device::LiveObjects shown;
++  for (int cycle = 0; cycle < 8; ++cycle) {
++    if (!r.upload(*dev, area, view::RenderOptions(), &err)) {
++      std::printf("FAIL 5. upload cycle %d: %s\n", cycle, err.c_str());
++      ok = false;
++      break;
++    }
++    r.render(*dev, art, area, view::make_camera(area, view::synthetic_camera(), 1.0f));
++    r.render(*dev, art, area, view::make_camera(area, view::synthetic_camera(), 1.0f));
++    std::vector<uint8_t> p;
++    if (!dev->read_pixels(art, p)) {
++      ok = false;
++      break;
++    }
++    if (cycle == 0) {
++      first = p;
++      shown = dev->live_objects();
++      print("area shown", shown);
++    } else if (p != first || !same(dev->live_objects(), shown)) {
++      std::printf("FAIL 5. cycle %d: pixels %s, live counts %s\n", cycle, p == first ? "same" : "DIFFER",
++                  same(dev->live_objects(), shown) ? "same" : "DIFFER");
++      ok = false;
++    }
++    uint32_t failures = 0;
++    r.release(*dev, &failures);
++    if (failures || !same(dev->live_objects(), before)) {
++      std::printf("FAIL 5. cycle %d: release failures %u\n", cycle, failures);
++      print("after release", dev->live_objects());
++      ok = false;
++    }
++  }
++  check(ok, "5. 8 upload/render/release cycles: identical pixels, flat live counts, 0 rejected destroys");
++  check(dev->last_frame_stats().rejected == 0, "5. no rejected call in the last frame");
++  // 6. (REF4 r2, C1) The lost handler: a pipeline whose WGSL does not compile passes the shared checks (rhi does not parse
++  //    WGSL) and fails inside Dawn as an uncaptured validation error; that first error reaches the handler exactly once,
++  //    with a readable reason.
++  {
++    int calls = 0;
++    std::string why;
++    dev->set_lost_handler([&](const std::string& r) {
++      ++calls;
++      why = r;
++    });
++    MeshPipelineDesc bad = pd;
++    bad.wgsl = "this is not WGSL";
++    const PipelineId bp = dev->create_mesh_pipeline(bad);
++    const TextureId t6 = dev->create_render_target_ex(RenderTargetDesc{8, 8, true, 1.0f});
++    const TextureId tx = dev->create_texture(1, 1, 1);
++    const BindGroupId g6 = dev->create_bind_group({ub, 16, tx, samp});
++    dev->begin_frame(t6, clear);
++    dev->draw_indexed({bp, vb, ib, 0, 6, g6, 0});
++    dev->end_frame();
++    dev->draw_indexed({bp, vb, ib, 0, 6, g6, 0});  // outside a frame: a counted rejection, not a second GPU error
++    std::vector<uint8_t> px6;
++    dev->read_pixels(t6, px6);  // waits for the queue: any asynchronous error has been reported by now
++    std::printf("     lost handler: %d call(s): %s\n", calls, why.c_str());
++    check(calls == 1 && why.rfind("GPU error (validation)", 0) == 0, "6. the first uncaptured GPU error reaches the lost handler once");
++  }
++  std::printf("adapter=%s\n", dev->adapter().c_str());
++  return ok ? 0 : 1;
++}
+diff -ruN base/engine/tests/test_prefetch_fs.cpp ref/engine/tests/test_prefetch_fs.cpp
+--- base/engine/tests/test_prefetch_fs.cpp	1970-01-01 01:00:00
++++ ref/engine/tests/test_prefetch_fs.cpp	2026-10-07 15:45:43
+@@ -0,0 +1,224 @@
++// M1b: PrefetchFileSystem (the browser's file system) and the read-driven prefetch ("discovery"). Runs natively and
++// as wasm32 under Node.
++#include <cstring>
++#include <set>
++#include <string>
++#include <vector>
++
++#include "doctest.h"
++#include "lomn/fs.h"
++#include "lomn/prefetch_fs.h"
++#include "lomn/view/area.h"
++#include "lomn/view/prefetch.h"
++#include "lomn/view/synthetic.h"
++
++using namespace lomn;
++using fs::ByteRange;
++using fs::Error;
++using fs::PrefetchFileSystem;
++
++namespace {
++
++// Makes [off, off+len) of `path` resident with bytes value(i) = (off + i) & 0xff.
++bool fill(PrefetchFileSystem& p, const char* path, uint64_t off, uint64_t len) {
++  uint8_t* dst = p.reserve(path, off, len);
++  if (!dst) return false;
++  for (uint64_t i = 0; i < len; ++i) dst[i] = static_cast<uint8_t>((off + i) & 0xff);
++  return p.commit(dst);
++}
++
++// The browser's loop, natively: a round runs `load`; its misses are copied from `src` (the player's files) into the
++// prefetch fs; repeat until a round has no miss. Returns the number of rounds (0 = gave up after `max_rounds`).
++template <typename Load>
++int discover(PrefetchFileSystem& p, const fs::FileSystem& src, Load load, int max_rounds = 16) {
++  for (int round = 1; round <= max_rounds; ++round) {
++    p.next_generation();
++    load();
++    if (p.misses().empty() && p.misses_dropped() == 0) return round;
++    for (const ByteRange& m : std::vector<ByteRange>(p.misses())) {
++      std::vector<uint8_t> bytes;
++      if (src.read_range(m.path, m.offset, m.length, bytes) != Error::None) return 0;
++      uint8_t* dst = p.reserve(m.path, m.offset, m.length);
++      if (!dst) return 0;
++      std::memcpy(dst, bytes.data(), bytes.size());
++      p.commit(dst);
++    }
++  }
++  return 0;
++}
++
++// Registers every file of a MemoryFileSystem holding the synthetic install in the prefetch index.
++void index_synthetic(PrefetchFileSystem& p, const fs::MemoryFileSystem& m) {
++  for (const char* f : {"Root/Data/Levels/levt/levt.blk", "Root/Data/Levels/levt/test.blk", "Root/Data/Levels/levt/stat.blk",
++                        "Root/Data/Base.osi"}) {
++    uint64_t size = 0;
++    REQUIRE(m.size(f, size) == Error::None);
++    REQUIRE(p.add_file(f, size));
++  }
++}
++
++}  // namespace
++
++TEST_CASE("prefetch fs: the index answers exists/size without resident bytes; bad registrations are rejected") {
++  PrefetchFileSystem p;
++  std::string err;
++  CHECK(p.add_file("Root\\Data\\Main.BLK", 100, &err));
++  CHECK_FALSE(p.add_file("root/data/main.blk", 5, &err));  // duplicate after normalisation
++  CHECK(err.find("duplicate") != std::string::npos);
++  CHECK_FALSE(p.add_file("User/save0.sav", 5, &err));      // only root/ is indexed
++  CHECK_FALSE(p.add_file("Root", 5, &err));
++  CHECK_FALSE(p.add_file("Root/x", (1ull << 53), &err));    // beyond a JS safe integer
++  CHECK_FALSE(p.add_file(std::string(PrefetchFileSystem::kMaxPathBytes + 1, 'a'), 1, &err));
++  CHECK(p.file_count() == 1);
++  CHECK(p.exists("ROOT/data/main.blk"));
++  uint64_t sz = 0;
++  CHECK(p.size("root/data/main.blk", sz) == Error::None);
++  CHECK(sz == 100);
++  CHECK(p.size("root/data/nope", sz) == Error::NotFound);
++  CHECK(p.size("elsewhere/x", sz) == Error::BadMount);
++}
++
++TEST_CASE("prefetch fs: reads are served only from ONE resident range that contains them; others are recorded misses") {
++  PrefetchFileSystem p;
++  REQUIRE(p.add_file("root/a.bin", 1000));
++  REQUIRE(fill(p, "root/a.bin", 100, 50));
++  REQUIRE(fill(p, "root/a.bin", 150, 50));
++  std::vector<uint8_t> out;
++  CHECK(p.read_range("root/a.bin", 110, 20, out) == Error::None);
++  CHECK(out.size() == 20);
++  CHECK(out[0] == 110);
++  CHECK(p.read_range("root/a.bin", 140, 20, out) == Error::Io);   // spans two ranges: a miss (fetched as one range)
++  CHECK(p.read_range("root/a.bin", 0, 10, out) == Error::Io);     // not resident
++  CHECK(p.read_range("root/a.bin", 0, 10, out) == Error::Io);     // the same miss again: stored once
++  CHECK(p.read("root/a.bin", out) == Error::Io);                  // whole file = [0, 1000)
++  CHECK(p.read_range("root/a.bin", 990, 20, out) == Error::Io);   // outside the file: an error, NOT a miss
++  CHECK(p.read_range("root/a.bin", 1000, 0, out) == Error::None); // empty read at the end: nothing to fetch
++  CHECK(p.read_range("root/missing", 0, 1, out) == Error::NotFound);
++  REQUIRE(p.misses().size() == 3);
++  CHECK(p.misses()[0] == ByteRange{"root/a.bin", 140, 20});
++  CHECK(p.misses()[1] == ByteRange{"root/a.bin", 0, 10});
++  CHECK(p.misses()[2] == ByteRange{"root/a.bin", 0, 1000});
++  CHECK(p.misses_total() == 4);
++  // reserve refuses what cannot or need not be fetched.
++  std::string err;
++  CHECK(p.reserve("root/a.bin", 110, 10, &err) == nullptr);
++  CHECK(err.find("already resident") != std::string::npos);
++  CHECK(p.reserve("root/a.bin", 990, 20, &err) == nullptr);
++  CHECK(p.reserve("root/a.bin", 0, 0, &err) == nullptr);
++  CHECK(p.reserve("root/zzz", 0, 1, &err) == nullptr);
++  CHECK(p.reserve("root/a.bin", 0, PrefetchFileSystem::kMaxRangeBytes + 1, &err) == nullptr);
++  // A pending reservation is not readable until committed; abort frees it.
++  uint8_t* h = p.reserve("root/a.bin", 0, 10, &err);
++  REQUIRE(h);
++  CHECK(p.read_range("root/a.bin", 0, 10, out) == Error::Io);
++  CHECK(p.pending_bytes() == 10);
++  CHECK(p.abort(h));
++  CHECK_FALSE(p.commit(h));
++  CHECK(p.pending_bytes() == 0);
++  CHECK(p.resident_bytes() == 100);
++}
++
++TEST_CASE("prefetch fs: byte budget, miss cap, user/ writes, root/ is read-only") {
++  PrefetchFileSystem p(64);
++  REQUIRE(p.add_file("root/a.bin", 100000));
++  std::string err;
++  CHECK(fill(p, "root/a.bin", 0, 60));
++  CHECK(p.reserve("root/a.bin", 100, 5, &err) == nullptr);
++  CHECK(err.find("budget") != std::string::npos);
++  CHECK(p.peak_bytes() == 60);
++  std::vector<uint8_t> out;
++  for (uint32_t i = 0; i < PrefetchFileSystem::kMaxMissesPerGeneration + 10; ++i) p.read_range("root/a.bin", 100 + i, 1, out);
++  CHECK(p.misses().size() == PrefetchFileSystem::kMaxMissesPerGeneration);
++  CHECK(p.misses_dropped() == 10);
++  p.next_generation();
++  CHECK(p.misses().empty());
++  CHECK(p.misses_dropped() == 0);
++  const uint8_t b[3] = {1, 2, 3};
++  CHECK(p.write("root/a.bin", b, 3) == Error::ReadOnly);
++  CHECK(p.write("User/s.sav", b, 3) == Error::None);
++  CHECK(p.read("user/s.sav", out) == Error::None);
++  CHECK(out.size() == 3);
++  CHECK(p.write("x/../../y", b, 3) == Error::BadMount);
++}
++
++TEST_CASE("prefetch fs: generations - release_untouched keeps pinned and touched ranges (shared files), frees the rest") {
++  PrefetchFileSystem p;
++  REQUIRE(p.add_file("root/boot.osi", 100));
++  REQUIRE(p.add_file("root/a.blk", 1000));
++  std::vector<uint8_t> out;
++  REQUIRE(fill(p, "root/boot.osi", 0, 100));
++  p.next_generation();
++  REQUIRE(p.read("root/boot.osi", out) == Error::None);
++  CHECK(p.pin_touched() == 1);
++  // "Area 1" reads [0,10) and [500,100).
++  REQUIRE(fill(p, "root/a.blk", 0, 10));
++  REQUIRE(fill(p, "root/a.blk", 500, 100));
++  p.next_generation();
++  REQUIRE(p.read_range("root/a.blk", 0, 10, out) == Error::None);
++  REQUIRE(p.read_range("root/a.blk", 500, 100, out) == Error::None);
++  CHECK(p.release_untouched() == 0);
++  // "Area 2" shares [0,10) and reads [700,50); [500,100) is area 1's only.
++  REQUIRE(fill(p, "root/a.blk", 700, 50));
++  p.next_generation();
++  REQUIRE(p.read_range("root/a.blk", 0, 10, out) == Error::None);
++  REQUIRE(p.read_range("root/a.blk", 700, 50, out) == Error::None);
++  CHECK(p.touched() == std::vector<ByteRange>{{"root/a.blk", 0, 10}, {"root/a.blk", 700, 50}});
++  CHECK(p.release_untouched() == 100);
++  CHECK(p.is_resident("root/boot.osi", 0, 100));  // pinned (boot), although not touched in this generation
++  CHECK(p.is_resident("root/a.blk", 0, 10));      // shared
++  CHECK_FALSE(p.is_resident("root/a.blk", 500, 100));
++  CHECK(p.resident_bytes() == 160);
++  CHECK(p.pinned_bytes() == 100);
++  CHECK(p.resident_ranges() == 3);
++}
++
++TEST_CASE("prefetch discovery: the synthetic areas load from misses alone, equal to the direct load and the access log") {
++  fs::MemoryFileSystem m;
++  REQUIRE(view::mount_synthetic_install(m));
++  PrefetchFileSystem p;
++  index_synthetic(p, m);
++  // Boot: no Art.blk in the synthetic install (size() fails: no miss), Base.osi whole.
++  const int boot_rounds = discover(p, m, [&] { view::boot_reads(p); });
++  CHECK(boot_rounds == 2);
++  CHECK(p.pin_touched() == 1);
++  uint64_t osi = 0;
++  REQUIRE(m.size("Root/Data/Base.osi", osi) == Error::None);
++  CHECK(p.pinned_bytes() == osi);
++  for (const char* name : {view::kSyntheticArea, view::kSyntheticStateArea, view::kSyntheticArea}) {
++    CAPTURE(name);
++    view::AreaData via_prefetch, direct;
++    std::string err;
++    bool ok = false;
++    const int rounds = discover(p, m, [&] { ok = view::load_area(p, view::kSyntheticLevel, name, view::AreaOptions(), via_prefetch, &err); });
++    CHECK(rounds >= 2);
++    CHECK(rounds <= 8);
++    REQUIRE(ok);
++    // The last round's touched ranges == the access log of the same load on the source file system (the native
++    // `lomn_view --manifest` rows), so the browser fetches exactly what the native engine reads.
++    const std::vector<ByteRange> log = view::record_reads(m, [&] { ok = view::load_area(m, view::kSyntheticLevel, name, view::AreaOptions(), direct, &err); });
++    REQUIRE(ok);
++    CHECK(p.touched() == log);
++    CHECK(via_prefetch.stats.draws == direct.stats.draws);
++    CHECK(via_prefetch.stats.textures == direct.stats.textures);
++    CHECK(via_prefetch.stats.texture_bytes == direct.stats.texture_bytes);
++    CHECK(via_prefetch.placements.size() == direct.placements.size());
++    CHECK(via_prefetch.warnings == direct.warnings);
++    CHECK(via_prefetch.fog.source == direct.fog.source);
++    p.release_untouched();
++    for (const ByteRange& r : log) CHECK(p.is_resident(r.path, r.offset, r.length));
++    uint64_t bytes = 0;
++    for (const ByteRange& r : log) bytes += r.length;
++    // Everything resident is either pinned (Base.osi, also in the log) or this area's set.
++    CHECK(p.resident_bytes() == bytes);
++  }
++}
++
++TEST_CASE("list_areas: levels/<lev>/<area>.blk, the level blockfile excluded") {
++  const std::vector<std::string> paths = {"root/data/levels/lev1/lev1.blk", "root/data/levels/lev1/vllg.blk", "root/data/levels/lev1/textures/x.dds",
++                                          "root/data/levels/lev10/abcd.blk", "root/data/levels/lev1/toolong.blk", "root/data/main.blk",
++                                          "root/data/levels/x.blk"};
++  const std::vector<view::AreaRef> a = view::list_areas(paths);
++  REQUIRE(a.size() == 1);
++  CHECK(a[0] == view::AreaRef{"lev1", "vllg"});
++  CHECK(view::ranges_text({{"root/a", 1, 2}, {"root/b", 0, 10}}) == "root/a\t1\t2\nroot/b\t0\t10\n");
++}
+diff -ruN base/engine/tests/test_rhi_destroy.cpp ref/engine/tests/test_rhi_destroy.cpp
+--- base/engine/tests/test_rhi_destroy.cpp	1970-01-01 01:00:00
++++ ref/engine/tests/test_rhi_destroy.cpp	2026-10-07 17:15:51
+@@ -0,0 +1,231 @@
++// M1b rhi additions on the null backend: destroy_* (dependency rule: a referenced object is rejected, never cascaded),
++// live_objects(), the surface calls on a headless device, and AreaRenderer::release (area switching without leaks).
++// The log lines are exact: this suite runs natively AND as wasm32 under Node, so both produce the same text.
++#include <string>
++#include <vector>
++
++#include "doctest.h"
++#include "lomn/fs.h"
++#include "lomn/rhi.h"
++#include "lomn/view/area.h"
++#include "lomn/view/synthetic.h"
++
++using namespace lomn;
++using namespace lomn::rhi;
++
++namespace {
++
++MeshPipelineDesc mesh_desc() {
++  MeshPipelineDesc d;
++  d.wgsl = "w";
++  d.uniform_bytes = 96;
++  d.vertex_stride = 36;
++  d.attributes = {{VertexFormat::Float32x3, 0, 0}, {VertexFormat::Float32x2, 12, 1}, {VertexFormat::Float32x4, 20, 2}};
++  return d;
++}
++
++Device::LiveObjects counts(uint32_t t, uint32_t b, uint32_t p, uint32_t s, uint32_t g) {
++  Device::LiveObjects o;
++  o.textures = t;
++  o.buffers = b;
++  o.pipelines = p;
++  o.samplers = s;
++  o.bind_groups = g;
++  return o;
++}
++
++// Forwards to a null device but rejects the n-th create_index_buffer: makes AreaRenderer::upload fail half-way.
++class FailingDevice final : public Device {
++ public:
++  FailingDevice(std::unique_ptr<Device> d, int fail_index_buffer_at) : d_(std::move(d)), fail_at_(fail_index_buffer_at) {}
++  std::string backend() const override { return d_->backend(); }
++  std::string adapter() const override { return d_->adapter(); }
++  TextureId create_render_target(uint32_t w, uint32_t h) override { return d_->create_render_target(w, h); }
++  BufferId create_uniform_buffer(uint32_t b) override { return d_->create_uniform_buffer(b); }
++  void write_buffer(BufferId b, uint32_t o, const void* p, uint32_t n) override { d_->write_buffer(b, o, p, n); }
++  PipelineId create_pipeline(const PipelineDesc& x) override { return d_->create_pipeline(x); }
++  void begin_frame(TextureId t, const float c[4]) override { d_->begin_frame(t, c); }
++  void draw(PipelineId p, uint32_t n, BufferId u, uint32_t o) override { d_->draw(p, n, u, o); }
++  void end_frame() override { d_->end_frame(); }
++  bool read_pixels(TextureId t, std::vector<uint8_t>& v) override { return d_->read_pixels(t, v); }
++  FrameStats last_frame_stats() const override { return d_->last_frame_stats(); }
++  TextureId create_render_target_ex(const RenderTargetDesc& x) override { return d_->create_render_target_ex(x); }
++  BufferId create_vertex_buffer(uint32_t n) override { return d_->create_vertex_buffer(n); }
++  BufferId create_index_buffer(uint32_t n) override { return ++ib_ == fail_at_ ? 0 : d_->create_index_buffer(n); }
++  TextureId create_texture(uint32_t w, uint32_t h, uint32_t m) override { return d_->create_texture(w, h, m); }
++  bool write_texture(TextureId t, uint32_t m, const void* p, std::size_t n) override { return d_->write_texture(t, m, p, n); }
++  SamplerId create_sampler(const SamplerDesc& x) override { return d_->create_sampler(x); }
++  PipelineId create_mesh_pipeline(const MeshPipelineDesc& x) override { return d_->create_mesh_pipeline(x); }
++  BindGroupId create_bind_group(const BindGroupDesc& x) override { return d_->create_bind_group(x); }
++  void draw_indexed(const DrawIndexedDesc& x) override { d_->draw_indexed(x); }
++  bool destroy_texture(TextureId t) override { return d_->destroy_texture(t); }
++  bool destroy_buffer(BufferId b) override { return d_->destroy_buffer(b); }
++  bool destroy_pipeline(PipelineId p) override { return d_->destroy_pipeline(p); }
++  bool destroy_sampler(SamplerId s) override { return d_->destroy_sampler(s); }
++  bool destroy_bind_group(BindGroupId g) override { return d_->destroy_bind_group(g); }
++  LiveObjects live_objects() const override { return d_->live_objects(); }
++
++ private:
++  std::unique_ptr<Device> d_;
++  int fail_at_, ib_ = 0;
++};
++
++}  // namespace
++
++TEST_CASE("rhi destroy: a referenced texture/sampler/uniform buffer is rejected, never cascaded; ids are not reused") {
++  std::vector<std::string> log;
++  auto d = create_null_device(&log);
++  const BufferId ub = d->create_uniform_buffer(512);
++  const TextureId tex = d->create_texture(2, 2, 1);
++  const SamplerId s = d->create_sampler(SamplerDesc());
++  const PipelineId p = d->create_mesh_pipeline(mesh_desc());
++  const BindGroupId bg = d->create_bind_group({ub, 96, tex, s});
++  REQUIRE(bg == 1);
++  CHECK(d->live_objects() == counts(1, 1, 1, 1, 1));
++  log.clear();
++  CHECK_FALSE(d->destroy_texture(tex));
++  CHECK_FALSE(d->destroy_sampler(s));
++  CHECK_FALSE(d->destroy_buffer(ub));
++  CHECK(d->last_frame_stats().rejected == 3);
++  CHECK(d->live_objects() == counts(1, 1, 1, 1, 1));  // nothing freed by a rejected destroy
++  CHECK(d->destroy_pipeline(p));                       // pipelines are referenced by no rhi object
++  CHECK(d->destroy_bind_group(bg));
++  CHECK(d->destroy_texture(tex));
++  CHECK(d->destroy_sampler(s));
++  CHECK(d->destroy_buffer(ub));
++  CHECK_FALSE(d->destroy_buffer(ub));  // already destroyed
++  CHECK_FALSE(d->destroy_texture(0));  // 0 = the presentation surface: not a destroyable texture
++  CHECK(d->live_objects() == counts(0, 0, 0, 0, 0));
++  const std::vector<std::string> want = {
++      "destroy_texture 1 rejected: in use by bind group 1",
++      "destroy_sampler 1 rejected: in use by bind group 1",
++      "destroy_buffer 1 rejected: in use by bind group 1",
++      "destroy_pipeline 1",
++      "destroy_bind_group 1",
++      "destroy_texture 1",
++      "destroy_sampler 1",
++      "destroy_buffer 1",
++      "destroy_buffer 1 rejected: unknown buffer",
++      "destroy_texture 0 rejected: unknown texture",
++  };
++  CHECK(log == want);
++  // Ids continue: never reused after a destroy.
++  CHECK(d->create_texture(2, 2, 1) == 2);
++  CHECK(d->create_uniform_buffer(256) == 2);
++  CHECK(d->create_bind_group({1, 96, 2, 1}) == 0);  // the destroyed buffer/sampler ids are unknown now
++}
++
++TEST_CASE("rhi destroy: draws naming a destroyed object are rejected; a render target with depth is destroyable") {
++  std::vector<std::string> log;
++  auto d = create_null_device(&log);
++  const TextureId rt = d->create_render_target_ex(RenderTargetDesc{16, 16, true, 1.0f});
++  const BufferId ub = d->create_uniform_buffer(512), vb = d->create_vertex_buffer(144), ib = d->create_index_buffer(24);
++  const TextureId tex = d->create_texture(2, 2, 1);
++  const SamplerId s = d->create_sampler(SamplerDesc());
++  const PipelineId p = d->create_mesh_pipeline(mesh_desc());
++  const BindGroupId bg = d->create_bind_group({ub, 96, tex, s});
++  const float c[4] = {0, 0, 0, 1};
++  d->begin_frame(rt, c);
++  d->draw_indexed({p, vb, ib, 0, 6, bg, 0});
++  CHECK(d->destroy_pipeline(p));  // allowed inside a frame: the recorded draw keeps it (WebGPU refcounting)
++  d->draw_indexed({p, vb, ib, 0, 6, bg, 0});
++  d->end_frame();
++  CHECK(d->last_frame_stats().draws == 1);
++  CHECK(d->last_frame_stats().rejected == 1);
++  CHECK(log[log.size() - 2] == "draw_indexed pipeline=1 vb=2 ib=3 first=0 count=6 bind_group=1+0 rejected: unknown mesh pipeline");
++  CHECK(d->destroy_texture(rt));
++  log.clear();
++  d->begin_frame(rt, c);
++  d->end_frame();
++  CHECK(log.front() == "begin_frame target=1 clear=0.000,0.000,0.000,1.000 rejected: unknown render target");
++}
++
++TEST_CASE("rhi surface: set_surface_depth and resize are counted rejections on a device without a surface") {
++  std::vector<std::string> log;
++  auto d = create_null_device(&log);
++  CHECK_FALSE(d->set_surface_depth(true, 1.0f));
++  CHECK_FALSE(d->resize(640, 480));
++  CHECK(d->last_frame_stats().rejected == 2);
++  CHECK(log == std::vector<std::string>{"set_surface_depth 1 clear_depth=1.000 rejected: no presentation surface (headless device)",
++                                        "resize 640x480 rejected: no presentation surface (headless device)"});
++}
++
++TEST_CASE("rhi lost handler (REF4 r2): the null device logs the call and never invokes the handler") {
++  std::vector<std::string> log;
++  auto d = create_null_device(&log);
++  int calls = 0;
++  d->set_lost_handler([&](const std::string&) { ++calls; });
++  d->set_lost_handler(nullptr);
++  CHECK(log == std::vector<std::string>{"set_lost_handler set", "set_lost_handler cleared"});
++  CHECK(calls == 0);
++  CHECK(d->last_frame_stats().rejected == 0);
++}
++
++TEST_CASE("AreaRenderer::release: N upload/render/release cycles keep live objects flat; bind groups go first") {
++  fs::MemoryFileSystem mfs;
++  REQUIRE(view::mount_synthetic_install(mfs));
++  std::vector<std::string> log;
++  auto d = create_null_device(&log);
++  const TextureId rt = d->create_render_target_ex(RenderTargetDesc{64, 64, true, 1.0f});
++  const Device::LiveObjects base = d->live_objects();
++  CHECK(base == counts(1, 0, 0, 0, 0));
++  view::AreaRenderer r;
++  Device::LiveObjects shown[2];
++  for (int cycle = 0; cycle < 6; ++cycle) {
++    const char* name = cycle % 2 ? view::kSyntheticStateArea : view::kSyntheticArea;  // alternate two areas
++    view::AreaData a;
++    std::string err;
++    REQUIRE(view::load_area(mfs, view::kSyntheticLevel, name, view::AreaOptions(), a, &err));
++    REQUIRE(r.upload(*d, a, view::RenderOptions(), &err));
++    REQUIRE(r.render(*d, rt, a, view::make_camera(a, view::synthetic_camera(), 1.0f)));
++    REQUIRE(r.render(*d, rt, a, view::make_camera(a, view::synthetic_camera(), 1.0f)));
++    CHECK(d->last_frame_stats().rejected == 0);
++    const Device::LiveObjects live = d->live_objects();
++    if (cycle < 2) shown[cycle] = live;
++    else CHECK(live == shown[cycle % 2]);  // the same area always holds the same number of objects
++    log.clear();
++    uint32_t failures = 7;
++    const uint32_t n = r.release(*d, &failures);
++    CHECK(failures == 0);
++    CHECK(n == live.textures + live.buffers + live.pipelines + live.samplers + live.bind_groups - base.textures);
++    CHECK(d->live_objects() == base);
++    // Dependency order: every destroy_bind_group line comes before any texture/sampler/buffer destroy.
++    size_t last_group = 0, first_other = log.size();
++    for (size_t i = 0; i < log.size(); ++i) {
++      if (log[i].rfind("destroy_bind_group", 0) == 0) last_group = i;
++      else if (first_other == log.size() && log[i].rfind("destroy_pipeline", 0) != 0) first_other = i;
++    }
++    CHECK(last_group < first_other);
++    for (const std::string& l : log) CHECK(l.find("rejected") == std::string::npos);
++  }
++  CHECK(shown[0].bind_groups > 0);
++  CHECK(shown[1].pipelines > 0);
++}
++
++TEST_CASE("AreaRenderer::release: upload twice needs a release in between; a failed upload releases what it created") {
++  fs::MemoryFileSystem mfs;
++  REQUIRE(view::mount_synthetic_install(mfs));
++  view::AreaData a;
++  std::string err;
++  REQUIRE(view::load_area(mfs, view::kSyntheticLevel, view::kSyntheticArea, view::AreaOptions(), a, &err));
++  {
++    auto d = create_null_device(nullptr);
++    view::AreaRenderer r;
++    REQUIRE(r.upload(*d, a, view::RenderOptions(), &err));
++    CHECK_FALSE(r.upload(*d, a, view::RenderOptions(), &err));
++    CHECK(err.find("release") != std::string::npos);
++    r.release(*d);
++    CHECK(d->live_objects() == counts(0, 0, 0, 0, 0));
++    CHECK(r.upload(*d, a, view::RenderOptions(), &err));
++  }
++  {
++    FailingDevice d(create_null_device(nullptr), 2);  // the second model's index buffer is rejected
++    view::AreaRenderer r;
++    CHECK_FALSE(r.upload(d, a, view::RenderOptions(), &err));
++    CHECK(d.live_objects().textures > 0);  // white + the area's textures + the first model's buffers exist
++    uint32_t failures = 9;
++    r.release(d, &failures);
++    CHECK(failures == 0);
++    CHECK(d.live_objects() == counts(0, 0, 0, 0, 0));
++  }
++}
+diff -ruN base/engine/tools/lomn_view.cpp ref/engine/tools/lomn_view.cpp
+--- base/engine/tools/lomn_view.cpp	2026-10-07 15:21:46
++++ ref/engine/tools/lomn_view.cpp	2026-10-07 17:15:20
+@@ -2,6 +2,8 @@
+ //   lomn_view --install <dir> --level lev1 --area vllg --out <file.png> [options]
+ //   lomn_view --synthetic 1|2 --out <file> [options]        the A7 contract scene / the A9 state scene (no game data)
+ //   lomn_view --install <dir> --survey 1 --out <file.json>  CPU-load every area (no GPU), per-area counts + maxima
++//   lomn_view --install <dir> --manifest 1 --out <file.json>  M1b: every area's reads at (path, offset, length)
++//                           granularity + the boot set (format: docs/knowledge/web-porting-playbook.md "Prefetch manifest")
+ // Options (every option takes a value):
+ //   --backend webgpu|null   webgpu (default) writes <out> as PNG; null writes the rhi call log to <out>
+ //   --width 1280 --height 720 --frames 1
+@@ -32,7 +34,9 @@
+ #include <cstring>
+ #include <fstream>
+ #include <map>
++#include <iterator>
+ #include <memory>
++#include <set>
+ #include <sstream>
+ #include <string>
+ #include <vector>
+@@ -41,6 +45,7 @@
+ #include "lomn/fs.h"
+ #include "lomn/rhi.h"
+ #include "lomn/view/area.h"
++#include "lomn/view/prefetch.h"
+ #include "lomn/view/synthetic.h"
+ 
+ #include <unistd.h>
+@@ -282,11 +287,11 @@
+   std::error_code ec;
+   return d.is_directory(ec);
+ }
+-int survey(const std::string& install, const std::string& out_path) {
++// Every <lev>/<area>.blk under data/levels (sorted, lower-case), the level blockfile itself excluded. Empty `levels`
++// when the install has no data/levels directory.
++std::vector<std::pair<std::string, std::string>> list_install_areas(const std::string& install, std::filesystem::path& levels) {
+   namespace sfs = std::filesystem;
+-  auto fsp = fs::open_disk(install, disk_user_dir());
+-  if (!fsp) return std::fprintf(stderr, "cannot open install %s\n", install.c_str()), 3;
+-  sfs::path levels;
++  levels.clear();
+   for (const auto& d : list_dir(install))
+     if (is_dir(d)) {
+       std::string n = d.path().filename().string();
+@@ -298,8 +303,8 @@
+           if (ln == "levels") levels = l.path();
+         }
+     }
+-  if (levels.empty()) return std::fprintf(stderr, "no data/levels in %s\n", install.c_str()), 3;
+   std::vector<std::pair<std::string, std::string>> areas;
++  if (levels.empty()) return areas;
+   for (const auto& l : list_dir(levels)) {
+     if (!is_dir(l)) continue;
+     std::string lev = l.path().filename().string();
+@@ -316,7 +321,25 @@
+     }
+   }
+   std::sort(areas.begin(), areas.end());
++  return areas;
++}
++int survey(const std::string& install, const std::string& out_path) {
++  namespace sfs = std::filesystem;
++  auto fsp = fs::open_disk(install, disk_user_dir());
++  if (!fsp) return std::fprintf(stderr, "cannot open install %s\n", install.c_str()), 3;
++  sfs::path levels;
++  const std::vector<std::pair<std::string, std::string>> areas = list_install_areas(install, levels);
++  if (levels.empty()) return std::fprintf(stderr, "no data/levels in %s\n", install.c_str()), 3;
+   if (areas.empty()) return std::fprintf(stderr, "survey: no area blockfile under %s\n", levels.string().c_str()), 3;
++  // REF4 r2 (M6): the survey keeps every <lev>/<x>.blk (123 on Beta 1.5.0, the M1a counts) and marks the ones the game
++  // cannot address (view::list_areas rule, the browser's list: 122).
++  std::vector<view::AreaRef> addressable;
++  {
++    std::vector<std::string> paths;
++    for (const auto& la : areas) paths.push_back("root/data/levels/" + la.first + "/" + la.second + ".blk");
++    addressable = view::list_areas(paths);
++  }
++  uint64_t n_addressable = 0;
+   std::string rows;
+   uint64_t max_place = 0, max_draws = 0, max_tex = 0, max_tex_bytes = 0, max_geo = 0, max_records = 0, failures = 0;
+   double total_ms = 0;
+@@ -338,7 +361,10 @@
+     const double ms = ms_since(t0);
+     total_ms += ms;
+     const std::string where = la.first + "/" + la.second;
+-    rows += std::string(rows.empty() ? "" : ",\n") + "{\"area\":" + js(where) + ",\"ok\":" + (ok ? "true" : "false");
++    const bool addr = std::find(addressable.begin(), addressable.end(), view::AreaRef{la.first, la.second}) != addressable.end();
++    n_addressable += addr;
++    rows += std::string(rows.empty() ? "" : ",\n") + "{\"area\":" + js(where) + ",\"addressable\":" + (addr ? "true" : "false") +
++            ",\"ok\":" + (ok ? "true" : "false");
+     if (!ok) {
+       ++failures;
+       rows += ",\"error\":" + js(err) + "}";
+@@ -385,7 +411,7 @@
+     track(a.stats.geometry_bytes, max_geo, max_geo_at, where);
+   }
+   std::ofstream o(out_path);
+-  o << "{\n\"areas_total\":" << areas.size() << ",\"failures\":" << failures << ",\"total_load_ms\":" << num(total_ms) << ",\n\"max\":{\"obj_records\":" << max_records
++  o << "{\n\"areas_total\":" << areas.size() << ",\"areas_addressable\":" << n_addressable << ",\"failures\":" << failures << ",\"total_load_ms\":" << num(total_ms) << ",\n\"max\":{\"obj_records\":" << max_records
+     << ",\"placements\":" << max_place << ",\"placements_at\":" << js(max_place_at) << ",\"draws\":" << max_draws << ",\"draws_at\":"
+     << js(max_draws_at) << ",\"textures\":" << max_tex << ",\"textures_at\":" << js(max_tex_at) << ",\"texture_bytes_with_mips\":"
+     << max_tex_bytes << ",\"texture_bytes_at\":" << js(max_tex_bytes_at) << ",\"geometry_bytes\":" << max_geo << ",\"geometry_bytes_at\":"
+@@ -400,6 +426,146 @@
+   std::printf("survey: %zu areas, %llu failures -> %s\n", areas.size(), static_cast<unsigned long long>(failures), out_path.c_str());
+   return failures || frame_failures || frame_rejects ? 4 : 0;
+ }
++
++// M1b prefetch manifest (REF4 item 2). Format "lomn-prefetch-manifest" version 1, one JSON object:
++//   files: [{path, size}]            every file any range below reads (normalised path, size in bytes)
++//   boot:  {ranges: [[file, offset, length], ...], bytes}   view::boot_reads (Art.blk header+table, Base.osi)
++//   areas: [{area: "lev1/vllg", ok, reads, bytes, bytes_beyond_boot, files, ranges: [[file, offset, length], ...]}]
++//   summary: area count, failures, max bytes (+ where), union bytes, the ranges common to every area vs the boot set,
++//            and the census boot set (whole files) for comparison.
++// `file` indexes `files`; ranges are distinct and sorted. Derived from the install's structure (names, offsets, sizes):
++// written under build/ only, never committed and never shipped (REF4 decision D2: the browser derives the same sets
++// itself from the engine's own reads).
++int manifest(const std::string& install, const std::string& out_path) {
++  namespace sfs = std::filesystem;
++  auto fsp = fs::open_disk(install, disk_user_dir());
++  if (!fsp) return std::fprintf(stderr, "cannot open install %s\n", install.c_str()), 3;
++  sfs::path levels;
++  // REF4 r2 (M6): the rows are the areas the game can address, by the browser's own rule (view::list_areas: ids of 1..4
++  // characters, the level blockfile excluded), so both list 122 on Beta 1.5.0; any other <lev>/<x>.blk (lev4c) is
++  // reported under not_addressable instead of being "loaded" as its truncated id (the level blockfile).
++  std::vector<std::pair<std::string, std::string>> areas;
++  std::vector<std::string> not_addressable;
++  {
++    const std::vector<std::pair<std::string, std::string>> all = list_install_areas(install, levels);
++    std::vector<std::string> paths;
++    for (const auto& la : all) paths.push_back("root/data/levels/" + la.first + "/" + la.second + ".blk");
++    const std::vector<view::AreaRef> ok = view::list_areas(paths);
++    for (const auto& la : all) {
++      if (std::find(ok.begin(), ok.end(), view::AreaRef{la.first, la.second}) != ok.end()) areas.push_back(la);
++      else not_addressable.push_back(la.first + "/" + la.second);
++    }
++  }
++  if (areas.empty()) return std::fprintf(stderr, "manifest: no area blockfile under %s\n", install.c_str()), 3;
++  std::map<std::string, uint32_t> file_ids;
++  std::vector<std::string> files;
++  auto fid = [&](const std::string& p) {
++    auto it = file_ids.find(p);
++    if (it != file_ids.end()) return it->second;
++    const uint32_t id = static_cast<uint32_t>(files.size());
++    file_ids[p] = id;
++    files.push_back(p);
++    return id;
++  };
++  auto bytes_of = [](const std::vector<fs::ByteRange>& v) {
++    uint64_t n = 0;
++    for (const auto& r : v) n += r.length;
++    return n;
++  };
++  auto ranges_json = [&](const std::vector<fs::ByteRange>& v) {
++    std::string o = "[";
++    for (size_t i = 0; i < v.size(); ++i)
++      o += std::string(i ? "," : "") + "[" + std::to_string(fid(v[i].path)) + "," + std::to_string(v[i].offset) + "," +
++           std::to_string(v[i].length) + "]";
++    return o + "]";
++  };
++  const std::vector<fs::ByteRange> boot = view::record_reads(*fsp, [&] { view::boot_reads(*fsp); });
++  const std::set<fs::ByteRange> boot_set(boot.begin(), boot.end());
++  std::string rows;
++  uint64_t failures = 0, max_bytes = 0, max_beyond = 0, max_reads = 0, sum_beyond = 0;
++  std::string max_at, max_beyond_at, max_reads_at;
++  std::set<fs::ByteRange> uni;
++  std::set<fs::ByteRange> common;
++  bool first = true;
++  const auto t0 = Clock::now();
++  for (const auto& la : areas) {
++    view::AreaData a;
++    std::string err;
++    bool ok = false;
++    const std::vector<fs::ByteRange> r =
++        view::record_reads(*fsp, [&] { ok = view::load_area(*fsp, la.first, la.second, view::AreaOptions(), a, &err); });
++    const std::string where = la.first + "/" + la.second;
++    if (!ok) ++failures;
++    std::set<std::string> fset;
++    uint64_t beyond = 0;
++    for (const auto& x : r) {
++      fset.insert(x.path);
++      uni.insert(x);
++      if (!boot_set.count(x)) beyond += x.length;
++    }
++    const std::set<fs::ByteRange> rs(r.begin(), r.end());
++    if (first) {
++      common = rs;
++      first = false;
++    } else {
++      std::set<fs::ByteRange> keep;
++      std::set_intersection(common.begin(), common.end(), rs.begin(), rs.end(), std::inserter(keep, keep.begin()));
++      common.swap(keep);
++    }
++    const uint64_t b = bytes_of(r);
++    sum_beyond += beyond;
++    if (b > max_bytes) max_bytes = b, max_at = where;
++    if (beyond > max_beyond) max_beyond = beyond, max_beyond_at = where;
++    if (r.size() > max_reads) max_reads = r.size(), max_reads_at = where;
++    rows += std::string(rows.empty() ? "" : ",\n") + "{\"area\":" + js(where) + ",\"ok\":" + (ok ? "true" : "false") +
++            (ok ? std::string() : ",\"error\":" + js(err)) + ",\"reads\":" + std::to_string(r.size()) + ",\"bytes\":" +
++            std::to_string(b) + ",\"bytes_beyond_boot\":" + std::to_string(beyond) + ",\"files\":" + std::to_string(fset.size()) +
++            ",\"ranges\":" + ranges_json(r) + "}";
++  }
++  const double ms = ms_since(t0);
++  const std::vector<fs::ByteRange> common_v(common.begin(), common.end()), uni_v(uni.begin(), uni.end());
++  // The census boot set (docs/census.md, M0a 0.6): whole files.
++  std::string census;
++  uint64_t census_bytes = 0;
++  for (const char* p : {"Root/Data/Main.blk", "Root/Data/Base.osi", "Root/Data/Languages/lang_eng.blk", "Root/Data/Art/Art.blk"}) {
++    uint64_t sz = 0;
++    const bool there = fsp->size(p, sz) == fs::Error::None;
++    const std::string n = fs::normalize(p);
++    uint64_t read_by_boot = 0;
++    for (const auto& x : boot)
++      if (x.path == n) read_by_boot += x.length;
++    census_bytes += there ? sz : 0;
++    census += std::string(census.empty() ? "" : ",") + "{\"path\":" + js(n) + ",\"present\":" + (there ? "true" : "false") +
++              ",\"size\":" + std::to_string(sz) + ",\"boot_bytes_read\":" + std::to_string(read_by_boot) + "}";
++  }
++  const std::string boot_json = ranges_json(boot), common_json = ranges_json(common_v);
++  std::string files_json;  // complete only after every ranges_json call (each may add a file id)
++  for (size_t i = 0; i < files.size(); ++i) {
++    uint64_t sz = 0;
++    fsp->size(files[i], sz);
++    files_json += std::string(i ? "," : "") + "{\"path\":" + js(files[i]) + ",\"size\":" + std::to_string(sz) + "}";
++  }
++  std::ofstream o(out_path);
++  o << "{\n\"format\":\"lomn-prefetch-manifest\",\"version\":1,\n\"files\":[" << files_json << "],\n\"boot\":{\"ranges\":" << boot_json
++    << ",\"reads\":" << boot.size() << ",\"bytes\":" << bytes_of(boot) << "},\n\"summary\":{\"areas\":" << areas.size()
++    << ",\"failures\":" << failures << ",\"wall_ms\":" << num(ms) << ",\"max_bytes\":" << max_bytes << ",\"max_bytes_at\":" << js(max_at)
++    << ",\"max_bytes_beyond_boot\":" << max_beyond << ",\"max_bytes_beyond_boot_at\":" << js(max_beyond_at) << ",\"max_reads\":" << max_reads
++    << ",\"max_reads_at\":" << js(max_reads_at) << ",\"mean_bytes_beyond_boot\":" << (areas.empty() ? 0 : sum_beyond / areas.size())
++    << ",\"union_ranges\":" << uni_v.size() << ",\"union_bytes\":" << bytes_of(uni_v) << ",\"files_read\":" << files.size()
++    << ",\"common_ranges\":" << common_json << ",\"common_bytes\":" << bytes_of(common_v)
++    << ",\"boot_equals_common\":" << (common == boot_set ? "true" : "false") << ",\"not_addressable\":[" << [&] {
++         std::string o;
++         for (size_t i = 0; i < not_addressable.size(); ++i) o += std::string(i ? "," : "") + js(not_addressable[i]);
++         return o;
++       }() << "],\"census_boot\":[" << census
++    << "],\"census_boot_bytes\":" << census_bytes << "},\n\"areas\":[\n" << rows << "]}\n";
++  o.close();
++  if (o.fail()) return std::fprintf(stderr, "cannot write %s\n", out_path.c_str()), 4;
++  std::printf("manifest: %zu areas, %llu failures, boot %llu bytes, max %llu bytes (%s) -> %s\n", areas.size(),
++              static_cast<unsigned long long>(failures), static_cast<unsigned long long>(bytes_of(boot)),
++              static_cast<unsigned long long>(max_bytes), max_at.c_str(), out_path.c_str());
++  return failures ? 4 : 0;
++}
+ #endif
+ 
+ }  // namespace
+@@ -409,7 +575,7 @@
+   std::map<std::string, std::string> a;
+   static const char* known[] = {"--install", "--level", "--area", "--out", "--backend", "--width", "--height", "--frames", "--fov", "--near",
+                                 "--far", "--eye", "--yaw", "--pitch", "--eye-height", "--vertex-colors", "--routes",
+-                                "--synthetic", "--survey", "--keep-cpu", "--state-log", "--lighting", "--fog", "--write-install"};
++                                "--synthetic", "--survey", "--keep-cpu", "--state-log", "--lighting", "--fog", "--write-install", "--manifest"};
+   for (int i = 1; i + 1 < argc; i += 2) {
+     std::string k = argv[i];
+     if (std::find_if(std::begin(known), std::end(known), [&](const char* x) { return k == x; }) == std::end(known))
+@@ -425,6 +591,17 @@
+   if (synthetic && (has("--install") || has("--level") || has("--area") || has("--survey")))
+     return usage("--synthetic cannot be combined with --install, --level, --area or --survey");
+   if (has("--survey") && (has("--level") || has("--area"))) return usage("--survey cannot be combined with --level or --area");
++  if (has("--manifest")) {  // M1b
++    if (a["--manifest"] != "1") return usage("--manifest takes exactly 1");
++    if (synthetic || has("--survey") || has("--level") || has("--area")) return usage("--manifest takes only --install and --out");
++#if defined(__EMSCRIPTEN__)
++    return usage("--manifest needs the native disk file system");
++#else
++    if (!has("--install")) return usage("--manifest needs --install");
++    if (int rc = remove_stale_outputs(out)) return rc;
++    return manifest(a["--install"], out);
++#endif
++  }
+   if (has("--survey")) {
+ #if defined(__EMSCRIPTEN__)
+     return usage("--survey needs the native disk file system");

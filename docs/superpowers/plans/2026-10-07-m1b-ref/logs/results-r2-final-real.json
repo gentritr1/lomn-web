@@ -1,0 +1,1784 @@
+{
+ "results": [
+  {
+   "ok": true,
+   "what": "real install: validated, copied to OPFS, lev1/vllg shown",
+   "detail": "lev1/vllg"
+  },
+  {
+   "ok": true,
+   "what": "accepted as beta-1.5.0-installer + beta-1.5.0-data",
+   "detail": ""
+  },
+  {
+   "ok": true,
+   "what": "pixels lev1/vllg (first visit, OPFS path) vs native",
+   "detail": "0 of 921600 differ, max delta 0; over tolerance 0: 0"
+  },
+  {
+   "ok": true,
+   "what": "measured configuration: the page runs the wasm in the build dir (Release)",
+   "detail": "Release [-O3 -DNDEBUG] wasm 916a914816bd vs built 916a914816bd; canvas 1280x720; apple/metal-3/"
+  },
+  {
+   "ok": true,
+   "what": "discovery: lev1/vllg fetched exactly its native access log",
+   "detail": "8 rounds, 45 ranges, 2027888 bytes"
+  },
+  {
+   "ok": true,
+   "what": "lev1/vllg: draws == the area's expected draws, 0 rejected",
+   "detail": "draws 31"
+  },
+  {
+   "ok": true,
+   "what": "pixels lev2/ghut (first visit, OPFS path) vs native",
+   "detail": "0 of 921600 differ, max delta 0; over tolerance 0: 0"
+  },
+  {
+   "ok": true,
+   "what": "discovery: lev2/ghut fetched exactly its native access log",
+   "detail": "8 rounds, 39 ranges, 2469250 bytes"
+  },
+  {
+   "ok": true,
+   "what": "lev2/ghut: draws == the area's expected draws, 0 rejected",
+   "detail": "draws 30"
+  },
+  {
+   "ok": true,
+   "what": "pixels lev4/crss (first visit, OPFS path) vs native",
+   "detail": "0 of 921600 differ, max delta 0; over tolerance 0: 0"
+  },
+  {
+   "ok": true,
+   "what": "discovery: lev4/crss fetched exactly its native access log",
+   "detail": "8 rounds, 59 ranges, 5763178 bytes"
+  },
+  {
+   "ok": true,
+   "what": "lev4/crss: draws == the area's expected draws, 0 rejected",
+   "detail": "draws 42"
+  },
+  {
+   "ok": true,
+   "what": "pixels lev0/frnt vs native",
+   "detail": "0 of 921600 differ, max delta 0; over tolerance 0: 0"
+  },
+  {
+   "ok": true,
+   "what": "switch 1 -> lev1/vllg: live objects and resident file bytes flat",
+   "detail": "{\"textures\":28,\"buffers\":21,\"pipelines\":3,\"samplers\":1,\"bind_groups\":27} fs=2660222"
+  },
+  {
+   "ok": true,
+   "what": "switch 1: resident file bytes == lev1/vllg's own read set (previous area released)",
+   "detail": "2660222 vs 2660222"
+  },
+  {
+   "ok": true,
+   "what": "switch 2 -> lev2/ghut: live objects and resident file bytes flat",
+   "detail": "{\"textures\":31,\"buffers\":3,\"pipelines\":2,\"samplers\":1,\"bind_groups\":30} fs=3101584"
+  },
+  {
+   "ok": true,
+   "what": "switch 2: resident file bytes == lev2/ghut's own read set (previous area released)",
+   "detail": "3101584 vs 3101584"
+  },
+  {
+   "ok": true,
+   "what": "switch 3 -> lev4/crss: live objects and resident file bytes flat",
+   "detail": "{\"textures\":38,\"buffers\":29,\"pipelines\":4,\"samplers\":1,\"bind_groups\":37} fs=6395512"
+  },
+  {
+   "ok": true,
+   "what": "switch 3: resident file bytes == lev4/crss's own read set (previous area released)",
+   "detail": "6395512 vs 6395512"
+  },
+  {
+   "ok": true,
+   "what": "switch 4 -> lev1/vllg: live objects and resident file bytes flat",
+   "detail": "{\"textures\":28,\"buffers\":21,\"pipelines\":3,\"samplers\":1,\"bind_groups\":27} fs=2660222"
+  },
+  {
+   "ok": true,
+   "what": "switch 4: resident file bytes == lev1/vllg's own read set (previous area released)",
+   "detail": "2660222 vs 2660222"
+  },
+  {
+   "ok": true,
+   "what": "switch 5 -> lev2/ghut: live objects and resident file bytes flat",
+   "detail": "{\"textures\":31,\"buffers\":3,\"pipelines\":2,\"samplers\":1,\"bind_groups\":30} fs=3101584"
+  },
+  {
+   "ok": true,
+   "what": "switch 5: resident file bytes == lev2/ghut's own read set (previous area released)",
+   "detail": "3101584 vs 3101584"
+  },
+  {
+   "ok": true,
+   "what": "switch 6 -> lev4/crss: live objects and resident file bytes flat",
+   "detail": "{\"textures\":38,\"buffers\":29,\"pipelines\":4,\"samplers\":1,\"bind_groups\":37} fs=6395512"
+  },
+  {
+   "ok": true,
+   "what": "switch 6: resident file bytes == lev4/crss's own read set (previous area released)",
+   "detail": "6395512 vs 6395512"
+  },
+  {
+   "ok": true,
+   "what": "switch 7 -> lev1/vllg: live objects and resident file bytes flat",
+   "detail": "{\"textures\":28,\"buffers\":21,\"pipelines\":3,\"samplers\":1,\"bind_groups\":27} fs=2660222"
+  },
+  {
+   "ok": true,
+   "what": "switch 7: resident file bytes == lev1/vllg's own read set (previous area released)",
+   "detail": "2660222 vs 2660222"
+  },
+  {
+   "ok": true,
+   "what": "switch 8 -> lev2/ghut: live objects and resident file bytes flat",
+   "detail": "{\"textures\":31,\"buffers\":3,\"pipelines\":2,\"samplers\":1,\"bind_groups\":30} fs=3101584"
+  },
+  {
+   "ok": true,
+   "what": "switch 8: resident file bytes == lev2/ghut's own read set (previous area released)",
+   "detail": "3101584 vs 3101584"
+  },
+  {
+   "ok": true,
+   "what": "switch 9 -> lev4/crss: live objects and resident file bytes flat",
+   "detail": "{\"textures\":38,\"buffers\":29,\"pipelines\":4,\"samplers\":1,\"bind_groups\":37} fs=6395512"
+  },
+  {
+   "ok": true,
+   "what": "switch 9: resident file bytes == lev4/crss's own read set (previous area released)",
+   "detail": "6395512 vs 6395512"
+  },
+  {
+   "ok": true,
+   "what": "memory budget: wasm memory growth from boot through vllg/ghut/crss/frnt and 9 switches <= one 16 MiB step",
+   "detail": "100663296 -> 100663296 bytes (growth 0)"
+  },
+  {
+   "ok": true,
+   "what": "sweep: every area discovers its set in <= 12 rounds (max 8 at lev0/frnt)",
+   "detail": "{\"2\":1,\"3\":4,\"5\":1,\"6\":107,\"7\":1,\"8\":8}"
+  },
+  {
+   "ok": true,
+   "what": "sweep: all 122 areas load and draw their expected draws with 0 rejected",
+   "detail": ""
+  },
+  {
+   "ok": true,
+   "what": "sweep: no wasm memory growth over every area",
+   "detail": ""
+  },
+  {
+   "ok": true,
+   "what": "network discipline: first visit (OPFS copy)",
+   "detail": "13 responses, 454710 of 455530 build bytes"
+  },
+  {
+   "ok": true,
+   "what": "revisit: no picker, no copy",
+   "detail": "{\"kind\":\"opfs\",\"how\":\"revisit\",\"name\":\"lomn-install\",\"files\":505,\"bytes\":1099991943}"
+  },
+  {
+   "ok": true,
+   "what": "revisit lev1/vllg: cached prefetch set, 1 round",
+   "detail": "rounds 1"
+  },
+  {
+   "ok": true,
+   "what": "pixels lev1/vllg (revisit) vs native",
+   "detail": "0 of 921600 differ, max delta 0; over tolerance 0: 0"
+  },
+  {
+   "ok": true,
+   "what": "pixel gate null: lev1/vllg first visit vs revisit page",
+   "detail": "0 differ, max delta 0"
+  },
+  {
+   "ok": true,
+   "what": "revisit lev2/ghut: cached prefetch set, 1 round",
+   "detail": "rounds 1"
+  },
+  {
+   "ok": true,
+   "what": "pixels lev2/ghut (revisit) vs native",
+   "detail": "0 of 921600 differ, max delta 0; over tolerance 0: 0"
+  },
+  {
+   "ok": true,
+   "what": "pixel gate null: lev2/ghut first visit vs revisit page",
+   "detail": "0 differ, max delta 0"
+  },
+  {
+   "ok": true,
+   "what": "revisit lev4/crss: cached prefetch set, 1 round",
+   "detail": "rounds 1"
+  },
+  {
+   "ok": true,
+   "what": "pixels lev4/crss (revisit) vs native",
+   "detail": "0 of 921600 differ, max delta 0; over tolerance 0: 0"
+  },
+  {
+   "ok": true,
+   "what": "pixel gate null: lev4/crss first visit vs revisit page",
+   "detail": "0 differ, max delta 0"
+  },
+  {
+   "ok": true,
+   "what": "I1: live GPUTexture/GPUBuffer counts flat over 30 vllg<->frnt switches",
+   "detail": "at vllg: first {\"textures\":29,\"buffers\":21,\"texture_bytes\":10682372.000000022}, last {\"textures\":29,\"buffers\":21,\"texture_bytes\":10682372.000000231}"
+  },
+  {
+   "ok": true,
+   "what": "network discipline: revisit",
+   "detail": "10 responses, 450898 of 455530 build bytes"
+  },
+  {
+   "ok": true,
+   "what": "handle path: ghut from a directory handle (no copy)",
+   "detail": "{\"kind\":\"handle\",\"how\":\"picked\",\"name\":\"lomn-install\",\"files\":505,\"bytes\":1099991943}"
+  },
+  {
+   "ok": true,
+   "what": "pixels lev2/ghut (handle path) vs native",
+   "detail": "0 of 921600 differ, max delta 0; over tolerance 0: 0"
+  },
+  {
+   "ok": true,
+   "what": "handle revisit from IndexedDB",
+   "detail": "{\"kind\":\"handle\",\"how\":\"revisit\",\"name\":\"lomn-install\",\"files\":505,\"bytes\":1099991943}"
+  },
+  {
+   "ok": true,
+   "what": "pixels lev4/crss (handle revisit) vs native",
+   "detail": "0 of 921600 differ, max delta 0; over tolerance 0: 0"
+  },
+  {
+   "ok": true,
+   "what": "network discipline: handle revisit",
+   "detail": "10 responses, 450898 of 455530 build bytes"
+  },
+  {
+   "ok": true,
+   "what": "pixel gate positive control: vllg with fog off exceeds the tolerance",
+   "detail": "155532 pixels over 0, max delta 29"
+  },
+  {
+   "ok": true,
+   "what": "lev1/vllg fps reconciliation: dt samples == frames - 1",
+   "detail": "601 frames in 9975.8 ms; expected 598.5 intervals at 60 Hz; p50 16.7 p95 16.8"
+  },
+  {
+   "ok": true,
+   "what": "lev2/ghut fps reconciliation: dt samples == frames - 1",
+   "detail": "601 frames in 9985.2 ms; expected 599.1 intervals at 60 Hz; p50 16.7 p95 17.4"
+  },
+  {
+   "ok": true,
+   "what": "lev4/crss fps reconciliation: dt samples == frames - 1",
+   "detail": "602 frames in 10021.4 ms; expected 601.3 intervals at 60 Hz; p50 16.7 p95 17.3"
+  },
+  {
+   "ok": true,
+   "what": "network discipline: HUD",
+   "detail": "10 responses, 450898 of 455530 build bytes"
+  },
+  {
+   "ok": true,
+   "what": "no page exceptions",
+   "detail": ""
+  }
+ ],
+ "summary": {
+  "loadavg_start": "9.38 9.45 14.09",
+  "areas": {
+   "lev1/vllg": {
+    "first": {
+     "rounds": 8,
+     "ranges": 45,
+     "bytes": 2027888,
+     "fetch_ms": 76,
+     "total_ms": 164.7999997138977,
+     "probe_ms": 28.4,
+     "load_ms": 4.2,
+     "decode_ms": 14.1,
+     "upload_ms": 10
+    },
+    "pixels": {
+     "differing": 0,
+     "max": 0
+    },
+    "draws": 31,
+    "pipelines": 3,
+    "textures": 28,
+    "texture_bytes": 6995936,
+    "heap": {
+     "wasm_memory_bytes": 100663296,
+     "malloc_in_use_bytes": 2879640,
+     "malloc_arena_bytes": 11258704,
+     "fs_resident_bytes": 2660222,
+     "fs_pinned_bytes": 632334,
+     "fs_peak_bytes": 2660222,
+     "fs_ranges": 48
+    },
+    "live": {
+     "textures": 28,
+     "buffers": 21,
+     "pipelines": 3,
+     "samplers": 1,
+     "bind_groups": 27
+    },
+    "revisit": {
+     "rounds": 1,
+     "bytes": 2027888,
+     "fetch_ms": 56.30000019073486,
+     "total_ms": 110.40000009536743
+    },
+    "fps": {
+     "dt_samples": 600,
+     "frames_in_window": 601,
+     "window_ms": 9975.8,
+     "p50_ms": 16.7,
+     "p95_ms": 16.8,
+     "nominal_hz": 60,
+     "display_hz": 60,
+     "display_p10_ms": 16.5,
+     "display_samples": 90,
+     "hz_source": "display measured before the first area",
+     "expected_intervals": 598.548,
+     "fps": 60.146,
+     "dropping": false,
+     "spin_ms": 0,
+     "breakdown": {
+      "script": 0,
+      "physics": 0,
+      "replay_p50": 0.4,
+      "replay_p95": 0.5,
+      "submit_p50": 0.2,
+      "submit_p95": 0.3,
+      "frame_cpu_p50": 0.6,
+      "frame_cpu_p95": 0.8
+     },
+     "loadavg_before": "12.44 10.25 14.07",
+     "loadavg_after": "12.12 10.26 14.03"
+    }
+   },
+   "lev2/ghut": {
+    "first": {
+     "rounds": 8,
+     "ranges": 39,
+     "bytes": 2469250,
+     "fetch_ms": 74.09999990463257,
+     "total_ms": 112.59999990463257,
+     "probe_ms": 18.3,
+     "load_ms": 2.9,
+     "decode_ms": 10.4,
+     "upload_ms": 8.2
+    },
+    "pixels": {
+     "differing": 0,
+     "max": 0
+    },
+    "draws": 30,
+    "pipelines": 2,
+    "textures": 31,
+    "texture_bytes": 10052916,
+    "heap": {
+     "wasm_memory_bytes": 100663296,
+     "malloc_in_use_bytes": 3307080,
+     "malloc_arena_bytes": 17152848,
+     "fs_resident_bytes": 3101584,
+     "fs_pinned_bytes": 632334,
+     "fs_peak_bytes": 5129472,
+     "fs_ranges": 42
+    },
+    "live": {
+     "textures": 31,
+     "buffers": 3,
+     "pipelines": 2,
+     "samplers": 1,
+     "bind_groups": 30
+    },
+    "revisit": {
+     "rounds": 1,
+     "bytes": 2469250,
+     "fetch_ms": 85.5,
+     "total_ms": 116
+    },
+    "fps": {
+     "dt_samples": 600,
+     "frames_in_window": 601,
+     "window_ms": 9985.2,
+     "p50_ms": 16.7,
+     "p95_ms": 17.4,
+     "nominal_hz": 60,
+     "display_hz": 60,
+     "display_p10_ms": 16.5,
+     "display_samples": 90,
+     "hz_source": "display measured before the first area",
+     "expected_intervals": 599.112,
+     "fps": 60.089,
+     "dropping": false,
+     "spin_ms": 0,
+     "breakdown": {
+      "script": 0,
+      "physics": 0,
+      "replay_p50": 0.3,
+      "replay_p95": 0.3,
+      "submit_p50": 0.2,
+      "submit_p95": 0.3,
+      "frame_cpu_p50": 0.4,
+      "frame_cpu_p95": 0.5
+     },
+     "loadavg_before": "12.12 10.26 14.03",
+     "loadavg_after": "11.31 10.15 13.95"
+    }
+   },
+   "lev4/crss": {
+    "first": {
+     "rounds": 8,
+     "ranges": 59,
+     "bytes": 5763178,
+     "fetch_ms": 111.89999961853027,
+     "total_ms": 173.90000009536743,
+     "probe_ms": 33.2,
+     "load_ms": 3,
+     "decode_ms": 25.7,
+     "upload_ms": 20.7
+    },
+    "pixels": {
+     "differing": 0,
+     "max": 0
+    },
+    "draws": 42,
+    "pipelines": 4,
+    "textures": 38,
+    "texture_bytes": 26678568,
+    "heap": {
+     "wasm_memory_bytes": 100663296,
+     "malloc_in_use_bytes": 6637008,
+     "malloc_arena_bytes": 37288784,
+     "fs_resident_bytes": 6395512,
+     "fs_pinned_bytes": 632334,
+     "fs_peak_bytes": 8864762,
+     "fs_ranges": 62
+    },
+    "live": {
+     "textures": 38,
+     "buffers": 29,
+     "pipelines": 4,
+     "samplers": 1,
+     "bind_groups": 37
+    },
+    "revisit": {
+     "rounds": 1,
+     "bytes": 5763178,
+     "fetch_ms": 97.09999990463257,
+     "total_ms": 149.59999990463257
+    },
+    "fps": {
+     "dt_samples": 601,
+     "frames_in_window": 602,
+     "window_ms": 10021.4,
+     "p50_ms": 16.7,
+     "p95_ms": 17.3,
+     "nominal_hz": 60,
+     "display_hz": 60,
+     "display_p10_ms": 16.5,
+     "display_samples": 90,
+     "hz_source": "display measured before the first area",
+     "expected_intervals": 601.284,
+     "fps": 59.972,
+     "dropping": false,
+     "spin_ms": 0,
+     "breakdown": {
+      "script": 0,
+      "physics": 0,
+      "replay_p50": 0.3,
+      "replay_p95": 0.5,
+      "submit_p50": 0.2,
+      "submit_p95": 0.3,
+      "frame_cpu_p50": 0.5,
+      "frame_cpu_p95": 0.7
+     },
+     "loadavg_before": "11.31 10.15 13.95",
+     "loadavg_after": "10.18 9.95 13.83"
+    }
+   }
+  },
+  "heap_at_ready": {
+   "wasm_memory_bytes": 100663296,
+   "malloc_in_use_bytes": 767336,
+   "malloc_arena_bytes": 1674064,
+   "fs_resident_bytes": 632334,
+   "fs_pinned_bytes": 632334,
+   "fs_peak_bytes": 632334,
+   "fs_ranges": 3
+  },
+  "first_visit": {
+   "wall_ms": 12581,
+   "validation": {
+    "build": "beta-1.5.0-installer",
+    "data": "beta-1.5.0-data",
+    "ms": 371.5,
+    "blk_files": 189,
+    "table_bytes": 643748
+   },
+   "source": {
+    "kind": "opfs",
+    "how": "copied",
+    "name": "lomn-install",
+    "files": 505,
+    "bytes": 1099991943
+   },
+   "copy": {
+    "bytes": 1099991943,
+    "ms": 9153.800000190735
+   },
+   "quota": {
+    "ok": true,
+    "free": 10737418240,
+    "need": 1099991943,
+    "persisted": false,
+    "quota": 10737420009,
+    "usage": 1769
+   },
+   "boot": {
+    "rounds": 3,
+    "fetch_ms": 7.500000476837158,
+    "bytes": 632334,
+    "ranges": 3,
+    "total_ms": 8.700000286102295,
+    "cached": false,
+    "pinned_bytes": 632334
+   }
+  },
+  "heap_after_first_area": {
+   "wasm_memory_bytes": 100663296,
+   "malloc_in_use_bytes": 2882120,
+   "malloc_arena_bytes": 11258704,
+   "fs_resident_bytes": 2660222,
+   "fs_pinned_bytes": 632334,
+   "fs_peak_bytes": 2660222,
+   "fs_ranges": 48
+  },
+  "measured_config": {
+   "build": {
+    "type": "Release",
+    "cxx_flags": "-O3 -DNDEBUG",
+    "emscripten": "6.0.11",
+    "compiler": "Clang 24.0.0git (https:/github.com/llvm/llvm-project f718ebe873411a562ef6e5c27da36d75b7aaec98)",
+    "wasm_sha256": "916a914816bd801a98e1e9df5f1f25c1baa55c05a07cd8c55495e2f9cce04ed3",
+    "wasm_bytes": 332642
+   },
+   "canvas": {
+    "width": 1280,
+    "height": 720,
+    "css_width": 1280,
+    "css_height": 720,
+    "device_pixel_ratio": 1
+   },
+   "adapter": "apple/metal-3/",
+   "loadavg": "11.24 9.89 14.12"
+  },
+  "frnt": {
+   "load": {
+    "rounds": 8,
+    "bytes": 12434082,
+    "total_ms": 246.09999990463257
+   },
+   "heap": {
+    "wasm_memory_bytes": 100663296,
+    "malloc_in_use_bytes": 13317768,
+    "malloc_arena_bytes": 78523216,
+    "fs_resident_bytes": 13066416,
+    "fs_pinned_bytes": 632334,
+    "fs_peak_bytes": 18829594,
+    "fs_ranges": 64
+   },
+   "texture_bytes": 56994416,
+   "draws": 47
+  },
+  "heap_after_switches": {
+   "wasm_memory_bytes": 100663296,
+   "malloc_in_use_bytes": 6642224,
+   "malloc_arena_bytes": 78523216,
+   "fs_resident_bytes": 6395512,
+   "fs_pinned_bytes": 632334,
+   "fs_peak_bytes": 18829594,
+   "fs_ranges": 62
+  },
+  "memory_growth_bytes": 0,
+  "sweep": {
+   "areas": 122,
+   "wall_ms": 12856,
+   "max_wasm_memory": 100663296,
+   "grew_at": [],
+   "problems": [],
+   "rounds_max": 8,
+   "rounds_max_at": "lev0/frnt",
+   "rounds_histogram": {
+    "2": 1,
+    "3": 4,
+    "5": 1,
+    "6": 107,
+    "7": 1,
+    "8": 8
+   },
+   "rows": [
+    {
+     "area": "fren/frnt",
+     "rounds": 7,
+     "cached": false,
+     "bytes_fetched": 844639,
+     "read_set": 1476973,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev0/frnt",
+     "rounds": 8,
+     "cached": false,
+     "bytes_fetched": 12434082,
+     "read_set": 13066416,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev1/atrm",
+     "rounds": 8,
+     "cached": false,
+     "bytes_fetched": 2843616,
+     "read_set": 3475950,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev1/bech",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 1670721,
+     "read_set": 2614235,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev1/bugs",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 1107373,
+     "read_set": 1886151,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev1/cave",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 1297969,
+     "read_set": 2160459,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev1/clf1",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 1750092,
+     "read_set": 2801126,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev1/clf2",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 1084027,
+     "read_set": 2934567,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev1/hk01",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 1672360,
+     "read_set": 2582466,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev1/l1a1",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 706147,
+     "read_set": 1821693,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev1/l1a3",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 1609032,
+     "read_set": 2256482,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev1/l1a7",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 2888301,
+     "read_set": 3535751,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev1/l1a8",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 1878750,
+     "read_set": 2875256,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev1/mud0",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 1286266,
+     "read_set": 2271636,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev1/ptv1",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 1815713,
+     "read_set": 2795707,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev1/pzzl",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 388238,
+     "read_set": 1778344,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev1/scrp",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 997200,
+     "read_set": 1977194,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev1/shrn",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 1939698,
+     "read_set": 2884364,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev1/spcv",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 459534,
+     "read_set": 1123496,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev1/tura",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 2367782,
+     "read_set": 3080896,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev1/vllg",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 1745892,
+     "read_set": 2660222,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev2/evac",
+     "rounds": 8,
+     "cached": false,
+     "bytes_fetched": 837937,
+     "read_set": 1470271,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev2/ghut",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 2441970,
+     "read_set": 3101584,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev2/gly3",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 3030865,
+     "read_set": 3690479,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev2/hk01",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 1412803,
+     "read_set": 2335073,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev2/hydr",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 1372403,
+     "read_set": 2229009,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev2/mtop",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 1909012,
+     "read_set": 3477170,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev2/mtup",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 705328,
+     "read_set": 1977806,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev2/mwat",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 1834932,
+     "read_set": 2560210,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev2/shrn",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 1462883,
+     "read_set": 2385153,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev2/strt",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 1550554,
+     "read_set": 2494712,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev2/takv",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 986436,
+     "read_set": 1777378,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev2/ttun",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 3820243,
+     "read_set": 4496369,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev2/tura",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 2708150,
+     "read_set": 3433428,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev2/vlgs",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 2403991,
+     "read_set": 3063605,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev2/vllg",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 5178300,
+     "read_set": 7216474,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev2/vtnl",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 676336,
+     "read_set": 2123534,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev2/wthk",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 1354666,
+     "read_set": 2145608,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev3/bkik",
+     "rounds": 8,
+     "cached": false,
+     "bytes_fetched": 3767961,
+     "read_set": 4400295,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev3/blcv",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 1573151,
+     "read_set": 2705769,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev3/bldr",
+     "rounds": 5,
+     "cached": false,
+     "bytes_fetched": 644719,
+     "read_set": 1580345,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev3/blr1",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 2775391,
+     "read_set": 3448361,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev3/blr2",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 3252031,
+     "read_set": 5106185,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev3/boss",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 2766069,
+     "read_set": 4292671,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev3/gly1",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 2812977,
+     "read_set": 4208251,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev3/gly3",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 2454083,
+     "read_set": 3652365,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev3/hutt",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 1780907,
+     "read_set": 2821749,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev3/mtup",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 2479963,
+     "read_set": 3455141,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev3/ptos",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 1717370,
+     "read_set": 3178308,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev3/rkfl",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 1571597,
+     "read_set": 2507223,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev3/shrn",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 2263219,
+     "read_set": 3198845,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev3/tura",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 1749928,
+     "read_set": 3053426,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev3/vllg",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 5564454,
+     "read_set": 6342640,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev3/xrod",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 2908837,
+     "read_set": 4041455,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev4/boss",
+     "rounds": 8,
+     "cached": false,
+     "bytes_fetched": 3493683,
+     "read_set": 4126017,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev4/brd2",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 3263583,
+     "read_set": 6213909,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev4/brd3",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 3187282,
+     "read_set": 6727816,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev4/brd4",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 1951521,
+     "read_set": 6016599,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev4/crss",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 2330434,
+     "read_set": 6395512,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev4/gly1",
+     "rounds": 3,
+     "cached": false,
+     "bytes_fetched": 2196,
+     "read_set": 651594,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev4/haka",
+     "rounds": 2,
+     "cached": false,
+     "bytes_fetched": 12,
+     "read_set": 649410,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev4/hutt",
+     "rounds": 3,
+     "cached": false,
+     "bytes_fetched": 68,
+     "read_set": 649466,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev4/icmz",
+     "rounds": 3,
+     "cached": false,
+     "bytes_fetched": 1860,
+     "read_set": 651258,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev4/maz1",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 3981830,
+     "read_set": 4631228,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev4/maz2",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 2580325,
+     "read_set": 5661595,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev4/mosh",
+     "rounds": 3,
+     "cached": false,
+     "bytes_fetched": 124,
+     "read_set": 649522,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev4/path",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 4713322,
+     "read_set": 5362720,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev4/shrn",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 2187538,
+     "read_set": 6121288,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev4/snbd",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 3256406,
+     "read_set": 6337676,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev4/snfl",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 1690551,
+     "read_set": 4706157,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev4/strt",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 3006595,
+     "read_set": 4120633,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev4/swrd",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 3454524,
+     "read_set": 5159154,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev4/tele",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 3568583,
+     "read_set": 6912509,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev4/tura",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 2150038,
+     "read_set": 4505164,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev4/visn",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 2045545,
+     "read_set": 3744415,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev4/vllg",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 5396756,
+     "read_set": 6642122,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev4/well",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 2625067,
+     "read_set": 3733729,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev5/boss",
+     "rounds": 8,
+     "cached": false,
+     "bytes_fetched": 5003185,
+     "read_set": 5635519,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev5/cave",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 2138768,
+     "read_set": 3051926,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev5/gly1",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 1454723,
+     "read_set": 2367881,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev5/gly3",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 1571246,
+     "read_set": 2353076,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev5/hive",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 2781721,
+     "read_set": 3432223,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev5/le01",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 4812150,
+     "read_set": 6927612,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev5/le02",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 2098830,
+     "read_set": 5001876,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev5/le03",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 2112927,
+     "read_set": 5015973,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev5/le04",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 966820,
+     "read_set": 3935146,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev5/le08",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 1712941,
+     "read_set": 2429107,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev5/lep1",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 4431502,
+     "read_set": 5344276,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev5/lep2",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 2375106,
+     "read_set": 4490952,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev5/mtup",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 3783532,
+     "read_set": 5833714,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev5/room",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 1336820,
+     "read_set": 3364346,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev5/shrn",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 6894948,
+     "read_set": 8070762,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev5/tura",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 2105405,
+     "read_set": 5116739,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev5/vllg",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 5776255,
+     "read_set": 7410949,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev6/boss",
+     "rounds": 8,
+     "cached": false,
+     "bytes_fetched": 2834648,
+     "read_set": 3466982,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev6/fvil",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 3037123,
+     "read_set": 3896041,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev6/hutt",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 1967958,
+     "read_set": 3220860,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev6/mtup",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 2661521,
+     "read_set": 3389111,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev6/shrn",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 3292363,
+     "read_set": 4019953,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev6/ta01",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 1327293,
+     "read_set": 2317539,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev6/ta02",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 3571284,
+     "read_set": 4571130,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev6/ta03",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 3707007,
+     "read_set": 4697253,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev6/ta04",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 1821160,
+     "read_set": 2680078,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev6/ta05",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 2584356,
+     "read_set": 3443274,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev6/ta07",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 2179606,
+     "read_set": 3235516,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev6/ta08",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 2044230,
+     "read_set": 3165804,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev6/ta09",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 1356279,
+     "read_set": 2674845,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev6/ta11",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 2251300,
+     "read_set": 3569866,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev6/ta12",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 1950551,
+     "read_set": 3137789,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev6/ta13",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 2626448,
+     "read_set": 3813686,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev6/ta14",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 2760697,
+     "read_set": 3619615,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev6/tp01",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 1386156,
+     "read_set": 2179410,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev6/tp02",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 2606322,
+     "read_set": 3530904,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev6/tura",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 2532027,
+     "read_set": 3456609,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev6/tvil",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 2082682,
+     "read_set": 3401248,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev6/vllg",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 3220675,
+     "read_set": 5074153,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev7/gali",
+     "rounds": 8,
+     "cached": false,
+     "bytes_fetched": 2237273,
+     "read_set": 2869607,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev7/kpka",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 1565186,
+     "read_set": 2728904,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev7/lewa",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 2252014,
+     "read_set": 3153460,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev7/onua",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 1557876,
+     "read_set": 2721594,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev7/phtu",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 1361536,
+     "read_set": 2525254,
+     "over_fetch": 0
+    },
+    {
+     "area": "lev7/tahu",
+     "rounds": 6,
+     "cached": false,
+     "bytes_fetched": 2136678,
+     "read_set": 3038124,
+     "over_fetch": 0
+    }
+   ],
+   "final_heap": {
+    "wasm_memory_bytes": 100663296,
+    "malloc_in_use_bytes": 3401512,
+    "malloc_arena_bytes": 78523216,
+    "fs_resident_bytes": 3038124,
+    "fs_pinned_bytes": 632334,
+    "fs_peak_bytes": 18829594,
+    "fs_ranges": 41
+   }
+  },
+  "revisit_boot": {
+   "rounds": 1,
+   "fetch_ms": 5.200000286102295,
+   "bytes": 632334,
+   "ranges": 3,
+   "total_ms": 6.099999904632568,
+   "cached": true,
+   "pinned_bytes": 632334
+  },
+  "i1_gpu_live_vllg": [
+   {
+    "textures": 29,
+    "buffers": 21,
+    "texture_bytes": 10682372.000000022
+   },
+   {
+    "textures": 29,
+    "buffers": 21,
+    "texture_bytes": 10682372.000000037
+   },
+   {
+    "textures": 29,
+    "buffers": 21,
+    "texture_bytes": 10682372.000000052
+   },
+   {
+    "textures": 29,
+    "buffers": 21,
+    "texture_bytes": 10682372.000000067
+   },
+   {
+    "textures": 29,
+    "buffers": 21,
+    "texture_bytes": 10682372.000000082
+   },
+   {
+    "textures": 29,
+    "buffers": 21,
+    "texture_bytes": 10682372.000000097
+   },
+   {
+    "textures": 29,
+    "buffers": 21,
+    "texture_bytes": 10682372.000000112
+   },
+   {
+    "textures": 29,
+    "buffers": 21,
+    "texture_bytes": 10682372.000000127
+   },
+   {
+    "textures": 29,
+    "buffers": 21,
+    "texture_bytes": 10682372.000000142
+   },
+   {
+    "textures": 29,
+    "buffers": 21,
+    "texture_bytes": 10682372.000000156
+   },
+   {
+    "textures": 29,
+    "buffers": 21,
+    "texture_bytes": 10682372.000000171
+   },
+   {
+    "textures": 29,
+    "buffers": 21,
+    "texture_bytes": 10682372.000000186
+   },
+   {
+    "textures": 29,
+    "buffers": 21,
+    "texture_bytes": 10682372.000000201
+   },
+   {
+    "textures": 29,
+    "buffers": 21,
+    "texture_bytes": 10682372.000000216
+   },
+   {
+    "textures": 29,
+    "buffers": 21,
+    "texture_bytes": 10682372.000000231
+   }
+  ],
+  "pixel_gate": {
+   "tolerance": 0,
+   "native_vs_browser": [
+    {
+     "label": "lev1/vllg (first visit, OPFS path)",
+     "differing": 0,
+     "max": 0
+    },
+    {
+     "label": "lev2/ghut (first visit, OPFS path)",
+     "differing": 0,
+     "max": 0
+    },
+    {
+     "label": "lev4/crss (first visit, OPFS path)",
+     "differing": 0,
+     "max": 0
+    },
+    {
+     "label": "lev0/frnt",
+     "differing": 0,
+     "max": 0
+    },
+    {
+     "label": "lev1/vllg (revisit)",
+     "differing": 0,
+     "max": 0
+    },
+    {
+     "label": "lev2/ghut (revisit)",
+     "differing": 0,
+     "max": 0
+    },
+    {
+     "label": "lev4/crss (revisit)",
+     "differing": 0,
+     "max": 0
+    },
+    {
+     "label": "lev2/ghut (handle path)",
+     "differing": 0,
+     "max": 0
+    },
+    {
+     "label": "lev4/crss (handle revisit)",
+     "differing": 0,
+     "max": 0
+    }
+   ],
+   "null": [
+    {
+     "area": "lev1/vllg",
+     "differing": 0,
+     "max": 0
+    },
+    {
+     "area": "lev2/ghut",
+     "differing": 0,
+     "max": 0
+    },
+    {
+     "area": "lev4/crss",
+     "differing": 0,
+     "max": 0
+    }
+   ],
+   "positive": {
+    "what": "lev1/vllg fog off vs native",
+    "differing": 155532,
+    "max": 29,
+    "over_tolerance": 155532
+   }
+  },
+  "loadavg_end": "9.77 9.87 13.78"
+ }
+}

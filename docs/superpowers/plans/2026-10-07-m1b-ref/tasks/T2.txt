@@ -1,0 +1,5 @@
+T2: AreaRenderer::release (+ created-object ownership, replay/submit timing); leak checks
+  partial  engine/include/lomn/view/area.h  (without the T3 path constants)
+  partial  engine/src/view/area.cpp  (without the T3 path constants)
+  full     engine/tests/test_rhi_destroy.cpp
+  full     engine/tests/test_gpu_destroy.cpp

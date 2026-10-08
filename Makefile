@@ -5,7 +5,7 @@ export LOMN_DATA LOMN_CACHE
 VENV := .venv
 PY := $(VENV)/bin/python
 EMSDK_ENV := source .toolchain/emsdk/emsdk_env.sh >/dev/null 2>&1
-.PHONY: setup check-data decomp worklist native wasm site test-tools test-native test-wasm test-web check perf perf-areas datacheck datacheck-wasm fuzz-osi fuzz-formats fuzz-formats-help a9-sweep
+.PHONY: setup check-data decomp worklist native wasm site test-tools test-native test-wasm test-web check perf perf-areas datacheck datacheck-wasm fuzz-osi fuzz-formats fuzz-formats-help a9-sweep a13-real manifest
 
 setup: $(VENV)/.ok
 	timeout 3600 tools/toolchain.sh
@@ -33,11 +33,24 @@ native:
 wasm:
 	$(EMSDK_ENV) && timeout 600 emcmake cmake -S engine -B build/wasm -G Ninja -DCMAKE_BUILD_TYPE=Release && timeout 1800 cmake --build build/wasm
 
+# M1b: index.html + web/app/*.js + the wasm build + builds.json, and asset-manifest.json (the network-discipline list).
 site: wasm
-	rm -rf build/site && mkdir -p build/site && cp web/index.html build/wasm/lomn_web.js build/wasm/lomn_web.wasm build/site/
+	timeout 120 node web/tools/build_site.mjs build/wasm build/site
 
-test-tools: $(VENV)/.ok
-	$(EMSDK_ENV); timeout 1800 $(VENV)/bin/pytest -q -rs tools
+# A skipped test is not a pass, and neither is an expected failure (M1b T7, T8 P15). pytest runs with -rsxX and its report is
+# gated by tools/pytest_gate.py (unit-tested on synthetic reports in tools/tests/test_pytest_gate.py): every skip must match
+# the allowlist PYTEST_SKIP_ALLOW (a regex over the "SKIPPED [n] file:line: reason" line; EMPTY = no skip is allowed), every
+# xfail / xpass must match PYTEST_XFAIL_ALLOW (EMPTY = none), the counts listed must equal the "N skipped / xfailed / xpassed"
+# of pytest's summary line (so a changed report format cannot hide any), and a skip is also tolerated when LOMN_DATA is unset
+# and the line ENDS with the reason "(no LOMN_DATA)" (anchored: "needs node and LOMN_DATA" no longer hides a missing node; the
+# data-free subset is all that can run then; check prints "SKIPPED (no LOMN_DATA)" for the data layers too). test-tools needs
+# build/native (test_m1a1_oracles runs lomn_datacheck), so it runs after `native`. The log is build/pytest-tools.log.
+PYTEST_SKIP_ALLOW ?=
+PYTEST_XFAIL_ALLOW ?=
+test-tools: native $(VENV)/.ok
+	@mkdir -p build
+	$(EMSDK_ENV); set -o pipefail; timeout 1800 $(VENV)/bin/pytest -q -rsxX tools 2>&1 | tee build/pytest-tools.log
+	@$(PY) tools/pytest_gate.py build/pytest-tools.log --allow-skip "$(PYTEST_SKIP_ALLOW)" --allow-xfail "$(PYTEST_XFAIL_ALLOW)" $$([ -z "$$LOMN_DATA" ] && echo --no-data)
 
 test-native: native
 	ctest --test-dir build/native --output-on-failure --timeout 300
@@ -51,9 +64,23 @@ test-wasm: wasm test-native $(VENV)/.ok
 	cmp build/native/a9/a/calls.txt build/wasm/a9/a/calls.txt
 	cmp build/native/a9/f2/state.txt build/wasm/a9/f2/state.txt
 
-test-web: site
-	cd web && timeout 60 node --test tests/serve_test.mjs
+# M1b: + the data-free BYO/viewer test on a synthetic install (needs the native lomn_view for the fixture and the
+# reference renders) and the fingerprint/JS unit tests.
+test-web: site native
+	cd web && timeout 60 node --test tests/serve_test.mjs tests/network_check_test.mjs tests/a13_checks_test.mjs tests/unit_test.mjs tests/unit_r2_test.mjs
 	cd web && timeout 180 node tests/smoke.mjs ../build/site ../build/pw-profile
+	cd web && timeout 600 node tests/byo_synthetic.mjs ../build/wasm ../build/byo-syn ../build/native/lomn_view
+
+# M1b A13 on the real install (LOMN_DATA; skipped otherwise): OPFS copy of the install into a throwaway Playwright
+# profile (removed afterwards), lev1/vllg, lev2/ghut, lev4/crss vs native renders, switches, revisit, handle path, fps.
+a13-real: site native
+	@if [ -z "$(LOMN_DATA)" ]; then echo "a13-real SKIPPED (no LOMN_DATA)"; exit 0; fi
+	cd web && timeout 1800 node tests/a13_real.mjs ../build/site ../build/a13-real ../build/native/lomn_view ../build/wasm
+
+# M1b: the per-area prefetch manifest of the install (build/m1b/manifest.json; derived data: never committed).
+manifest: native
+	@if [ -z "$(LOMN_DATA)" ]; then echo "manifest: LOMN_DATA is not set"; exit 2; fi
+	mkdir -p build/m1b && timeout 300 build/native/lomn_view --install "$(LOMN_DATA)/install" --manifest 1 --out build/m1b/manifest.json
 
 perf: native $(VENV)/.ok
 	timeout 300 build/native/lomn_native --backend webgpu --frames 600 --out build/perf
@@ -127,6 +154,6 @@ fuzz-formats:
 	  cmp build/asan/native/fuzz_totals.txt build/asan/wasm/fuzz_totals.txt && echo "fuzz-formats: native == wasm32 per-format totals"; fi
 
 check: test-tools test-native test-wasm test-web
-	@if [ -n "$(LOMN_DATA)" ]; then $(MAKE) datacheck datacheck-wasm; else echo "datacheck SKIPPED (no LOMN_DATA)"; fi
+	@if [ -n "$(LOMN_DATA)" ]; then $(MAKE) datacheck datacheck-wasm a13-real; else echo "datacheck, a13-real SKIPPED (no LOMN_DATA)"; fi
 	@if [ -d gen/decomp ]; then $(MAKE) worklist; else echo "worklist SKIPPED (run make decomp first)"; fi
 	@echo "make check: all layers green"

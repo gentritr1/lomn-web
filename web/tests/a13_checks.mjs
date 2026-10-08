@@ -1,0 +1,70 @@
+// The pure verdicts behind a13_real.mjs's fps, GPU-object, positive-control and over-fetch checks (T8 P12-P14). They live here,
+// free of Playwright, so tests/a13_checks_test.mjs can pin each one with the inputs that used to slip through:
+//  - a GPU-object probe that reads zeros is flat, and passed vacuously (P13);
+//  - "dt samples == frames - 1" is true by construction (the engine counts frames as samples + 1), so it checked nothing (P12);
+//  - the fog-off pixel gate control asserted > 10,000 px where the global constraint says >= 100,000 (P14);
+//  - over-fetch was recorded per sweep row but never asserted (P14).
+
+export const FPS_MIN_RATIO = 0.95;          // the HUD rule: counted / expected intervals, DROPPING below it
+export const FPS_MIN_SAMPLES = 30;          // the engine's own floor for flagging DROPPING
+export const POSITIVE_CONTROL_MIN_PX = 100000;  // global constraints: the fog-off control must exceed the tolerance by >= 100,000 px
+
+// P12. f = metrics.fps of one page (unspun areas must pass; a page spun on purpose must fail). Counted intervals are
+// dt_samples; expected = the window's duration at the display rate MEASURED on that page before its first area
+// (expected_intervals). The engine's expected_intervals is recomputed here from window_ms and display_hz, so a reading whose
+// window, rate and expectation do not reconcile fails by itself (an unverified sample count is not a measurement).
+export function fpsVerdict(f, { minRatio = FPS_MIN_RATIO, minSamples = FPS_MIN_SAMPLES } = {}) {
+  const reasons = [];
+  const num = (x) => typeof x === 'number' && Number.isFinite(x);
+  if (!f || ![f.dt_samples, f.window_ms, f.display_hz, f.expected_intervals].every(num)) return { ok: false, ratio: NaN, recomputed: NaN, reasons: ['fps metrics missing or not finite'] };
+  if (!(f.display_hz > 0)) reasons.push('display rate not measured');
+  if (f.dt_samples < minSamples) reasons.push(`only ${f.dt_samples} dt samples (need ${minSamples})`);
+  const recomputed = (f.window_ms * f.display_hz) / 1000;
+  if (!(recomputed > 0) || Math.abs(recomputed - f.expected_intervals) > 0.01 * recomputed + 0.5)
+    reasons.push(`expected intervals ${f.expected_intervals} != window ${f.window_ms} ms x ${f.display_hz} Hz = ${recomputed.toFixed(1)}`);
+  const ratio = f.expected_intervals > 0 ? f.dt_samples / f.expected_intervals : NaN;
+  if (!(ratio >= minRatio)) reasons.push(`counted ${f.dt_samples} of ${Number(f.expected_intervals).toFixed(1)} expected intervals = ${Number.isNaN(ratio) ? 'n/a' : ratio.toFixed(3)} < ${minRatio}`);
+  if (f.dropping !== false) reasons.push(`engine flag dropping = ${f.dropping}`);
+  return { ok: reasons.length === 0, ratio, recomputed, reasons };
+}
+
+// P13. seen = the GPUTexture/GPUBuffer live counts at each visit of the same area ({textures, buffers}). Flat is only a result
+// when the probe saw something: zeros everywhere (a hook that never ran) are flat too.
+export function gpuLiveVerdict(seen) {
+  const reasons = [];
+  if (!Array.isArray(seen) || seen.length < 2) return { ok: false, reasons: ['fewer than 2 samples'] };
+  const vals = (x) => Number.isFinite(x?.textures) && Number.isFinite(x?.buffers);
+  if (!seen.every(vals)) return { ok: false, reasons: ['a sample has no finite textures / buffers count'] };
+  const zero = seen.findIndex((x) => !(x.textures > 0 && x.buffers > 0));
+  if (zero >= 0) reasons.push(`sample ${zero} has textures ${seen[zero].textures}, buffers ${seen[zero].buffers}: the probe saw nothing (vacuous)`);
+  const drift = seen.findIndex((x) => x.textures !== seen[0].textures || x.buffers !== seen[0].buffers);
+  if (drift >= 0) reasons.push(`sample ${drift} (${seen[drift].textures}/${seen[drift].buffers}) differs from the first (${seen[0].textures}/${seen[0].buffers})`);
+  return { ok: reasons.length === 0, reasons };
+}
+
+// P14. The fog-off positive control: pixels over the tolerance must reach the global-constraint floor.
+export function positiveControlVerdict(overTolerance, { sameSize = true, min = POSITIVE_CONTROL_MIN_PX } = {}) {
+  return { ok: sameSize === true && Number.isFinite(overTolerance) && overTolerance >= min, min };
+}
+
+// P14. Every sweep row discovers its set with no over-fetch (bytes fetched that the engine did not read): exactly 0 B.
+export function overFetchVerdict(rows) {
+  if (!Array.isArray(rows) || rows.length === 0) return { ok: false, offenders: [], reasons: ['no sweep rows'] };
+  const offenders = rows.filter((r) => r.over_fetch !== 0).map((r) => `${r.area}: ${r.over_fetch}`);
+  return { ok: offenders.length === 0, offenders, reasons: offenders };
+}
+
+// T8 P16. byo_synthetic samples every unspun page as it closes: {url, dropping, fps, hz, snapped, loadavg, remeasure?}. On a
+// loaded host an unspun page can read DROPPING (52.7 and 53.2 fps at loadavg 16-25; the minimum in 20 quieter runs was 58.3),
+// so a page that reads DROPPING (the engine flag, or fps < 0.95 x its display rate) is re-measured ONCE (`remeasure`, same
+// fields, taken on a fresh window) and fails only if the second reading drops again. A flagged page with no second reading
+// fails. The engine's flag must agree with fps < 0.95 x hz on every reading, first or second. Both readings are reported.
+export function dropSamplesVerdict(samples, { min = 8, minRatio = FPS_MIN_RATIO } = {}) {
+  const low = (r) => r.dropping === true || !(r.fps >= minRatio * r.hz);
+  const incoherent = (r) => r.dropping !== (r.fps < minRatio * r.hz);
+  const readings = (s) => (s.remeasure ? [s, s.remeasure] : [s]);
+  const wrong = samples.filter((s) => low(s.remeasure ?? s) || (low(s) && !s.remeasure));
+  const incoh = samples.filter((s) => readings(s).some(incoherent));
+  const remeasured = samples.filter((s) => s.remeasure);
+  return { ok: samples.length >= min && wrong.length === 0 && incoh.length === 0, wrong, incoherent: incoh, remeasured };
+}
