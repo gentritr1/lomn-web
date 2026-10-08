@@ -59,6 +59,7 @@ struct State {
   // shown area
   view::AreaData area;
   bool has_area = false;
+  std::string probe_reads;  // lomn_fs_reads: the last area probe round's exact reads
   view::AreaRenderer ren;
   view::RenderOptions render_opts;  // lomn_set_fog (the pixel gate's positive control: ?fog=off)
   uint32_t debug_leaked = 0;        // lomn_debug_leak_texture (the leak detector's positive control)
@@ -264,6 +265,9 @@ EMSCRIPTEN_KEEPALIVE int lomn_fs_is_resident(const char* path, double offset, do
 // "path\toffset\tlength\n" lines (lomn::view::ranges_text).
 EMSCRIPTEN_KEEPALIVE const char* lomn_fs_misses() { return keep(view::ranges_text(st().fs.misses())); }
 EMSCRIPTEN_KEEPALIVE const char* lomn_fs_touched() { return keep(view::ranges_text(st().fs.touched())); }
+// M1 close-out C-f2: the ranges the last lomn_area_probe round actually read (exact, distinct, sorted, no zero-length reads). Unlike
+// lomn_fs_touched (the RESIDENT ranges a read hit, which can be larger than the read) this is what a cached prefetch set must hold.
+EMSCRIPTEN_KEEPALIVE const char* lomn_fs_reads() { return keep(st().probe_reads); }
 EMSCRIPTEN_KEEPALIVE double lomn_fs_misses_dropped() { return static_cast<double>(st().fs.misses_dropped()); }
 // Area list from the index (levels/<lev>/<area>.blk): "lev\tarea\n" lines.
 EMSCRIPTEN_KEEPALIVE const char* lomn_list_areas() {
@@ -303,7 +307,10 @@ EMSCRIPTEN_KEEPALIVE int lomn_area_probe() {
   s.fs.next_generation();
   const double t0 = emscripten_get_now();
   std::string err;
-  s.probe_ok = view::load_area(s.fs, s.probe_level, s.probe_area, view::AreaOptions(), s.probe, &err);
+  // M1 close-out C-f2: the exact (path, offset, length) of every non-empty read of this round, for lomn_fs_reads.
+  s.probe_reads = view::ranges_text(view::record_reads(s.fs, [&] {
+    s.probe_ok = view::load_area(s.fs, s.probe_level, s.probe_area, view::AreaOptions(), s.probe, &err);
+  }));
   s.probe_ms += emscripten_get_now() - t0;
   ++s.probe_rounds;
   const size_t misses = s.fs.misses().size() + s.fs.misses_dropped();

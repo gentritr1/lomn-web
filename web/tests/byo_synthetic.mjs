@@ -34,7 +34,11 @@ const check = (ok, what, detail = '') => {
   console.log(`${ok ? 'ok  ' : 'FAIL'} ${what}${detail ? ' :: ' + detail : ''}`);
 };
 // REF4 r2 sections run independently: a failure (or a missing feature on pre-fix code) is recorded and the run goes on.
+// BYO_ONLY=<regex> (development only, never set by make): run just the sections whose name matches, skipping the lettered blocks that
+// depend on each other; a full run (the default, and what make test-web does) is the only one that counts.
+const only = process.env.BYO_ONLY ? new RegExp(process.env.BYO_ONLY) : null;
 const section = async (name, fn) => {
+  if (only && !only.test(name)) return;
   try {
     await fn();
   } catch (e) {
@@ -282,7 +286,7 @@ const shotsKept = {};
 const summary = { refs: Object.keys(refs) };
 try {
   // A. Rejections through the real directory input.
-  {
+  if (!only) {
     const p = await open(base);
     let st = await waitState(p.page, ['need-files']);
     check(st.state === 'need-files', 'first visit asks for the folder', st.message);
@@ -292,6 +296,13 @@ try {
       [nonGameDir, /not a LOMN install/, 'non-game folder (exe, no .blk) -> hard rejection (C2)'],
       [emptyDir, /LEGOBionicle\.exe was not found/, 'empty folder -> rejection (M8, the empty-fixture negative test)'],
     ];
+  if (only) {  // BYO_ONLY (development): the sections that revisit an install need the copy the lettered blocks normally make first
+    const p = await open(base + '?pick=1', undefined, { drop: false });
+    await waitState(p.page, ['need-files']);
+    await p.page.setInputFiles('#byo-input', inst);
+    await waitState(p.page, ['area-ready'], 120000);
+    await p.page.close();
+  }
     for (const [dir, re, what] of cases) {
       await section(what, async () => {
         await p.page.evaluate(() => { window.__lomn.state = 'test-reset'; });
@@ -312,7 +323,7 @@ try {
     await p.page.close();
   }
   // B. Quota-short: estimate() stubbed to 10 bytes free.
-  {
+  if (!only) {
     const p = await open(base, () => {
       navigator.storage.estimate = async () => ({ quota: 1000, usage: 990 });
     });
@@ -326,7 +337,7 @@ try {
   }
   // C. OPFS fallback path: input -> validate -> quota -> copy -> engine -> area.
   let opfsMetrics;
-  {
+  if (!only) {
     const p = await open(base + '?size=1280x720&area=levt/test');
     await waitState(p.page, ['need-files']);
     await p.page.setInputFiles('#byo-input', inst);
@@ -372,7 +383,7 @@ try {
     await p.page.close();
   }
   // D. OPFS revisit: no input, no copy, cached prefetch set (1 round).
-  {
+  if (!only) {
     const p = await open(base + '?size=1280x720&area=levt/test');
     const st = await waitState(p.page, ['area-ready'], 60000);
     const info = await p.page.evaluate(() => ({ source: window.__lomn.source, copy: window.__lomn.copy, load: window.__lomn.load }));
@@ -413,7 +424,7 @@ try {
     await r.page.close();
   });
   // E. Handle path (what showDirectoryPicker returns): an OPFS directory handle, persisted in IndexedDB, read in place.
-  {
+  if (!only) {
     const p = await open(base + '?size=1280x720&area=levt/stat&pick=1');
     await waitState(p.page, ['need-files']);
     const ok = await p.page.evaluate(async () => {
@@ -434,7 +445,7 @@ try {
     await q.page.close();
   }
   // E2. Pixel gate positive control: fog off (debug switch) on levt/stat (script fog 5..50) must exceed the tolerance.
-  {
+  if (!only) {
     const p = await open(base + '?size=1280x720&area=levt/stat&debug=1&fog=off', () => {
       window.__csp = [];
       document.addEventListener('securitypolicyviolation', (e) => window.__csp.push(e.blockedURI));
@@ -556,7 +567,7 @@ try {
     await p.page.close();
   });
   // F. Permission re-request (queryPermission STUBBED to 'prompt'; the real browser prompt stays UNVERIFIED).
-  {
+  if (!only) {
     const p = await open(base + '?size=1280x720&area=levt/test', () => {
       FileSystemHandle.prototype.queryPermission = async () => 'prompt';
       FileSystemHandle.prototype.requestPermission = async () => 'granted';
@@ -569,7 +580,7 @@ try {
     await p.page.close();
   }
   // G. HUD + metrics reconciliation, free-fly camera, resize.
-  {
+  if (!only) {
     const p = await open(base + '?hud=1&area=levt/test', undefined, { drop: false });  // resizes below
     await waitState(p.page, ['area-ready'], 60000);
     await waitFrames(p.page, 120);
@@ -628,7 +639,7 @@ try {
   // H. Responsive sweep 360..1920 px (40 px steps): the BYO page and the viewer (HUD on). No horizontal scroll, no
   // overlap, minimum clearance reported; after every resize the surface + depth buffer follow the canvas with no WebGPU
   // message, 0 rejected calls and all draws; at three widths the canvas equals a native render of that size.
-  {
+  if (!only) {
     const widths = [];
     for (let w = 360; w <= 1920; w += 40) widths.push(w);
     const layout = (sels) => {
@@ -1066,7 +1077,7 @@ try {
   });
   // Review fix 2: every unspun page that showed an area (sampled as it closed) was NOT DROPPING against the display rate
   // measured on that same page, and the engine's flag agrees with fps < 0.95 x that rate.
-  {
+  if (!only) {
     const dv = dropSamplesVerdict(dropSamples);
     summary.drop_samples = dropSamples;
     const fmt = (x) => `${x.fps.toFixed(1)}/${x.hz}Hz${x.snapped === false ? '?' : ''}`;
@@ -1091,3 +1102,42 @@ fs.writeFileSync(path.join(work, 'results.json'), JSON.stringify({ results, summ
 const failed = results.filter((r) => !r.ok);
 console.log(`byo_synthetic: ${results.length - failed.length}/${results.length} checks passed`);
 process.exitCode = failed.length ? 1 : 0;
+  // M1 close-out C-f2 (browser): a tampered prefetch cache that holds ONE whole-file range per file (a superset) satisfies every read, so
+  // the resident ranges the engine "touched" are the tampered ones; persisting them kept the superset for ever. The page now writes
+  // back the exact reads (lomn_fs_reads), and the next visit loads the exact set.
+  await section('C-f2 tampered superset cache', async () => {
+    const p = await open(base + '?size=1280x720&area=levt/test&pick=1', undefined, { drop: false });
+    await waitState(p.page, ['need-files']);
+    await p.page.setInputFiles('#byo-input', inst);
+    await waitState(p.page, ['area-ready'], 120000);
+    const want = new Set(nativeRanges('levt/stat').split('\n'));
+    const files = [...new Set([...want].map((l) => l.split('\t')[0]))];
+    const idbGetRaw = (key) => p.page.evaluate((k) => new Promise((res) => {
+      const r = indexedDB.open('lomn-web', 1);
+      r.onsuccess = () => { const g = r.result.transaction('kv').objectStore('kv').get(k); g.onsuccess = () => { r.result.close(); res(g.result ?? null); }; };
+    }), key);
+    const tampered = await p.page.evaluate((fl) => new Promise((res, rej) => {
+      const e = window.__lomn.engine, key = e.cacheKey + 'area:levt/stat';
+      const text = fl.map((f) => `${f}\t0\t${e.byNorm.get(f).size}\n`).join('');
+      const r = indexedDB.open('lomn-web', 1);
+      r.onerror = () => rej(r.error);
+      r.onsuccess = () => { const t = r.result.transaction('kv', 'readwrite'); t.objectStore('kv').put(text, key); t.oncomplete = () => { r.result.close(); res({ key, text }); }; t.onerror = () => rej(t.error); };
+    }), files);
+    const load = await p.page.evaluate(() => window.__lomn.showArea('levt/stat').then(() => window.__lomn.load));
+    const touched = new Set(load.touched.trim().split('\n'));
+    const saved = await idbGetRaw(tampered.key);
+    const savedSet = new Set((saved ?? '').trim().split('\n'));
+    const same = (a, b) => a.size === b.size && [...a].every((x) => b.has(x));
+    check(load.cached && load.rounds === 1 && !same(touched, want) && tampered.text.trim().split('\n').every((l) => touched.has(l)),
+          'C-f2 setup: the tampered whole-file ranges satisfy every read in one round, so the TOUCHED set is the tampered superset (not the native reads)',
+          `${load.rounds} round(s), cached ${load.cached}, touched ${touched.size} lines vs native ${want.size}`);
+    check(saved !== tampered.text && same(savedSet, want), 'C-f2: what is written back is exactly the native read set of levt/stat, not the tampered superset',
+          `persisted ${savedSet.size} lines vs native ${want.size}; tampered ${tampered.text.trim().split('\n').length} lines`);
+    // the next visit loads the exact set: one round, the fetched ranges are the native ones
+    await p.page.evaluate(async () => { await window.__lomn.showArea('levt/test'); });
+    const again = await p.page.evaluate(() => window.__lomn.showArea('levt/stat').then(() => window.__lomn.load));
+    const touched2 = new Set(again.touched.trim().split('\n'));
+    check(again.cached && again.rounds === 1 && same(touched2, want) && again.over_fetch_bytes === 0, 'C-f2: the following visit loads the healed set: one round, touched == native reads, 0 B over-fetch',
+          `${again.rounds} round(s), touched ${touched2.size} lines, over-fetch ${again.over_fetch_bytes}`);
+    await p.page.close();
+  });

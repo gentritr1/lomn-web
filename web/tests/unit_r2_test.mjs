@@ -239,3 +239,47 @@ test('C-a2 rounds: a file read that never settles fails with its own message at 
     clearInterval(hold);
   }
 });
+
+// M1 close-out C-f2: what Engine.showArea writes back to the prefetch-set cache. lomn_fs_touched() lists the RESIDENT ranges a load
+// hit, so a tampered cache holding one whole-file range "touches" that range with every read inside it, and persisting `touched`
+// kept the tampered superset for ever (final review m-2: it only costs a fetch, but on every visit). A load that used a cached set now
+// writes back the ranges the engine actually READ (lomn_fs_reads: exact lines, zero-length reads excluded). Fake wasm module, fake
+// store (a Map instead of IndexedDB), no browser.
+const R1 = 'root/data/fake.blk\t16\t32', R2 = 'root/data/fake.blk\t100\t8', WHOLE = 'root/data/fake.blk\t0\t4096';
+async function areaEngine(initialStore) {
+  const { Engine } = await import('../app/engine.js');
+  const { e, M, resident } = fakeEngine(Engine, 4096);
+  const reads = [R1, R2];
+  const have = (line) => resident.has(line) || resident.has(WHOLE);
+  M._lomn_area_begin = () => {};
+  M._lomn_area_probe = () => { const miss = reads.filter((l) => !have(l)); M.misses = miss.map((l) => l + '\n').join(''); return miss.length; };
+  M._lomn_area_show = () => 1;
+  M._lomn_fs_touched = () => M.stringToNewUTF8(resident.has(WHOLE) ? WHOLE + '\n' : reads.filter((l) => resident.has(l)).map((l) => l + '\n').join(''));
+  M._lomn_fs_reads = () => M.stringToNewUTF8(reads.map((l) => l + '\n').join(''));
+  const map = new Map(Object.entries(initialStore));
+  e.store = { get: async (k) => map.get(k), set: async (k, v) => { map.set(k, v); }, delete: async (k) => { map.delete(k); }, keys: async () => [...map.keys()] };
+  e.cacheKey = 'k|';
+  return { e, map, resident };
+}
+test('C-f2 a tampered superset cache (one whole-file range) is NOT written back: the persisted set is the exact reads', { timeout: 10000 }, async () => {
+  const { e, map } = await areaEngine({ 'k|area:lev/ar': WHOLE + '\n' });
+  const load = await e.showArea('lev', 'ar');
+  assert.equal(load.cached, true);
+  assert.equal(load.rounds, 1);                                   // the superset satisfied every read: one round, nothing to discover
+  assert.equal(load.touched.trim(), WHOLE);                       // ... and it IS "touched": this is why touched cannot be persisted
+  assert.equal(map.get('k|area:lev/ar'), `${R1}\n${R2}\n`);       // the exact reads, the superset is gone
+});
+test('C-f2 a cache that misses a read heals: the discovered range joins the persisted set; an honest cache stays as it is; a first visit persists what it fetched', { timeout: 10000 }, async () => {
+  const sub = await areaEngine({ 'k|area:lev/ar': R1 + '\n' });   // a subset: R2 is missed, discovered in round 2
+  const ls = await sub.e.showArea('lev', 'ar');
+  assert.equal(ls.rounds, 2);
+  assert.equal(sub.map.get('k|area:lev/ar'), `${R1}\n${R2}\n`);
+  const honest = await areaEngine({ 'k|area:lev/ar': `${R1}\n${R2}\n` });
+  const lh = await honest.e.showArea('lev', 'ar');
+  assert.equal(lh.rounds, 1);
+  assert.equal(honest.map.get('k|area:lev/ar'), `${R1}\n${R2}\n`);
+  const first = await areaEngine({});
+  const lf = await first.e.showArea('lev', 'ar');
+  assert.equal(lf.cached, false);
+  assert.equal(first.map.get('k|area:lev/ar'), `${R1}\n${R2}\n`);
+});

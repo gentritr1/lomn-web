@@ -51,6 +51,7 @@ export class Engine {
     this.concurrency = 1;     // debug (M1 measurement): ranges fetched in parallel per round
     this.useCache = true;     // debug: false = always discover
     this.validation = null;   // the BYO verdict shown with the metrics (C2: data 'unknown' + warning)
+    this.store = { get: idbGet, set: idbSet, delete: idbDelete, keys: idbKeys };  // the prefetch-set cache (IndexedDB; tests inject a Map)
   }
 
   str(s, fn) {
@@ -157,7 +158,7 @@ export class Engine {
   async cached(key) {
     if (!this.useCache) return [];
     try {
-      const text = await idbGet(this.cacheKey + key);
+      const text = await this.store.get(this.cacheKey + key);
       if (typeof text !== 'string' || text.length > 16 * 1024 * 1024) return [];
       // Validated against the index and capped before use: a stale or tampered cache can only cost a fetch, never a bad
       // read or an oversized heap.
@@ -166,15 +167,15 @@ export class Engine {
       return [];
     }
   }
-  forgetCachedSet(area) { return idbDelete(this.cacheKey + 'area:' + area).catch(() => {}); }
+  forgetCachedSet(area) { return this.store.delete(this.cacheKey + 'area:' + area).catch(() => {}); }
   // REF4 r2 (M2): cached sets of other wasm builds can never be used again: drop them (keys "prefetch|<fp>|<sha>|...").
   async pruneOtherBuilds() {
     const sha = this.cacheKey.split('|')[2];
-    const keys = await idbKeys().catch(() => []);
+    const keys = await this.store.keys().catch(() => []);
     let n = 0;
     for (const k of keys)
       if (typeof k === 'string' && k.startsWith('prefetch|') && k.split('|')[2] !== sha) {
-        await idbDelete(k).catch(() => {});
+        await this.store.delete(k).catch(() => {});
         ++n;
       }
     return n;
@@ -188,7 +189,7 @@ export class Engine {
     const pre = await this.cached('boot');
     this.boot = await this.rounds(() => this.M._lomn_boot_probe(), 'boot', pre);
     this.boot.pinned_bytes = this.M._lomn_boot_done();
-    await idbSet(this.cacheKey + 'boot', this.M.UTF8ToString(this.M._lomn_fs_touched())).catch(() => {});
+    await this.store.set(this.cacheKey + 'boot', this.M.UTF8ToString(this.M._lomn_fs_touched())).catch(() => {});
     this.M._lomn_configure(width, height, 0);
     this.M.callMain([]);
   }
@@ -200,10 +201,15 @@ export class Engine {
     const pre = await this.cached(key);
     const r = await this.rounds(() => this.M._lomn_area_probe(), `${level}/${area}`, pre);
     const touched = this.M.UTF8ToString(this.M._lomn_fs_touched());
+    // M1 close-out C-f2: a load that used a cached set writes back the ranges the engine actually READ (exact lines), not the resident
+    // ranges it touched: one tampered whole-file range in the cache is "touched" by every read inside it and would be persisted for
+    // ever. The exact reads are what a clean discovery persists (a13_real: touched == the native --manifest on 122 areas), so an honest
+    // cache is rewritten unchanged and a subset cache gains what the extra rounds discovered.
+    const reads = r.cached ? this.M.UTF8ToString(this.M._lomn_fs_reads()) : touched;
     const read = new Set(touched.split('\n').filter(Boolean));
     const overFetch = this.fetched.filter((x) => !read.has(`${x.path}\t${x.offset}\t${x.length}`)).reduce((n, x) => n + x.length, 0);
     if (!this.M._lomn_area_show()) throw new Error(this.lastError());
-    await idbSet(this.cacheKey + key, touched).catch(() => {});
+    await this.store.set(this.cacheKey + key, reads).catch(() => {});
     this.load = { area: `${level}/${area}`, ...r, touched, over_fetch_bytes: overFetch, concurrency: this.concurrency, load_total_ms: performance.now() - t0 };
     return this.load;
   }
