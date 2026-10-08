@@ -1,0 +1,146 @@
+# LOMN Web: roadmap and resume point
+
+State as of 2026-10-08, late evening. Update this file whenever a milestone closes. The live board mirrors it at https://claude.ai/artifact/GyZGve8HMfmWHzJJhx3PyQ.
+
+## 1. Where we are
+
+| Milestone | What it gives you | State |
+|---|---|---|
+| M0 Foundations | toolchain, decompiler pipeline, native and browser builds | done |
+| M1a-1…4 | read every game file format, render areas natively, faithful look, hardening | done |
+| M1b Browser viewer | pick your game folder in Chrome and fly around any of the 123 areas | **done; you can test it now (§2)** |
+| M2 Script VM to the main menu | the game's own script (Base.osi) runs, up to its main menu in the browser | **in progress, about 34 %** |
+| M3 One playable area | character, collision, camera, animation | later |
+| M4 Audio, video, saves | sound, cutscenes, browser saves with export | later |
+| M5 The full game | every area, progression, bosses, AI | later |
+| M6 Public release | browser matrix, performance, public URL (needs your yes) | later |
+| M7 Extras (optional) | REBUILT content, gamepad, touch | later |
+
+Inside M2:
+
+| Sub-milestone | Acceptance | State |
+|---|---|---|
+| M2a-0 | completed decompiled code plus citation tables for 96 opcodes and 1,056 natives | done |
+| M2a-1 | VM core, an independent Python oracle, a 527-program conformance corpus; Base.osi Setup plus 600 frames byte-identical across native, wasm32 and Python; mutation bite and fuzz seed | done; **final review running** (§3) |
+| M2a-2 | native framework; `Setup` runs to the first `Process`; `lomn_view --script` runs N frames headless | next |
+| M2a-3 | menu systems: tile fonts, HUD sprites and text, camera spline, SDL3 input → `Input`/`OnEvent`, `Bionicle.ini`; the menu renders | after M2a-2; **needs your menu screenshots** |
+| M2a-4 | hardening: VM fuzz under ASan/UBSan, native and wasm32; caps measured; perf entries | after M2a-3 |
+| M2b | the browser page boots to the main menu; keys drive the menu | ends M2 |
+
+**First "start the game" moment.** At the end of M2 the browser opens the real main menu, and you can move through it with the keyboard. Nothing is playable before M3.
+
+## 2. What you can test right now: the area viewer (M1b)
+
+1. In a terminal at the repo root (this worktree), run:
+   ```bash
+   cd web && node -e "import('./tests/serve.mjs').then(async m=>{const s=await m.serve('../build/site');console.log(s.url)})"
+   ```
+   It prints a `http://127.0.0.1:<port>/` URL. Open it in Chrome. If `build/site` is missing, run `make site` first.
+2. Click **Choose game folder…** and pick your LOMN Beta 1.5.0 folder (the one containing `LEGOBionicle.exe` and `data`). Nothing is uploaded.
+3. Check and report back:
+   - the folder picker works, and the permission prompt appears when you revisit;
+   - mouse look and flying feel smooth;
+   - areas look right;
+   - Activity Monitor GPU memory plateaus over about 30 area switches;
+   - Safari and Firefox (only Chromium was tested);
+   - the 4 comparison shots G1–G4 against the real game: ghut net, vllg pink fog, vertex-colour clamp, field of view.
+
+Controller-verified 2026-10-08: the page loads to the folder picker with 0 console errors. The real-data browser suite passed 59/59 at M1b. Your eyes on a real folder are still outstanding.
+
+## 3. Resume steps, in order
+
+### 3.1 Close M2a-1
+Workspace: `.superpowers/sdd/2026-10-08-lomn-web-m2a1/`. It is git-ignored; the ledger is `progress.md`.
+1. **Fable final review.** It was dispatched 2026-10-08 and is read-only.
+   - If `final-review-report.md` exists, read it.
+   - Otherwise re-dispatch using `final-review-brief.md`, on model fable.
+2. **One fix dispatch** covering every Critical and Important finding. Also add the ledgered ruling: widen S05's `conform` EXPECT regex in `tools/research/oracle/mutate_vm.py:196` to the new programs `a/0x70-float-negative-lhs-cancels-to-positive-zero` and `a/0x71-float-negative-lhs-minus-itself-positive-zero`. Then:
+   - a scoped re-review;
+   - a frozen-copy check: anchors, `make conform-trace-cmp`, `mutate_vm --only S05`, the A6 differential. Delete the copy once its result is ledgered.
+3. **Close-out:**
+   - ledger, metrics (`~/.claude/process-metrics/lomn-web.jsonl`), board, memory;
+   - E2 round 3 notes in `docs/knowledge/process-experiments.md`;
+   - numbers in `docs/knowledge/measurements.md`;
+   - this file.
+4. Remove the finished task worktrees: `lomn-web-m2-{vm,oracle,ca,cb,t6,t7}`.
+
+### 3.2 M2a-2: native framework, Setup to the first Process
+Process: consult Fable, then plan, then subagent-driven development.
+- Generated typed stubs for every native, with real returns for the 3 copy-kind natives.
+- The natives `Setup` needs, implemented against the decomp with a citation per native.
+- `lomn_view --script`: Setup plus N Process frames, headless, native and wasm32.
+- A tier list of menu natives from the A8/A10 run trace (A3: the 728 `class.func` pairs Base.osi calls).
+- Parked items that land here:
+  - the static reachability walk and the 0x19 residual;
+  - the 4th FindMemberID caller 0x616519 (GetVariantFromBuffer) must use the VM's miss cache;
+  - a `next_[]` handle-wrap guard;
+  - a unit test for the empty-symbol-table NULL case;
+  - the bodies of the Beta 1.5.0 mod natives (read as data, never run);
+  - the atof rounding-chain blind spot (A6/A9 risk);
+  - a `-fwasm-exceptions` scope revisit;
+  - a loadavg field in perf rows.
+
+### 3.3 M2a-3: menu systems
+Tile fonts (binary `.fnt`), HUD sprites, text and rectangles through the D3D8 shim (FVF 0x42, textured quads, HUD transform, drawn after the area), camera spline, SDL3 input, and `Bionicle.ini` via the VFS.
+- Acceptance: a pixel comparison against **your screenshots of the real menu**. This review cannot close without them.
+- It carries most of M2's size variance.
+
+### 3.4 M2a-4 and M2b
+- M2a-4: VM fuzz of bytecode and tables under ASan/UBSan, native and wasm32; caps measured on Base.osi; perf entries.
+- M2b:
+  - the BYO page boots to the menu;
+  - `window.__lomn.script` exposes the script state;
+  - Playwright drives the menu with keys;
+  - you test it in your browser.
+
+### 3.5 M3 onward
+Each milestone starts with its own Fable consult, then a spec, then a plan; none is planned yet.
+- M3, one playable area: needs traces from the original game as its oracle. Expect to be asked for recordings.
+- M4: audio, cutscenes, saves.
+- M5: the full game.
+- M6, release: needs your yes on everything in §5.
+
+## 4. Size and pace (estimates, low confidence)
+- **Spent on M2 so far, measured:** M2a-0 took 5.4 h and M2a-1 took 4.4 h of logged agent time (the sum of agent wall-minutes; controller time not included).
+- **M2 remaining, estimated:** the spec's total was 33–45 agent-hours, which leaves roughly 23–35 for M2a-2 → M2b. M2a-3 is the widest range. In sessions like today's, that is a few days of work, plus your screenshot round-trip.
+- **Whole game, estimated:** the board's sizing puts M2 → M6 at 21–39 milestone-sized units. An earlier Fable review put the gameplay work at 12–24 person-months in human terms. The playable-area milestone (M3) has no oracle as strong as the renderer's, so expect it to be slower per unit.
+
+## 5. Needed from you
+**Checks you can do any time:**
+- the §2 viewer checks;
+- screenshots of the real main menu after the intro: 640×480 and your usual resolution, cursor on entries 1 and 2, plus the Options screen (before the M2a-3 review);
+- whether Esc, Backspace and right-click work on the Options screen;
+- G1–G4 comparison shots plus the original game's file-access log;
+- about 15 quiet minutes on the Mac (load under 6) for the performance baselines and experiment E1;
+- `claude plugin update agent-playbooks@agent-playbooks-local`.
+
+**Actions that wait for your explicit yes** (never done without it):
+- merge to main;
+- any push (a separate yes each time);
+- deploy;
+- licence and README;
+- making the repo public;
+- a git history rewrite (an early commit contains a username path);
+- publishing the research notes;
+- pushing the PORT-001 playbook correction.
+
+## 6. Standing rules for whoever resumes
+- **Never run** the game's .exe or any DLL; parse them as data only.
+- **Never commit:** game data, renders, decompiled code blocks, or assembled .osi files. `gen/` stays out of git.
+- **Scrub personal paths** before any commit.
+- **Roles:** Claude subagents implement, never Codex. The controller specs, reviews and owns git, and consults Fable before every spec and plan.
+- **Verification:**
+  - run it on a frozen `git archive` copy;
+  - the copy needs a `.toolchain` symlink, a real `.venv/` with symlinks and `.ok`, and `.env.local`;
+  - delete the copy as soon as its result is in the ledger.
+- **No foreground command over 2 minutes.** Long work runs in the background, and every wait matches failure too.
+
+## 7. Where things live
+- **Branches.** `m2-osi-vm` is the current work; its worktree is `lomn-web-m2`. It contains `m1-integration`, the merged M1. `main` is untouched until you say so.
+- **Workspaces:**
+  - plans in `docs/superpowers/plans/`, specs in `docs/superpowers/specs/`;
+  - research in `docs/knowledge/research/`;
+  - the OSI contracts in `docs/osi/`.
+- **Ledgers:**
+  - per-plan ledgers in `.superpowers/sdd/<plan>/progress.md`, git-ignored;
+  - process metrics in `~/.claude/process-metrics/lomn-web.jsonl`.
