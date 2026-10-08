@@ -13,6 +13,7 @@
 //  so the closest observable is the device's own destroy counter (gpu_destroys) and its undestroyed-surface-depth set,
 //  driven through the headless test seam debug_cycle_surface_depth (the depth half of resize()). Runs before probe 6 so
 //  that "no GPU error" can still be asserted. The same counter pins texture/buffer destroys (2 per depth render target).
+//  M1 close-out C-a3: 8. a loss that happened before set_lost_handler is delivered inside that call, exactly once (second device).
 //  T8 P4: the lost handler is installed before probe 1 and records every reason it receives, so probes 1-4 assert that
 //  no GPU error happened (none reached it, after a queue wait), and probe 6 asserts WHICH error arrived: the provoked
 //  WGSL compile error (a stale error left by an earlier probe would arrive first, and fail that check).
@@ -241,6 +242,42 @@ int main() {
     // T8 P4: and it is the error this probe provoked (Dawn's WGSL parse error quoting the bad source), not a stale one.
     check(why.find("Error while parsing WGSL") != std::string::npos && why.find("this is not WGSL") != std::string::npos,
           "6. the handler's reason is the provoked WGSL compile error");
+  }
+  // 8. (M1 close-out C-a3) A loss BEFORE any handler is set is held by the device and delivered INSIDE set_lost_handler, exactly once
+  //    (webgpu_device.cpp: LostSink::pending). The first device's handler was installed up front (probes 1-7), so a second device
+  //    takes the same bad pipeline with no handler, waits for the queue so Dawn has reported the error, and only then gets one.
+  {
+    std::unique_ptr<Device> d2;
+    std::string err2;
+    create_webgpu_device(nullptr, 0, 0, [&](std::unique_ptr<Device> d, std::string e) {
+      d2 = std::move(d);
+      err2 = std::move(e);
+    });
+    if (!d2) {
+      std::printf("     second device: %s\n", err2.c_str());
+      check(false, "8. a second device could be created for the pending-loss probe");
+    } else {
+      MeshPipelineDesc bad = pd;
+      bad.wgsl = "this is not WGSL";
+      const PipelineId bp = d2->create_mesh_pipeline(bad);
+      const TextureId t8 = d2->create_render_target_ex(RenderTargetDesc{8, 8, true, 1.0f});
+      d2->begin_frame(t8, clear);
+      d2->end_frame();
+      std::vector<uint8_t> px8;
+      const bool waited = d2->read_pixels(t8, px8);  // waits for the queue: the error has been reported by now, to nobody
+      std::vector<std::string> got;
+      bool inside = false;
+      d2->set_lost_handler([&](const std::string& why) { got.push_back(why); });
+      inside = got.size() == 1;  // delivered before set_lost_handler returned (nothing else has run since)
+      std::printf("     pending loss: handler called %zu time(s) inside set_lost_handler: %s\n", got.size(), got.empty() ? "-" : got[0].c_str());
+      check(bp && waited && inside, "8. a loss before the handler was set is delivered inside set_lost_handler, once");
+      check(!got.empty() && got[0].rfind("GPU error (validation)", 0) == 0 && got[0].find("this is not WGSL") != std::string::npos,
+            "8. the delivered reason is the provoked WGSL compile error");
+      std::vector<std::string> again;
+      d2->set_lost_handler([&](const std::string& why) { again.push_back(why); });
+      d2->read_pixels(t8, px8);
+      check(again.empty() && got.size() == 1, "8. nothing is delivered twice: a second handler gets no replay, the first none more");
+    }
   }
   std::printf("adapter=%s\n", dev->adapter().c_str());
   return ok ? 0 : 1;
