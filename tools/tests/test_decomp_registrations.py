@@ -30,6 +30,7 @@ def test_reg_sites_present(gen_decomp):
 
 
 def test_every_site_inside_exactly_one_function(gen_decomp):
+    # owner == enclosing cannot see a stray prologue inside the true function; test_enclosing_starts_are_initializers can.
     funcs = _functions(gen_decomp)
     bad = []
     for r in _reg_sites(gen_decomp):
@@ -44,6 +45,15 @@ def test_every_fnptr_is_a_function_start(gen_decomp):
     starts = {a for a, _ in _functions(gen_decomp)}
     missing = sorted({r["fnptr"] for r in _reg_sites(gen_decomp)} - starts)
     assert not missing, [hex(a) for a in missing[:20]]
+
+
+def test_enclosing_starts_are_initializers(gen_decomp, canonical_exe):
+    # The real guard against a stray aligned prologue inside the true function (it would become its own function, and
+    # owner == enclosing would still hold): every enclosing start is a .CRT initializer, or the one ScInitFunc callback.
+    import seed_addrs
+    crt = set(seed_addrs.compute(canonical_exe.read_bytes())["crt"])
+    stray = {r["enclosing"] for r in _reg_sites(gen_decomp)} - (crt | {0x61D6A0})
+    assert not stray, sorted(hex(a) for a in stray)
 
 
 def test_every_crt_initializer_is_a_function(gen_decomp, canonical_exe):

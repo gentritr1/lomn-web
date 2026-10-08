@@ -78,17 +78,64 @@ ANALYSIS_SCRIPTS = ("ApplyCVTypes2.java", "ApplyCVSymbols.java", "ApplyCVLocals.
                     "CVTypeSpec.java", "SeedFunctions.java", "ApplySret.java")
 # The seed extraction rule: a change to it must force re-analysis even if today's seed list happens not to change.
 SEED_EXTRACTOR = HERE / "seed_addrs.py"
+# The analysis step's script flags, in order (run() prefixes "-import <exe> -overwrite"). Part of analysis_key: a
+# dropped or reordered script must not reuse the cached project and re-read the stats of the old analyze.log.
+ANALYSIS_ARGV = ("-preScript", "ApplyCVTypes2.java", "-preScript", "ApplyCVSymbols.java",
+                 "-preScript", "SeedFunctions.java",
+                 "-postScript", "ApplyCVLocals.java", "-postScript", "ApplyD3D8Types.java",
+                 "-postScript", "ApplySret.java")
+# Env passed to the analysis scripts: key -> (base, file). base "dec" = gen/decomp (an output of the earlier steps),
+# "here" = tools/decomp (a repo file). The keys and the (base, file) pairs are hashed; the files' contents are hashed too.
+ANALYSIS_ENV = {"CV_SYMBOLS": ("dec", "symbols.txt"), "CV_TYPES": ("dec", "types.txt"),
+                "SEED_ADDRS": ("dec", "seed_addrs.txt"), "D3D8_VTABLES": ("here", "data/d3d8_vtables.txt")}
+
+
+def analysis_env(dec: Path) -> dict:
+    return {k: str((dec if base == "dec" else HERE) / name) for k, (base, name) in ANALYSIS_ENV.items()}
+
+
+def ghidra_version() -> str:
+    """application.version from $GHIDRA_HOME/Ghidra/application.properties, or "unknown"."""
+    p = GHIDRA_HOME / "Ghidra" / "application.properties"
+    if p.is_file():
+        for line in p.read_text(errors="replace").splitlines():
+            if line.startswith("application.version="):
+                return line.split("=", 1)[1].strip()
+    return "unknown"
 
 
 def analysis_key(exe_sha: str, dec: Path, scripts_dir: Path) -> str:
-    """Identity of everything the cached analysis depends on; a changed script or input forces re-analysis."""
+    """Identity of everything the cached analysis depends on: the exe, the Ghidra version, the command's script flags,
+    the env keys, and the content of every input file and script. Any change forces re-analysis."""
     h = hashlib.sha256(exe_sha.encode())
-    files = [dec / "types.txt", dec / "symbols.txt", dec / "seed_addrs.txt", HERE / "data" / "d3d8_vtables.txt",
-             SEED_EXTRACTOR, *(scripts_dir / n for n in sorted(ANALYSIS_SCRIPTS))]
+    h.update(b"\0ghidra\0" + ghidra_version().encode())
+    h.update(b"\0argv\0" + "\0".join(ANALYSIS_ARGV).encode())
+    h.update(b"\0env\0" + "\0".join(f"{k}={b}:{n}" for k, (b, n) in sorted(ANALYSIS_ENV.items())).encode())
+    files = [*(Path(v) for _, v in sorted(analysis_env(dec).items())), SEED_EXTRACTOR,
+             *(scripts_dir / n for n in sorted(ANALYSIS_SCRIPTS))]
     for f in files:
         h.update(b"\0" + f.name.encode() + b"\0")
         h.update(f.read_bytes())
     return h.hexdigest()
+
+
+def finish_analysis(cache: Path, key: str, n_seeds: int) -> dict:
+    """Parse the analysis stats from cache/analyze.log and write the cache marker only if the analysis is complete:
+    every stat present, no seed or sret failure, every seed created or already a function, and CreateVariant retyped."""
+    log = cache / "analyze.log"
+    text = log.read_text(errors="replace")
+    stats = {k: int(m.group(1)) for k, p in STAT_PATTERNS.items() if (m := re.search(p, text))}
+    if len(stats) != len(STAT_PATTERNS):
+        raise SystemExit(f"Ghidra script stats missing ({sorted(set(STAT_PATTERNS) - set(stats))}); see {log}")
+    if bad := {k: stats[k] for k in MUST_BE_ZERO if stats[k]}:
+        raise SystemExit(f"Ghidra analysis incomplete ({bad}); see {log}")
+    if stats["ghidra_seeds_created"] + stats["ghidra_seeds_existing"] != n_seeds:
+        raise SystemExit(f"Ghidra seed totals: created {stats['ghidra_seeds_created']} + existing "
+                         f"{stats['ghidra_seeds_existing']} != {n_seeds} seeds; see {log}")
+    if stats["ghidra_sret_retyped"] <= 0:
+        raise SystemExit(f"Ghidra sret: no CreateVariant retyped; see {log}")
+    (cache / "analysis.ok").write_text(key + "\n")
+    return stats
 
 
 def _kill_group(proc: subprocess.Popen, grace_s: float = 30.0) -> None:
@@ -148,28 +195,15 @@ def run(exe: Path, gen: Path, cache_root: Path, reanalyze: bool) -> dict:
     proj = cache / "proj"
     check_cache_path(proj)
     key = analysis_key(sha, dec, SCRIPTS)
-    marker = cache / "analysis.ok"  # holds analysis_key(); written only after analysis + stats check succeed
+    marker = cache / "analysis.ok"  # holds analysis_key(); written by finish_analysis() only after the stats check
     fresh = marker.exists() and marker.read_text().strip() == key and (proj / "LOMN.gpr").exists()
     if (reanalyze or not fresh) and proj.exists():
         shutil.rmtree(proj)
     if reanalyze or not fresh:
         marker.unlink(missing_ok=True)
         proj.mkdir(parents=True, exist_ok=True)
-        ghidra(proj, ["-import", str(exe), "-overwrite",
-                      "-preScript", "ApplyCVTypes2.java", "-preScript", "ApplyCVSymbols.java",
-                      "-preScript", "SeedFunctions.java",
-                      "-postScript", "ApplyCVLocals.java", "-postScript", "ApplyD3D8Types.java",
-                      "-postScript", "ApplySret.java"],
-               {"CV_SYMBOLS": str(dec / "symbols.txt"), "CV_TYPES": str(dec / "types.txt"),
-                "SEED_ADDRS": str(dec / "seed_addrs.txt"),
-                "D3D8_VTABLES": str(HERE / "data" / "d3d8_vtables.txt")}, cache / "analyze.log")
-    stats = {k: int(m.group(1)) for k, p in STAT_PATTERNS.items()
-             if (m := re.search(p, (cache / "analyze.log").read_text(errors="replace")))}
-    if len(stats) != len(STAT_PATTERNS):
-        raise SystemExit(f"Ghidra script stats missing ({sorted(set(STAT_PATTERNS) - set(stats))}); see {cache / 'analyze.log'}")
-    if bad := {k: stats[k] for k in MUST_BE_ZERO if stats[k]}:
-        raise SystemExit(f"Ghidra analysis incomplete ({bad}); see {cache / 'analyze.log'}")
-    marker.write_text(key + "\n")
+        ghidra(proj, ["-import", str(exe), "-overwrite", *ANALYSIS_ARGV], analysis_env(dec), cache / "analyze.log")
+    stats = finish_analysis(cache, key, n_seeds=len((dec / "seed_addrs.txt").read_text().split()))
     export = cache / "export"
     if export.exists():
         shutil.rmtree(export)
