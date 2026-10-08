@@ -8,7 +8,7 @@
 *.mov
 # Local config, toolchain, builds
 .env.local
-/.toolchain/
+/.toolchain
 /build/
 /.venv/
 web/node_modules/
