@@ -1,0 +1,162 @@
+// M2a-1 T1: lomn::osi::Vm, the OSI script VM (ScOSIVirtualMachine), written from docs/osi/opcodes.md (96 handlers,
+// "Engine calls", "After an error"), docs/osi/trace.md and the M2 rulings D4 (memoised call sites, the image is never
+// written), D7 (handles), D8' (precision state), D9 (canonical NaN), D10 (errors) and D11 (typed stubs).
+#pragma once
+#include <cstdint>
+#include <map>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <unordered_map>
+#include <vector>
+
+#include "lomn/osi/heap.h"
+#include "lomn/osi/registry.h"
+#include "lomn/osi/stack.h"
+#include "lomn/osi/trace.h"
+#include "lomn/osi/variant.h"
+#include "lomn/sage/osi.h"
+
+namespace lomn::osi {
+
+struct VmState {
+  uint32_t pc = 0, depth = 0, frame = 0, context_depth = 0;
+  int refcount = 0;
+  Variant top;          // valid when depth > 0
+  bool halted = false;  // the last Run ended on 0xff
+  int fpu_pc = 24;      // D8'
+};
+
+// found=false: "Unable to locate function %s in scripts" (a Message, not an Error). ok=false: an error was recorded
+// (last_error(); the VM state is left exactly as at the throw until reset_after_error()).
+// The result is disposed by the host right after the R record (Call 0x60b320 disposes it), so `result` is only its type
+// and value; `result_text` is the text of a 0x16 result, read before that disposal.
+struct CallResult {
+  bool found = false;
+  bool ok = false;
+  Variant result;
+  std::string result_text;
+};
+
+class Vm {
+ public:
+  Vm(const sage::OsiFile& script, NativeRegistry& natives, Heap& heap, TraceSink* trace);
+
+  // Engine -> script call (opcodes.md "Engine calls": Call 0x60b320 / CallWithReturn 0x60b450 / SetPCAndArgs 0x60b5e0).
+  // At most 10 arguments; their ownership moves to the VM (pushed or disposed). Re-entrant: a native may call it.
+  CallResult call(std::string_view name, const std::vector<Variant>& args = {});
+  // 0x82 memoisation (D4): the native resolved at a call site (file offset), or nullptr.
+  const NativeEntry* memo(uint32_t site_pc) const;
+  // ConvertVariant (0x60b9d0). A 0x11 source with an int/float target is first replaced IN PLACE by a dynamic string
+  // (so `v` may change); the converted value is returned. The caller disposes `v` afterwards when it owns it.
+  Variant convert(Variant& v, uint16_t target);
+
+  const VmError* last_error() const { return last_error_ ? &*last_error_ : nullptr; }
+  VmState snapshot() const;
+  void reset_after_error();  // our host behaviour (D10): pop to the outer call's marker, restore the four registers
+
+  Heap& heap() { return heap_; }
+  NativeRegistry& natives() { return natives_; }
+  const sage::OsiFile& script() const { return script_; }
+  TraceSink* trace() const { return trace_; }
+  // A system-wide global by name (case-folded, as GetToken keys it), or nullptr when it does not exist yet.
+  const Variant* find_global(std::string_view name) const;
+  Variant& global(std::string_view name);  // creates it as nothing when absent (ScOSISystem::GetGlobalVariable 0x609e10)
+  uint64_t instructions() const { return instructions_; }
+  int fpu_pc() const { return fpu_pc_; }
+  uint32_t stack_high_water() const { return high_water_; }
+
+ private:
+  static const char* const kDirectCallMessage;  // 0x84's text, reported at a memoised 0x82 site
+  using Handler = bool (Vm::*)();
+
+  CallResult call_impl(std::string_view name, const std::vector<Variant>& args);
+  const sage::OsiFunction* find_function(std::string_view name) const;
+  void run();
+  bool dispatch(uint8_t op);
+  void record_error(const VmError& e);
+  void set_pc64();  // D8': the switch to 64-bit precision, traced as `P` once
+  void push(Variant v);
+  Variant pop();
+  void pop_dispose();
+  void trace_line(const std::string& s);
+
+  // operand reads at cur_pc_ + off (bounds-checked)
+  uint8_t op_u8(uint32_t off) const;
+  uint16_t op_u16(uint32_t off) const;
+  uint32_t op_u32(uint32_t off) const;
+  std::string str_entry(uint32_t idx) const;   // string-table text (raw bytes)
+  std::string symbol_name(uint32_t idx) const; // symbol-table text
+  std::string string_text(Variant s);          // text of a 0x11 or 0x16 variant
+  Variant to_dynamic_string(Variant v);        // ConvertStringIDToDynamicString (0x60b880), "kOutOfRange" at >= 255
+  Variant& var_ref(uint16_t idx);              // 0x21/0x22 addressing
+  Variant& frame_slot(uint32_t idx);
+  const sage::OsiClass& class_of(uint32_t obj);
+  uint32_t find_method(uint32_t obj, uint16_t sym, const char* undefined_msg);  // FindMethod 0x608600
+  uint16_t find_member_id(const std::string& name) const; // FindMemberID 0x609ba0
+  std::string fmt_err(const char* fmt, uint32_t type) const;
+
+  // shared handler bodies (each handler passes its own message literals)
+  bool compare(Op op, const char* lhs_msg, const char* rhs_msg);
+  bool int_binop(int which, const char* lhs_msg, const char* rhs_msg);
+  bool colour_set(int shift, const char* c_msg, const char* v_msg);
+  bool colour_get(int shift, const char* c_msg);
+  bool type_test(int which);
+  bool convert_op(uint16_t target);
+  struct NativeMsgs {
+    const char* too_many;
+    const char* too_few;
+    const char* mismatch;  // 0x83's inner "Argument type mismatch ..." (nullptr for 0x82)
+  };
+  void invoke_native(const NativeEntry& e, uint32_t n, const std::string& cls, const std::string& fn, uint32_t next_pc,
+                     bool check_argc, const NativeMsgs& msgs);
+
+#define LOMN_OSI_H(x) bool bcl_##x();
+  LOMN_OSI_H(00) LOMN_OSI_H(02) LOMN_OSI_H(03) LOMN_OSI_H(04) LOMN_OSI_H(05) LOMN_OSI_H(06)
+  LOMN_OSI_H(10) LOMN_OSI_H(11) LOMN_OSI_H(12) LOMN_OSI_H(13) LOMN_OSI_H(14) LOMN_OSI_H(15) LOMN_OSI_H(16) LOMN_OSI_H(17)
+  LOMN_OSI_H(18) LOMN_OSI_H(19) LOMN_OSI_H(1a)
+  LOMN_OSI_H(21) LOMN_OSI_H(22) LOMN_OSI_H(23) LOMN_OSI_H(24) LOMN_OSI_H(25)
+  LOMN_OSI_H(30) LOMN_OSI_H(31) LOMN_OSI_H(32) LOMN_OSI_H(33) LOMN_OSI_H(34) LOMN_OSI_H(35)
+  LOMN_OSI_H(40) LOMN_OSI_H(41) LOMN_OSI_H(42) LOMN_OSI_H(43) LOMN_OSI_H(44) LOMN_OSI_H(45) LOMN_OSI_H(46) LOMN_OSI_H(47)
+  LOMN_OSI_H(48) LOMN_OSI_H(49)
+  LOMN_OSI_H(50) LOMN_OSI_H(51) LOMN_OSI_H(52) LOMN_OSI_H(53) LOMN_OSI_H(54)
+  LOMN_OSI_H(60) LOMN_OSI_H(61) LOMN_OSI_H(62) LOMN_OSI_H(63) LOMN_OSI_H(64)
+  LOMN_OSI_H(6a) LOMN_OSI_H(6b) LOMN_OSI_H(6c) LOMN_OSI_H(6d) LOMN_OSI_H(6e) LOMN_OSI_H(6f)
+  LOMN_OSI_H(70) LOMN_OSI_H(71) LOMN_OSI_H(72) LOMN_OSI_H(73) LOMN_OSI_H(74) LOMN_OSI_H(75) LOMN_OSI_H(76) LOMN_OSI_H(77)
+  LOMN_OSI_H(78) LOMN_OSI_H(7a) LOMN_OSI_H(7b)
+  LOMN_OSI_H(80) LOMN_OSI_H(81) LOMN_OSI_H(82) LOMN_OSI_H(83) LOMN_OSI_H(84)
+  LOMN_OSI_H(90) LOMN_OSI_H(91) LOMN_OSI_H(92) LOMN_OSI_H(93) LOMN_OSI_H(94) LOMN_OSI_H(95) LOMN_OSI_H(96)
+  LOMN_OSI_H(a0) LOMN_OSI_H(a1) LOMN_OSI_H(a2) LOMN_OSI_H(a3) LOMN_OSI_H(a4) LOMN_OSI_H(a5) LOMN_OSI_H(a6) LOMN_OSI_H(a7)
+  LOMN_OSI_H(b0) LOMN_OSI_H(b1) LOMN_OSI_H(b2) LOMN_OSI_H(b8) LOMN_OSI_H(b9) LOMN_OSI_H(ba) LOMN_OSI_H(bb) LOMN_OSI_H(bc)
+  LOMN_OSI_H(bd) LOMN_OSI_H(bf) LOMN_OSI_H(ff) LOMN_OSI_H(unused)
+#undef LOMN_OSI_H
+
+  const sage::OsiFile& script_;
+  const std::vector<uint8_t>& img_;
+  NativeRegistry& natives_;
+  Heap& heap_;
+  TraceSink* trace_;
+  Stack stack_;
+  uint32_t pc_ = 0;
+  uint32_t frame_ = 0;
+  uint16_t context_depth_ = 0;
+  int refcount_ = 0;
+  int fpu_pc_ = 24;
+  bool halted_ = false;
+  uint32_t cur_pc_ = 0;
+  uint8_t cur_op_ = 0;
+  uint64_t instructions_ = 0;
+  uint32_t high_water_ = 0;
+  uint64_t native_seq_ = 0;
+  std::map<std::string, Variant, std::less<>> globals_;
+  std::unordered_map<uint32_t, const NativeEntry*> memo_;
+  std::optional<VmError> last_error_;
+  int nesting_ = 0;
+  struct Saved {
+    uint32_t depth = 0, pc = 0, frame = 0;
+    uint16_t context = 0;
+    int refcount = 0;
+  } saved_;
+};
+
+}  // namespace lomn::osi

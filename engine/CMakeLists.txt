@@ -27,6 +27,18 @@ add_library(lomn_sage STATIC src/sage/blockfile.cpp src/sage/blockchain.cpp src/
 target_link_libraries(lomn_sage PUBLIC lomn_core)
 target_compile_options(lomn_sage PRIVATE -Wall -Wextra)
 
+# M2a-1 T1: the OSI script VM (lomn::osi), written from docs/osi/opcodes.md. Errors are C++ exceptions (spec D10), so the
+# wasm32 build needs exception catching: Emscripten's default build aborts on the first throw. -fwasm-exceptions (native
+# wasm EH, near-zero cost; runs under node 20) is PUBLIC so every target linking lomn_osi compiles and links with it.
+add_library(lomn_osi STATIC src/osi/heap.cpp src/osi/convert.cpp src/osi/registry.cpp src/osi/trace.cpp src/osi/vm.cpp
+            src/osi/vm_handlers.cpp)
+target_link_libraries(lomn_osi PUBLIC lomn_sage)
+target_compile_options(lomn_osi PRIVATE -Wall -Wextra)
+if(EMSCRIPTEN)
+  target_compile_options(lomn_osi PUBLIC -fwasm-exceptions)
+  target_link_options(lomn_osi PUBLIC -fwasm-exceptions)
+endif()
+
 # M1a-3 faithful states: the D3D8 fixed-function state shim (state log) and its compiler to rhi (uber-shader + pipeline
 # keys). D3D-convention matrices (view/math) live here so the shim can hold transforms.
 add_library(lomn_d3d STATIC src/view/math.cpp src/d3d/device8.cpp src/d3d/ffp.cpp)
@@ -297,8 +309,9 @@ endif()
 add_executable(lomn_tests tests/test_main.cpp tests/test_fs.cpp tests/test_rhi_null.cpp tests/test_loop.cpp tests/test_sage_blockfile.cpp tests/test_sage_blockchain.cpp tests/test_sage_slb.cpp tests/test_sage_xfile.cpp tests/test_sage_image.cpp
                tests/test_rhi_mesh.cpp tests/test_view_mips.cpp tests/test_view_area.cpp tests/test_d3d.cpp tests/test_sage_osi.cpp
                tests/test_area_states.cpp tests/test_sage_frame.cpp tests/test_view_texture_cache.cpp tests/test_fuzz_fragments.cpp
-               tests/test_rhi_destroy.cpp tests/test_prefetch_fs.cpp tests/test_fly_camera.cpp)  # M1b
-target_link_libraries(lomn_tests PRIVATE lomn_area)
+               tests/test_rhi_destroy.cpp tests/test_prefetch_fs.cpp tests/test_fly_camera.cpp  # M1b
+               tests/test_osi_vm.cpp)  # M2a-1
+target_link_libraries(lomn_tests PRIVATE lomn_area lomn_osi)
 target_include_directories(lomn_tests PRIVATE "${LOMN_TOOLCHAIN_DIR}/include")
 target_compile_definitions(lomn_tests PRIVATE "LOMN_TESTS_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/tests\"")  # test_fuzz_fragments.cpp scans fuzz_fragments.h and xfile.cpp (native and wasm32 via NODERAWFS)
 if(EMSCRIPTEN)
@@ -315,7 +328,9 @@ add_test(NAME unit COMMAND lomn_tests)
 if(NOT EMSCRIPTEN)
   add_executable(lomn_tests_asan tests/test_main.cpp tests/test_sage_xfile.cpp tests/test_fuzz_fragments.cpp
                  tests/test_sage_blockfile.cpp tests/test_sage_slb.cpp tests/test_sage_image.cpp
-                 src/sage/blockfile.cpp src/sage/blockchain.cpp src/sage/slb.cpp src/sage/xfile.cpp src/sage/image.cpp src/sage/osi.cpp)
+                 src/sage/blockfile.cpp src/sage/blockchain.cpp src/sage/slb.cpp src/sage/xfile.cpp src/sage/image.cpp src/sage/osi.cpp
+                 tests/test_osi_vm.cpp src/osi/heap.cpp src/osi/convert.cpp src/osi/registry.cpp src/osi/trace.cpp
+                 src/osi/vm.cpp src/osi/vm_handlers.cpp)  # M2a-1: the VM's unit cases under ASan + UBSan
   target_include_directories(lomn_tests_asan PRIVATE include "${LOMN_TOOLCHAIN_DIR}/include")
   target_compile_definitions(lomn_tests_asan PRIVATE "LOMN_TESTS_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/tests\"")
   target_compile_options(lomn_tests_asan PRIVATE -Wall -Wextra -ffp-contract=off -O1 -g -fno-omit-frame-pointer
@@ -324,6 +339,22 @@ if(NOT EMSCRIPTEN)
   add_test(NAME unit_asan COMMAND lomn_tests_asan)
   set_tests_properties(unit_asan PROPERTIES TIMEOUT 120)
 endif()
+# M2a-1 T1: the conformance runner (docs/osi/conformance.md). The corpus's .asm files are assembled at test time into the
+# build dir (tools/osi/conform_assemble.py: <id>.osi + <id>.labels, never committed), then every .expect.json is checked.
+# Exit 77 (skip) when the corpus has no program yet. Natively and under node (NODERAWFS reads the source tree).
+add_executable(lomn_osi_conform tools/lomn_osi_conform.cpp)
+target_link_libraries(lomn_osi_conform PRIVATE lomn_osi)
+target_compile_options(lomn_osi_conform PRIVATE -Wall -Wextra)
+target_compile_definitions(lomn_osi_conform PRIVATE "LOMN_OSI_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/../data/osi\"")
+if(EMSCRIPTEN)
+  target_link_options(lomn_osi_conform PRIVATE -sNODERAWFS=1 -sALLOW_MEMORY_GROWTH=1)
+endif()
+add_test(NAME osi_conform COMMAND sh -c
+         "timeout 120 python3 \"$1\" \"$2\" \"$3\" || exit 1; if [ -n \"$4\" ]; then timeout 300 \"$4\" \"$0\" \"$2\" --osi-dir \"$3\"; else timeout 300 \"$0\" \"$2\" --osi-dir \"$3\"; fi"
+         $<TARGET_FILE:lomn_osi_conform> ${CMAKE_CURRENT_SOURCE_DIR}/../tools/osi/conform_assemble.py
+         ${CMAKE_CURRENT_SOURCE_DIR}/../tests/osi/conformance ${CMAKE_CURRENT_BINARY_DIR}/osi_conformance
+         "${CMAKE_CROSSCOMPILING_EMULATOR}")
+set_tests_properties(osi_conform PROPERTIES SKIP_RETURN_CODE 77)
 # REF3 revision 2: crafted-input time/memory probes of the OSI reader, natively and as wasm32 (2 GB linear memory).
 add_executable(lomn_osi_probe tests/probe_osi.cpp)
 target_link_libraries(lomn_osi_probe PRIVATE lomn_sage)
