@@ -462,3 +462,13 @@ reads as a bite.
 **ASan + UBSan r2** (final engine sources): ctest 30/30, the 122-area manifest identical to Release (`not_addressable`
 lev4/lev4c), vllg/ghut/crss renders byte-identical to the M1a-3 evidence, survey 123 total / 122 addressable / 0
 failures, 0 bytes of stderr.
+
+## M1 final gate (merged M1a-4 + M1b, 2026-10-08)
+
+Run by the controller on a frozen `git archive 8b91a14` of `m1-integration` (own node_modules, symlinked toolchain), host load 36–42 from other sessions, 60 Hz display.
+
+- **`make check`** with `LOMN_DATA`: all layers green — pytest 111 passed, 0 skips / xfails / xpasses; native ctest 36/36; wasm ctest 9/9; native == wasm32 traces and logs identical; node 59; byo_synthetic 123/123; datacheck 39/39 native and wasm32; a13_real 60/60; worklist 0 errors.
+- **`make a9-sweep`:** 123/123 areas equal (oracle == shim). **Renders** lev1/vllg, lev2/ghut, lev4/crss byte-identical to the M1a-3 references.
+- **Full `mutate4.py`, all 38 entries** (run in chunks 1–13, 14–26, 23 + 27–38 with the fixed scorer, 33–38): **37 CAUGHT, each on its targeted check; the no-op control (#38) MISSED.** This closes the "full rerun PENDING" note above.
+  - Entry #23 was first scored MISSED although its targeted `FAIL C1: GPU process crash …` line was in the log: `mutate4.run()` kept only the last 1,500 characters of the FAIL lines, and #23 breaks 7 checks. Fixed in `d72cc7c` (every FAIL line is kept; `tools/tests/test_mutate4_run.py` fails on the old `run()`); #23 re-run: CAUGHT on C1.
+  - One chunk was killed by a 30-minute tool limit mid-entry #33 and left that mutation applied in the frozen copy; the file was restored from the commit, the tree re-compared (0 differences) and #33–#38 re-run.
