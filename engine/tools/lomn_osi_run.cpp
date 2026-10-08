@@ -302,6 +302,9 @@ int main(int argc, char** argv) {
   Heap heap(&tee);
   Vm vm(file, reg, heap, &tee);
 
+  // T11: the 1-minute loadavg at the start and at the end of the run (perf_history.py reads both keys); -1 = unavailable
+  auto loadavg1 = []() { double l[1] = {-1.0}; return ::getloadavg(l, 1) == 1 ? l[0] : -1.0; };
+  const double loadavg_start = loadavg1();
   std::string stop = "none";
   auto t0 = std::chrono::steady_clock::now();
   CallResult r = vm.call("Setup", {});
@@ -419,12 +422,14 @@ int main(int argc, char** argv) {
                    "{\"scene\": \"osi-a6\", \"commit\": \"%s\", \"frames\": %ld, \"expected_frames\": %ld, \"insns_per_frame_p50\": %llu, "
                    "\"insns_per_frame_p95\": %llu, \"insns_samples\": %zu, \"natives_per_frame_p50\": %llu, \"natives_per_frame_p95\": %llu, "
                    "\"script_ms_per_frame_p50\": %.4f, \"script_ms_per_frame_p95\": %.4f, \"stack_high_water\": %u, "
-                   "\"setup_instructions\": %llu, \"instructions\": %llu, \"flattening_frame\": %ld, \"stop\": \"%s\"}\n",
+                   "\"setup_instructions\": %llu, \"instructions\": %llu, \"flattening_frame\": %ld, \"stop\": \"%s\", "
+                   "\"loadavg_start\": %.2f, \"loadavg_end\": %.2f}\n",
                    commit.c_str(), done, frames, (unsigned long long)pct(insns_per_frame, 0.5),
                    (unsigned long long)pct(insns_per_frame, 0.95), insns_per_frame.size(),
                    (unsigned long long)pct(natives_per_frame, 0.5), (unsigned long long)pct(natives_per_frame, 0.95),
                    pctd(ms_per_frame, 0.5), pctd(ms_per_frame, 0.95), vm.stack_high_water(), (unsigned long long)setup_insns,
-                   (unsigned long long)vm.instructions(), flatten, stop == "none" ? "none" : "error");
+                   (unsigned long long)vm.instructions(), flatten, stop == "none" ? "none" : "error", loadavg_start,
+                   loadavg1());
       std::fclose(pf);
     }
   }
