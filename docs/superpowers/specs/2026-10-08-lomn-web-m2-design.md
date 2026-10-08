@@ -23,13 +23,13 @@ Re-checked by the controller (EXECUTED 2026-10-08, own script `m2verify.py`, not
 | Opcodes with a real handler / `BCLUnused` | 96 / 160 (template `0x751768`, 16 B per entry, through the VM vtable `0x7514e4`) |
 | Handler table `0x752768` in the file | all zero (filled by a `.CRT` initializer at run time) |
 | `RegisterFunction` / `RegisterType` call sites in `.text` (`E8` scan) | 1,056 / 445 |
-| `RegisterFunction` call sites in the decomp corpus | 134 (in 6 functions) |
+| `RegisterFunction` call sites in the decomp corpus | 135 (in 6 functions; the first version said 134, corrected by probe 1 and re-counted: 139 matches − 4 in the definition file) |
 
-From the consult only (EXECUTED by the consultant, not re-checked): 47 of 391 `.CRT` initializers and 0 of 215 `&LAB_` native bodies are in the corpus; 186 distinct natives are called by the 38 front-end classes; 365 are reachable from the four entry points with level entry excluded; 3,161 `in_stack`/`in_EAX` artefacts, 205 in the VM and 274 in `CreateVariant`. M2a-0 re-measures them.
+From the consult and probe 1: 47 of 391 `.CRT` initializers are in the corpus; the 215 `&LAB_` targets are 126 OSI natives, 86 emitter callbacks and 3 others. **Probe 1 (re-checked by the controller):** a seeded Ghidra run encloses all 1,056 registrations in 70 functions (6,944 functions exported); see `docs/knowledge/research/2026-10-08-m2a0-probe1-seeding.md`. Also from the consult: 186 distinct natives are called by the 38 front-end classes; 365 are reachable from the four entry points with level entry excluded; 3,161 `in_stack`/`in_EAX` artefacts, 205 in the VM and 274 in `CreateVariant`. M2a-0 re-measures them.
 
 ## 3. What the original does (summary; details and addresses in the consult §1.2)
 
-1. **Boot:** `GcGame::DoSetUp` → … → `GcGame::SetUpScripting`: create the VM from `Root/Data/base.osi`, call the script's `Setup`, map controller one to the script, then add a per-frame `ScSLOSIProcess` (priority 2) that calls `Process(dt, …)`.
+1. **Boot:** `GcGame::DoSetUp` → … → `GcGame::SetUpScripting`: create the VM from `Root/Data/base.osi`, call the script's `Setup`, map controller one to the script, then add a per-frame `ScSLOSIProcess` (priority 2) that calls `Process(float time, float dt, int frame)` (probe 3: time first; the consult had dt first). A false return re-runs `Process` in the same frame, up to 10 extra passes; nothing stops it.
 2. **Entry points:** `Setup` (once), `Process` (every frame), `Input` (key mapper, analog triggers), `OnEvent` (mouse, timers).
 3. **VM:** a stack machine with 8-byte tagged variants, a 1,000-slot stack, frame-base markers (`0xff`) for engine→script calls and return markers (type 2) for script→script calls; re-entrant (69 engine functions call into the VM).
 4. **Natives:** registered at static-init time by (class, name) token pairs with min/max argc and 10 parameter types. Arguments are converted or boxed by reference (`0x200`). The native ABI is `ScOSIVariant fn(VM*, u32 × 10)`. The call instruction **self-patches** to `0x84` plus a direct pointer.
@@ -41,7 +41,7 @@ From the consult only (EXECUTED by the consultant, not re-checked): 47 of 391 `.
 
 - **D1 — Intro movies.** `playcinematic` completes instantly behind `--skip-video` (default **on** in M2; the state is reported in metrics and on `window.__lomn`). Bink stays in M4. *Cost if wrong:* a flag flip.
 - **D2 — Unregistered natives.** A native the original registers is never "unregistered" in ours: every one of the 1,056 registrations exists, as a stub or a binding. A name the original does not register raises the original's error path (logged error, the call yields nothing). Whether `bettersaver.*` is registered by this exe is decided by the completed registry (A3), not by assumption.
-- **D3 — Deterministic mode.** `scprocessmanager.userealdeltatime` is a logged no-op under `--deterministic`, and `Process` gets a fixed dt. Otherwise every replay drifts.
+- **D3 — Deterministic mode.** `scprocessmanager.userealdeltatime` is a logged no-op under `--deterministic`, which leaves the original's own fake-time path on: time += 0.0066667 per pass, dt = 0.0066667 (`0x712d68`). Real-time mode reproduces the original smoothing: dt = 0.07·raw + 0.93·prev, 0.016666 when raw > 0.5, capped at 0.066 (`0x4a9170`).
 - **D4 — Self-patching.** Our VM memoises the resolved native per call site and never writes into the script image. The oracle runs on a pristine image. Traces print the logical opcode (`0x82`) on every execution.
 - **D5 — Compiler finding.** The exe mixes Metrowerks CodeWarrior x86 V2.3 (38 compile records) and MSVC (29) objects (consult §1.5). The parent spec's MSVC6 x87 assumption is re-checked per module in M3. M2 is not affected: VM floats are `float` variant slots.
 - **D6 — No thresholds before measurement.** Caps, perf budgets and corpus-completion targets are written as "measured value, with the gap listed", never as invented percentages.
@@ -80,7 +80,7 @@ Each sub-milestone gets its own plan, written after the previous one lands (its 
 
 | Plan | Content |
 |---|---|
-| **M2a-0** Corpus completion + citation tables (no engine code) | **First, probes** (consult §5): (1) seed 20 random `&LAB_` native bodies plus the 6 registration initializers and check that the bodies decompile to the `{unpack, call, CreateVariant}` shape; (2) decode `BionicleFont.col` + `.info` in Python and print the metrics; (3) extract the `Input`/`OnEvent` argument tuples from `GcKeyMapper::ProcessKey` / `GcMouseDriver::Process`. Then: the seeded `make decomp` re-run (`.CRT` initializers, `&LAB_` bodies, registration callers) with the A11 `ScOSIVariant` by-value signature fix; generators for `docs/osi/opcodes.md`, `gen/osi/natives.json`, `docs/osi/types.md`. |
+| **M2a-0** Corpus completion + citation tables (no engine code) | Probes done 2026-10-08 (`docs/knowledge/research/2026-10-08-m2a0-probe{1,2,3}-*.md`): seeding works (body shapes: 5, not 1); the engine reads the binary `.fnt` inside the `.col`, never the text `.info`; input tuples are cited. Then: the seeded `make decomp` re-run (`.CRT` initializers, `&LAB_` bodies, registration callers) with the A11 `ScOSIVariant` by-value signature fix; generators for `docs/osi/opcodes.md`, `gen/osi/natives.json`, `docs/osi/types.md`. |
 | **M2a-1** VM core + Python oracle + conformance | 96 handlers; stack, frames, variants, strings, arrays, objects; native-call protocol with a pluggable registry; re-entrant `Call`; per-site memoisation; caps with errors (never a write past slot 1,000). |
 | **M2a-2** Native framework, `Setup` to the first `Process` | Generated stubs; the natives `Setup` needs implemented; `lomn_view --script` runs `Setup` and N `Process` frames headless. |
 | **M2a-3** Menu systems | Tile fonts, HUD sprites/text/rectangles through the shim (FVF `0x42`, textured quads, HUD transform, order after the area), camera spline, SDL3 input → `Input`/`OnEvent`, `Bionicle.ini` via the VFS, sound stubs, D1/D3 flags. |
@@ -99,7 +99,7 @@ Each sub-milestone gets its own plan, written after the previous one lands (its 
 | A8 | `lomn_view --script --frames 1` runs `Setup` with no unregistered-native error and prints the coverage report (distinct natives hit, by tier). | The stub log |
 | A9 | 600 `Process` frames with the real tier-1 natives: no VM error; the trace matches Python with native returns replayed. | A6 re-run |
 | A10 | Every native hit on the A6/A9 path is tier 1 or tier 2 (taint-proven). No tier 3 is hit. | The taint report |
-| A11 | The `BionicleFont` glyph set equals the `.db` name list and the `.info` charset. A rendered string's pixel width equals the cited `GetStrLen` formula on the metrics. | An independent Python `.col`/`.info` reader |
+| A11 | The `BionicleFont` glyph set equals the `.col` directory and the charset of the packed `.fnt` (the on-disk `.info` is stale and never read by the engine). A rendered string's pixel width equals the cited `GetStrLen` formula on the metrics. | An independent Python `.col`/`.info` reader |
 | A12 | **State log for one menu frame** (null backend): area draws (as M1), then HUD draws with the cited states (FVF `0x42`, textured quads, Z/alpha as decompiled). native == wasm32. | The expected sequence written from the cited render functions |
 | A13 | **Visual:** the menu after the skipped intro, with the cursor on entries 1 and 2, at 640×480 and 1280×720, vs the owner's screenshots of the original. | **Owner eyeball** (gated; does not block A1–A12) |
 | A14 | **Fuzz:** mutated `Base.osi` and crafted files give no crash and a reported error under ASan+UBSan, native and wasm32. The per-input time budget is set from the measured median. | The fuzz harness, as in M1a-4 |
@@ -116,6 +116,7 @@ Each sub-milestone gets its own plan, written after the previous one lands (its 
 ## 9. Owner items
 
 - **Screenshots of the original main menu** after the intro: 640×480 and native resolution, cursor on entries 1 and 2, and the Options screen. Needed before the M2a-3 review (A13).
+- **Eyeball check on the original:** on the front-end Options screen, press Esc, then Backspace, then right-click. Probe 3 infers that only right-click goes Back on PC.
 - **Informational:** D1 (intro skipped by default in M2), D2 (`bettersaver.*` handled per registry), D5 (mixed-compiler exe; acts in M3).
 - **Later (M3):** a run of the LOMNHook trace mod on the original game.
 
