@@ -1,4 +1,4 @@
-"""M2a-0 T3: the native registry (gen/osi/natives.json) and the variant-type table (docs/osi/types.md).
+"""M2a-0 T3: the native registry (data/osi/natives.json, committed) and the variant-type table (docs/osi/types.md).
 
 Every row is one `ScOSISystem::RegisterFunction` call (0x5fab30) in the decompiled corpus, parsed by STATEMENT (the calls
 wrap lines, and Ghidra hoists most arguments into locals, so a statement's arguments are resolved through the
@@ -19,7 +19,11 @@ INDEPENDENT CROSS-CHECK (reg_sites.json, raw exe push-walking, vs. this module's
 to reg_sites by enclosing function + statement order (`cross_check`); fnptr, enclosing function and call-site count must
 agree for all 1,056.
 
-Usage: registry.py --exe EXE --osi BASE.OSI --corpus gen/decomp --out-json gen/osi/natives.json --out-types docs/osi/types.md
+ARGC CHECK: every Base.osi 0x82 site whose argc lies outside the winner row's [min, max] is listed (`argc_violations`); in
+the original each one ends in BCLCallGameFunction's "Script is calling %s.%s" error.
+
+Usage: registry.py --exe EXE --osi BASE.OSI --corpus gen/decomp --out-json data/osi/natives.json --out-types docs/osi/types.md
+data/osi/natives.json is committed (names, addresses, counts and type names only), so that consumers need no Ghidra run.
 """
 from __future__ import annotations
 
@@ -51,6 +55,7 @@ BUILTIN = {
     0x10: "int",
     0x11: "string-id",
     0x12: "float",
+    0x14: "colour16",
     0x15: "colour",
     0x16: "string",
     0x200: "byref",
@@ -427,7 +432,8 @@ def winner_flags(rows: list[dict]) -> list[bool]:
     """Which rows the function map keeps: for each case-folded key, the FIRST registration in execution order
     (docs/osi/types.md, 'Duplicates': insert_one never overwrites). Execution order is `.CRT` index, then statement
     order inside the initializer; ScInitFunc callbacks (phase "scinit") run after every `.CRT` initializer. It does not
-    depend on the order of `rows` and never on an address."""
+    depend on the order of `rows`. `.CRT` rows never sort by address; the scinit rows sort by their registrar's address
+    (`init`), which is a tie-break only: there is one scinit registrar (0x61d6a0) and both of its keys are unique."""
     def order(r):
         return (0, r["crt_index"], 0, r["stmt"]) if r["phase"] == "crt" else (1, 0, r["init"], r["stmt"])
     keep: dict[str, int] = {}
@@ -725,6 +731,29 @@ def body_prologues(exe_bytes: bytes, parsed: list[dict]) -> tuple[dict, list]:
     return dict(got), bad
 
 
+def argc_violations(osi_path: Path, rows: list[dict]) -> list[dict]:
+    """Base.osi 0x82 sites whose argc (the u8 operand) lies outside the winner row's [min, max], over the M1a-3 walk
+    (osi.subroutines + osi.disasm). One entry per (key, argc), sorted by key then argc, with the number of sites.
+    BCLCallGameFunction (0x6015a0) refuses such a call with "Too many" / "Too few parameters passed to game function";
+    its catch(...) turns that into Error("Script is calling %s.%s") (docs/osi/opcodes.md, row 0x82)."""
+    spec = importlib.util.spec_from_file_location("osi_research", TOOLS / "research" / "osi.py")
+    osi = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(osi)
+    d = Path(osi_path).read_bytes()
+    o = osi.parse(d)
+    win = {r["key"]: r for r in rows if r["winner"]}
+    hits: collections.Counter = collections.Counter()
+    for _, off in osi.subroutines(o):
+        for _, op, a in osi.disasm(d, off):
+            if op != 0x82:
+                continue
+            r = win.get((o["strings"][a[0]] + "." + o["strings"][a[1]]).lower())
+            if r is not None and not r["min"] <= a[2] <= r["max"]:
+                hits[(r["key"], a[2])] += 1
+    return [{"key": k, "cls": win[k]["cls"], "name": win[k]["name"], "argc": n, "min": win[k]["min"],
+             "max": win[k]["max"], "sites": c} for (k, n), c in sorted(hits.items())]
+
+
 def base_osi_pairs(osi_path: Path) -> set[str]:
     """The case-folded class.func pairs at 0x82 CallGameFunction sites of Base.osi (tools/research/osi.py)."""
     spec = importlib.util.spec_from_file_location("osi_research", TOOLS / "research" / "osi.py")
@@ -788,6 +817,7 @@ def build(exe_bytes: bytes, corpus: Path, osi_path: Path | None, check: bool = T
             "phase": r["phase"],
         })
     keys = {r["key"] for r in rows}
+    argc_bad = argc_violations(osi_path, rows) if osi_path else []
     cv = createvariant_types(corpus, image, funcs)
     odd = [(e["class"], e["regname"]) for e in replay.order if e["regname"] != e["class"]] + \
           [(c["class"], c["regname"]) for c in cv if c["regname"] != c["class"]]
@@ -798,7 +828,7 @@ def build(exe_bytes: bytes, corpus: Path, osi_path: Path | None, check: bool = T
         raise RegistryError("insert_one result flags are not (1, 0): %r" % flags)
     return {"rows": rows, "parsed": parsed, "replay": replay, "crt": crt, "cross_check": cc, "asm_check": ac,
             "missing": sorted(pairs - keys), "base_pairs": pairs, "asm_type_order": asm_order, "getit": getit, "flags": flags,
-            "createvariant": cv, "prologues": prologues,
+            "createvariant": cv, "prologues": prologues, "argc_violations": argc_bad,
             "type_sites": type_site_accounting(funcs, seeds["type_sites"], crt)}
 
 
@@ -825,8 +855,9 @@ def render_types(res: dict) -> str:
     w("# OSI variant types and the native registry (canonical exe)")
     w("")
     w("Generated by `tools/osi/registry.py` (`make osi-tables`) from the canonical `LEGOBionicle.exe` read as data, the decomp")
-    w("corpus `gen/decomp` and `Base.osi`. It documents the type column of `gen/osi/natives.json` (one row per")
-    w("`ScOSISystem::RegisterFunction` call, 0x5fab30). Names, addresses and counts only; no decompiled code.")
+    w("corpus `gen/decomp` and `Base.osi`. It documents the type column of `data/osi/natives.json` (one row per")
+    w("`ScOSISystem::RegisterFunction` call, 0x5fab30). Names, addresses and counts only; no decompiled code. The JSON file is")
+    w("committed (rows in execution order, keys sorted), so consumers need no Ghidra run; `make osi-tables` regenerates it.")
     w("")
     w("- **Rows:** %d registrations, %d distinct `class.func` keys (case-folded), %d keys registered twice."
       % (len(rows), len({r["key"] for r in rows}), sum(1 for k, n in collections.Counter(r["key"] for r in rows).items() if n > 1)))
@@ -849,6 +880,11 @@ def render_types(res: dict) -> str:
         0x10: "int32: opcodes 0x40-0x43, 0x45. `GetVariantType<T>::GetIt` returns it for bool, short, unsigned short, long, unsigned long, `ScIdentifier` and the enum types (table below).",
         0x11: "string-table index: opcode 0x46. Never a declared parameter type.",
         0x12: "float32: opcode 0x44. `GetIt` returns it for float and double.",
+        0x14: "16-bit colour: pushed only by opcode 0x49 (`PushConstantColor5551`, 0 uses in `Base.osi`). Declared by no native "
+              "and rejected by every consumer: the channel ops 0xa0-0xa7 accept only 0x15; `ConvertVariant` 0x60b9d0 has no 0x14 "
+              "source case (its jump tables 0x751228 and 0x75120c send it to the default, so as an int or float native argument "
+              "it becomes {type 0, value 0}; a string target takes only 0x10-0x12 sources) and a 0x14 target is its "
+              "\"unimplimented\" error.",
         0x15: "32-bit colour: opcodes 0x48, 0xa0-0xa7. `GetIt` returns it for `StRGBABytes` (0x422930).",
         0x16: "dynamic string: opcode 0x70, `ConvertVariant` 0x60b9d0. `GetIt` returns it for `_ScBaseString` and `const _ScBaseString&`.",
         0x200: "by-reference box built around a native call: opcodes 0x82-0x84. Declared by two natives only.",
@@ -957,6 +993,21 @@ def render_types(res: dict) -> str:
             lose = [r for r in v if not r["winner"]][0]
             w("| `%s` | %s (%s, %d) | %s (%s, %d) |" % (k, win["body"], win["init"], win["crt_index"], lose["body"], lose["init"], lose["crt_index"]))
     w("")
+    w("## Argument-count violations in `Base.osi`")
+    w("")
+    bad = res.get("argc_violations", [])
+    w("%d `0x82` sites, over %d keys, pass an argument count outside the winner row's [min, max] (the M1a-3 walk, %s)."
+      % (sum(v["sites"] for v in bad), len(bad), "`argc_violations`"))
+    w("In the original `BCLCallGameFunction` (0x6015a0) refuses each with \"Too many\" or \"Too few parameters passed to game")
+    w("function\"; its catch(...) turns that into `Error(\"Script is calling %s.%s\")` (docs/osi/opcodes.md, row 0x82), which")
+    w("throws kOSIError. They are free conformance falsifiers: a VM that runs such a call is wrong. Whether play reaches them")
+    w("is not settled here.")
+    w("")
+    w("| key | argc passed | registered min..max | sites |")
+    w("|---|---|---|---|")
+    for v in bad:
+        w("| `%s` | %d | %d..%d | %d |" % (v["key"], v["argc"], v["min"], v["max"], v["sites"]))
+    w("")
     w("## Registrations outside the `.CRT` initializers")
     w("")
     late = [r for r in rows if r["phase"] != "crt"]
@@ -984,8 +1035,9 @@ def render_types(res: dict) -> str:
 
 
 def write_rows(rows: list[dict], path: Path) -> None:
+    """One row per line, in execution order, keys sorted: byte-stable across runs (data/osi/natives.json is committed)."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("[\n" + ",\n".join(json.dumps(r, separators=(",", ":")) for r in rows) + "\n]\n")
+    path.write_text("[\n" + ",\n".join(json.dumps(r, separators=(",", ":"), sort_keys=True) for r in rows) + "\n]\n")
 
 
 def main(argv=None) -> int:

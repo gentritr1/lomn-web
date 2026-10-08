@@ -162,6 +162,11 @@ PINNED_FACTS = [
     (0x82, "stack_effect", "ADDRESS OF THE ARGUMENT'S STACK SLOT"),  # *(args[i]+4) at 0x60198c-0x601abc
     (0x82, "errors", 'all end in Error("Script is calling %s.%s"'),  # .exc catch(...) 0x601cd3 -> Error 0x601dd3
     (0xB2, "stack_effect", "TRUNCATION toward zero"),           # or 0x0c00 + fistp at 0x60bc4b-0x60bc5a
+    # M2a-0 final fixes (F2): the RegisteredVariable map (ScOSISystem+0x14) is never inserted into
+    (0x10, "errors", "always-error, map never populated"),
+    (0x11, "errors", "always-error, map never populated"),
+    (0x18, "errors", "always-error, map never populated"),
+    (0x1A, "errors", "always-error, map never populated"),
 ]
 
 
@@ -180,3 +185,49 @@ def test_doc_authored_cells_cite_the_handler(rows):
             assert row[col], (r["op"], col)
             assert r["handler_addr"] in row[col], (r["op"], col, "must cite the handler address")
         assert "AMBIGUOUS" not in row["notes"] or "AMBIGUOUS:" in row["notes"], r["op"]
+
+
+def _own_va_reader(exe: Path):
+    d = exe.read_bytes()
+    pe = struct.unpack_from("<I", d, 0x3C)[0]
+    nsec, optsz = struct.unpack_from("<H", d, pe + 6)[0], struct.unpack_from("<H", d, pe + 20)[0]
+    base = struct.unpack_from("<I", d, pe + 52)[0]
+    secs = [struct.unpack_from("<IIII", d, pe + 24 + optsz + 40 * i + 8) for i in range(nsec)]
+
+    def read(va, n):
+        for vsize, rva, rawsize, rawptr in secs:
+            if base + rva <= va and va + n <= base + rva + rawsize:
+                return d[rawptr + va - base - rva: rawptr + va - base - rva + n]
+        raise AssertionError("VA %#x not file-backed" % va)
+    return read
+
+
+def test_crt_fill_copies_16_byte_template_entries_into_12_byte_handlers(canonical_exe):
+    """A fourth, execution-based reader of the op -> template mapping (F6.1). The .CRT initializer FUN_0060c670 (.CRT
+    index 346) holds 256 unrolled `mov edi, 0x752768+12*op; mov esi, 0x751768+16*op; movsd x3` groups from 0x60cd54, and
+    Run (0x60b850) dispatches through `imul edx, edx, 0xc; add edx, 0x752768` at 0x60b85f."""
+    read = _own_va_reader(canonical_exe)
+    b = read(0x60CD54, 13 * 256)
+    for op in range(256):
+        g = b[13 * op: 13 * op + 13]
+        assert (g[0], g[5], g[10:]) == (0xBF, 0xBE, b"\xa5\xa5\xa5"), op
+        assert struct.unpack_from("<II", g, 1)[0] == 0x752768 + 12 * op, op
+        assert struct.unpack_from("<I", g, 6)[0] == 0x751768 + 16 * op, op
+    assert read(0x60B85C, 12) == bytes.fromhex("0fb6126bd20c81c268277500")   # movzx edx,[edx]; imul 0xc; add 0x752768
+    crt = struct.unpack("<393I", read(0x76F000, 393 * 4))
+    assert crt.index(0x60C670) == 347                                         # dword 347 = initializer index 346
+    assert "FUN_0060c670" in DOC.read_text()
+
+
+ENGINE_CALL_FACTS = (
+    "## Engine calls (Call / CallWithReturn)", "### After an error", "0x609ce0", "0x60b5e0", "0x60b450", "0x60b320",
+    "Too many args required (max 10) to call requested entry point.", "Unable to locate function %s in scripts",
+    "push 0x3e8; push 8", "0x60b4fc", "0x60b53e", "0x401080",
+)
+
+
+def test_engine_call_section_is_present():
+    doc = DOC.read_text()
+    head = doc.split("<!-- BEGIN opcode-table", 1)[0]                        # prose, kept by the generator
+    for fact in ENGINE_CALL_FACTS:
+        assert fact in head, fact

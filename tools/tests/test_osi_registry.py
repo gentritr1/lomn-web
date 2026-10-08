@@ -595,3 +595,74 @@ def test_cli_writes_rows_and_doc(reg, canonical_exe, lomn_data, gen_decomp, res,
 def test_non_canonical_exe_is_refused(reg, gen_decomp, tmp_path):
     with pytest.raises(SystemExit, match="not the canonical exe"):
         reg.build(b"MZ" + bytes(1000), gen_decomp, None)
+
+
+# ------------------------------------------------------------------------------------- M2a-0 final fixes (F5, F6)
+COMMITTED_JSON = REPO / "data" / "osi" / "natives.json"
+
+# Base.osi 0x82 sites whose argc is outside the winner row's [min, max] (measured 2026-10-08 with the walk below):
+# (key, argc, min, max, sites)
+ARGC_VIOLATIONS = {
+    ("gc3dsound.synctocharacter", 5, 2, 2, 1), ("gc3dsound.synctoobject", 5, 2, 2, 1),
+    ("gcareadirector.hide", 1, 2, 2, 8), ("gcmodeldirector.addcharacter", 4, 5, 5, 2),
+    ("gcmodeldirector.hide", 1, 2, 2, 1), ("gcmodeldirector.remove", 1, 2, 2, 1),
+    ("gcmodeldirector.setinputstate", 2, 3, 3, 2), ("gcmodeldirector.show", 1, 2, 2, 1),
+    ("gctimer.durationaverage", 0, 1, 1, 1), ("gctimer.durationpeek", 0, 1, 1, 2),
+}
+
+
+def test_argc_violations_are_computed_and_pinned(res, rows, lomn_data):
+    got = {(v["key"], v["argc"], v["min"], v["max"], v["sites"]) for v in res["argc_violations"]}
+    assert got == ARGC_VIOLATIONS
+    assert sum(v["sites"] for v in res["argc_violations"]) == 20 and len(res["argc_violations"]) == 10
+    # the same list from this test's own walk (only osi.py is shared)
+    spec = importlib.util.spec_from_file_location("osi_research", REPO / "tools" / "research" / "osi.py")
+    osi = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(osi)
+    d = (lomn_data / "install" / "data" / "Base.osi").read_bytes()
+    o = osi.parse(d)
+    win = {r["key"]: r for r in rows if r["winner"]}
+    own, sites = {}, 0
+    for _, off in osi.subroutines(o):
+        for _, op, a in osi.disasm(d, off):
+            if op == 0x82:
+                sites += 1
+                r = win.get((o["strings"][a[0]] + "." + o["strings"][a[1]]).lower())
+                if r and not r["min"] <= a[2] <= r["max"]:
+                    k = (r["key"], a[2], r["min"], r["max"])
+                    own[k] = own.get(k, 0) + 1
+    assert sites == 4402
+    assert {k + (n,) for k, n in own.items()} == ARGC_VIOLATIONS
+    doc = DOC.read_text()
+    assert "## Argument-count violations in `Base.osi`" in doc and "Script is calling %s.%s" in doc
+    for key, argc, mn, mx, n in ARGC_VIOLATIONS:
+        assert "`%s`" % key in doc
+
+
+def test_builtin_0x14_row(reg):
+    assert reg.BUILTIN[0x14] == "colour16"
+    row = [l for l in DOC.read_text().splitlines() if l.startswith("| 0x14 |")]
+    assert len(row) == 1 and "0x49" in row[0] and "0x60b9d0" in row[0] and "| 0 |" in row[0]
+
+
+def test_committed_natives_json_is_fresh_and_data_free(reg, canonical_exe, lomn_data, gen_decomp, tmp_path):
+    """data/osi/natives.json is committed so that M2a-2's stub generator needs no Ghidra; regenerating it must give the
+    same bytes. It holds names, addresses, counts and type names only."""
+    out_json, out_md = tmp_path / "natives.json", tmp_path / "types.md"
+    assert reg.main(["--exe", str(canonical_exe), "--osi", str(lomn_data / "install" / "data" / "Base.osi"),
+                     "--corpus", str(gen_decomp), "--out-json", str(out_json), "--out-types", str(out_md)]) == 0
+    assert COMMITTED_JSON.exists() and out_json.read_bytes() == COMMITTED_JSON.read_bytes()
+    rows = json.loads(COMMITTED_JSON.read_text())
+    assert len(rows) == 1056
+    fields = {"cls", "name", "key", "site", "body", "max", "min", "types", "crt_index", "init", "winner",
+              "called_by_base_osi", "phase"}
+    for r in rows:
+        assert set(r) == fields
+        assert all(isinstance(r[k], str) for k in ("cls", "name", "key", "site", "body", "init", "phase"))
+        assert all(t is None or isinstance(t, str) for t in r["types"]) and len(r["types"]) == 10
+        assert isinstance(r["max"], int) and isinstance(r["min"], int)
+
+
+def test_makefile_writes_the_committed_json():
+    mk = (REPO / "Makefile").read_text()
+    assert "--out-json data/osi/natives.json" in mk and "gen/osi/natives.json" not in mk

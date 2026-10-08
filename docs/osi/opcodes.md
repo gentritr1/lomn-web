@@ -16,9 +16,13 @@ described in words, never as decompiled code.
 
 ## How the generated columns are derived
 
-- `Run` (0x60b850) loops `___ptmf_scall(handlers + 12·*PC)` until a handler returns false. `handlers` (0x752768,
-  12-byte entries) is all zero in the file; `.CRT` initialiser code that references both it (0x60cd55) and the
-  template (0x60cd5a) fills it at start-up (that code is not in the corpus).
+- `Run` (0x60b850) loops `___ptmf_scall(handlers + 12·*PC)` until a handler returns false: `movzx edx, byte [PC];
+  imul edx, edx, 0xc; add edx, 0x752768` at 0x60b85c–0x60b862. `handlers` (0x752768, 12-byte entries) is all zero in
+  the file. The `.CRT` initializer **FUN_0060c670** (`.CRT` index 346, in the corpus since the T2 re-run) fills it at
+  start-up: from 0x60cd54 it holds 256 unrolled groups `mov edi, 0x752768 + 12·op; mov esi, 0x751768 + 16·op; movsd`
+  ×3, so it copies the first 12 bytes of each 16-byte template entry into the 12-byte runtime entry of the same op.
+  This is a fourth reader of the op → template mapping, from executed code
+  (`test_crt_fill_copies_16_byte_template_entries_into_12_byte_handlers` pins the strides 16 and 12).
 - The template at **0x751768** holds 256 × 16-byte CodeWarrior pointer-to-member entries `{this_delta, vtbl_offset,
   vptr_offset, pad}`. `___ptmf_scall` (0x6595a0): when `vtbl_offset ≠ −1` it calls the dword at
   `*(this + this_delta + vptr_offset) + vtbl_offset`. All 256 entries have `this_delta = vptr_offset = 0`.
@@ -72,27 +76,83 @@ described in words, never as decompiled code.
   - any target other than 0x10/0x12/0x16 → error "Requested variant conversion unimplimented.  Recompile to debug for
     types".
 
-  A 0x11 source is first converted to a dynamic string in place.
+  A 0x11 source is first converted to a dynamic string **in place**: for an int or float target, ConvertVariant
+  overwrites the caller's variant (its `ScOSIVariant&` argument) with `ConvertStringIDToDynamicString(v)`
+  (0x60bbf9–0x60bc02, 0x60bcf9–0x60bd02) and then reads the text. Called from 0x82–0x84 on a stack slot, that slot
+  stays a 0x16 string. See "Objects, arrays and strings" below.
 
 ## Variant types seen in the handlers
 
 | type | meaning | cited from |
 |---|---|---|
 | 0x00 | result of an unsupported conversion (not otherwise a VM type) | `ConvertVariant` 0x60b9d0 |
-| 0x01 | script object (`ScOSIObject`, 32 bytes, refcounted; classID u16 at +0x14) | 0x13 / `ConstructObject` 0x60be00, 0xbf |
+| 0x01 | script object (`ScOSIObject`, 32 bytes, refcounted; classID u16 at +0x14); owns its properties (below) | 0x13 / `ConstructObject` 0x60be00, 0xbf; ctor 0x608520, dtor 0x6085c0 |
 | 0x02 | return marker (value = return PC) | 0x50, 0x51, 0x52 |
-| 0x05 | array (`ScOSIArray`, refcounted; count at +0xc, element data at +0x10) | 0x90–0x96 |
+| 0x05 | array (`ScOSIArray`, refcounted; count at +0xc, element data at +0x10); shared by reference (below) | 0x90–0x96; ctors 0x5fc690/0x5fc710, dtor 0x5fc790 |
 | 0x0f | nothing | `ScOSIVariant` ctor 0x60b2a0, 0x47 |
 | 0x10 | int32 | 0x40–0x43, 0x45 |
 | 0x11 | string-table index | 0x46 |
 | 0x12 | float32 | 0x44 |
-| 0x13 | "string table": a refcounted block (count at +4, length-prefixed strings from +0x10), read-only to scripts; no handler creates one | 0x91, 0x92 |
+| 0x13 | "string table": a refcounted block (count at +4, length-prefixed strings from +0x10), read-only to scripts; no handler creates one, and no `CreateVariant` overload does (none of the 63; 0x6159e0 copies its argument's type, so a 0x13 can only pass through it) | 0x91, 0x92 |
 | 0x14 | 16-bit colour from 0x49; rejected by the channel ops | 0x49 |
 | 0x15 | 32-bit colour (R bits 24..31, G 16..23, B 8..15, A 0..7) | 0x48, 0xa0–0xa7 |
 | 0x16 | dynamic string (heap `ScFixedStringTemplate<255>`, 268 bytes) | 0x70, 0x91, `ConvertVariant` |
-| 0x20..0xfe | registered game types (game objects, refcounted) | 0x10, 0x11, 0x60, 0xbc, 0xbf |
+| 0x20..0xfe | registered game types (game objects, refcounted). Member access on one (0x10/0x11/0x18/0x1a) is always-error, map never populated (see "The game-variable map") | 0x10, 0x11, 0x60, 0xbc, 0xbf |
 | 0xff | engine-call frame-base marker | 0x52, `CallWithReturn` 0x60b450 |
 | 0x200 | by-reference box `{0x200, pointer to a stack slot}`, built only around a native call | 0x82–0x84 |
+
+### Objects, arrays and strings (ownership)
+
+- **`ScOSIObject`** (ctor 0x608520, dtor 0x6085c0). Layout: vptr +0, reference count +4 (the ctor ends with `inc
+  [this+4]`, so a new object holds 1), a vector of `nprops` variants at +8 (size +0xc, data +0x10, filled with nothing
+  by 0x5fc830), classID u16 +0x14, class record +0x18, script +0x1c. **The object owns its properties**: the dtor
+  disposes every property, back to front (index size−1 down to 0, 0x6085cd–0x6085e3), then frees the vector. A
+  property store (0x10, 0x15, 0x1a) disposes the old value and moves the new one in, without `Duplicate`.
+- **`GetProperty(m)`** (0x6086a0): the class record is a u8 count, then count × u16 property symbols. It returns
+  `&props[i]` for the first i whose symbol is m (i counted in 8 bits), else null. 0x10, 0x15, 0x16, 0x18 and 0x1a test
+  for null and raise "Reference to non-existant member property"; 0x11 does not.
+- **`ScOSIArray`** (ctors 0x5fc690 = empty and 0x5fc710 = n nothings, dtor 0x5fc790). The same refcounted base (count
+  +4, 1 after either ctor), the element vector at +8 (count +0xc, data +0x10). **Arrays are shared by reference**:
+  `Duplicate` adds a reference (type 5), nothing copies the elements. The dtor disposes the elements **back to front**:
+  `Dispose(data[count−1])`, then `pop_back`, until the count is 0 (0x5fc7a0–0x5fc7bd).
+- **`ConvertStringIDToDynamicString(v)`** (0x60b880) returns `{0x16, new 268-byte string}` built from the string-table
+  entry `v.value & 0xffff` (the script's pointer table at script+0x10; entry + 1 skips one prefix byte). Its string
+  constructor 0x60b8d0 throws `kOutOfRange` (`SrThrow` at 0x60b970, a non-OSI error) if the text has 255 characters or
+  more. **It replaces the slot in place**: 0x70 (call 0x604053) and 0x60 (call 0x605369) overwrite the popped
+  operand's local with the result (0x604058–0x604062, 0x60536e–0x60537b), and `ConvertVariant` overwrites its source
+  reference (above). The old 0x11 value owns nothing, so nothing is disposed; the new string is disposed with the
+  operand or, for a stack slot, by the later `Pop(true)`.
+- **`CreateVariant`**: of its 63 overloads, 12 store 0x10, 2 store 0x12, 1 stores 0x15 (`StRGBABytes`, 0x447890), 2 store
+  0x16, 45 store a game type (`theOSIType<Class>`; a null pointer gives nothing) and 0x6159e0 copies its argument
+  (asm read of each overload's `mov word [ret], …`). **None creates a 0x13.**
+
+### The game-variable map (0x10/0x11/0x18/0x1a on a game type)
+
+**Always-error, map never populated.** A member access on a game-type value (0x20..0xfe) looks up
+`map<ScOSIDualToken, RegisteredVariable*>`, and nothing in the exe ever inserts into that map, so every such access
+raises "Reference to unregistered Game Variable" (`SrOSIError`). Evidence (all from the exe's bytes):
+
+- The map is the 16-byte tree at **`ScOSISystem`+0x14**. The ctor 0x5fa750 builds the four maps of the system with
+  their own tree ctors: +0x4 `RegisteredFunction` (0x5fb390), **+0x14 `RegisteredVariable` (0x5fb410, call
+  0x5fa799)**, +0x24 type names (0x5fb5d0), +0x34 globals (0x5fb660). The dtor 0x5fa880 walks +0x14 from its begin
+  pointer (+0x20) to its end node (+0x18), deletes each value, then calls the `RegisteredVariable` `clear` (0x5fb110)
+  and `destroy` (0x5fb3d0).
+- The only readers are the four `find` (0x5ff7a0) calls at 0x5fe74d (0x10), 0x5fead4 (0x11), 0x5ff0b2 (0x18) and
+  0x5ff612 (0x1a), each with `ecx = [0x74d644] + 0x14` (the system pointer).
+- `symbols.txt` has five `RegisteredVariable` tree functions (map dtor 0x5fa820, `clear`, `destroy`, tree ctor,
+  `find`) and no `insert_one`, `insert_node_at` or copy. Folded code could hide an insert under another type's
+  symbol, so the call graph was checked too. Every red-black insert ends in `__red_black_tree::balance_insert`
+  (0x49b790). A raw `E8`/`E9` scan of `.text` finds 10 calls to it, each inside the `insert_node_at` of a different map
+  type. The `RegisteredFunction` one (0x5fbcb0) is called only by `insert_one` 0x5fb290, which is called only at
+  0x5fac1f in `RegisterFunction`, with `ecx = this + 4`.
+- No other code reaches +0x14. After each of the 1,156 `mov reg, [0x74d644]` loads in `.text`, every `[reg + d]`
+  operand within 40 instructions was collected: +0x14 appears only at the four `find` sites above. The `ScOSISystem`
+  methods (0x5faa10–0x5fb110, `AddGlobal`, `GetGlobalVariable`) never address +0x14..+0x20 of `this`.
+- There is no `RegisterVariable` symbol, and no absolute reference to any `RegisteredVariable` tree function other than
+  the `.exc` records and one cleanup pointer to the map dtor.
+
+So the "game type" paths of 0x10, 0x11, 0x18 and 0x1a in the table are dead code in this exe: the lookup always misses.
+A port raises the error and need not model getters or setters.
 
 ## Exception tables (`.exc`), decoded for 0x70 and 0x82–0x84
 
@@ -107,6 +167,14 @@ directly. An action chain is a list of records that ends at the first record who
   count × u32 type-name pointer}`;
 - kind 0x11, the end of a specification scope: `{u16 flags, i32 frame offset}`;
 - kind 0x0a: 10 bytes (a partially-constructed-object cleanup; it contains no catch).
+- kind 0x0c: 14 bytes, `{u16 flags, i32 frame offset, u32 destructor, u32 0}` (another destructor action; no catch).
+  Chains elsewhere also hold kinds this decoder does not know (0x07 and 0x0b are common in constructors). None of them
+  occurs in a chain cited in this file.
+
+An info record whose flags byte has **bit 0 set** is only 4 bytes long and has no call-site table: nothing in that
+frame is destroyed or caught. 4,605 of the 7,002 index entries are of this form (e.g. `Run` 0x60b850, flags 0x09). The
+`{flags, action-table pointer, n}` layout above holds only when bit 0 is clear. A decoder that ignores the bit misreads
+the next function's action chains as call sites.
 
 The landing pads decoded this way match the catch blocks in the asm. Each of them stores the caught ScError, or
 `_kMSLError` / `_kUndefinedError` for `!exception!` / `...`, and continues to the code after the try. The catch-type
@@ -141,6 +209,108 @@ as `!ScCatchMessage!!`) passes through.
 - 0x84 (`i`): a raw host pointer that exists only after self-patching.
 - 0x18/0x19/0x1a and 0x83 take their member or function name from the stack, not from an operand.
 
+## Engine calls (Call / CallWithReturn)
+
+Every engine→script call goes through `ScOSIVirtualMachine::Call` (0x60b320, 144 call sites, raw `E8` scan) or
+`CallWithReturn` (0x60b450, called directly only by `ScSLOSIProcess::Process` at 0x43b32d and by `Call` at 0x60b402).
+- The names pushed as string literals in front of the `Call` sites are `OnEvent` (136 sites), `Input` (2) and `Setup`
+  (1).
+- 5 sites take the name from elsewhere: 0x476950, 0x55d089, 0x55d1aa, 0x57e051, and 0x61406f
+  (`ScSLOSIAnalogControllerAction`, a name given to its ctor).
+- `ScSLOSIProcess` passes its stored name (`Process`, given by `GcGame::SetUpScripting`).
+
+Everything below was read from the asm of the function named.
+
+**`ScOSIScript::FindFunction(name)`** (0x609ce0) walks the global-function table (count: a **u8** at script+0x20;
+table at script+0x24). Each entry is `{u8 len, name[len], u32 offset, u16 argc}` (not NUL-terminated). The first entry
+for which `__strnicmp(name, entry, len) == 0` (0x65bdf0) wins. It returns `{script base (+0x4) + offset, argc}`, or
+`{0, 0}` when nothing matches.
+- `__strnicmp` compares `tolower` of both bytes for the entry's own `len` characters only, stopping early at a shared
+  NUL. `tolower` (0x65ef50) is a table (0x762a18) that folds exactly A–Z.
+- So the match is **prefix-tolerant**: an entry matches every query that **starts with** the entry's name,
+  case-insensitively. Query characters after `len` are never looked at. A query shorter than the entry fails, because
+  its NUL meets a letter.
+- The `Base.osi` table is in alphabetical order, so `setup` (entry 4) shadows every `setup…` entry for any query that
+  starts with "setup": a query `SetupLevel_1` resolves to `setup`. The names the engine passes (`Process`, `Input`,
+  `OnEvent`, `Setup`) are unaffected; each equals an entry.
+
+**`SetPCAndArgs(name, a0..a9)`** (0x60b5e0, vtable +0x10; the arguments are references):
+- Not found (code pointer 0) → returns false at once: PC is unchanged, nothing is pushed and **no argument is
+  disposed**.
+- Found → PC (VM+0x1f58) = the code pointer. If argc > 10 (`cmp ax, 0xa; jbe` at 0x60b62c), it raises
+  `Error("Too many args required (max 10) to call requested entry point.")` (string 0x7512a0, vtable +0xc).
+- Then, for i = 0..9: if i < argc, a bitwise copy of a_i is **pushed** (ownership moves to the stack, no
+  `Duplicate`); otherwise a_i is **disposed** (0x60b644–0x60b838).
+- So a callee gets **exactly argc** of the 10 supplied variants, as declared by the script, not by the engine.
+  `Base.osi` declares `process` 3, `input` 5, `onevent` 10, `setup` 0. Returns true.
+
+**`CallWithReturn(name, a0..a9)`** (0x60b450), in order:
+1. result = `{0x0f, 0}`; the VM's reference count (+0x4) is incremented.
+2. A `{0xff, PC}` marker is pushed (0x60b484).
+3. framePtr (+0x1f54) = (the first slot, scanning down from the top, whose type is 2 or 0xff) + 1, i.e. the slot just
+   above the new marker (0x60b489–0x60b4b1).
+4. `mContextDepth` (a **u16** at +0x1f4c) is incremented.
+5. `SetPCAndArgs` (vtable +0x10, call 0x60b4ee).
+   - If it returns false: `Message("Unable to locate function %s in scripts", name)` (string 0x751278; vtable **+0x8**,
+     `Message` 0x60bef0). This is **not an Error**: it only `vsprintf`s into a static buffer (0x7e5be1) and returns.
+     Run is skipped and the result stays nothing. The supplied arguments are neither pushed nor disposed (a refcounted
+     or string argument leaks).
+   - Otherwise: `Run` (vtable +0x14, call 0x60b4f9), then `Pop(false)` = the result (`push 0` at **0x60b4fc**).
+6. `Pop(true)` (`push 1` at **0x60b53e**) is repeated until the popped slot's type is 0xff. On the normal path this pops
+   only the marker, since 0x52 leaves `{0xff, r}` and r was popped in step 5.
+7. `mContextDepth` is decremented. If it is not 0, framePtr is recomputed by the same scan (0x60b569–0x60b59b).
+   Otherwise it is left as it was.
+8. PC = the marker's value (0x60b5a2). The reference count is decremented; at ≤ 0 the VM frees itself (vtable +0x4).
+   The result is returned.
+
+**`Call(name, a0..a9)`** (0x60b320) = reference count +1, `CallWithReturn` on bitwise copies of the 10 arguments
+(0x60b402), `Dispose` of the result (0x60b417), reference count −1 (vtable +0x4 at ≤ 0).
+
+**The stack** is 1,000 slots of 8 bytes inside the VM, built by the VM ctor 0x60b230 with
+`__construct_array(stack, ScOSIVariant ctor 0x60b2a0, dtor 0x413ec0, 8, 1000)` (`push 0x3e8; push 8` at 0x60b257). The
+top pointer is at stack+0x1f44 (VM+0x1f50), and `mContextDepth` = 0 and PC = 0 are set there too. `Push` (0x5fd0c0)
+and `Pop` (0x5fd260) never check the bounds, and nothing checks the depth of script recursion through 0x50/0x51: the
+only limit is the 1,000 slots, and overrunning them corrupts the VM object. `mContextDepth` is a u16 that nothing
+compares except against 0.
+
+### After an error
+
+`Error` (vtable +0xc) and `SrOSIError` throw kOSIError (`SrThrow` 0x4d91f0 → `___throw` 0x657260 with the type list
+`!ScCatchMessage!!`, which a catch(`!ScCatchMessage!`) matches).
+Run (0x60b850: flags 0x09, no call-site table), `CallWithReturn` and `Call` hold only `ScOSIVariant` destructor actions
+(0x413ec0, which is `mov eax, ecx; ret`). None of them catches, and none of their epilogues runs. Each engine caller
+was followed up its call chain with the `.exc` decoder above (call-site records re-derived at every site):
+
+| engine caller (call site) | `.exc` at the site | frames above it | where it is caught |
+|---|---|---|---|
+| `ScSLOSIProcess::Process` 0x43b250 (`CallWithReturn` 0x43b32d) | 10 variant dtors | `ScProcessManager::Process` 0x4a9170 (vtable +8 calls at 0x4a93a5/0x4a949f: dtors only) → main loop 0x538700 (flags 0x49: no table) → `AppMain` 0x5381f0 (call 0x53869a: dtors only) | `_WinMain@16` |
+| `GcMouseDriver::Process` 0x55c160 (0x55c753, 0x55c89a, … 0x55d4a3, 13 sites) | 10 variant dtors each | a process (vtable +8 = 0x55c160): the same chain | `_WinMain@16` |
+| `GcKeyMapper::ProcessKey` 0x5d1a10 (0x5d1d0f, 0x5d1de2) | 10 variant dtors | `GcKeyMapper::Process` 0x5d1e30 (a process; no table), or `KeyPressed` 0x5d18e0 (no table), whose address sits in the pointer-to-member table `sKeyFlagMap` that `ScCallbackAction<GcKeyMapper>::Fire` 0x5d2530 (no table; vtable +0xc) calls through `___ptmf_scall` (target INFERRED), ← `ScAction::IsRequested` and the trigger chain below | `_WinMain@16` |
+| `ScSLOSIAnalogControllerAction::Fire` 0x613f80 (0x61406f) | 10 variant dtors | `ScAction::IsRequested` 0x491ed0 (calls Fire at 0x491f4e; no table) ← `ScTrigger::Trigger` 0x4c1bd0 (no table) ← `ScTrigger::Process` 0x4c1b90 (no table) ← `ScTriggerTree::ProcessTrigger` 0x4c4420 (call 0x4c44a8: dtor only) ← `ScTriggerManager::ProcessTriggers` 0x4c2bf0 (dtors only) ← `GcControllerProcess::Process` 0x44a7a0 (a process; no table) → the process chain | `_WinMain@16` |
+| `GcTimer::Trigger` 0x445ae0 (0x445bca) | 10 variant dtors | `ScTrigger::Process` 0x4c1b90 (vtable +0x20; `GcTimer::Process` 0x445920 has no table) → the trigger chain | `_WinMain@16` |
+| `GcGame::SetUpScripting` 0x4390d0 (`Call("Setup")` 0x43925a) | 10 variant dtors, then catch(`!ScCatchMessage!`) 0x439324, catch(`!exception!`) 0x439343, catch(...) 0x439363 | the catch stores the ScError and skips the rest of the try (`MapControllerToScript`, the context provider and the `ScSLOSIProcess("Process")` + `AddProcess`). After the try a stored error is **re-thrown** (`___throw` 0x4393e9). `GcGame::DoSetUp` 0x436a10 has no record at its call 0x436bcd; `AppMain` (call 0x53867d) has dtors only | `_WinMain@16` |
+
+**`_WinMain@16`** (0x401020) wraps `SrInitializeAll` + `AppMain` (calls 0x40105f and 0x401078) in catch(`!ScCatchMessage!`)
+**0x401080**, catch(`!exception!`) 0x401093 and catch(...) 0x4010b0. Each stores the error code (the ScError, `_kMSLError`
+or `_kUndefinedError`) and continues at 0x4010d3.
+- It then compares the code with `_kNoException`, but the result (edx) is never used.
+- It calls `SrDestroyAll` if `SrInitializeAll` had finished, and returns 0 (0x401134).
+- Its re-throw flag ([ebp−0x38]) and its retry flag ([ebp−0x3c]) are only ever written 0.
+
+So **a kOSIError from any engine→script call on these paths ends the game**. The process exits normally with code 0.
+No message box is shown: the formatted text sits in `Error`'s static buffer and nothing reads it. This is INFERRED
+from the asm; the exe was never run.
+
+Consequences for the VM: in the original there is no next call. The error unwinds past `CallWithReturn` and `Call`
+without their epilogues, so the state at exit is as follows.
+- The VM reference count is still +2 (`Call` and `CallWithReturn` each).
+- `mContextDepth` is still +1.
+- The 0xff marker, the frame and any partial values are still on the stack.
+- PC points into the failed handler's instruction. framePtr points into the failed frame.
+
+A port that chooses to keep running after a script error is outside what the original defines. It must reset these
+four itself, and conformance tests must not depend on behaviour after an error.
+
 ## Table
 
 Regenerate the generated columns with `make osi-tables`. `--check` exits 1 if the file is stale.
@@ -164,17 +334,17 @@ Regenerate the generated columns with `make osi-tables`. `--check` exits 1 if th
 | 0x0d | BCLUnused | 0x60be60 | 0x751838 | 102 (+0x198) | n/a | 0 | none: errors before any change; PC not advanced [0x60be60] | "Call of undefined instruction" (always) [0x60be60] | osi.py also rejects it (unknown opcode). 0 uses. |
 | 0x0e | BCLUnused | 0x60be60 | 0x751848 | 102 (+0x198) | n/a | 0 | none: errors before any change; PC not advanced [0x60be60] | "Call of undefined instruction" (always) [0x60be60] | osi.py also rejects it (unknown opcode). 0 uses. |
 | 0x0f | BCLUnused | 0x60be60 | 0x751858 | 102 (+0x198) | n/a | 0 | none: errors before any change; PC not advanced [0x60be60] | "Call of undefined instruction" (always) [0x60be60] | osi.py also rejects it (unknown opcode). 0 uses. |
-| 0x10 | BCLSetMemberValue | 0x5fe610 | 0x751868 | 15 (+0x3c) | H | 72 | v o → (empty); operand u16 m (member-symbol index). o is popped first (top, no dispose). Game type o (0x20..0xfe): RegisteredVariable = map[(GetTypeToken(o.type), GetMemberTableToken(m))]; its getter (+0xc)(vm, o.value) is called and the result disposed, THEN v is popped and the setter (+0x10)(vm, o.value, v) called; o disposed. Script object o (type 1): v popped, prop = GetProperty(o, m) (0x6086a0, linear search of the class property symbols), old prop disposed, prop ← v (moved); o disposed [0x5fe610] | "Reference to unregistered Game Variable" (SrOSIError, game type, map miss); "Member property of non member variable" (o neither type 1 nor 0x20..0xfe); "Reference to non-existant member property \"%s\"" (type 1, property absent; %s = member-symbol name) [0x5fe610] | The game path calls the getter before popping v (a native-visible side effect; the ICALL order in the asm is getter, Dispose, Pop, setter). |
-| 0x11 | BCLGetMemberValue | 0x5fe9a0 | 0x751878 | 16 (+0x40) | H | 5905 | o → value; operand u16 m. o popped (no dispose). Game type: push Duplicate(getter(vm, o.value)) via the RegisteredVariable map. Any other type: push Duplicate(*GetProperty((ScOSIObject*)o.value, m)); o disposed [0x5fe9a0] | "Reference to unregistered Game Variable" (SrOSIError, game type, map miss) [0x5fe9a0] | No type check and no null check on the non-game path: a non-object o or an absent property dereferences a bad pointer in the original (undefined behaviour; conformance tests must not exercise it). Contrast 0x16, which checks. |
+| 0x10 | BCLSetMemberValue | 0x5fe610 | 0x751868 | 15 (+0x3c) | H | 72 | v o → (empty); operand u16 m (member-symbol index). o is popped first (top, no dispose). Game type o (0x20..0xfe): RegisteredVariable = map[(GetTypeToken(o.type), GetMemberTableToken(m))]; its getter (+0xc)(vm, o.value) is called and the result disposed, THEN v is popped and the setter (+0x10)(vm, o.value, v) called; o disposed. Script object o (type 1): v popped, prop = GetProperty(o, m) (0x6086a0, linear search of the class property symbols), old prop disposed, prop ← v (moved); o disposed [0x5fe610] | "Reference to unregistered Game Variable" (SrOSIError, game type, map miss; always-error, map never populated: nothing inserts into ScOSISystem+0x14, see "The game-variable map"); "Member property of non member variable" (o neither type 1 nor 0x20..0xfe); "Reference to non-existant member property \"%s\"" (type 1, property absent; %s = member-symbol name) [0x5fe610] | The game path calls the getter before popping v (a native-visible side effect; the ICALL order in the asm is getter, Dispose, Pop, setter). That path is dead in this exe: the map lookup before it always misses ("The game-variable map"). |
+| 0x11 | BCLGetMemberValue | 0x5fe9a0 | 0x751878 | 16 (+0x40) | H | 5905 | o → value; operand u16 m. o popped (no dispose). Game type: push Duplicate(getter(vm, o.value)) via the RegisteredVariable map. Any other type: push Duplicate(*GetProperty((ScOSIObject*)o.value, m)); o disposed [0x5fe9a0] | "Reference to unregistered Game Variable" (SrOSIError, game type, map miss; always-error, map never populated: nothing inserts into ScOSISystem+0x14, see "The game-variable map") [0x5fe9a0] | No type check and no null check on the non-game path: a non-object o or an absent property dereferences a bad pointer in the original (undefined behaviour; conformance tests must not exercise it). Contrast 0x16, which checks. |
 | 0x12 | BCLGetMemberFunction | 0x5fe590 | 0x751888 | 14 (+0x38) | H | 8422 | o → int(code address); operand u16 m. o popped (no dispose), FindMethod(o, m) (0x608600) scans the class method records {u16 symbol, u32 offset}; pushes {0x10, script-file base + offset}; o disposed [0x5fe590] | "Call to undefined member method" (SrOSIError inside FindMethod 0x608600, no method with that symbol) [0x5fe590] | No type check on o (a non-object is undefined behaviour). The pushed int is a HOST ADDRESS consumed by 0x51; a port must carry it as a tagged file offset (D4: never write host pointers into script-visible state). |
 | 0x13 | BCLCreateObject | 0x5fe530 | 0x751898 | 13 (+0x34) | H | 1941 | → obj; operand u16 c (class index). ConstructObject (0x60be00): FindClass(c), new 32-byte ScOSIObject with classID=c and nprops = first byte of the class record, every property nothing, refcount 1; pushes {1, obj} [0x5fe530] | none (FindClass 0x609af0 does not range-check c) [0x5fe530] |  |
 | 0x14 | BCLMemberFunctionArgumentCheck | 0x5feb90 | 0x7518a8 | 17 (+0x44) | b | 3583 | a1..ak → a1..ak nothing×(n−k); operand u8 n (unsigned). k = (top − framePtr) in slots, truncated to 8 bits; pads with nothings until exactly n slots sit above the frame base [0x5feb90] | "Too many arguments to method" (n < k) [0x5feb90] | Runs at a method entry after 0x51, so k = arguments passed. 3,583 uses. |
 | 0x15 | BCLSetThisMemberValue | 0x5fec10 | 0x7518b8 | 18 (+0x48) | H | 5102 | v → (empty); operand u16 m; this = framePtr[0]. this.type must be 1; v popped WITHOUT dispose (asm 0x5fec72 pushes 0; the decomp's Pop(true) is a misreading); prop = GetProperty(this, m); old prop disposed; prop ← v [0x5fec10] | "Member property of non member variable" (framePtr[0].type ≠ 1); "Reference to non-existant member property \"%s\"" (property absent) [0x5fec10] | The type check happens before the pop, so on error v is still on the stack (moot: Error throws). |
 | 0x16 | BCLGetThisMemberValue | 0x5fecf0 | 0x7518c8 | 19 (+0x4c) | H | 11951 | → value; operand u16 m; this = framePtr[0]; pushes Duplicate(*GetProperty(this, m)) [0x5fecf0] | "Member property of non member variable" (this.type ≠ 1; the decomp prints the argument as 0xe0f0 = low half of 0x74e0f0); "Reference to non-existant member property \"%s\"" [0x5fecf0] |  |
 | 0x17 | BCLGetThisMemberFunction | 0x5fedb0 | 0x7518d8 | 20 (+0x50) | H | 1743 | → int(code address); operand u16 m; this = framePtr[0]; pushes {0x10, FindMethod(this, m)} (host address, as 0x12) [0x5fedb0] | "Member method of non member variable" (this.type ≠ 1; string 0x74e163); "Call to undefined member method" (FindMethod 0x608600) [0x5fedb0] |  |
-| 0x18 | BCLGetMemberValueFromString | 0x5fee40 | 0x7518e8 | 21 (+0x54) | none | 0 | o s → value; s (member name) popped first, then o (both no dispose). s text = string-table entry (0x11) or the dynamic string (0x16). Game type o: map[(GetTypeToken(o.type), GetToken(s))] getter, push Duplicate(result), o disposed (s is not disposed on this path). Type 1: id = FindMemberID(s) (0x609ba0), push Duplicate(*GetProperty(o, id)); o and s disposed [0x5fee40] | "Invalid type for member access (must be a string)" (s not 0x11/0x16; string 0x74e188); "Reference to unregistered Game Variable" (SrOSIError); "Member property of non member variable" (o neither game type nor 1; string 0x74e0f0); "Reference to non-existant member property \"%s\"" [0x5fee40] | FindMemberID (0x609ba0) has no error path: on a name that is not a member symbol it returns an unset id; tests must not rely on it. 0 uses in Base.osi. |
+| 0x18 | BCLGetMemberValueFromString | 0x5fee40 | 0x7518e8 | 21 (+0x54) | none | 0 | o s → value; s (member name) popped first, then o (both no dispose). s text = string-table entry (0x11) or the dynamic string (0x16). Game type o: map[(GetTypeToken(o.type), GetToken(s))] getter, push Duplicate(result), o disposed (s is not disposed on this path). Type 1: id = FindMemberID(s) (0x609ba0), push Duplicate(*GetProperty(o, id)); o and s disposed [0x5fee40] | "Invalid type for member access (must be a string)" (s not 0x11/0x16; string 0x74e188); "Reference to unregistered Game Variable" (SrOSIError; always-error, map never populated: nothing inserts into ScOSISystem+0x14, see "The game-variable map"); "Member property of non member variable" (o neither game type nor 1; string 0x74e0f0); "Reference to non-existant member property \"%s\"" [0x5fee40] | FindMemberID (0x609ba0) has no error path: on a name that is not a member symbol it returns an unset id; tests must not rely on it. 0 uses in Base.osi. |
 | 0x19 | BCLGetMemberFunctionFromString | 0x5ff210 | 0x7518f8 | 22 (+0x58) | none | 12 | o s → int(code address); s popped first, then o (no dispose). o.type must be 1; s must be 0x11/0x16; id = FindMemberID(s); pushes {0x10, FindMethod(o, id)}; o and s disposed [0x5ff210] | "Member method of non member variable" (o.type ≠ 1, checked first; string 0x74e163); "Invalid method type for function call (must be a string)" (string 0x74e1ba); "Call to undefined member method" (FindMethod) [0x5ff210] | 12 uses in Base.osi. |
-| 0x1a | BCLSetMemberValueFromString | 0x5ff3a0 | 0x751908 | 23 (+0x5c) | none | 0 | v o s → (empty); s popped first, then o (no dispose). Game type o: getter called and result disposed, then v popped and setter (+0x10)(vm, o.value, v) called; o disposed. Type 1: v popped, id = FindMemberID(s), prop = GetProperty(o, id), old disposed, prop ← v; o and s disposed [0x5ff3a0] | "Invalid type for member set (must be a string)" (s not 0x11/0x16); "Reference to unregistered Game Variable" (SrOSIError); "Member property of non object variable" (o neither game type nor 1 — note 'object', unlike 0x10/0x18); "Reference to non-existant member property \"%s\"" [0x5ff3a0] | 0 uses in Base.osi. |
+| 0x1a | BCLSetMemberValueFromString | 0x5ff3a0 | 0x751908 | 23 (+0x5c) | none | 0 | v o s → (empty); s popped first, then o (no dispose). Game type o: getter called and result disposed, then v popped and setter (+0x10)(vm, o.value, v) called; o disposed. Type 1: v popped, id = FindMemberID(s), prop = GetProperty(o, id), old disposed, prop ← v; o and s disposed [0x5ff3a0] | "Invalid type for member set (must be a string)" (s not 0x11/0x16); "Reference to unregistered Game Variable" (SrOSIError; always-error, map never populated: nothing inserts into ScOSISystem+0x14, see "The game-variable map"); "Member property of non object variable" (o neither game type nor 1 — note 'object', unlike 0x10/0x18); "Reference to non-existant member property \"%s\"" [0x5ff3a0] | 0 uses in Base.osi. |
 | 0x1b | BCLUnused | 0x60be60 | 0x751918 | 102 (+0x198) | n/a | 0 | none: errors before any change; PC not advanced [0x60be60] | "Call of undefined instruction" (always) [0x60be60] | osi.py also rejects it (unknown opcode). 0 uses. |
 | 0x1c | BCLUnused | 0x60be60 | 0x751928 | 102 (+0x198) | n/a | 0 | none: errors before any change; PC not advanced [0x60be60] | "Call of undefined instruction" (always) [0x60be60] | osi.py also rejects it (unknown opcode). 0 uses. |
 | 0x1d | BCLUnused | 0x60be60 | 0x751938 | 102 (+0x198) | n/a | 0 | none: errors before any change; PC not advanced [0x60be60] | "Call of undefined instruction" (always) [0x60be60] | osi.py also rejects it (unknown opcode). 0 uses. |
