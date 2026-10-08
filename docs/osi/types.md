@@ -17,9 +17,9 @@ corpus `gen/decomp` and `Base.osi`. It documents the type column of `gen/osi/nat
 
 ## Builtin variant types
 
-| id | name | meaning and citation | declared in 10560 registration slots |
+| id | name | meaning and citation | slots using it (of 10560 = 1056 rows x 10) |
 |---|---|---|---|
-| 0x0f | nothing | nothing: `ScOSIVariant` ctor 0x60b2a0 and opcode 0x47 (docs/osi/opcodes.md, "Variant types seen in the handlers"). In a registration it fills every unused slot. | 8591 |
+| 0x0f | nothing | nothing: `ScOSIVariant` ctor 0x60b2a0 and opcode 0x47 (docs/osi/opcodes.md, "Variant types seen in the handlers"). In a registration it fills every unused slot. | 8591 unused, 0 declared |
 | 0x10 | int | int32: opcodes 0x40-0x43, 0x45. `GetVariantType<T>::GetIt` returns it for bool, short, unsigned short, long, unsigned long, `ScIdentifier` and the enum types (table below). | 629 |
 | 0x11 | string-id | string-table index: opcode 0x46. Never a declared parameter type. | 0 |
 | 0x12 | float | float32: opcode 0x44. `GetIt` returns it for float and double. | 470 |

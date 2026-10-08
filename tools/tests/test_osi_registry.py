@@ -187,7 +187,7 @@ void FUN_00401300(void)
     theOSITypeGcLater = ScOSISystem::RegisterType(ScGlobalOSISystem::theOSISystem,&local_30);
   }
   ScOSISystem::RegisterFunction
-            (ScGlobalOSISystem::theOSISystem,&local_20,&local_28,FUN_00401140,'\\x01','\\x01',theOSITypeGcLater,0xf,
+            (ScGlobalOSISystem::theOSISystem,&local_20,&local_28,FUN_00401400,'\\x01','\\x01',theOSITypeGcLater,0xf,
              0xf,0xf,0xf,0xf,0xf,0xf,0xf,0xf);
   return;
 }
@@ -200,13 +200,38 @@ def test_synthetic_registration_order_follows_crt_order_not_address_order(reg, s
     exe = synthetic_exe({S_CLASS: b"GcThing", S_FUNC: b"Run", S_SHORT_CLS: b"Short", S_SHORT_FN: b"Fn", S_TYPE: b"Other",
                          RDATA_VA + 0x90: b"GcLater"})
     sites = json.loads((corpus / "reg_sites.json").read_text())
-    sites.append({"site": "0x00401350", "fnptr": "0x00401140", "candidates": 1, "enclosing": "0x00401300"})
+    sites.append({"site": "0x00401350", "fnptr": "0x00401400", "candidates": 1, "enclosing": "0x00401300"})
     (corpus / "reg_sites.json").write_text(json.dumps(sites))
     rows, replay = reg.parse_corpus(corpus, reg.Image(exe), [0x401300, 0x401000])   # 0x401300 listed (so run) first
     assert [e["class"] for e in replay.order] == ["GcLater", "GcThing", "Other"]
     assert [e["rank"] for e in replay.order] == [0, 1, 2]
     assert [r["crt_index"] for r in rows] == [0, 1, 1]
     assert rows[0]["raw_types"][0] == ("game", "GcLater")
+
+
+def test_synthetic_winner_follows_crt_order_not_address_order(reg, synth):
+    """Two initializers register the same key (Short.Fn). 0x401300 is listed FIRST in .CRT although it has the higher
+    address (and the higher call-site address), so it runs first and its registration is the one the map keeps."""
+    _, corpus = synth
+    (corpus / "funcs" / "00401300.c").write_text(SYNTH_INIT2)
+    exe = synthetic_exe({S_CLASS: b"GcThing", S_FUNC: b"Run", S_SHORT_CLS: b"Short", S_SHORT_FN: b"Fn", S_TYPE: b"Other",
+                         RDATA_VA + 0x90: b"GcLater"})
+    sites = json.loads((corpus / "reg_sites.json").read_text())
+    sites.append({"site": "0x00401350", "fnptr": "0x00401400", "candidates": 1, "enclosing": "0x00401300"})
+    (corpus / "reg_sites.json").write_text(json.dumps(sites))
+    rows, _ = reg.parse_corpus(corpus, reg.Image(exe), [0x401300, 0x401000])
+    for r, site in zip(rows, (0x401350, 0x401050, 0x4010A0)):
+        r["site"] = site
+    same = [r for r in rows if (r["cls"], r["name"]) == ("Short", "Fn")]
+    assert [(r["init"], r["body"]) for r in same] == [(0x401300, 0x401400), (0x401000, 0x401140)]
+    flags = reg.winner_flags(rows)
+    assert [(r["init"], f) for r, f in zip(rows, flags) if r in same] == [(0x401300, True), (0x401000, False)]
+    assert flags.count(True) == 2                       # GcThing.Run, and the Short.Fn winner
+    # the answer does not depend on how the list is ordered
+    assert reg.winner_flags(rows[::-1]) == flags[::-1]
+    # a scinit registrar runs after every .CRT initializer, whatever its address
+    late = dict(same[0], phase="scinit", crt_index=None, init=0x400100)
+    assert reg.winner_flags(rows + [late])[-1] is False
 
 
 def test_synthetic_cross_check_reports_fnptr_disagreement(reg, synth):
@@ -391,12 +416,84 @@ def test_fnptr_matches_reg_sites_for_every_row(res, gen_decomp):
     assert res["cross_check"]["bad"] == []
 
 
+def _asm(reg, canonical_exe, gen_decomp, parsed):
+    funcs = reg.load_functions(gen_decomp)
+    return reg.asm_check(canonical_exe.read_bytes(), parsed, reg.load_type_globals(gen_decomp), reg.ctor_addrs(funcs),
+                         reg.Image(canonical_exe.read_bytes()))
+
+
 def test_argument_pushes_in_the_asm_agree(res):
-    """A third reader: the pushes in front of each call. min/max (`6a MIN 6a MAX 68 fnptr`), both name-string addresses and
-    10,529 of the 10,560 type slots decode and agree; 31 slots sit behind a push the decoder cannot follow (counted as
-    unchecked, not as agreeing). Zero disagreements."""
+    """A third reader that uses nothing from the decomp except the rows it checks: the pushes in front of each call.
+    min/max (`6a MIN 6a MAX 68 fnptr`); class and function identified BY ROLE (the two `lea; push` after the fnptr push, back
+    to their string-constructor calls); each type slot is `6a ib`, `68 imm32` (the two byref slots), `call GetIt; push eax`
+    (GetIt's value read from its own bytes: `mov eax,imm32; ret`, `xor eax,eax; ret` or the lazy `cmp word [g],0` guard) or
+    `<load theOSIType*>; push eax`. 10,547 of 10,560 slots decode and agree; 13 are behind a register push the decoder
+    does not track (unchecked, never counted as agreeing). Zero disagreements."""
     assert res["asm_check"]["bad"] == []
-    assert res["asm_check"]["stats"] == {"minmax_ok": 1056, "names_ok": 1056, "types_ok": 10529, "types_unchecked": 31, "sites": 1056}
+    assert res["asm_check"]["stats"] == {"minmax_ok": 1056, "names_ok": 1056, "types_ok": 10547, "types_unchecked": 13, "sites": 1056}
+
+
+def test_byref_rows_are_checked_against_the_bytes(res, rows):
+    byref = [p for p in res["parsed"] if 0x200 in p["raw_types"]]
+    assert [(p["cls"], p["name"], p["site"]) for p in byref] == [("ScSLOSIFileIO", "SaveOSIObject", 0x61755B),
+                                                                   ("ScSLOSIFileIO", "SaveOSIObjectToMemCard", 0x6175E2)]
+
+
+@pytest.fixture(scope="module")
+def mutate(reg, canonical_exe, gen_decomp, res):
+    import copy
+
+    def run(change):
+        parsed = copy.deepcopy(res["parsed"])
+        change(parsed)
+        return _asm(reg, canonical_exe, gen_decomp, parsed)["bad"]
+    return run
+
+
+def test_asm_reader_catches_class_function_swap(mutate):
+    def swap(parsed):
+        for p in parsed:
+            if (p["cls"], p["name"]) == ("GcTimer", "Create"):
+                p["cls"], p["name"] = p["name"], p["cls"]
+    bad = mutate(swap)
+    assert bad and all("GcTimer" in m or "Create" in m for _, m in bad) and any("class" in m or "function" in m for _, m in bad)
+
+
+def test_asm_reader_catches_other_mutants(mutate):
+    def minmax(parsed):
+        parsed[10]["min"], parsed[10]["max"] = parsed[10]["max"] + 1, parsed[10]["min"]
+
+    def byref(parsed):                  # the imm32 push of a byref slot is now decoded
+        for p in parsed:
+            if p["name"] == "SaveOSIObject":
+                p["raw_types"][1] = 0x16
+
+    def getit(parsed):                  # a lazy GetIt resolved to the wrong class
+        for p in parsed:
+            if p["raw_types"][0] == ("game", "GcCharacter"):
+                p["raw_types"][0] = ("game", "GcToa")
+                return
+
+    def literal(parsed):
+        for p in parsed:
+            if p["raw_types"][0] == 0x12:
+                p["raw_types"][0] = 0x10
+                return
+    for change in (minmax, byref, getit, literal):
+        assert mutate(change), change.__name__
+
+
+def test_bodies_are_aligned_function_prologues_in_the_bytes(res, reg, canonical_exe):
+    """Not circular with the seeding (every body was a seed): the bytes at each body are 16-byte aligned and begin with one
+    of five measured prologue forms."""
+    got, bad = reg.body_prologues(canonical_exe.read_bytes(), res["parsed"])
+    assert bad == []
+    assert got == {"push ebp; mov ebp,esp": 894, "push ebx; push esi": 124, "push ebx; mov ebx,[esp+d]": 31,
+                   "mov ecx,[esp+d]": 4, "mov edx,[esp+d]": 3}
+
+
+def test_winner_flags_are_what_build_reports(res, reg):
+    assert [r["winner"] for r in res["rows"]] == reg.winner_flags(res["parsed"])
 
 
 def test_crt_layout_matches_run_init(res, canonical_exe, gen_decomp):

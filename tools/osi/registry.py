@@ -201,8 +201,7 @@ def getit_table(corpus: Path) -> dict[str, dict]:
 class Replay:
     """The state RegisterType leaves behind, replayed in execution order."""
 
-    def __init__(self, image: Image):
-        self.image = image
+    def __init__(self):
         self.order: list[dict] = []            # first-use order of game types
         self.by_global: dict[str, dict] = {}
         self.guard_events = 0                  # `theOSITypeX = RegisterType(..)` statements seen in .CRT initializers
@@ -257,7 +256,7 @@ class FunctionParser:
                 continue
             m = re.fullmatch(r"ScOSISystem::RegisterFunction ?\((.*)\)", st)
             if m:
-                rows.append(self.row(init, crt_index, split_args(m.group(1)), strs, env))
+                rows.append(dict(self.row(init, crt_index, split_args(m.group(1)), strs, env), stmt=len(rows)))
                 continue
             m = re.fullmatch(r"(\w+) = (.+)", st)
             if m and not m.group(1).startswith("theOSIType"):
@@ -379,16 +378,33 @@ def load_functions(corpus: Path) -> list[dict]:
     return [json.loads(line) for line in open(corpus / "functions.jsonl") if line.strip()]
 
 
-def parse_corpus(corpus: Path, image: Image, crt: list[int]):
+def load_type_globals(corpus: Path) -> dict[int, str]:
+    """{address: Class} for every `theOSIType<Class>` global named in symbols.txt."""
+    out = {}
+    for line in (corpus / "symbols.txt").read_text().splitlines():
+        a, _, n = line.partition(" ")
+        m = re.fullmatch(r"\?theOSIType(\w+?)@@3GA", n.strip())
+        if m:
+            out[int(a, 16)] = m.group(1)
+    return out
+
+
+def ctor_addrs(funcs: list[dict]) -> set[int]:
+    """Addresses of the `_ScBaseString::_ScBaseString` overloads (the string constructors in front of each registration)."""
+    return {int(f["addr"], 16) for f in funcs if f["name"] == "_ScBaseString::_ScBaseString"}
+
+
+def parse_corpus(corpus: Path, image: Image, crt: list[int], funcs: list[dict] | None = None, getit: dict | None = None):
     """Parse every .CRT initializer in ascending order (type registration replay) and the registrars outside .CRT.
-    Returns (rows in execution order, Replay)."""
-    funcs = load_functions(corpus)
+    `funcs` (functions.jsonl) and `getit` (getit_table) are loaded here when not passed. Returns (rows, Replay)."""
+    funcs = load_functions(corpus) if funcs is None else funcs
+    getit = getit_table(corpus) if getit is None else getit
     by_name: dict[str, list[int]] = collections.defaultdict(list)
     for f in funcs:
         by_name[f["name"]].append(int(f["addr"], 16))
     fn_by_name = {n: a[0] for n, a in by_name.items() if len(a) == 1}
-    replay = Replay(image)
-    parser = FunctionParser(image, getit_table(corpus), fn_by_name, replay)
+    replay = Replay()
+    parser = FunctionParser(image, getit, fn_by_name, replay)
     wanted = {int(s["enclosing"], 16) for s in json.loads((corpus / "reg_sites.json").read_text())}
     rows = []
     for i, a in enumerate(crt):
@@ -407,11 +423,25 @@ def parse_corpus(corpus: Path, image: Image, crt: list[int]):
     return rows, replay
 
 
-def createvariant_types(corpus: Path, image: Image) -> list[dict]:
+def winner_flags(rows: list[dict]) -> list[bool]:
+    """Which rows the function map keeps: for each case-folded key, the FIRST registration in execution order
+    (docs/osi/types.md, 'Duplicates': insert_one never overwrites). Execution order is `.CRT` index, then statement
+    order inside the initializer; ScInitFunc callbacks (phase "scinit") run after every `.CRT` initializer. It does not
+    depend on the order of `rows` and never on an address."""
+    def order(r):
+        return (0, r["crt_index"], 0, r["stmt"]) if r["phase"] == "crt" else (1, 0, r["init"], r["stmt"])
+    keep: dict[str, int] = {}
+    for i in sorted(range(len(rows)), key=lambda i: order(rows[i])):
+        keep.setdefault((rows[i]["cls"] + "." + rows[i]["name"]).lower(), i)
+    mine = set(keep.values())
+    return [i in mine for i in range(len(rows))]
+
+
+def createvariant_types(corpus: Path, image: Image, funcs: list[dict]) -> list[dict]:
     """Classes whose id CreateVariant(<Class>*) can assign at run time (the lazy `if (theOSITypeX == 0)` in each of its
     overloads): they are registered the first time a native returns such an object, if nothing registered them before."""
     out = []
-    for f in load_functions(corpus):
+    for f in funcs:
         if f["name"] != "CreateVariant":
             continue
         t = strip_comments((corpus / "funcs" / ("%08x.c" % int(f["addr"], 16))).read_text())
@@ -423,10 +453,10 @@ def createvariant_types(corpus: Path, image: Image) -> list[dict]:
     return out
 
 
-def crt_layout(exe_bytes: bytes) -> list[int]:
+def crt_layout(exe_bytes: bytes, crt_listed: list[int]) -> list[int]:
     """The raw dwords of the `.CRT` section as `__RunInit` (0x65f530) walks them: it starts at 0x76f004 and stops at the
-    first zero dword. Returns the pointers it would call; raises unless that is exactly the pointers seed_addrs found
-    (a zero dword inside the table would silently drop every later initializer)."""
+    first zero dword. Returns the pointers it would call; raises unless that is exactly `crt_listed` (seed_addrs' list; a
+    zero dword inside the table would silently drop every later initializer)."""
     base, secs = seed_addrs.sections(exe_bytes)
     sec = seed_addrs._section(secs, ".CRT")
     if sec["va"] + 4 != RUN_INIT_START:
@@ -438,22 +468,22 @@ def crt_layout(exe_bytes: bytes) -> list[int]:
         if d == 0:
             break
         called.append(d)
-    if called != seed_addrs.compute(exe_bytes)["crt"]:
+    if called != crt_listed:
         raise RegistryError("__RunInit would call %d dwords, seed_addrs lists a different set" % len(called))
     return called
 
 
-def type_site_accounting(exe_bytes: bytes, corpus: Path, crt: list[int]) -> dict:
+def type_site_accounting(funcs: list[dict], type_sites: list[int], crt: list[int]) -> dict:
     """Where the 445 `call RegisterType` sites of the exe live: inside .CRT initializers, inside GetIt bodies, inside
     CreateVariant overloads, or elsewhere."""
     import bisect
-    funcs = sorted((int(f["addr"], 16), f["size"], f["name"]) for f in load_functions(corpus))
-    starts = [f[0] for f in funcs]
+    fl = sorted((int(f["addr"], 16), f["size"], f["name"]) for f in funcs)
+    starts = [f[0] for f in fl]
     crt_set = set(crt)
     acc = collections.Counter()
-    for s in seed_addrs.compute(exe_bytes)["type_sites"]:
+    for s in type_sites:
         i = bisect.bisect_right(starts, s) - 1
-        a, n, name = funcs[i]
+        a, n, name = fl[i]
         if not (a <= s < a + n):
             acc["unowned"] += 1
         elif a in crt_set:
@@ -497,7 +527,7 @@ def cross_check(rows: list[dict], corpus: Path) -> dict:
     return {"matched": matched, "bad": bad}
 
 
-def type_order_from_asm(exe_bytes: bytes, corpus: Path, crt: list[int], getit: dict) -> list[str]:
+def type_order_from_asm(exe_bytes: bytes, globals_: dict[int, str], funcs: list[dict], crt: list[int], getit: dict) -> list[str]:
     """First-use order of the game types re-derived from raw bytes only (no decompiled text): inside each .CRT initializer,
     ascending by address, every `call RegisterType` (always followed by `mov [theOSIType<Class>], ax` = 66 A3 imm32; the
     global's name comes from symbols.txt) and every call of a lazy `GetVariantType<Class*>::GetIt`; initializers in `.CRT`
@@ -506,15 +536,9 @@ def type_order_from_asm(exe_bytes: bytes, corpus: Path, crt: list[int], getit: d
     base, secs = seed_addrs.sections(exe_bytes)
     text = [s for s in secs if s["name"] == ".text"][0]
     tb, tva = exe_bytes[text["roff"]:text["roff"] + text["vsz"]], text["va"]
-    glob = {}
-    for line in (corpus / "symbols.txt").read_text().splitlines():
-        a, _, n = line.partition(" ")
-        m = re.fullmatch(r"\?theOSIType(\w+?)@@3GA", n.strip())
-        if m:
-            glob[int(a, 16)] = m.group(1)
     lazy = {g["addr"]: g["lazy"][len("theOSIType"):] for g in getit.values() if "lazy" in g}
-    funcs = sorted((int(f["addr"], 16), f["size"]) for f in load_functions(corpus))
-    starts = [f[0] for f in funcs]
+    fl = sorted((int(f["addr"], 16), f["size"]) for f in funcs)
+    starts = [f[0] for f in fl]
     crt_index = {a: i for i, a in enumerate(crt)}
     events = []                                   # (crt_index, address, class)
     for i in range(len(tb) - 5):
@@ -525,13 +549,13 @@ def type_order_from_asm(exe_bytes: bytes, corpus: Path, crt: list[int], getit: d
             continue
         site = tva + i
         k = bisect.bisect_right(starts, site) - 1
-        a, n = funcs[k]
+        a, n = fl[k]
         if not (a <= site < a + n) or a not in crt_index:
             continue                              # GetIt / CreateVariant bodies, not initializers
         if tgt == seed_addrs.REGISTER_TYPE:
             if tb[i + 5:i + 7] != b"\x66\xa3":
                 raise RegistryError("RegisterType call at %#x is not followed by mov [global], ax" % site)
-            cls = glob[struct.unpack_from("<I", tb, i + 7)[0]]
+            cls = globals_[struct.unpack_from("<I", tb, i + 7)[0]]
         else:
             cls = lazy[tgt]
         events.append((crt_index[a], site, cls))
@@ -542,27 +566,63 @@ def type_order_from_asm(exe_bytes: bytes, corpus: Path, crt: list[int], getit: d
     return order
 
 
-def asm_check(exe_bytes: bytes, parsed: list[dict], getit: dict, corpus: Path) -> dict:
-    """A second independent reader of the same calls: the raw argument pushes in front of each RegisterFunction call.
-    The compiler pushes right to left: t9..t0, MIN, MAX, fnptr, &function-name, &class-name. Anchored on the `push fnptr`
-    (68 imm32), this decodes MIN and MAX (`6a ib` each), the two name-string pushes, and then each type slot backwards:
-    `6a ib` (literal), `call GetIt; push eax` (target compared with the GetIt table), `<load theOSIType*>; push eax`
-    (the global's address compared with symbols.txt). Items it cannot decode (register pushes, locals) are counted as
-    unchecked, never as agreeing. Returns counts and the list of disagreements."""
+_LEA_PUSH = re.compile(rb"\x8d\x85(....)\x50|\x8d\x45(.)\x50", re.S)           # lea eax,[ebp+d32|d8] ; push eax
+_LAZY_GUARD = re.compile(rb"\x66\x83\x3d(....)\x00", re.S)                      # cmp word [theOSIType<Class>], 0
+_LOAD_TYPE = re.compile(rb"\x66\xa1(....)|\x0f\xb7\x05(....)|\x66\x8b\x05(....)", re.S)
+
+
+def _getit_from_bytes(tb: bytes, tva: int, addr: int, globals_: dict[int, str]):
+    """What a GetVariantType<T>::GetIt returns, read from its own bytes: `mov eax, imm32; ret`, `xor eax,eax; ret`, or the
+    lazy form (guarded by `cmp word [theOSIType<Class>], 0`; it returns that global). None when it is none of these."""
+    o = addr - tva
+    if tb[o] == 0xB8 and tb[o + 5] == 0xC3:
+        return struct.unpack_from("<I", tb, o + 1)[0]
+    if tb[o:o + 3] == b"\x31\xc0\xc3":
+        return 0
+    m = _LAZY_GUARD.search(tb[o:o + 0x20])
+    if m:
+        g = globals_.get(struct.unpack("<I", m.group(1))[0])
+        return ("game", g) if g else None
+    return None
+
+
+def _ctor_string(tb: bytes, tva: int, image: Image, ctors: set[int], disp: int, lo: int, hi: int):
+    """The string the nearest preceding `push imm32 ; lea ecx,[ebp+disp] ; call _ScBaseString::_ScBaseString` put in the local
+    at ebp+disp (searching tb[lo:hi])."""
+    encs = [b"\x8d\x8d" + struct.pack("<i", disp)] + ([b"\x8d\x4d" + struct.pack("<b", disp)] if -128 <= disp < 128 else [])
+    best = None
+    for e in encs:
+        p = hi
+        while True:
+            p = tb.rfind(e, lo, p)
+            if p < 0:
+                break
+            q = p + len(e)
+            if (p >= 5 and tb[p - 5] == 0x68 and tb[q] == 0xE8
+                    and (tva + q + 5 + struct.unpack_from("<i", tb, q + 1)[0]) & 0xFFFFFFFF in ctors):
+                if best is None or p > best[0]:
+                    best = (p, struct.unpack_from("<I", tb, p - 4)[0])
+                break
+    return image.cstr(best[1]) if best else None
+
+
+def asm_check(exe_bytes: bytes, parsed: list[dict], globals_: dict[int, str], ctors: set[int], image: Image) -> dict:
+    """A second, independent reader of the same calls: the raw argument pushes in front of each RegisterFunction call. It
+    uses nothing from the decompiled text except the rows it checks. The compiler pushes right to left: t9..t0, MIN, MAX,
+    fnptr, &function-name, &class-name. Anchored on the `push fnptr` (68 imm32) it decodes
+      MIN, MAX      `6a ib` each;
+      class, function  the two `lea eax,[ebp+d]; push eax` after the fnptr push, each followed back to the
+                    `push imm32; lea ecx,[ebp+d]; call _ScBaseString::_ScBaseString` that built the string, so the roles are
+                    read from the push order (first pushed = function, second = class), not just checked for presence;
+      each type slot, backwards: `6a ib` (literal), `68 imm32` (literal), `call GetIt; push eax` (the GetIt's value read from
+                    its own bytes by _getit_from_bytes), `<load theOSIType*>; push eax` (global named by symbols.txt).
+    A slot behind a register push (51-57) is counted as unchecked, never as agreeing. Returns counts and disagreements."""
     base, secs = seed_addrs.sections(exe_bytes)
     text = [s for s in secs if s["name"] == ".text"][0]
     tb, tva = exe_bytes[text["roff"]:text["roff"] + text["vsz"]], text["va"]
-    globals_ = {}
-    for line in (corpus / "symbols.txt").read_text().splitlines():
-        a, _, n = line.partition(" ")
-        m = re.fullmatch(r"\??theOSIType(\w+?)(?:@@3GA)?", n.strip())
-        if m:
-            globals_[int(a, 16)] = m.group(1)
-    getit_by_addr = {v["addr"]: v for v in getit.values()}
     order = sorted(r["site"] for r in parsed)
     prev_end = {s: (order[i - 1] - tva + 5 if i else 0) for i, s in enumerate(order)}
     st, bad = collections.Counter(), []
-    load_re = re.compile(rb"(?s)\x66\xa1(....)|\x0f\xb7\x05(....)|\x66\x8b\x05(....)")
     for r in parsed:
         s, lo = r["site"] - tva, prev_end[r["site"]]
         who = "%s.%s@%#x" % (r["cls"], r["name"], r["site"])
@@ -577,10 +637,23 @@ def asm_check(exe_bytes: bytes, parsed: list[dict], getit: dict, corpus: Path) -
                 bad.append((who, "min/max: asm (%d,%d) decomp (%d,%d)" % (tb[j - 3], tb[j - 1], r["min"], r["max"])))
         else:
             st["minmax_unchecked"] += 1
-        if all(tb.find(b"\x68" + struct.pack("<I", a), lo, s) >= 0 for a in (r["cls_addr"], r["name_addr"])):
-            st["names_ok"] += 1
+        # roles: the first lea/push after the fnptr push is the function name, the second the class name
+        m1 = _LEA_PUSH.match(tb, j + 5)
+        m2 = _LEA_PUSH.match(tb, m1.end()) if m1 else None
+        if not (m1 and m2):
+            bad.append((who, "no `lea; push` pair for the name arguments after the fnptr push"))
         else:
-            bad.append((who, "class/function string address not pushed before the call"))
+            disp = [struct.unpack("<i", m.group(1))[0] if m.group(1) is not None else struct.unpack("<b", m.group(2))[0]
+                    for m in (m1, m2)]
+            fn_s = _ctor_string(tb, tva, image, ctors, disp[0], lo, s)
+            cls_s = _ctor_string(tb, tva, image, ctors, disp[1], lo, s)
+            if (cls_s, fn_s) == (r["cls"], r["name"]):
+                st["names_ok"] += 1
+            else:
+                if cls_s != r["cls"]:
+                    bad.append((who, "class: asm %r decomp %r" % (cls_s, r["cls"])))
+                if fn_s != r["name"]:
+                    bad.append((who, "function: asm %r decomp %r" % (fn_s, r["name"])))
         pos, stop = j - 4, False
         for i in range(NROW_TYPES):
             want = r["raw_types"][i]
@@ -591,16 +664,17 @@ def asm_check(exe_bytes: bytes, parsed: list[dict], getit: dict, corpus: Path) -
                 got, pos = tb[pos - 1], pos - 2
             elif tb[pos - 1] == 0x50 and tb[pos - 6] == 0xE8:          # call GetIt ; push eax
                 tgt = (tva + pos - 1 + struct.unpack_from("<i", tb, pos - 5)[0]) & 0xFFFFFFFF
-                g = getit_by_addr.get(tgt)
-                if g is None:
-                    bad.append((who, "slot %d: call to %#x is not a GetIt body" % (i, tgt)))
+                got = _getit_from_bytes(tb, tva, tgt, globals_)
+                if got is None:
+                    bad.append((who, "slot %d: call to %#x is not a recognisable GetIt" % (i, tgt)))
                     stop = True
                     continue
-                got = g["lit"] if "lit" in g else ("game", g["lazy"][len("theOSIType"):])
                 pos -= 6
+            elif tb[pos - 5] == 0x68 and tb[pos - 1] != 0x50:          # push imm32
+                got, pos = struct.unpack_from("<I", tb, pos - 4)[0], pos - 5
             elif tb[pos - 1] == 0x50:                                  # push eax, loaded earlier
                 m = None
-                for m in load_re.finditer(tb[lo:pos - 1]):
+                for m in _LOAD_TYPE.finditer(tb[lo:pos - 1]):
                     pass
                 a = struct.unpack("<I", next(g for g in m.groups() if g))[0] if m else None
                 got = ("game", globals_[a]) if a in globals_ else None
@@ -619,6 +693,36 @@ def asm_check(exe_bytes: bytes, parsed: list[dict], getit: dict, corpus: Path) -
                 bad.append((who, "slot %d: asm %r decomp %r" % (i, got, want)))
     st["sites"] = len(parsed)
     return {"stats": dict(st), "bad": bad}
+
+
+# Entry sequences of the 1,056 natives (measured: every body is 16-byte aligned and starts with one of these).
+PROLOGUES = (
+    (bytes.fromhex("5589e5"), "push ebp; mov ebp,esp"),
+    (bytes.fromhex("5356"), "push ebx; push esi"),
+    (bytes.fromhex("538b5c24"), "push ebx; mov ebx,[esp+d]"),
+    (bytes.fromhex("8b4c24"), "mov ecx,[esp+d]"),
+    (bytes.fromhex("8b5424"), "mov edx,[esp+d]"),
+)
+
+
+def body_prologues(exe_bytes: bytes, parsed: list[dict]) -> tuple[dict, list]:
+    """The bytes at every native's address, not the seeding that made them functions: 16-byte aligned and a known entry
+    sequence. Returns ({form: count}, [(body, reason)] for the ones that are neither)."""
+    base, secs = seed_addrs.sections(exe_bytes)
+    text = [s for s in secs if s["name"] == ".text"][0]
+    tb, tva = exe_bytes[text["roff"]:text["roff"] + text["vsz"]], text["va"]
+    got, bad = collections.Counter(), []
+    for r in parsed:
+        a = r["body"]
+        o = a - tva
+        form = next((name for pre, name in PROLOGUES if tb[o:o + len(pre)] == pre), None)
+        if a % 16:
+            bad.append((a, "not 16-byte aligned"))
+        elif form is None:
+            bad.append((a, "unknown entry bytes %s" % tb[o:o + 4].hex()))
+        else:
+            got[form] += 1
+    return dict(got), bad
 
 
 def base_osi_pairs(osi_path: Path) -> set[str]:
@@ -648,27 +752,31 @@ def build(exe_bytes: bytes, corpus: Path, osi_path: Path | None, check: bool = T
     if check:
         _check_canonical(exe_bytes)
     image = Image(exe_bytes)
-    crt = crt_layout(exe_bytes)
-    parsed, replay = parse_corpus(corpus, image, crt)
+    seeds = seed_addrs.compute(exe_bytes)              # computed once: .CRT list and the RegisterType call sites
+    funcs = load_functions(corpus)                     # once: functions.jsonl
+    getit = getit_table(corpus)                        # once: the GetIt bodies
+    globals_ = load_type_globals(corpus)
+    crt = crt_layout(exe_bytes, seeds["crt"])
+    parsed, replay = parse_corpus(corpus, image, crt, funcs, getit)
     cc = cross_check(parsed, corpus)
     if cc["bad"]:
         raise RegistryError("decomp vs reg_sites.json disagree: %r" % cc["bad"][:5])
-    for i, r in enumerate(parsed):     # execution order: .CRT initializers ascending, statement order, then ScInitFunc
+    for i, r in enumerate(parsed):
         r["site"] = int(cc["matched"][i]["site"], 16)
-    getit = getit_table(corpus)
-    ac = asm_check(exe_bytes, parsed, getit, corpus)
+    ac = asm_check(exe_bytes, parsed, globals_, ctor_addrs(funcs), image)
     if ac["bad"]:
         raise RegistryError("decomp vs asm pushes disagree: %r" % ac["bad"][:5])
-    asm_order = type_order_from_asm(exe_bytes, corpus, crt, getit)
+    prologues, pbad = body_prologues(exe_bytes, parsed)
+    if pbad:
+        raise RegistryError("native bodies that are not aligned function entries: %r" % pbad[:5])
+    asm_order = type_order_from_asm(exe_bytes, globals_, funcs, crt, getit)
     if asm_order != [e["class"] for e in replay.order]:
         raise RegistryError("game-type first-use order differs between the decomp replay and the raw call sites: %r vs %r"
                             % ([e["class"] for e in replay.order], asm_order))
     pairs = base_osi_pairs(osi_path) if osi_path else set()
-    first: dict[str, dict] = {}
-    for r in parsed:
-        first.setdefault((r["cls"] + "." + r["name"]).lower(), r)
+    wins = winner_flags(parsed)
     rows = []
-    for r in parsed:
+    for r, win in zip(parsed, wins):
         key = (r["cls"] + "." + r["name"]).lower()
         rows.append({
             "cls": r["cls"], "name": r["name"], "key": key,
@@ -676,11 +784,11 @@ def build(exe_bytes: bytes, corpus: Path, osi_path: Path | None, check: bool = T
             "max": r["max"], "min": r["min"],
             "types": [type_name(t, r["max"], i) for i, t in enumerate(r["raw_types"])],
             "crt_index": r["crt_index"], "init": "0x%08x" % r["init"],
-            "winner": first[key] is r, "called_by_base_osi": key in pairs,
+            "winner": win, "called_by_base_osi": key in pairs,
             "phase": r["phase"],
         })
     keys = {r["key"] for r in rows}
-    cv = createvariant_types(corpus, image)
+    cv = createvariant_types(corpus, image, funcs)
     odd = [(e["class"], e["regname"]) for e in replay.order if e["regname"] != e["class"]] + \
           [(c["class"], c["regname"]) for c in cv if c["regname"] != c["class"]]
     if odd:
@@ -690,8 +798,8 @@ def build(exe_bytes: bytes, corpus: Path, osi_path: Path | None, check: bool = T
         raise RegistryError("insert_one result flags are not (1, 0): %r" % flags)
     return {"rows": rows, "parsed": parsed, "replay": replay, "crt": crt, "cross_check": cc, "asm_check": ac,
             "missing": sorted(pairs - keys), "base_pairs": pairs, "asm_type_order": asm_order, "getit": getit, "flags": flags,
-            "createvariant": cv,
-            "type_sites": type_site_accounting(exe_bytes, corpus, crt)}
+            "createvariant": cv, "prologues": prologues,
+            "type_sites": type_site_accounting(funcs, seeds["type_sites"], crt)}
 
 
 # ----------------------------------------------------------------------------------------------------------- types.md
@@ -734,7 +842,7 @@ def render_types(res: dict) -> str:
     w("")
     w("## Builtin variant types")
     w("")
-    w("| id | name | meaning and citation | declared in %d registration slots |" % (len(rows) * NROW_TYPES))
+    w("| id | name | meaning and citation | slots using it (of %d = %d rows x %d) |" % (len(rows) * NROW_TYPES, len(rows), NROW_TYPES))
     w("|---|---|---|---|")
     meaning = {
         0x0F: "nothing: `ScOSIVariant` ctor 0x60b2a0 and opcode 0x47 (docs/osi/opcodes.md, \"Variant types seen in the handlers\"). In a registration it fills every unused slot.",
@@ -746,10 +854,10 @@ def render_types(res: dict) -> str:
         0x200: "by-reference box built around a native call: opcodes 0x82-0x84. Declared by two natives only.",
     }
     for i, n in sorted(BUILTIN.items()):
-        cnt = sum(1 for r in rows for k, t in enumerate(r["types"]) if t == n)
-        if i == 0x0F:
-            cnt = sum(1 for r in rows for t in r["types"] if t is None) + uses.get("nothing", 0)
-        w("| 0x%02x | %s | %s | %d |" % (i, n, meaning[i], cnt))
+        cnt = "%d" % sum(1 for r in rows for t in r["types"] if t == n)
+        if i == 0x0F:        # the binary stores 0x0f in every unused slot; none is a declared parameter
+            cnt = "%d unused, %d declared" % (sum(1 for r in rows for t in r["types"] if t is None), uses.get("nothing", 0))
+        w("| 0x%02x | %s | %s | %s |" % (i, n, meaning[i], cnt))
     w("")
     w("## `GetVariantType<T>::GetIt` (C++ parameter type to variant type)")
     w("")
