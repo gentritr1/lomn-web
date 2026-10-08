@@ -23,9 +23,9 @@ def _report(cr, d, group=None):
 
 def test_measured_denominators(cr, tmp_path):
     r = _report(cr, tmp_path)
-    assert (r["handlers"], r["pairs"], r["falsifiers"], r["argc"], r["programs"]) == ((0, 96), (0, 111), (0, 29), (0, 20), 0)
+    assert (r["handlers"], r["pairs"], r["falsifiers"], r["argc"], r["programs"]) == ((0, 96), (0, 111), (0, 31), (0, 20), 0)
     a, b = _report(cr, tmp_path, "a"), _report(cr, tmp_path, "b")
-    assert (a["handlers"][1], a["pairs"][1], a["falsifiers"][1], a["argc"][1]) == (48, 60, 13, 0)
+    assert (a["handlers"][1], a["pairs"][1], a["falsifiers"][1], a["argc"][1]) == (48, 60, 15, 0)
     assert (b["handlers"][1], b["pairs"][1], b["falsifiers"][1], b["argc"][1]) == (48, 51, 16, 20)
 
 
@@ -43,7 +43,7 @@ def test_counts_from_metadata_only(cr, tmp_path):
     r = _report(cr, tmp_path)
     assert r["handlers"] == (1, 96) and r["programs"] == 4
     assert r["pairs"] == (2, 111)            # 0x60 rhs (formats match any text) and 0x82 "Script is calling %s.%s"
-    assert r["falsifiers"] == (2, 29) and r["argc"] == (1, 20)
+    assert r["falsifiers"] == (2, 31) and r["argc"] == (1, 20)
     assert "0x30" not in r["missing_handlers"] and "0x40" in r["missing_handlers"]
 
 

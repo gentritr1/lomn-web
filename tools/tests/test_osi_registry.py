@@ -705,7 +705,9 @@ def test_ret_column_kind_counts_are_pinned(rows):
     assert {r["key"] for r in win if r["ret"] == "copy"} == COPY_KEYS
     for r in rows:
         assert (r["ret_class"] in TYPE_ORDER) if r["ret"] == "game" else r["ret_class"] is None, r["key"]
-        assert r["default"] is None
+        # copy-kind natives: their real return is unknown until M2a-2, so the stub returns nothing (controller ruling)
+        want = {"type": "0x0f", "value": 0} if r["ret"] == "copy" else None
+        assert r["default"] == want, r["key"]
 
 
 def test_ret_column_spot_checks(rows):

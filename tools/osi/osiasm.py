@@ -24,6 +24,10 @@ Syntax (one statement per line; `;` or `#` starts a comment outside quotes):
     PushConstantString "text" (escapes \\" \\\\ \\xNN); CallGameFunction cls.fn argc; CallGameFunctionFromString cls argc;
     Get/SetGameVariable cls.name; member operands .sym; CreateObject ClassName; Get/SetVariableValue global:name or a
     frame index; CompareAndBranchIfFalse/BranchAlways @lbl (encoded relative to the address after the operand).
+Limitation (fix round 1, m8): the string and symbol tables are deduplicated — every distinct text gets exactly one
+entry, so a table with two equal entries cannot be written. No corpus need for duplicates is foreseeable (the VM reads
+entries by index; nothing in docs/osi/opcodes.md depends on two equal texts), so none is provided; `.strings` with a
+repeated text is a no-op for the repeat.
 Usage: osiasm.py IN.asm -o OUT.osi [--listing]
 """
 from __future__ import annotations

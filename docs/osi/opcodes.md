@@ -77,13 +77,19 @@ described in words, never as decompiled code.
   - **Initial value 24.** `CreateDirectXWindow` (0x52e570) calls `CreateDevice` without `D3DCREATE_FPU_PRESERVE` (M1
     R23), which sets 24-bit precision, and `SetUpRenderer` runs before `SetUpScripting`. INFERRED; it becomes
     UNVERIFIED if `d3d8.dll` or another runtime path changes the precision before `Setup` (not readable from this exe).
+    Whether `d3d8.dll` or the driver re-applies 24-bit precision later (per frame, on `Reset`) is also UNVERIFIED: the
+    scan below covers this exe only. It is listed as an A6 risk: if it does, the mode can return to 24 after a switch.
   - **64 from then on, permanently**, once the VM performs a string → float conversion: `ConvertVariant` (0x60b9d0) calls
     `_atof` (0x65c7b0) at **0x60bd0d** for a 0x11/0x16 source with target 0x12 (0xb1 on a string, and a float-declared
     native argument given a 0x11/0x16 in 0x82/0x83/0x84). `_atof` → `_strtod` → `___strtold` → `___dec2num`
     (0x65f80a), which runs `fnstcw [ebp−0xe]; or word [ebp−0xe], 0x300; fldcw [ebp−0xe]` at 0x65f883–**0x65f886**–0x65f88c
     and returns at 0x65f8a8 without restoring. `___strtold` reaches it on every in-range parse (0x65c66d), so the
-    switch happens whenever `_atof` runs, even when the text parses to 0. Its other caller (0x662f70) is in a function
-    with no callers (controller-checked: dead code).
+    switch happens whenever `_atof` runs, even when the text parses to 0. Exception (INFERRED from the asm, not run): a
+    decimal exponent beyond ±32767 sets `___strtold`'s overflow flag (0x65c539, 0x65c603–0x65c613) and returns ±HUGE_VAL
+    (0x7620dc) or 0.0 (0x762538) through 0x65c626–0x65c65f without calling `___dec2num`, so the mode does not switch;
+    corpus strings stay in the normal range. The other paths into `___dec2num` are dead: `___strtold`'s other caller
+    (0x662f70) is in a function with no callers (controller-checked), and `___wcstold`'s call (0x66637d) has no live
+    caller (review-checked).
   - **The native `gcscripttools.stringtofloat`** (body 0x564d50 → `GcScriptTools::StringToFloat` 0x5654b0, whose
     `_atof` call is at **0x5654bc**) sets 64 when it runs. The registry marks it (`sets_fpu_pc64` in
     `data/osi/natives.json`); the VM applies the flag when it calls that native, stubs included.
@@ -91,26 +97,42 @@ described in words, never as decompiled code.
     before jumping to every landing pad, at **0x657068** (`FUN_00657010`, cleanup pads) and **0x657245**
     (`FUN_00657080`, catch pads), from `___throw` (0x657260). In the original every VM error ends the game (see "After
     an error"); our VM keeps running (D10), so it models the landing pads by setting 64 when an error is recorded.
-  - **Every other control-word writer leaves the precision bits alone** (scan of `.text`, EXECUTED 2026-10-08): 484
-    `fldcw` sites are the compiler's float → int idiom `fnstcw X; or X, 0xc00; fldcw X; fistp; and X, 0xf3ff; fldcw X`,
-    which changes only the rounding bits — among them `ConvertVariant` 0x60bc45–0x60bc69, which restores from the saved
-    word; 14 are save / load-constant / restore pairs in the MSL math functions (acos … hypot, and `___num2dec`, the
-    `%f` path); there is no `fldenv`, `frstor` or `fxrstor`, and no `_controlfp` / `_control87` / `_fpreset` import.
-  - **Port:** result = round_f32(round_p(exact a OP b)), p = `fpu_pc` significand bits, round to nearest even, the
-    intermediate with the x87 extended exponent range. At p = 24 that is one rounding of the exact result except when the
-    result is an f32 subnormal (the intermediate stays normal, then `fstp dword` rounds again). At p = 64 it is double
-    rounding through 64 bits. C++: TwoSum/TwoProduct + round-to-odd (consult M23) for 24, an exact 64-bit step for 64;
-    Python: `fractions` (`tools/osi/expect_calc.py`).
-  - **Not affected:** float,float arithmetic (double rounding through ≥ 2·24+2 bits is innocuous for + − × ÷: 0
-    mismatches between p 24, 53 and 64 in 80,000 random f32 pairs with uniform bit patterns and 80,000 with exponents
-    biased to exponents 110–145, i.e. magnitudes 2^−17 … 2^19, EXECUTED with a rational script), every compare, `fild`, int → float (0xb1 on an int), and float → int.
-    0x74's `_pow` runs its own x87 code at the current setting (UNVERIFIED; corpus programs use exact powers only). 0x75
-    has no float path at all (no x87 instruction).
+  - **Every other control-word writer in this exe leaves the precision bits alone** (scan of the exe's `.text` only,
+    EXECUTED 2026-10-08, re-derived by the review): of the 499 `fldcw` instructions, 472 are the compiler's float → int
+    idiom `fnstcw X; or X, 0xc00; fldcw X; fistp; and X, 0xf3ff; fldcw X`, which changes only the rounding bits — among
+    them `ConvertVariant` 0x60bc45–0x60bc69, which restores from the saved word; 26 are 13 save / load-constant /
+    restore pairs in the MSL math functions (acos, asin, exp, tanh, cosh, sinh, ceil, floor, modf, hypot, trunc, exp2,
+    and `___num2dec`, the `%f` path); 1 is `___dec2num`'s. There is no `fldenv`, `frstor` or `fxrstor`, and no
+    `_controlfp` / `_control87` / `_fpreset` import. DLLs (`d3d8.dll`, drivers) are outside the scan.
+  - **Port — one rule for every f32 result of 0x70–0x73, whatever the operand types:** result =
+    round_f32(round_p(exact a OP b)), p = `fpu_pc` significand bits, round to nearest even, with the x87 **extended
+    exponent range** at the round_p step (the intermediate never overflows or goes subnormal); round_f32 is the final
+    `fstp dword` (subnormals, overflow to ±inf). C++: TwoSum/TwoProduct + round-to-odd (consult M23) for 24 plus the
+    subnormal re-rounding, an exact 64-bit step for 64; Python: `fractions` (`tools/osi/expect_calc.py`).
+  - **Where the two settings differ from one rounding:**
+    - At p = 24 the result equals one rounding of the exact value **unless the result is an f32 subnormal**: the
+      intermediate is rounded to 24 bits with the extended exponent (so it stays normal), then `fstp dword` rounds it
+      again to fewer bits. + and − are never affected, and neither is int × float: their exact result is a multiple of
+      2^−149, so a result below 2^−126 has at most 23 significant bits and the first rounding is exact. **× of two
+      floats and ÷ are affected**: f32 0x24368a23 × f32 0x1af99066 gives 0x002c7cd4 at p = 24 and 0x002c7cd5 with one
+      rounding (falsifier `0x72#2` below).
+    - At p = 64 every f32 OP f32 result equals one rounding (64 ≥ 2·24+2, so double rounding is innocuous); int,float
+      operands can differ (falsifier `0x70#3`).
+    - Measured (EXECUTED, exact-rational script, 20,000 f32 pairs with uniform bit patterns per op, seed 7): p = 24 vs
+      one rounding: + 0, − 0, × 27, ÷ 18 (all on subnormal results; 2,568 and 2,529 of the × and ÷ results were
+      subnormal); p = 53 and p = 64 vs one rounding: 0 for every op. (An earlier draft claimed "float,float
+      unaffected" from a run that never compared p = 24 and bounded the exponents; that claim was wrong.)
+  - **Not affected:** every compare, `fild`, int → float (0xb1 on an int), and float → int. 0x74's `_pow` runs its own
+    x87 code at the current setting (UNVERIFIED; corpus programs use exact powers only). 0x75 has no float path at all
+    (no x87 instruction).
   - **Not the original:** the earlier port formula `(float)((double)a OP (double)b)` is the 53-bit setting, which this
-    exe never uses while the script runs. It differs from both readings: `16777217 1.0e-15 +` → 4b800001 at 24,
-    4b800000 at 64 and at 53; `16777217 1.0e-10 +` → 4b800001 at 24 and 64, 4b800000 at 53.
-  - **Trace:** the header records the initial mode (`fpu=pc24`); a record `P <pc:08x> 64` is written when the mode
-    switches, before the next `I` line (`docs/osi/trace.md`).
+    exe never uses while the script runs. Programs that tell the three apart: `16777217 1.0e-15 +` → 4b800001 at 24,
+    4b800000 at 64 and at 53 (separates 24 from 64 and 53); `16777217 1.0e-10 +` → 4b800001 at 24 and 64, 4b800000 at
+    53 (separates 53 from 64). Run before and after a string → float conversion, the pair separates all three readings
+    and the "24 forever" reading (falsifiers `0x70#2`–`0x70#4`).
+  - **Trace:** the header records the initial mode (`fpu=pc24`); a record `P <pc:08x> 64` is written at the moment the
+    mode switches, in event order with the other records, and after an error directly after its `E` line
+    (`docs/osi/trace.md` §3).
 - **`ConvertVariant(v, target)`** (0x60b9d0), used by 0x82–0x84 and 0xb0–0xb2:
   - same type → `Duplicate`;
   - target int: float → **truncation** (the asm sets the x87 rounding field to chop, `fistp qword`, keeps the low 32
@@ -127,9 +149,12 @@ described in words, never as decompiled code.
   (0x60bbf9–0x60bc02, 0x60bcf9–0x60bd02) and then reads the text. Called from 0x82–0x84 on a stack slot, that slot
   stays a 0x16 string. See "Objects, arrays and strings" below.
 - **NaN results (D9, M2a-1).** Any f32 result that is a NaN is stored as **0xffc00000**, the x87 "real indefinite" an
-  `fstp dword` writes for an invalid operation (stable x87 knowledge; UNVERIFIED on this exe). Both interpreters
-  canonicalise, because wasm32 NaN payloads are not deterministic across engines. A NaN *operand* keeps its bits until an
-  operation produces a new value.
+  `fstp dword` writes for an invalid operation (stable x87 knowledge; UNVERIFIED on this exe). This is **our choice**,
+  not the original's behaviour in every case: the x87 propagates a NaN *operand* (quietened, payload kept) instead of
+  writing the indefinite, so an operation on a NaN operand can give a different NaN in the original. Both interpreters
+  canonicalise because wasm32 NaN payloads are not deterministic across engines. Conformance programs therefore never
+  use a NaN operand (an invalid operation on ordinary operands, such as inf × 0, is fine: the x87 writes the
+  indefinite there too).
 - **Errors in the port (D10, M2a-1).** Inside our VM an error unwinds to the outermost engine call, which records it,
   writes the trace's `E` line and returns failure without touching VM state, so a snapshot shows exactly the state "After
   an error" documents (operands already popped stay popped, nothing pushed, 0x82: converted arguments stay converted).
@@ -268,10 +293,12 @@ as `!ScCatchMessage!!`) passes through.
 Each line is `a b op` → the value the original computes, then the value the old "int converted to float first"
 reading gives. Ints are written without a decimal point and floats with one. Every expected value was computed
 from the exact rational result rounded once to f32 (a scratch Python script using `fractions` and `numpy.float32`,
-not committed). Every finite exact result fits in 53 bits, so the values do not depend on the x87 precision setting; the `1.0e30 1.0e-30 /` row overflows to +inf under every precision setting.
-The last two lines (D8′) are the exception: they are the same program run at `fpu_pc` 24 and, after a 0xb1 on a string,
-at 64; their "old reading" column is the 53-bit formula. `tools/osi/expect_calc.py` reproduces every line
-(`tools/tests/test_expect_calc.py`, both settings for the first 11).
+not committed). For the first 11 lines every result rounds to the same f32 at 24, 53 and 64 bits (each one either is
+exact in 53 bits or overflows: `1.0e30 1.0e-30 /` is +inf under every setting), so they do not depend on the precision
+setting. The last four lines (D8′, fix round 1) are the exception: `0x70#2`–`0x70#4` run at `fpu_pc` 24 and, after a
+0xb1 on a string, at 64, and `0x72#2` is the float × float subnormal case at 24. Their "old reading" column names the
+alternative reading each one kills. `tools/osi/expect_calc.py` reproduces every line (`tools/tests/test_expect_calc.py`,
+both settings for the first 11, and the alternatives of the last four).
 f32(16777217) = 16777216.0 and f32(16777219) = 16777220.0 (round to nearest even).
 
 | row | program | original (asm reading) | old reading |
@@ -287,8 +314,10 @@ f32(16777217) = 16777216.0 and f32(16777219) = 16777220.0 (round to nearest even
 | 0x72 | `16777217 3.0 *` | 50331652.0 | 50331648.0 |
 | 0x73 | `50331651 3.0 /` | 16777216.0 | 16777218.0 |
 | 0x73 | `1.0e30 1.0e-30 /` | +inf, no error | (old note: "no IEEE inf") |
-| 0x70 | `16777217 1.0e-15 +` at `fpu_pc` 24 (no string → float before it) | 16777218.0 (4b800001) | 16777216.0 (4b800000) |
-| 0x70 | `16777217 1.0e-15 +` at `fpu_pc` 64 (after `"0.5"` 0xb1) | 16777216.0 (4b800000) | 16777216.0 (4b800000) |
+| 0x70 | `16777217 1.0e-15 +` at `fpu_pc` 24 (no string → float before it) | 16777218.0 (4b800001) | 53-bit formula: 16777216.0 (4b800000) |
+| 0x70 | `16777217 1.0e-15 +` at `fpu_pc` 64 (after `"0.5"` 0xb1) | 16777216.0 (4b800000) | "24 forever": 16777218.0 (4b800001) |
+| 0x70 | `16777217 1.0e-10 +` at `fpu_pc` 64 (after `"0.5"` 0xb1) | 16777218.0 (4b800001) | 53-bit formula: 16777216.0 (4b800000) |
+| 0x72 | `f32:0x24368a23 f32:0x1af99066 *` at `fpu_pc` 24 (subnormal result) | 0x002c7cd4 | one rounding (= 53, 64): 0x002c7cd5 |
 
 0x74 (int,float), 0xb1 (int → float) and 0xb2 did not change meaning: `pow` already took `(double)a`, and
 `ConvertVariant` already rounds an int to f32 once. Guards kept for them: 0xb1 `16777217` → 16777216.0; 0xb2

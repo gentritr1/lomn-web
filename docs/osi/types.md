@@ -23,12 +23,15 @@ committed (rows in execution order, keys sorted), so consumers need no Ghidra ru
   calls none (those bodies store {0x0f, 0} themselves). No body calls overloads of two kinds. The 63 overloads are
   classified twice, from the type store in each body and from its mangled parameter in `symbols.txt`: 1 colour, 1 copy, 2 float, 45 game, 12 int, 2 string.
 - `ret_class` names the game type for `game`; `copy` is `CreateVariant(ScOSIVariant)` 0x6159e0, which copies its argument.
-  `default` is the per-row override of the stub return (D11); none is set.
+  `default` is the per-row override of the stub return (D11): only the 3 copy-kind natives have one, `nothing`, because
+  their real return is unknown until M2a-2 reads their bodies.
 - Over the 1049 winners: colour 1, copy 3, float 129, game 56, int 223, none 621, string 16.
 - `sets_fpu_pc64` is true when the body reaches `___dec2num` (0x65f80a: `or word [ebp-0xe], 0x300; fldcw` at
   0x65f886-0x65f88c, no restore before `ret` 0x65f8a8) in the static call graph without entering the VM: `gcscripttools.stringtofloat`.
 - Game-type ids are in `data/osi/types.json` (id = 0x20 + rank below). The Beta 1.5.0 mod natives (D12) are in
-  `data/osi/natives_beta150.json`, decoded from `install/mods/*.dll` read as data (`mod_registrations`).
+  `data/osi/natives_beta150.json`, decoded from `install/mods/*.dll` read as data (`mod_registrations`). Every mod row
+  has min == max, so the MAX-then-MIN order of the `OSIRegisterFunction` shim is proven from the shim's bytes
+  (ijl15.dll 0x100035f7-0x1000362b), not from the data.
 
 ## Builtin variant types
 

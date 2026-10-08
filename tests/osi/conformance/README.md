@@ -20,8 +20,15 @@ Coverage: `.venv/bin/python tools/osi/conformance_report.py tests/osi/conformanc
    corpus a copy of one implementation.
 4. Programs never depend on behaviour the table marks undefined: 0x11 on a non-object, `0x33 0`, a literal 0x84 except the
    D10 error program, INT_MIN / −1, stack over/underflow except our two error programs, behaviour after an error.
-   Decimal text given to `atof` is exactly representable in f32 (`"0.5"`, `"-2.25"`, `"3"`); `%f` programs are tagged
-   `"UNVERIFIED-CRT"` in `note` (consult risk 3).
+   Also excluded, because the reading is not settled or not the original's:
+   - decimal text given to `atof` that is not exactly representable in f32, or whose decimal exponent is outside the
+     normal range (`___strtold` skips `___dec2num` beyond ±32767, so the precision would not switch; INFERRED). Use
+     `"0.5"`, `"-2.25"`, `"3"`. `%f` programs are tagged `"UNVERIFIED-CRT"` in `note` (consult risk 3);
+   - `%f` (0xb0) of a float with |x| ≥ 1e17: the original's `___num2dec` keeps 18 BCD digits (0x65fa25, 0x65fa57) and
+     `expect_calc.to_string` refuses it;
+   - NaN operands: D9 (store NaN results as 0xffc00000) is our choice, while the x87 propagates an operand NaN's
+     payload, so the original's result bits for a NaN operand differ from ours. A NaN produced by an invalid operation
+     on ordinary operands (inf × 0) is fine.
 5. Programs are minimal: one row under test, the fewest other instructions, and those from the "trusted core" (0x40–0x47,
    0x30, 0x52), which get their own programs first.
 6. **Precision (D8′).** A program that does mixed int/float arithmetic states the `fpu_pc` it runs at. It is 24 unless the

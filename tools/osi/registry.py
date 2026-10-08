@@ -471,6 +471,10 @@ _MANGLED_KIND = [(r"[MN]", "float"), (r"(F|G|H|J|K|E|_N|W1[\w@]+|VScIdentifier@*
 # ___dec2num (MSL strtod core): `fnstcw [ebp-0xe]; or word [ebp-0xe], 0x300; fldcw [ebp-0xe]` at 0x65f883-0x65f88c and
 # no restore before its `ret` at 0x65f8a8, so it leaves x87 precision control at 64 bits (D8').
 DEC2NUM = 0x65F80A
+# The copy-kind natives (CreateVariant(ScOSIVariant) 0x6159e0: loadosiobject, loadosiobjectfrommemcard, getstringtable)
+# return a variant their body builds; what it is stays unknown until their bodies are read in M2a-2, so their stub
+# returns nothing rather than a copy of argument 0 (controller ruling, M2a-1 T0 fix round 1).
+COPY_DEFAULT = {"type": "0x0f", "value": 0}
 
 
 def overload_kinds(corpus: Path, funcs: list[dict]) -> dict[int, dict]:
@@ -1091,7 +1095,7 @@ def build(exe_bytes: bytes, corpus: Path, osi_path: Path | None, check: bool = T
             "crt_index": r["crt_index"], "init": "0x%08x" % r["init"],
             "winner": win, "called_by_base_osi": key in pairs,
             "phase": r["phase"],
-            "ret": ret, "ret_class": ret_class, "default": None,
+            "ret": ret, "ret_class": ret_class, "default": COPY_DEFAULT if ret == "copy" else None,
             "sets_fpu_pc64": reaches_dec2num(r["body"], callees, by_addr),
         })
     keys = {r["key"] for r in rows}
@@ -1159,13 +1163,17 @@ def render_types(res: dict) -> str:
     w("  classified twice, from the type store in each body and from its mangled parameter in `symbols.txt`: %s."
       % ", ".join("%d %s" % (n, k) for k, n in sorted(ov.items())))
     w("- `ret_class` names the game type for `game`; `copy` is `CreateVariant(ScOSIVariant)` 0x6159e0, which copies its argument.")
-    w("  `default` is the per-row override of the stub return (D11); none is set.")
+    w("  `default` is the per-row override of the stub return (D11): only the %d copy-kind natives have one, `nothing`, because"
+      % sum(1 for r in rows if r["default"] is not None))
+    w("  their real return is unknown until M2a-2 reads their bodies.")
     w("- Over the %d winners: %s." % (sum(kinds.values()), ", ".join("%s %d" % (k, n) for k, n in sorted(kinds.items()))))
     w("- `sets_fpu_pc64` is true when the body reaches `___dec2num` (0x65f80a: `or word [ebp-0xe], 0x300; fldcw` at")
     w("  0x65f886-0x65f88c, no restore before `ret` 0x65f8a8) in the static call graph without entering the VM: %s."
       % ", ".join("`%s`" % r["key"] for r in rows if r["sets_fpu_pc64"]))
     w("- Game-type ids are in `data/osi/types.json` (id = 0x20 + rank below). The Beta 1.5.0 mod natives (D12) are in")
-    w("  `data/osi/natives_beta150.json`, decoded from `install/mods/*.dll` read as data (`mod_registrations`).")
+    w("  `data/osi/natives_beta150.json`, decoded from `install/mods/*.dll` read as data (`mod_registrations`). Every mod row")
+    w("  has min == max, so the MAX-then-MIN order of the `OSIRegisterFunction` shim is proven from the shim's bytes")
+    w("  (ijl15.dll 0x100035f7-0x1000362b), not from the data.")
     w("")
     w("## Builtin variant types")
     w("")

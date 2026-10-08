@@ -29,9 +29,17 @@ test time; the binary is never committed.
 - `entry`, `args`: the engine call, a name and at most 10 variants. A test may pass more than the declared argc, to test
   disposal.
 - `natives`: declarative test natives, so both runners implement them from the same JSON and no program depends on an
-  engine native. `returns` gives a variant or `{"game": "<Class>"}` (a fresh game handle of that type, ids from
-  `data/osi/types.json`); `writes` changes a by-ref argument; `sets_fpu_pc64` applies D8′ like the registry flag of
-  `gcscripttools.stringtofloat`.
+  engine native.
+  - `types` uses the registry vocabulary of `data/osi/natives.json` (`docs/osi/types.md`): `"int"`, `"float"`,
+    `"string"`, `"colour"`, `"byref"`, `"type:<Class>"` (a game type named in `data/osi/types.json`), and `"nothing"`;
+    `"string-id"`, `"colour16"` and `"unknown:0x0"` exist in the table but no native declares them, so programs avoid
+    them.
+  - `returns` is one of: a variant (`{"type": "0x10", "value": 7}`, `{"type": "0x12", "bits": "3f800000"}`),
+    `{"game": "<Class>"}` (a fresh game handle of that type), `{"text": "abc"}` (a fresh 0x16 dynamic string with these
+    latin-1 bytes; `{"hex": "00ff"}` for bytes that are not printable), or `{"arg": i}` (the converted argument i,
+    duplicated). Omitted: nothing.
+  - `writes` changes a by-ref argument; `sets_fpu_pc64: true` applies D8′ like the registry flag of
+    `gcscripttools.stringtofloat`.
 - `registry`: `"none"` (only the test natives) or `"natives.json"` (the 1,056-row registry plus the mod rows of
   `data/osi/natives_beta150.json`; this enables the argc-violation keys and the unregistered path).
 - An error program replaces `expect` with:
@@ -45,6 +53,7 @@ test time; the binary is never committed.
 - Values are written as `value` (decimal u32) or `bits` (8 hex digits). Floats only as bits, so an author must compute the
   f32 pattern with `tools/osi/expect_calc.py` and the row's formula.
 - `fpu_pc` (optional in `expect`, `expect_error`) is the precision state after the call; after any error it is 64 (D8′/D10).
+  `reset_after_error()` does not change `fpu_pc`, so a second entry point (`main2`) called after an error runs at 64.
 
 ### Coverage metadata (read by `tools/osi/conformance_report.py`, which reads nothing else)
 
@@ -70,8 +79,15 @@ test time; the binary is never committed.
    corpus a copy of one implementation.
 4. Programs never depend on behaviour the table marks undefined: 0x11 on a non-object, `0x33 0`, a literal 0x84 except the
    D10 error program, INT_MIN / −1, stack over/underflow except our two error programs, behaviour after an error.
-   Decimal text given to `atof` is exactly representable in f32 (`"0.5"`, `"-2.25"`, `"3"`); `%f` programs are tagged
-   `"UNVERIFIED-CRT"` in `note` (consult risk 3).
+   Also excluded, because the reading is not settled or not the original's:
+   - decimal text given to `atof` that is not exactly representable in f32, or whose decimal exponent is outside the
+     normal range (`___strtold` skips `___dec2num` beyond ±32767, so the precision would not switch; INFERRED). Use
+     `"0.5"`, `"-2.25"`, `"3"`. `%f` programs are tagged `"UNVERIFIED-CRT"` in `note` (consult risk 3);
+   - `%f` (0xb0) of a float with |x| ≥ 1e17: the original's `___num2dec` keeps 18 BCD digits (0x65fa25, 0x65fa57) and
+     `expect_calc.to_string` refuses it;
+   - NaN operands: D9 (store NaN results as 0xffc00000) is our choice, while the x87 propagates an operand NaN's
+     payload, so the original's result bits for a NaN operand differ from ours. A NaN produced by an invalid operation
+     on ordinary operands (inf × 0) is fine.
 5. Programs are minimal: one row under test, the fewest other instructions, and those from the "trusted core" (0x40–0x47,
    0x30, 0x52), which get their own programs first.
 6. **Precision (D8′).** A program that does mixed int/float arithmetic states the `fpu_pc` it runs at. It is 24 unless the
@@ -87,11 +103,15 @@ test time; the binary is never committed.
   nothing pushed).
 - **The falsifier targets** (`falsifier_id`):
   - each line of opcodes.md's "Conformance falsifiers for M2a-1" table, numbered per row in table order: `0x60#1`,
-    `0x61#1`, `0x62#1`, `0x63#1`, `0x64#1`, `0x64#2`, `0x70#1`, `0x71#1`, `0x72#1`, `0x73#1`, `0x73#2`, and the two D8′
-    lines `0x70#2` (`16777217 1.0e-15 +` at `fpu_pc` 24 → `4b800001`) and `0x70#3` (the same after a 0xb1 on the string
-    `"0.5"`, at 64 → `4b800000`). Record the "old reading" column as `"alternative"`. One program may do both D8′ lines
-    (`falsifier_id: ["0x70#2", "0x70#3"]`): run the addition, convert `"0.5"`, run it again. That pair separates all three
-    readings (24, 53, 64);
+    `0x61#1`, `0x62#1`, `0x63#1`, `0x64#1`, `0x64#2`, `0x70#1`, `0x71#1`, `0x72#1`, `0x73#1`, `0x73#2`, and the four D8′
+    lines: `0x70#2` (`16777217 1.0e-15 +` at `fpu_pc` 24 → `4b800001`; kills the 53-bit formula), `0x70#3` (the same
+    after a 0xb1 on the string `"0.5"`, at 64 → `4b800000`; kills "24 forever"), `0x70#4` (`16777217 1.0e-10 +` at 64 →
+    `4b800001`; kills the 53-bit formula, which gives `4b800000`) and `0x72#2` (`f32:0x24368a23 f32:0x1af99066 *` at 24
+    → `002c7cd4`, a subnormal product rounded twice; kills one rounding, `002c7cd5`). Record the "old reading" column
+    as `"alternative"`. One program may do `0x70#2`–`0x70#4` together (`falsifier_id: ["0x70#2", "0x70#3",
+    "0x70#4"]`): run the 1.0e-15 addition, convert `"0.5"`, run both additions. The low bytes of the three results
+    (1.0e-15 before, 1.0e-15 after, 1.0e-10 after) are 01/00/01 under D8′, 00/00/00 under the 53-bit formula,
+    00/00/01 under "64 from the start" and 01/01/01 under "24 forever": all four readings differ;
   - the two guards: `guard:0xb1` (`16777217` → 16777216.0) and `guard:0xb2` (3.0e9 → −1294967296);
   - every row whose notes cell states a falsifier (`0x60#notes` … `0xb2#notes`; the report lists them). Those include:
     `0x74` `2.0 1 ^` → `4f000000`, `3 2 ^` → 81; `0x75` `-1 3 %` → 0; `0x78` `-8 1 >>` → `7ffffffc`; `0xb2` 2.7 → 2,
@@ -119,6 +139,8 @@ test time; the binary is never committed.
 
 ## 4. Error-path assertions
 
+- After the error the precision state is 64 (D8′) and `reset_after_error()` leaves it there, so the `main2` check runs
+  at 64.
 - `expect_error.message` is compared byte for byte, typos included. The `%02.2X` type formats are spelled out by the
   author, e.g. `(type:12)`.
 - `pc` is the failing instruction's own address (the table says "PC not advanced" for pre-check errors; for 0x70's
@@ -135,7 +157,7 @@ The acceptance is the output of `tools/osi/conformance_report.py DIR [--group a|
 `.expect.json` metadata:
 
 ```
-handlers ≥2: x/96, row×message pairs: y/111, falsifiers: k/29, argc violations: z/20, programs: N
+handlers ≥2: x/96, row×message pairs: y/111, falsifiers: k/31, argc violations: z/20, programs: N
 ```
 
 - The denominators are measured from the tables by the script (2026-10-08, empty corpus):
@@ -143,9 +165,10 @@ handlers ≥2: x/96, row×message pairs: y/111, falsifiers: k/29, argc violation
   - **111** row×message pairs. The consult's estimate was 114. The script counts the quoted messages of each named row's
     errors cell, expands abbreviated cells such as "… '=' (rhs) …" from the row's own lhs message, skips the section
     reference "The game-variable map" and skips 0xb0, whose cell is "none";
-  - **29** falsifier targets (13 table lines, 2 guards, 14 notes rows);
+  - **31** falsifier targets (15 table lines, 2 guards, 14 notes rows). The 15 lines are the M2a-0 11 plus the four D8′
+    lines of fix round 1 (`0x70#2`–`0x70#4`, `0x72#2`);
   - 20 argc-violation sites.
-- Group A: 48 handlers, 60 pairs, 13 falsifiers. Group B: 48 handlers, 51 pairs, 16 falsifiers, 20 argc sites.
+- Group A: 48 handlers, 60 pairs, 15 falsifiers. Group B: 48 handlers, 51 pairs, 16 falsifiers, 20 argc sites.
 - N is whatever the authors write; the ledger records it. ESTIMATE from the consult: 280–340 programs.
 
 **The 29 opcodes `Base.osi` never uses** (consult M3) all have authored rows and get programs like any other:

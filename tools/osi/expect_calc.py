@@ -11,9 +11,13 @@ Semantics, each from docs/osi/opcodes.md (row cited) and the D8' ruling (2026-10
   result = round_f32(round_pc(exact)). `pc` is the VM's precision-control state (D8'): 24 from CreateDevice, 64 for
   ever after the VM's first string->float conversion (`___dec2num` 0x65f886 leaves PC = 64). It must be passed
   explicitly; 53 (the old `(float)((double)a OP (double)b)` formula) is not the original and is refused.
-  At pc 24 this equals one rounding of the exact result except when the result is an f32 subnormal (the extended
-  exponent keeps a 24-bit intermediate normal, then `fstp dword` rounds again). For f32 OP f32 both pc values give the
-  exact-once result (double rounding through >= 2*24+2 bits is innocuous; measured 0 mismatches in 160,000 pairs).
+  ONE rule for every f32 result of 0x70-0x73, whatever the operand types. At pc 24 it equals one rounding of the exact
+  result unless the result is an f32 subnormal: the extended exponent keeps the 24-bit intermediate normal, then
+  `fstp dword` rounds again to fewer bits. + and - (and int * float) are never affected: their exact result is a
+  multiple of 2^-149, so a result below 2^-126 has at most 23 significant bits and the first rounding is exact. x and /
+  are (e.g. f32 0x24368a23 * 0x1af99066: pc24 002c7cd4, one rounding 002c7cd5). At pc 64 the result always equals one
+  rounding (64 >= 2*24+2). Measured on 20,000 uniform-bit-pattern f32 pairs per op (scratch ff_pc24.py, seed 7):
+  pc24 vs one rounding + 0, - 0, * 27, / 18; pc53 and pc64 vs one rounding 0 for every op.
 - NaN results are stored as 0xffc00000 (D9). ±inf results come from f32 overflow at the final rounding.
 - Compares (0x60-0x64) are exact, unordered -> 0, +0.0 == -0.0; no precision dependence.
 - Ints are int32: + - * wrap; / truncates toward zero (signed idiv, 0x73); % is UNSIGNED (0x75); >> is LOGICAL (0x78);
@@ -21,8 +25,10 @@ Semantics, each from docs/osi/opcodes.md (row cited) and the D8' ruling (2026-10
 - float -> int (0xb2, int native arguments) chops toward zero and keeps the low 32 bits of the 64-bit result; NaN or
   |x| >= 2^63 store the integer indefinite, whose low dword is 0.
 - int -> float (0xb1) rounds once. int -> text is "%d"; float -> text is "%f" of the f32 widened exactly to double
-  (Python's %f equals libc's here, consult M21; the original's CRT is UNVERIFIED). text -> int is atoi, text -> float is
-  atof rounded once to f32; atof also switches the VM to pc 64 (D8'), which `atof` reports as "pc_after".
+  (Python's %f equals libc's here, consult M21; the original's CRT is UNVERIFIED). The original's `___num2dec` keeps 18
+  BCD digits (0x65fa25, 0x65fa57), so %f of |x| >= 1e17 is refused. text -> int is atoi, text -> float is atof rounded
+  once to f32; atof also switches the VM to pc 64 (D8'), which `atof` reports as "pc_after" (None = unchanged: a
+  decimal exponent beyond +-32767 takes ___strtold's overflow path and skips ___dec2num, INFERRED).
 """
 from __future__ import annotations
 
@@ -229,6 +235,8 @@ def to_string(v) -> bytes:
     x = v.value
     if not math.isfinite(x):
         raise CalcError("%f of a non-finite value: the original CRT's text is UNVERIFIED; do not author it")
+    if abs(x) >= 1e17:
+        raise CalcError("%%f of |x| >= 1e17: ___num2dec keeps only 18 digits (0x65fa25), the CRT text is not modelled")
     return (b"%f" % x)
 
 
@@ -252,6 +260,14 @@ def atof(text: bytes, inexact_ok: bool = False) -> dict:
     if not m:
         return dict(float_result(0), pc_after=64)
     s = m.group(0).decode("ascii")
+    em = re.search(r"[eE]([+-]?[0-9]+)$", s)
+    if em and abs(int(em.group(1))) > 32767:
+        # ___strtold's exponent overflow flag (0x65c539 / 0x65c603-0x65c613): returns +-HUGE_VAL (0x7620dc) for a
+        # positive exponent and 0.0 (0x762538) for a negative one, without ___dec2num: the precision state is unchanged.
+        neg = s.startswith("-")
+        if int(em.group(1)) > 0:
+            return dict(float_result(0xFF800000 if neg else 0x7F800000), pc_after=None)
+        return dict(float_result(0), pc_after=None)
     exact = Fraction(s) if not s.endswith(".") else Fraction(s[:-1] or "0")
     b = f32_bits(exact)
     if Fraction(struct.unpack("<f", struct.pack("<I", b))[0]) != exact and not inexact_ok:

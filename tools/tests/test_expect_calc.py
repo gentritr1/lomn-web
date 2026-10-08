@@ -143,3 +143,75 @@ def test_it_does_not_interpret_bytecode():
     text = SRC.read_text()
     for banned in ("osi_vm", "disasm", "osiasm", "0x82", "dispatch", "OsiFile", "bytecode ="):
         assert banned not in text, banned
+
+
+# ------------------------------------------------------------------------------------------ fix round 1 (I1, I4, m1, m4)
+# I1 (controller-verified with an independent exact-rational script, re-measured here with scratchpad m2a1-t0/ff_pc24.py):
+# f32 0x24368a23 * f32 0x1af99066 has a subnormal exact product; pc24 rounds it to 24 bits with the extended exponent,
+# then fstp dword rounds again: 002c7cd4; one rounding (and pc 53/64) gives 002c7cd5.
+def test_float_float_multiply_is_double_rounded_at_pc24_when_subnormal(ec):
+    a, b = ec.Flt.bits(0x24368A23), ec.Flt.bits(0x1AF99066)
+    assert ec.arith("*", a, b, pc=24) == {"type": "0x12", "bits": "002c7cd4"}
+    assert ec.arith("*", a, b, pc=64) == {"type": "0x12", "bits": "002c7cd5"}
+
+
+def test_f32_bits_subnormals_and_ties(ec):
+    from fractions import Fraction
+    assert ec.f32_bits(Fraction(1, 2 ** 149)) == 0x00000001          # the smallest subnormal
+    assert ec.f32_bits(Fraction(3, 2 ** 150)) == 0x00000002          # 1.5 ulp: tie, to even
+    assert ec.f32_bits(Fraction(1, 2 ** 150)) == 0x00000000          # 0.5 ulp: tie, to even (zero)
+    assert ec.f32_bits(-Fraction(5, 2 ** 150)) == 0x80000002         # 2.5 ulp: tie, to even
+    assert ec.f32_bits(Fraction(2 ** 23 - 1, 2 ** 149)) == 0x007FFFFF  # the largest subnormal
+    assert ec.f32_bits(Fraction(1, 2 ** 126)) == 0x00800000           # the smallest normal
+
+
+def _py53(op, a, b):
+    """The 53-bit reading computed independently: (float)((double)a OP (double)b) with Python doubles."""
+    r = {"+": a + b, "-": a - b, "*": a * b, "/": a / b}[op]
+    return fbits(r)
+
+
+def _f32(x):
+    return struct.unpack("<f", struct.pack("<f", x))[0]
+
+
+# The D8' and I1 lines of opcodes.md's falsifier table: (id, a, b, op, pc, original, alternative reading, its value)
+D8P_LINES = [
+    ("0x70#2", I(16777217), F(1.0e-15), "+", 24, "4b800001", "53", None),
+    ("0x70#3", I(16777217), F(1.0e-15), "+", 64, "4b800000", "24 forever", 24),
+    ("0x70#4", I(16777217), F(1.0e-10), "+", 64, "4b800001", "53", None),
+    ("0x72#2", ("bits", 0x24368A23), ("bits", 0x1AF99066), "*", 24, "002c7cd4", "single rounding (= pc 64)", 64),
+]
+
+
+@pytest.mark.parametrize("fid,a,b,op,pc,want,alt,alt_pc", D8P_LINES)
+def test_d8_prime_table_lines_and_their_alternatives(ec, fid, a, b, op, pc, want, alt, alt_pc):
+    def val(x):
+        return ec.Flt.bits(x[1]) if x[0] == "bits" else _value(ec, x)
+    A, B = val(a), val(b)
+    got = ec.arith(op, A, B, pc=pc)["bits"]
+    assert got == want, fid
+    if alt_pc is not None:
+        other = ec.arith(op, A, B, pc=alt_pc)["bits"]
+    else:
+        x = float(a[1]) if a[0] == "int" else _f32(a[1])
+        y = float(b[1]) if b[0] == "int" else _f32(b[1])
+        other = _py53(op, x, y)
+    assert other != want, (fid, alt)     # a falsifier: the alternative reading gives a different value
+
+
+def test_atof_exponent_overflow_skips_the_switch(ec):
+    """m1: ___strtold sets its overflow flag when the decimal exponent leaves ±32767 (0x65c539, 0x65c603-0x65c613) and
+    returns +-HUGE_VAL (0x7620dc) or 0.0 (0x762538) without calling ___dec2num, so the precision mode is unchanged."""
+    assert ec.atof(b"1e99999") == {"type": "0x12", "bits": "7f800000", "pc_after": None}
+    assert ec.atof(b"-1e99999") == {"type": "0x12", "bits": "ff800000", "pc_after": None}
+    assert ec.atof(b"1e-99999") == {"type": "0x12", "bits": "00000000", "pc_after": None}
+
+
+def test_percent_f_refuses_values_beyond_18_digits(ec):
+    """m4: ___num2dec keeps 18 BCD digits (0x65fa25, 0x65fa57); %f of |x| >= 1e17 is not reproducible here."""
+    assert ec.to_string(ec.Flt(1.0e16)) == b"10000000272564224.000000"
+    assert ec.to_string(ec.Flt(1.0e17)) == b"99999998430674944.000000"   # f32(1e17) is below 1e17: 17 digits, allowed
+    for x in (2.0e17, -3.0e20):
+        with pytest.raises(ec.CalcError, match="18 digits"):
+            ec.to_string(ec.Flt(x))

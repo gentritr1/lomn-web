@@ -157,6 +157,14 @@ def test_roundtrip_through_the_independent_reader(asm, osi):
     call = [x for x in listing if x["text"].startswith("CallGameFunction t.echo")][0]
     c, f, n = by_at[call["at"]][1]
     assert (o["strings"][c], o["strings"][f], n) == ("t", "echo", 1)
+    # symbolic operands resolve back to the names they were written with (fix round 1, I4)
+    def operand(prefix):
+        return by_at[[x["at"] for x in listing if x["text"].startswith(prefix)][0]][1][0]
+    assert o["classes"][operand("CreateObject thing")][0] == "thing"
+    assert o["symbols"][operand("GetMemberValue .size")] == "size"
+    assert o["symbols"][operand("SetThisMemberValue .size")] == "size"
+    assert o["symbols"][operand("GetThisMemberFunction .tick")] == "tick"
+    assert o["strings"][operand('PushConstantString "hello')] == 'hello "q" \x80'
     gv = [x for x in listing if x["text"].startswith("GetVariableValue")][0]
     assert by_at[gv["at"]][1] == [0x8001]
     assert by_at[[x["at"] for x in listing if x["text"].startswith("CreateStackVariables")][0]][1] == [200 - 256]
