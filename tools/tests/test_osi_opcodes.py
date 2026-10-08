@@ -167,6 +167,11 @@ PINNED_FACTS = [
     (0x11, "errors", "always-error, map never populated"),
     (0x18, "errors", "always-error, map never populated"),
     (0x1A, "errors", "always-error, map never populated"),
+    # M2a-0 sweep: mixed int/float operands are loaded EXACTLY by fild (no f32 conversion first), one rounding at the end
+    (0x71, "stack_effect", "the int is loaded exactly by fild"),  # fild 0x60435e, fsub dword 0x604361, fstp 0x604363
+    (0x64, "stack_effect", "the int is loaded exactly by fild"),  # fild 0x604b87, fcomp dword 0x604b8a (exact compare)
+    # M2a-0 sweep (F3): 0x14's k and n count framePtr[0] = this plus the arguments
+    (0x14, "notes", "this"),
 ]
 
 
