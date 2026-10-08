@@ -84,6 +84,7 @@ def test_analysis_key_tracks_inputs(tmp_path):
     dec.mkdir()
     (dec / "types.txt").write_text("t")
     (dec / "symbols.txt").write_text("s")
+    (dec / "seed_addrs.txt").write_text("0x00401000\n")
     scripts = tmp_path / "scripts"
     scripts.mkdir()
     for n in run_decomp.ANALYSIS_SCRIPTS:
@@ -99,3 +100,35 @@ def test_analysis_key_tracks_inputs(tmp_path):
     assert k2 != k
     (dec / "symbols.txt").write_text("s2")
     assert run_decomp.analysis_key("sha", dec, scripts) != k2
+
+
+def test_analysis_key_covers_seeds_and_scripts(tmp_path, monkeypatch):
+    """M2a-0: the seed list, the seed extractor and both new analysis scripts shape the cached project, so each must
+    force re-analysis when it changes (otherwise a stale cache silently drops the seeds or the sret fix)."""
+    import shutil
+    dec = tmp_path / "dec"
+    dec.mkdir()
+    (dec / "types.txt").write_text("t")
+    (dec / "symbols.txt").write_text("s")
+    (dec / "seed_addrs.txt").write_text("0x00401000\n0x005fab30\n")
+    real = Path(run_decomp.__file__).resolve().parent / "ghidra"
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    for n in run_decomp.ANALYSIS_SCRIPTS:
+        shutil.copy(real / n, scripts / n)
+    extractor = tmp_path / "seed_addrs.py"
+    extractor.write_text("# extractor\n")
+    monkeypatch.setattr(run_decomp, "SEED_EXTRACTOR", extractor, raising=False)
+    k = run_decomp.analysis_key("sha", dec, scripts)
+    (dec / "seed_addrs.txt").write_text("0x00401000\n0x005fab31\n")  # one byte changed
+    k_seed = run_decomp.analysis_key("sha", dec, scripts)
+    assert k_seed != k
+    seen = {k, k_seed}
+    for name in ("SeedFunctions.java", "ApplySret.java"):
+        p = scripts / name
+        p.write_text((p.read_text() if p.exists() else "") + "// changed\n")
+        k_n = run_decomp.analysis_key("sha", dec, scripts)
+        assert k_n not in seen, name
+        seen.add(k_n)
+    extractor.write_text("# extractor, rule changed\n")
+    assert run_decomp.analysis_key("sha", dec, scripts) not in seen, "seed_addrs.py"

@@ -21,8 +21,13 @@ def call(at_va, target):
     return b"\xE8" + struct.pack("<i", target - (at_va + 5))
 
 
-def synthetic_pe():
-    """Minimal PE32: .text (RVA 0x1000, 0x200 bytes) and .CRT (RVA 0x2000, 3 dwords). Returns (bytes, expected)."""
+PROLOGUE = b"\x55\x89\xE5"  # push ebp; mov ebp, esp
+
+
+def synthetic_pe(prologue=True):
+    """Minimal PE32: .text (RVA 0x1000, 0x200 bytes) and .CRT (RVA 0x2000, 3 dwords). Returns (bytes, expected).
+    The registrations sit in one function with an aligned frame prologue at 0x401010 (prologue=False: int3 instead),
+    preceded in the walk-back by an unaligned decoy prologue that must be skipped."""
     code = bytearray()
 
     def emit(b):
@@ -31,6 +36,12 @@ def synthetic_pe():
     def here():
         return TEXT_VA + len(code)
 
+    emit(b"\xCC" * 0x10)
+    enclosing = here()                # 0x401010, 16-byte aligned
+    emit(PROLOGUE if prologue else b"\xCC" * 3)
+    emit(b"\x90")
+    decoy = here()                    # 0x401014: not 16-byte aligned
+    emit(PROLOGUE)
     # site 1: pushes text, non-text, text, non-text, non-text -> 2 .text candidates, the last one is the fn pointer
     emit(push(0x401100))
     emit(push(CRT_VA))                # .CRT address: not .text
@@ -70,7 +81,8 @@ def synthetic_pe():
         hdr[o:o + 8] = name.ljust(8, b"\0")
         struct.pack_into("<IIII", hdr, o + 8, size, rva, 0x200, raw)
     exe = bytes(hdr) + text + crt
-    expected = dict(site1=site1, site2=site2, tsite=tsite)
+    assert enclosing % 16 == 0 and decoy % 16 != 0
+    expected = dict(site1=site1, site2=site2, tsite=tsite, enclosing=enclosing)
     return exe, expected
 
 
@@ -79,11 +91,17 @@ def test_synthetic_pe():
     r = seed_addrs.compute(exe, register_function=FAKE_REGF, register_type=FAKE_REGT)
     assert r["crt"] == [0x401000, 0x401060]
     assert r["reg_sites"] == [
-        {"site": e["site1"], "fnptr": 0x401120, "candidates": 2},
-        {"site": e["site2"], "fnptr": 0x401140, "candidates": 1},
+        {"site": e["site1"], "fnptr": 0x401120, "candidates": 2, "enclosing": 0x401010},
+        {"site": e["site2"], "fnptr": 0x401140, "candidates": 1, "enclosing": 0x401010},
     ]
     assert r["type_sites"] == [e["tsite"]]
-    assert r["seeds"] == [0x401000, 0x401060, 0x401120, 0x401140]
+    assert r["seeds"] == [0x401000, 0x401010, 0x401060, 0x401120, 0x401140]
+
+
+def test_synthetic_pe_without_aligned_prologue_raises():
+    exe, _ = synthetic_pe(prologue=False)  # only the unaligned decoy remains
+    with pytest.raises(ValueError, match="no 16-byte aligned frame prologue"):
+        seed_addrs.compute(exe, register_function=FAKE_REGF, register_type=FAKE_REGT)
 
 
 def test_default_constants_cite_symbols():
@@ -112,24 +130,37 @@ def test_real_exe_counts(real):
     assert len(real["type_sites"]) == 445
     fnptrs = [s["fnptr"] for s in real["reg_sites"]]
     assert len(set(fnptrs)) == 1056
-    assert real["seeds"] == sorted(set(real["crt"]) | set(fnptrs))
-    assert len(real["seeds"]) == 1447
+    enclosing = {s["enclosing"] for s in real["reg_sites"]}
+    assert real["seeds"] == sorted(set(real["crt"]) | set(fnptrs) | enclosing)
+    assert len(real["seeds"]) == 1448  # 1447 before the enclosing seeds (M2a-0 T2): only 0x61d6a0 is new
+
+
+def test_real_exe_enclosing(real):
+    """Registrations sit in 70 functions, one contiguous run of sites each; 69 are .CRT initializers and the 70th,
+    0x61d6a0 (ScSLOSIDebug::Print/Assert), is an ScInitFunc callback that only the enclosing seed makes a function."""
+    enc = [s["enclosing"] for s in real["reg_sites"]]
+    runs = [enc[0]] + [b for a, b in zip(enc, enc[1:]) if a != b]
+    assert len(set(enc)) == 70 and len(runs) == 70
+    assert set(enc) - set(real["crt"]) == {0x61D6A0}
+    assert max(s["site"] - s["enclosing"] for s in real["reg_sites"]) == 28916  # in 0x41b640 (29,050 B)
 
 
 def test_real_exe_first_site_in_initializer(real):
     # The first registration of an initializer also sees the earlier ScInitFunc pushes (several .text candidates within
     # the 256-byte walk-back window); the fn pointer is the last .text push before the call. Later registrations see one.
-    assert real["reg_sites"][0] == {"site": 0x402FEB, "fnptr": 0x402030, "candidates": 5}
-    assert real["reg_sites"][1] == {"site": 0x4030CE, "fnptr": 0x402110, "candidates": 1}
+    assert real["reg_sites"][0] == {"site": 0x402FEB, "fnptr": 0x402030, "candidates": 5, "enclosing": 0x402890}
+    assert real["reg_sites"][1] == {"site": 0x4030CE, "fnptr": 0x402110, "candidates": 1, "enclosing": 0x402890}
     assert sum(1 for s in real["reg_sites"] if s["candidates"] == 1) == 988
 
 
-def test_real_exe_corpus_fnptrs_are_seeds(real, gen_decomp):
+def test_real_exe_seeds_are_corpus_functions(real, gen_decomp):
+    """After the M2a-0 seeded decomp, every registered fn pointer and every .CRT initializer is a function start."""
     starts = {int(json.loads(line)["addr"], 16)
               for line in (gen_decomp / "functions.jsonl").read_text().splitlines() if line}
-    in_corpus = {s["fnptr"] for s in real["reg_sites"]} & starts
-    assert len(in_corpus) == 79
-    assert in_corpus <= set(real["seeds"])
+    fnptrs = {s["fnptr"] for s in real["reg_sites"]}
+    # 79 in the pre-M2a-0 corpus
+    assert len(fnptrs & starts) == 1056
+    assert len(set(real["crt"]) & starts) == 391
 
 
 def test_cli_writes_outputs(canonical_exe, real, tmp_path):

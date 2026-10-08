@@ -5,15 +5,22 @@ nor of the script natives reached only through the fn pointer passed to ScOSISys
 both so the decomp can create functions there.
 
   crt        every dword of the `.CRT` section that points into `.text`, in file order
-  reg_sites  one {site, fnptr, candidates} per `E8 rel32` call to RegisterFunction, ascending by site
+  reg_sites  one {site, fnptr, candidates, enclosing} per `E8 rel32` call to RegisterFunction, ascending by site
   type_sites every `E8 rel32` call to RegisterType
-  seeds      sorted, de-duplicated union of `crt` and every `fnptr`
+  seeds      sorted, de-duplicated union of `crt`, every `fnptr` and every `enclosing`
 
 fnptr rule: walk back from the call site to the end of the previous RegisterFunction call, or at most WALK_BACK bytes,
 whichever is nearer; every `68 imm32` (push imm32) in that window whose imm lies in `.text` is a candidate; the fn
 pointer is the last candidate. The first registration of an initializer also sees the ScInitFunc pushes (several
 candidates); later ones see exactly their own (the fn pointer is followed only by the name and class string pushes,
 which point into data, not `.text`).
+
+enclosing rule (M2a-0 T2, controller ruling): the nearest frame prologue (`55 89 e5` or `55 8b ec`) at a 16-byte aligned
+address before the call site, at most ENCLOSING_WALK_BACK bytes back within `.text`. Most registering functions are
+`.CRT` initializers, but 0x61d6a0 (ScSLOSIDebug::Print/Assert) is an ScInitFunc callback reached only through a
+`push imm32` inside the initializer 0x61d7c0, and a single analysis pass never made a function of it. Measured on the
+seeded corpus: this rule gives the enclosing function's start for 1,054/1,054 enclosed sites, and 0x61d6a0 for the 2
+that were not enclosed.
 
 CLI: python tools/decomp/seed_addrs.py <exe> <out_dir>  ->  <out_dir>/seed_addrs.txt, <out_dir>/reg_sites.json
 """
@@ -32,6 +39,10 @@ REGISTER_FUNCTION = 0x5FAB30
 # gen/decomp/symbols.txt: 0x5fae00 ?RegisterType@ScOSISystem@@QAEGABV_ScBaseString@@@Z
 REGISTER_TYPE = 0x5FAE00
 WALK_BACK = 256
+# Measured: 552 of 1,056 sites lie more than 4 KiB past their function's start; the farthest is 28,916 B into the
+# 29,050-byte initializer 0x41b640. 32 KiB bounds the walk with margin (the ruling's 4 KiB raises on 0x41dc28).
+ENCLOSING_WALK_BACK = 0x8000
+PROLOGUES = (b"\x55\x89\xe5", b"\x55\x8b\xec")  # push ebp; mov ebp, esp (both encodings)
 
 
 def sections(exe: bytes) -> tuple[int, list[dict]]:
@@ -63,6 +74,15 @@ def _mapped(exe: bytes, s: dict) -> bytes:
     return exe[s["roff"]:s["roff"] + min(s["vsz"], s["rsz"])]
 
 
+def _enclosing(tb: bytes, tva: int, i: int) -> int:
+    """Nearest 16-byte aligned frame prologue before .text offset i, at most ENCLOSING_WALK_BACK bytes back."""
+    for j in range(i - 1, max(i - ENCLOSING_WALK_BACK, 0) - 1, -1):
+        if (tva + j) % 16 == 0 and tb[j:j + 3] in PROLOGUES:
+            return tva + j
+    raise ValueError(f"no 16-byte aligned frame prologue within {ENCLOSING_WALK_BACK} bytes before "
+                     f"RegisterFunction call at {tva + i:#x}")
+
+
 def compute(exe_bytes: bytes, register_function: int = REGISTER_FUNCTION, register_type: int = REGISTER_TYPE) -> dict:
     _, secs = sections(exe_bytes)
     text = _section(secs, ".text")
@@ -90,11 +110,22 @@ def compute(exe_bytes: bytes, register_function: int = REGISTER_FUNCTION, regist
                  for v in (struct.unpack_from("<I", tb, j + 1)[0],) if in_text(v)]
         if not cands:
             raise ValueError(f"no .text push imm32 before RegisterFunction call at {tva + i:#x}")
-        reg_sites.append({"site": tva + i, "fnptr": cands[-1], "candidates": len(cands)})
+        reg_sites.append({"site": tva + i, "fnptr": cands[-1], "candidates": len(cands),
+                          "enclosing": _enclosing(tb, tva, i)})
         prev_end = i + 5
 
-    seeds = sorted(set(crt) | {r["fnptr"] for r in reg_sites})
+    seeds = sorted(set(crt) | {r["fnptr"] for r in reg_sites} | {r["enclosing"] for r in reg_sites})
     return {"crt": crt, "reg_sites": reg_sites, "type_sites": [tva + i for i in sites[register_type]], "seeds": seeds}
+
+
+def write(r: dict, out: Path) -> None:
+    """<out>/seed_addrs.txt (one 0x%08x per line, sorted) and <out>/reg_sites.json (addresses as hex strings)."""
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "seed_addrs.txt").write_text("".join("0x%08x\n" % a for a in r["seeds"]))
+    (out / "reg_sites.json").write_text(json.dumps(
+        [{"site": "0x%08x" % s["site"], "fnptr": "0x%08x" % s["fnptr"], "candidates": s["candidates"],
+          "enclosing": "0x%08x" % s["enclosing"]}
+         for s in r["reg_sites"]], indent=0) + "\n")
 
 
 def main(argv: list[str] | None = None) -> dict:
@@ -106,13 +137,10 @@ def main(argv: list[str] | None = None) -> dict:
     if sha != BUILDS["canonical"]["exe_sha256"]:
         raise SystemExit(f"{exe} is not the canonical exe (sha256 {sha})")
     r = compute(exe.read_bytes())
-    out.mkdir(parents=True, exist_ok=True)
-    (out / "seed_addrs.txt").write_text("".join("0x%08x\n" % a for a in r["seeds"]))
-    (out / "reg_sites.json").write_text(json.dumps(
-        [{"site": "0x%08x" % s["site"], "fnptr": "0x%08x" % s["fnptr"], "candidates": s["candidates"]}
-         for s in r["reg_sites"]], indent=0) + "\n")
+    write(r, out)
     print(f"crt {len(r['crt'])}  reg_sites {len(r['reg_sites'])}  "
-          f"distinct fnptrs {len({s['fnptr'] for s in r['reg_sites']})}  type_sites {len(r['type_sites'])}  "
+          f"distinct fnptrs {len({s['fnptr'] for s in r['reg_sites']})}  "
+          f"distinct enclosing {len({s['enclosing'] for s in r['reg_sites']})}  type_sites {len(r['type_sites'])}  "
           f"seeds {len(r['seeds'])}  -> {out}")
     return r
 

@@ -3,7 +3,10 @@
 Pipeline (each step is a module in this folder):
   1 verify exe sha256 == tools/builds.json canonical
   2 nb11.main            -> symbols.txt, types.txt, modules.json
-  3 Ghidra analysis      -> cached project $LOMN_CACHE/decomp/<sha>/proj (import + CV symbols/types/locals + D3D8 vtables)
+  2b seed_addrs.compute  -> seed_addrs.txt (.CRT initializers + script-native fn pointers + the functions enclosing
+                            each RegisterFunction call), reg_sites.json
+  3 Ghidra analysis      -> cached project $LOMN_CACHE/decomp/<sha>/proj (import + CV symbols/types + seeded functions,
+                            then CV locals + D3D8 vtables + CreateVariant sret signatures)
   4 Ghidra ExportCorpus  -> funcs/*.c, functions.jsonl, calls.jsonl, vtable_uses.jsonl
   5 x87fix               -> rewrites x87 compare idioms in funcs/*.c
   6 corpus.build         -> corpus/<original path>.cpp, function_map.json
@@ -34,6 +37,7 @@ import corpus  # noqa: E402
 import headers  # noqa: E402
 import metrics  # noqa: E402
 import nb11  # noqa: E402
+import seed_addrs  # noqa: E402
 import seedset  # noqa: E402
 import x87fix  # noqa: E402
 from lomn_data import BUILDS, sha256_file  # noqa: E402
@@ -48,7 +52,12 @@ STAT_PATTERNS = {
     "ghidra_labels_applied": r"CV labels applied=(\d+)", "ghidra_local_funcs": r"CV locals: functions=(\d+)",
     "ghidra_params_applied": r"CV locals: functions=\d+ params=(\d+)", "ghidra_locals_applied": r" locals=(\d+) failed",
     "ghidra_d3d8_globals": r"globals typed=(\d+)",
+    "ghidra_seeds_created": r"SEED created=(\d+)", "ghidra_seeds_existing": r"SEED created=\d+ existing=(\d+)",
+    "ghidra_seeds_failed": r"SEED created=\d+ existing=\d+ failed=(\d+)",
+    "ghidra_sret_retyped": r"SRET retyped=(\d+)", "ghidra_sret_failed": r"SRET retyped=\d+ failed=(\d+)",
 }
+# A stat that must be 0, or the analysis is incomplete and is neither cached nor exported.
+MUST_BE_ZERO = ("ghidra_seeds_failed", "ghidra_sret_failed")
 
 
 def default_cache() -> Path:
@@ -66,14 +75,16 @@ def check_cache_path(proj: Path) -> None:
 
 # Scripts that shape the cached analysis project; ExportCorpus.java is export-only and deliberately excluded.
 ANALYSIS_SCRIPTS = ("ApplyCVTypes2.java", "ApplyCVSymbols.java", "ApplyCVLocals.java", "ApplyD3D8Types.java",
-                    "CVTypeSpec.java")
+                    "CVTypeSpec.java", "SeedFunctions.java", "ApplySret.java")
+# The seed extraction rule: a change to it must force re-analysis even if today's seed list happens not to change.
+SEED_EXTRACTOR = HERE / "seed_addrs.py"
 
 
 def analysis_key(exe_sha: str, dec: Path, scripts_dir: Path) -> str:
     """Identity of everything the cached analysis depends on; a changed script or input forces re-analysis."""
     h = hashlib.sha256(exe_sha.encode())
-    files = [dec / "types.txt", dec / "symbols.txt", HERE / "data" / "d3d8_vtables.txt",
-             *(scripts_dir / n for n in sorted(ANALYSIS_SCRIPTS))]
+    files = [dec / "types.txt", dec / "symbols.txt", dec / "seed_addrs.txt", HERE / "data" / "d3d8_vtables.txt",
+             SEED_EXTRACTOR, *(scripts_dir / n for n in sorted(ANALYSIS_SCRIPTS))]
     for f in files:
         h.update(b"\0" + f.name.encode() + b"\0")
         h.update(f.read_bytes())
@@ -132,6 +143,7 @@ def run(exe: Path, gen: Path, cache_root: Path, reanalyze: bool) -> dict:
         shutil.rmtree(dec)
     dec.mkdir(parents=True)
     nb11.main([str(exe), str(dec)])
+    seed_addrs.write(seed_addrs.compute(exe.read_bytes()), dec)
     cache = cache_root / "decomp" / sha
     proj = cache / "proj"
     check_cache_path(proj)
@@ -145,13 +157,18 @@ def run(exe: Path, gen: Path, cache_root: Path, reanalyze: bool) -> dict:
         proj.mkdir(parents=True, exist_ok=True)
         ghidra(proj, ["-import", str(exe), "-overwrite",
                       "-preScript", "ApplyCVTypes2.java", "-preScript", "ApplyCVSymbols.java",
-                      "-postScript", "ApplyCVLocals.java", "-postScript", "ApplyD3D8Types.java"],
+                      "-preScript", "SeedFunctions.java",
+                      "-postScript", "ApplyCVLocals.java", "-postScript", "ApplyD3D8Types.java",
+                      "-postScript", "ApplySret.java"],
                {"CV_SYMBOLS": str(dec / "symbols.txt"), "CV_TYPES": str(dec / "types.txt"),
+                "SEED_ADDRS": str(dec / "seed_addrs.txt"),
                 "D3D8_VTABLES": str(HERE / "data" / "d3d8_vtables.txt")}, cache / "analyze.log")
     stats = {k: int(m.group(1)) for k, p in STAT_PATTERNS.items()
              if (m := re.search(p, (cache / "analyze.log").read_text(errors="replace")))}
     if len(stats) != len(STAT_PATTERNS):
         raise SystemExit(f"Ghidra script stats missing ({sorted(set(STAT_PATTERNS) - set(stats))}); see {cache / 'analyze.log'}")
+    if bad := {k: stats[k] for k in MUST_BE_ZERO if stats[k]}:
+        raise SystemExit(f"Ghidra analysis incomplete ({bad}); see {cache / 'analyze.log'}")
     marker.write_text(key + "\n")
     export = cache / "export"
     if export.exists():
