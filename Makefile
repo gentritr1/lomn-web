@@ -5,7 +5,7 @@ export LOMN_DATA LOMN_CACHE
 VENV := .venv
 PY := $(VENV)/bin/python
 EMSDK_ENV := source .toolchain/emsdk/emsdk_env.sh >/dev/null 2>&1
-.PHONY: setup check-data decomp worklist native wasm site test-tools test-native test-wasm test-web check perf perf-areas datacheck datacheck-wasm fuzz-osi fuzz-formats fuzz-formats-help a9-sweep a13-real manifest osi-tables osi-diff conform-trace-cmp
+.PHONY: setup check-data decomp worklist native wasm site test-tools test-native test-wasm test-web check perf perf-areas datacheck datacheck-wasm fuzz-osi fuzz-osi-vm fuzz-formats fuzz-formats-help a9-sweep a13-real manifest osi-tables osi-diff conform-trace-cmp
 
 setup: $(VENV)/.ok
 	timeout 3600 tools/toolchain.sh
@@ -138,6 +138,19 @@ fuzz-osi:
 	@if [ -n "$(LOMN_DATA)" ]; then timeout 1800 build/fuzz/fuzz_osi 2000 2 "$(LOMN_DATA)/install/data/Base.osi"; fi
 	$(EMSDK_ENV) && timeout 900 em++ $(FUZZ_FLAGS) -sNODERAWFS=1 -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=2GB engine/tests/fuzz_osi.cpp engine/src/sage/osi.cpp -o build/fuzz/fuzz_osi.js
 	$(EMSDK_ENV) && timeout 1800 node build/fuzz/fuzz_osi.js $(FUZZ_OSI_N_WASM) 3
+
+# M2a-1 T5: ASan+UBSan mutation-fuzz SEED harness of the script VM (engine/tests/fuzz_osi_vm.cpp), natively. Seeds: the
+# conformance corpus assembled into build/fuzz/osi-vm-seeds (never committed) plus, when LOMN_DATA is set, the real
+# Base.osi; typed stubs from data/osi; FUZZ_OSI_VM_STEPS instructions per engine call. On demand only (the campaign is M2a-4).
+FUZZ_OSI_VM_N ?= 5000
+FUZZ_OSI_VM_STEPS ?= 100000
+OSI_VM_SRCS := engine/src/osi/heap.cpp engine/src/osi/convert.cpp engine/src/osi/registry.cpp engine/src/osi/trace.cpp \
+  engine/src/osi/vm.cpp engine/src/osi/vm_handlers.cpp engine/src/sage/osi.cpp
+fuzz-osi-vm: $(VENV)/.ok
+	mkdir -p build/fuzz
+	rm -rf build/fuzz/osi-vm-seeds && timeout 120 $(PY) tools/osi/conform_assemble.py tests/osi/conformance build/fuzz/osi-vm-seeds
+	timeout 900 clang++ $(FUZZ_FLAGS) -ffp-contract=off engine/tests/fuzz_osi_vm.cpp $(OSI_VM_SRCS) -o build/fuzz/fuzz_osi_vm
+	timeout 1800 build/fuzz/fuzz_osi_vm $(FUZZ_OSI_VM_N) 1 data/osi build/fuzz/osi-vm-seeds $(if $(LOMN_DATA),"$(LOMN_DATA)/install/data/Base.osi",) --steps $(FUZZ_OSI_VM_STEPS)
 
 # M1a-4 A11: ASan+UBSan (-fno-sanitize-recover) mutation fuzz of every real file format (engine/tests/fuzz_formats.cpp:
 # BLK + LZSS, SLB OBJ/POS/LIGHT/textures, binary .x, DDS, TGA, OSI), natively (build/asan/native) and as wasm32 under
