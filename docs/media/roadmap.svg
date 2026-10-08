@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 300" width="960" height="300" font-family="-apple-system, Segoe UI, Helvetica, Arial, sans-serif">
+  <title>LOMN Web roadmap: M0 and M1 done, M2 in progress, M3 to M7 planned</title>
+  <rect width="960" height="300" rx="12" fill="#14161a"/>
+  <text x="32" y="40" fill="#f2f2f2" font-size="20" font-weight="700">LOMN Web: roadmap</text>
+  <text x="32" y="62" fill="#9aa3ad" font-size="13">State on 2026-10-08. Green: done. Orange: in progress. Grey: planned.</text>
+
+  <!-- track -->
+  <line x1="70" y1="132" x2="890" y2="132" stroke="#3a3f47" stroke-width="6" stroke-linecap="round"/>
+  <line x1="70" y1="132" x2="304" y2="132" stroke="#3fb950" stroke-width="6" stroke-linecap="round"/>
+  <line x1="304" y1="132" x2="405" y2="132" stroke="#f0883e" stroke-width="6"/>
+
+  <!-- milestones: x positions 70..890 -->
+  <g font-size="13" text-anchor="middle">
+    <circle cx="70" cy="132" r="14" fill="#3fb950"/><text x="70" y="137" fill="#0d1117" font-weight="700">M0</text>
+    <text x="70" y="172" fill="#f2f2f2">Foundations</text>
+
+    <circle cx="187" cy="132" r="14" fill="#3fb950"/><text x="187" y="137" fill="#0d1117" font-weight="700">M1a</text>
+    <text x="187" y="172" fill="#f2f2f2">Files + faithful</text><text x="187" y="188" fill="#f2f2f2">rendering</text>
+
+    <circle cx="304" cy="132" r="14" fill="#3fb950"/><text x="304" y="137" fill="#0d1117" font-weight="700">M1b</text>
+    <text x="304" y="172" fill="#f2f2f2">Browser viewer</text>
+
+    <circle cx="421" cy="132" r="16" fill="#f0883e"/><text x="421" y="137" fill="#0d1117" font-weight="700">M2</text>
+    <text x="421" y="172" fill="#f2f2f2">Script engine</text><text x="421" y="188" fill="#f2f2f2">→ main menu</text>
+
+    <circle cx="538" cy="132" r="14" fill="#3a3f47" stroke="#6e7681" stroke-width="2"/><text x="538" y="137" fill="#f2f2f2" font-weight="700">M3</text>
+    <text x="538" y="172" fill="#9aa3ad">One playable</text><text x="538" y="188" fill="#9aa3ad">area</text>
+
+    <circle cx="655" cy="132" r="14" fill="#3a3f47" stroke="#6e7681" stroke-width="2"/><text x="655" y="137" fill="#f2f2f2" font-weight="700">M4</text>
+    <text x="655" y="172" fill="#9aa3ad">Audio, video,</text><text x="655" y="188" fill="#9aa3ad">saves</text>
+
+    <circle cx="772" cy="132" r="14" fill="#3a3f47" stroke="#6e7681" stroke-width="2"/><text x="772" y="137" fill="#f2f2f2" font-weight="700">M5</text>
+    <text x="772" y="172" fill="#9aa3ad">The full game</text>
+
+    <circle cx="890" cy="132" r="14" fill="#3a3f47" stroke="#6e7681" stroke-width="2"/><text x="890" y="137" fill="#f2f2f2" font-weight="700">M6</text>
+    <text x="890" y="172" fill="#9aa3ad">Public release</text>
+  </g>
+
+  <!-- M2 breakdown -->
+  <text x="32" y="232" fill="#f2f2f2" font-size="14" font-weight="700">Inside M2</text>
+  <g font-size="12">
+    <rect x="130" y="216" width="128" height="26" rx="6" fill="#3fb950"/><text x="194" y="233" fill="#0d1117" text-anchor="middle">M2a-0 citations</text>
+    <rect x="266" y="216" width="128" height="26" rx="6" fill="#3fb950"/><text x="330" y="233" fill="#0d1117" text-anchor="middle">M2a-1 VM + oracle</text>
+    <rect x="402" y="216" width="128" height="26" rx="6" fill="#3a3f47"/><text x="466" y="233" fill="#f2f2f2" text-anchor="middle">M2a-2 natives</text>
+    <rect x="538" y="216" width="128" height="26" rx="6" fill="#3a3f47"/><text x="602" y="233" fill="#f2f2f2" text-anchor="middle">M2a-3 menu</text>
+    <rect x="674" y="216" width="128" height="26" rx="6" fill="#3a3f47"/><text x="738" y="233" fill="#f2f2f2" text-anchor="middle">M2a-4 hardening</text>
+    <rect x="810" y="216" width="118" height="26" rx="6" fill="#3a3f47"/><text x="869" y="233" fill="#f2f2f2" text-anchor="middle">M2b menu in browser</text>
+  </g>
+  <text x="32" y="276" fill="#9aa3ad" font-size="12">M7 (optional extras: REBUILT content, gamepad, touch) comes after M6. Full plan: docs/ROADMAP.md.</text>
+</svg>

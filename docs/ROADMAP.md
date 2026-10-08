@@ -51,9 +51,11 @@ Controller-verified 2026-10-08: the page loads to the folder picker with 0 conso
 
 ### 3.1 Close M2a-1
 Workspace: `.superpowers/sdd/2026-10-08-lomn-web-m2a1/`. It is git-ignored; the ledger is `progress.md`.
-1. **Fable final review.** It was dispatched 2026-10-08 and is read-only.
-   - If `final-review-report.md` exists, read it.
-   - Otherwise re-dispatch using `final-review-brief.md`, on model fable.
+1. **Fable final review: done 2026-10-08, READY WITH FIXES** (0 Critical, 2 Important, 7 Minor; full report in `final-review-report.md`).
+   - **I1:** atof's overflow test. The C++ VM and `expect_calc` decide by the raw decimal exponent, but the binary uses the exponent adjusted after digit normalisation (0x65c5c1–0x65c624). Example: `"10e32767"` wrongly switches fpu_pc to 64. Fix: port the oracle's `_strtold_overflow` model into `engine/src/osi/convert.cpp` and `tools/osi/expect_calc.py`, reword `docs/osi/opcodes.md`, and add unit and trace-cmp cases.
+   - **I2:** deep re-entrant engine calls crash wasm32 ("memory access out of bounds") before the 1000-slot cap fires; native is correct. Fix: an explicit engine-call nesting cap in both engines, `-sSTACK_SIZE`/`STACK_OVERFLOW_CHECK` on the wasm targets, and a corpus program. This must land before M2a-2 adds re-entrant natives.
+   - **Minors:** the oracle's RecursionError on deep re-entry; the stale S05 regex below, plus an anchors test that FAIL regexes name existing programs; type-only expectation compare; dead `Heap::duplicate_in_place`; divergences on undefined inputs. The report lists them all.
+
 2. **One fix dispatch** covering every Critical and Important finding. Also add the ledgered ruling: widen S05's `conform` EXPECT regex in `tools/research/oracle/mutate_vm.py:196` to the new programs `a/0x70-float-negative-lhs-cancels-to-positive-zero` and `a/0x71-float-negative-lhs-minus-itself-positive-zero`. Then:
    - a scoped re-review;
    - a frozen-copy check: anchors, `make conform-trace-cmp`, `mutate_vm --only S05`, the A6 differential. Delete the copy once its result is ledgered.
