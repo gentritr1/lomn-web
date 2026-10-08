@@ -285,6 +285,13 @@ const comparePixels = (img, ref, label) => {
 const shotsKept = {};
 const summary = { refs: Object.keys(refs) };
 try {
+  if (only) {  // BYO_ONLY (development): the sections that revisit an install need the copy the lettered blocks normally make first
+    const p = await open(base + '?pick=1', undefined, { drop: false });
+    await waitState(p.page, ['need-files']);
+    await p.page.setInputFiles('#byo-input', inst);
+    await waitState(p.page, ['area-ready'], 120000);
+    await p.page.close();
+  }
   // A. Rejections through the real directory input.
   if (!only) {
     const p = await open(base);
@@ -296,13 +303,6 @@ try {
       [nonGameDir, /not a LOMN install/, 'non-game folder (exe, no .blk) -> hard rejection (C2)'],
       [emptyDir, /LEGOBionicle\.exe was not found/, 'empty folder -> rejection (M8, the empty-fixture negative test)'],
     ];
-  if (only) {  // BYO_ONLY (development): the sections that revisit an install need the copy the lettered blocks normally make first
-    const p = await open(base + '?pick=1', undefined, { drop: false });
-    await waitState(p.page, ['need-files']);
-    await p.page.setInputFiles('#byo-input', inst);
-    await waitState(p.page, ['area-ready'], 120000);
-    await p.page.close();
-  }
     for (const [dir, re, what] of cases) {
       await section(what, async () => {
         await p.page.evaluate(() => { window.__lomn.state = 'test-reset'; });
@@ -1075,33 +1075,6 @@ try {
           `returned ${ret}; ${JSON.stringify(o)}; frames at loss ${f0}`);
     await p.page.close();
   });
-  // Review fix 2: every unspun page that showed an area (sampled as it closed) was NOT DROPPING against the display rate
-  // measured on that same page, and the engine's flag agrees with fps < 0.95 x that rate.
-  if (!only) {
-    const dv = dropSamplesVerdict(dropSamples);
-    summary.drop_samples = dropSamples;
-    const fmt = (x) => `${x.fps.toFixed(1)}/${x.hz}Hz${x.snapped === false ? '?' : ''}`;
-    check(dv.ok,
-          `I2: every unspun page (${dropSamples.length} sampled) is NOT DROPPING against the display rate measured on that same page (a flagged page is re-measured once)`,
-          (dv.wrong.length || dv.incoherent.length ? 'DROPPING/incoherent: ' + JSON.stringify([...dv.wrong, ...dv.incoherent]) :
-            dropSamples.map((x) => (x.remeasure ? `${fmt(x)} [flagged at load ${x.loadavg}; re-measured ${fmt(x.remeasure)} at load ${x.remeasure.loadavg}]` : fmt(x))).join(' ')));
-  }
-  summary.loadavg = { start: loadavgStart, end: loadavg() };
-  for (const w of pageWatchers.filter((x) => !x.expectGpuLoss)) {
-    const gpu = w.console.filter((t) => t.includes('[webgpu]') || t.includes('[area]'));
-    if (gpu.length || w.errors.length) check(false, 'no WebGPU errors or page exceptions', JSON.stringify({ gpu, errors: w.errors }));
-  }
-  check(pageWatchers.filter((x) => !x.expectGpuLoss).every((w) => !w.errors.length), 'no page exceptions on any page');
-} catch (e) {
-  check(false, 'test run', e.stack || String(e));
-} finally {
-  await ctx.close();
-  srv.close();
-}
-fs.writeFileSync(path.join(work, 'results.json'), JSON.stringify({ results, summary }, null, 1));
-const failed = results.filter((r) => !r.ok);
-console.log(`byo_synthetic: ${results.length - failed.length}/${results.length} checks passed`);
-process.exitCode = failed.length ? 1 : 0;
   // M1 close-out C-N1 (ruling): only GPU device loss is final. A file read that fails during an area switch (a file that vanished, a
   // permission revoked mid-session) shows the message, keeps the previous area rendering, re-enables the picker and lets the next switch
   // work (pre-fix: fail() = state 'error', picker disabled, Reload only). One read is made to reject once (Blob.prototype.arrayBuffer
@@ -1228,3 +1201,30 @@ process.exitCode = failed.length ? 1 : 0;
           `${again.rounds} round(s), touched ${touched2.size} lines, over-fetch ${again.over_fetch_bytes}`);
     await p.page.close();
   });
+  // Review fix 2: every unspun page that showed an area (sampled as it closed) was NOT DROPPING against the display rate
+  // measured on that same page, and the engine's flag agrees with fps < 0.95 x that rate.
+  if (!only) {
+    const dv = dropSamplesVerdict(dropSamples);
+    summary.drop_samples = dropSamples;
+    const fmt = (x) => `${x.fps.toFixed(1)}/${x.hz}Hz${x.snapped === false ? '?' : ''}`;
+    check(dv.ok,
+          `I2: every unspun page (${dropSamples.length} sampled) is NOT DROPPING against the display rate measured on that same page (a flagged page is re-measured once)`,
+          (dv.wrong.length || dv.incoherent.length ? 'DROPPING/incoherent: ' + JSON.stringify([...dv.wrong, ...dv.incoherent]) :
+            dropSamples.map((x) => (x.remeasure ? `${fmt(x)} [flagged at load ${x.loadavg}; re-measured ${fmt(x.remeasure)} at load ${x.remeasure.loadavg}]` : fmt(x))).join(' ')));
+  }
+  summary.loadavg = { start: loadavgStart, end: loadavg() };
+  for (const w of pageWatchers.filter((x) => !x.expectGpuLoss)) {
+    const gpu = w.console.filter((t) => t.includes('[webgpu]') || t.includes('[area]'));
+    if (gpu.length || w.errors.length) check(false, 'no WebGPU errors or page exceptions', JSON.stringify({ gpu, errors: w.errors }));
+  }
+  check(pageWatchers.filter((x) => !x.expectGpuLoss).every((w) => !w.errors.length), 'no page exceptions on any page');
+} catch (e) {
+  check(false, 'test run', e.stack || String(e));
+} finally {
+  await ctx.close();
+  srv.close();
+}
+fs.writeFileSync(path.join(work, 'results.json'), JSON.stringify({ results, summary }, null, 1));
+const failed = results.filter((r) => !r.ok);
+console.log(`byo_synthetic: ${results.length - failed.length}/${results.length} checks passed`);
+process.exitCode = failed.length ? 1 : 0;

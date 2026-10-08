@@ -351,6 +351,7 @@ async function showArea(name) {
     // The device can be lost while the area's files are being read (the page is then in 'error' already): never flip it back.
     if (dead) return false;
     L.load = load;
+    L.areaError = null;  // a later success clears the last recoverable error (C-N1)
     setState('area-ready', name);
     return true;
   } catch (err) {
@@ -363,7 +364,6 @@ async function showArea(name) {
   }
 }
 
-    L.areaError = null;  // a later success clears the last recoverable error (C-N1)
 // Free-fly camera input: WASD / arrows move, Q/E down/up, Shift faster; drag (or pointer lock after a click) looks.
 function startInput() {
   const c = $('canvas');
