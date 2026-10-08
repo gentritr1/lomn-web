@@ -146,8 +146,9 @@ described in words, never as decompiled code.
 
   A 0x11 source is first converted to a dynamic string **in place**: for an int or float target, ConvertVariant
   overwrites the caller's variant (its `ScOSIVariant&` argument) with `ConvertStringIDToDynamicString(v)`
-  (0x60bbf9–0x60bc02, 0x60bcf9–0x60bd02) and then reads the text. Called from 0x82–0x84 on a stack slot, that slot
-  stays a 0x16 string. See "Objects, arrays and strings" below.
+  (0x60bbf9–0x60bc02, 0x60bcf9–0x60bd02) and then reads the text. Called from 0x82–0x84 on a stack slot, the slot is a 0x16 string only **transiently**: the handler then calls
+  `PushInto` (0x60191b → 0x601ec0), which disposes the slot (0x601edc, frees the in-place string: trace `A s` … `F s`)
+  and stores the converted value (0x601ef2), so the slot ends as the int/float (corrected 2026-10-08, oracle second-reader). See "Objects, arrays and strings" below.
 - **NaN results (D9, M2a-1).** Any f32 result that is a NaN is stored as **0xffc00000**, the x87 "real indefinite" an
   `fstp dword` writes for an invalid operation (stable x87 knowledge; UNVERIFIED on this exe). This is **our choice**,
   not the original's behaviour in every case: the x87 propagates a NaN *operand* (quietened, payload kept) instead of

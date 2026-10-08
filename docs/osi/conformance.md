@@ -206,5 +206,13 @@ Both runners (`lomn_osi_conform`, `osi_vm.py --conform`) implement these. They c
 
    Further pairs may be added only with the same kind of citation.
 10. **Heap values in expectations** (`result`, `top`, `globals`) are written as `{"type": <kind or game type>, "value": <handle>}`. The handle is the per-kind monotonic id of D7, starting at 1 for each kind (o, a, s, g) in a fresh VM. Example: the first object a program creates is `{"type": "0x01", "value": 1}`.
-11. **The engine marker** that `Vm::call` pushes is `{0xff, saved PC}`. In a fresh VM the saved PC is 0, and a nested call saves the PC of the instruction that invoked the native. Expectations write the top-level marker as `{"type": "0xff", "value": 0}`.
+11. **The engine marker** that `Vm::call` pushes is `{0xff, saved PC}`. In a fresh VM the saved PC is 0. **Corrected 2026-10-08 (oracle second-reader, controller re-read):** a nested call saves the PC **as already advanced past the invoking instruction's operands** (0x82 increments PC six times at 0x6015c6–0x601780 before the native call at 0x601af5, so the marker is site+6; 0x83 → site+4), not the instruction's own address. Expectations write the top-level marker as `{"type": "0xff", "value": 0}`.
 12. **Pop-versus-check order on error paths** (members 0x10/0x15/0x18–0x1a, colour 0xa0–0xa3, arithmetic with one invalid operand). The asm settles each case, and opcodes.md records the outcome. An expectation follows opcodes.md as amended, never a guess.
+13. **0x02/0x03 advance PC before erroring** (`inc` at 0x6038a6 / 0x6038d6). This corrects §4's "PC not advanced" for these two rows. The `E` line and `expect_error.pc` still give the instruction's own address, while `snapshot().pc` is pc+1. 0x41 and BCLUnused really do not advance.
+14. **Unspecified runner details**, now fixed:
+    - (a) An `M` line is not followed by `R`. CallResult is `found=false, ok=true`.
+    - (b) `--conform` trace headers always hash the three data files in use, also under `"registry": "none"`.
+    - (c) `reset_after_error()` disposes from the top down to and including the call's outer marker and emits the `F` lines. This is host behaviour, but it is visible in traces.
+    - (d) A test native's by-ref `writes` overwrite the slot without disposing the old value. The following Pop(true) disposes the new value (0x601c5f).
+    - (e) ConvertStringIDToDynamicString on a string of 255 or more characters throws before any `A s` line, with message `kOutOfRange` (0x60b95c–0x60b970), in the same style as kLenTooLong.
+    - (f) Engine-protocol programs with no opcode row may use `"rows": []` and must name the opcodes.md section ("Engine calls") in `note`.
