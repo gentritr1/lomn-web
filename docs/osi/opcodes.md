@@ -107,8 +107,8 @@ described in words, never as decompiled code.
   - **Port — one rule for every f32 result of 0x70–0x73, whatever the operand types:** result =
     round_f32(round_p(exact a OP b)), p = `fpu_pc` significand bits, round to nearest even, with the x87 **extended
     exponent range** at the round_p step (the intermediate never overflows or goes subnormal); round_f32 is the final
-    `fstp dword` (subnormals, overflow to ±inf). C++: TwoSum/TwoProduct + round-to-odd (consult M23) for 24 plus the
-    subnormal re-rounding, an exact 64-bit step for 64; Python: `fractions` (`tools/osi/expect_calc.py`).
+    `fstp dword` (subnormals, overflow to ±inf). Any exact method is acceptable: the C++ VM uses exact integer
+    arithmetic (wide sums/products, quotient with a sticky bit) then the two roundings; Python: `fractions` (`tools/osi/expect_calc.py`).
   - **Where the two settings differ from one rounding:**
     - At p = 24 the result equals one rounding of the exact value **unless the result is an f32 subnormal**: the
       intermediate is rounded to 24 bits with the extended exponent (so it stays normal), then `fstp dword` rounds it

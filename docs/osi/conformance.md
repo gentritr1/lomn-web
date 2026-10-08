@@ -216,3 +216,5 @@ Both runners (`lomn_osi_conform`, `osi_vm.py --conform`) implement these. They c
     - (d) A test native's by-ref `writes` overwrite the slot without disposing the old value. The following Pop(true) disposes the new value (0x601c5f).
     - (e) ConvertStringIDToDynamicString on a string of 255 or more characters throws before any `A s` line, with message `kOutOfRange` (0x60b95c–0x60b970), in the same style as kLenTooLong.
     - (f) Engine-protocol programs with no opcode row may use `"rows": []` and must name the opcodes.md section ("Engine calls") in `note`.
+15. **`snapshot().pc` after an error is unspecified and never compared.** Several handlers advance PC before their checks (0x14 +2 at 0x5feba7; 0x51 +2; 0x60/0x70/0x78/0x91 +1 at entry; 0x82's map miss at PC+5), and implementations need not copy that internal state. The `E` line and `expect_error.pc` are the instruction's own address, as before.
+16. **0x74 float^float uses the host `pow`** in both implementations. That is not bit-reproducible for inexact powers, so corpus programs use exact powers only (rule 4). Base.osi never executes 0x74.
