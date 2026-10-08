@@ -1162,6 +1162,33 @@ try {
           `returned ${ret}; ${JSON.stringify(o)}; frames at loss ${f0}`);
     await p.page.close();
   });
+  // M1 close-out C-N4: a navigator.gpu that exists but whose requestAdapter() resolves null (a blocklisted GPU) stops before any copy,
+  // like the missing-navigator.gpu case (final I-3): a named message, no copy worker, OPFS unchanged (pre-fix it copies, then fails).
+  await section('C-N4 no WebGPU adapter', async () => {
+    const p = await open(base + '?pick=1', `
+      GPU.prototype.requestAdapter = async () => null;
+      window.__workers = 0; const W = window.Worker; window.Worker = class extends W { constructor(...a) { super(...a); window.__workers++; } };`, { drop: false });
+    const before = await opfsList(p.page);
+    const st = await waitState(p.page, ['need-files'], 15000);
+    check(st.state === 'error' && /^This browser has WebGPU, but it returned no graphics adapter/.test(st.message) && /Chrome|Edge/.test(st.message),
+          'C-N4: requestAdapter() resolving null -> a named, final message before any file is chosen', `${st.state}: ${st.message}`);
+    const noWork = await p.page.evaluate(() => window.__lomn.validation === undefined && !window.__lomn.engine && /no graphics adapter/.test(window.__lomn.noAdapter ?? ''));
+    check(noWork, 'C-N4: no validation or engine work ran (noAdapter recorded)');
+    await p.page.setInputFiles('#byo-input', inst);
+    const moved = await p.page.waitForFunction(() => window.__lomn.state !== 'error' && window.__lomn.state !== 'need-files', null, { timeout: 4000 }).then(() => true, () => false);
+    const after = await opfsList(p.page);
+    const workers = await p.page.evaluate(() => window.__workers);
+    const final = await p.page.evaluate(() => ({ state: window.__lomn.state, copy: window.__lomn.copy ?? null, byoHidden: document.getElementById('byo').hidden, reload: !document.getElementById('reload').hidden }));
+    check(!moved && final.state === 'error' && !final.copy && workers === 0 && JSON.stringify(before) === JSON.stringify(after) && final.byoHidden && !final.reload,
+          'C-N4: choosing a folder anyway copies nothing (no copy worker, OPFS listing unchanged), the folder choice is hidden, no Reload button',
+          `state ${final.state}; left error ${moved}; workers ${workers}; OPFS entries ${before.length} -> ${after.length}; byo hidden ${final.byoHidden}; reload ${final.reload}`);
+    await p.page.close();
+    // control: a requestAdapter() that REJECTS is named too (the page does not hang in boot)
+    const q = await open(base + '?pick=1', `GPU.prototype.requestAdapter = async () => { throw new Error('TEST: adapter request failed'); };`, { drop: false });
+    const st2 = await waitState(q.page, ['need-files'], 15000);
+    check(st2.state === 'error' && /requesting an adapter failed \(TEST: adapter request failed\)/.test(st2.message), 'C-N4: a requestAdapter() that throws is named in the final message', `${st2.state}: ${st2.message}`);
+    await q.page.close();
+  });
   // M1 close-out C-f2 (browser): a tampered prefetch cache that holds ONE whole-file range per file (a superset) satisfies every read, so
   // the resident ranges the engine "touched" are the tampered ones; persisting them kept the superset for ever. The page now writes
   // back the exact reads (lomn_fs_reads), and the next visit loads the exact set.

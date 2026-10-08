@@ -87,6 +87,18 @@ async function start() {
       L.noWebGpu = true;
       return fail('This browser has no WebGPU, so the viewer cannot run here. Use Chrome or Edge 113 or newer (Safari and Firefox support is planned).', { reload: false });
     }
+    // M1 close-out C-N4: WebGPU can exist and still hand out no adapter (a blocklisted GPU or driver, some Linux builds). The same
+    // rule as above: found out before any validation or copy, not after ~1.1 GB were copied and the first GPU call failed.
+    let adapterWhy = '';
+    try {
+      if (!(await navigator.gpu.requestAdapter())) adapterWhy = 'it returned no graphics adapter';
+    } catch (err) {
+      adapterWhy = `requesting an adapter failed (${String(err?.message ?? err)})`;
+    }
+    if (adapterWhy) {
+      L.noAdapter = adapterWhy;
+      return fail(`This browser has WebGPU, but ${adapterWhy}, so the viewer cannot run here (the graphics card or driver may be unsupported or blocklisted). Try Chrome or Edge 113 or newer on a computer with a supported GPU.`, { reload: false });
+    }
     if (params.get('scene') === 'triangle') return startTriangle();
     setState('boot');
     const res = await fetch('builds.json');
