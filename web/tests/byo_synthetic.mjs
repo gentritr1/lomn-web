@@ -19,7 +19,7 @@ import { fileURLToPath } from 'node:url';
 import { blkTablesFingerprint, sha256hex } from '../app/fingerprint.js';
 import { serve } from './serve.mjs';
 import { decodePng, diffRgb, importSpecifiers, launch, networkCheck, waitFrames, waitState, watch, workerSharedFiles } from './lib.mjs';
-import { dropSamplesVerdict, FPS_MAX_RATIO } from './a13_checks.mjs';
+import { dropSamplesVerdict, FPS_MAX_RATIO, fpsWithRemeasure } from './a13_checks.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const [wasmDir, workArg, lomnView] = process.argv.slice(2);
@@ -214,6 +214,17 @@ const remeasureDisplay = async (page) => {
   await page.evaluate(() => window.__lomn.engine.M._lomn_debug_remeasure());
   await page.waitForFunction((k) => window.__lomn.metrics.fps.display_runs >= k, runs0 + 1, { timeout: 90000 });
 };
+// M1 close-out C-m7: an unspun page's fps verdict with the re-measure-once rule (fpsWithRemeasure, pinned by a13_checks_test.mjs): a
+// reading that fails (host load, or a display rate measured too low) gets ONE fresh window (the area shown again, after a display
+// re-measure when the rate was under-measured) and fails only if the second reading fails too. `frames` = the window to wait for.
+const unspunFps = (page, frames, timeout) => fpsWithRemeasure({
+  read: async () => { await waitFrames(page, frames, timeout); return { fps: (await page.evaluate(() => window.__lomn.metrics)).fps }; },
+  freshWindow: () => page.evaluate(() => window.__lomn.showArea(window.__lomn.load.area)),
+  remeasureDisplay: () => remeasureDisplay(page),
+  stamp: () => ({ loadavg: loadavg() }),
+});
+const fpsDetail = (r) => `${r.remeasure ? `RE-MEASURED after ${r.remeasure.first.reasons.join('; ')} (first fps ${Number(r.remeasure.first.fps?.fps).toFixed(1)}, load ${r.remeasure.first.loadavg}); second: ` : ''}` +
+  `fps ${r.m.fps.fps} vs display ${r.m.fps.display_hz} Hz, ratio ${Number(r.v.ratio).toFixed(3)}${r.v.ok ? '' : '; ' + r.v.reasons.join('; ')}`;
 const pageWatchers = [];
 // Review fix 2: every unspun page that showed an area is checked, just before it closes, against the display rate measured
 // on that same page: the engine's DROPPING flag must be false and must agree with fps < 0.95 x display_hz. Pages that resize,
@@ -589,8 +600,11 @@ try {
     const f = m.fps;
     check(f.dt_samples === f.frames_in_window - 1 && f.dt_samples >= 119, 'HUD reconciliation: dt samples == frames in window - 1',
           `${f.frames_in_window} frames, ${f.dt_samples} dt samples, window ${f.window_ms} ms, expected ${f.expected_intervals} intervals at ${f.nominal_hz} Hz`);
-    check(f.display_hz > 0 && f.dropping === false && f.fps >= 0.95 * f.display_hz, 'I2: the HUD page (unspun) is not DROPPING against its own display rate',
-          `fps ${f.fps} vs display ${f.display_hz} Hz`);
+    // C-m7: was one reading (f.fps >= 0.95 x display): host load turned it into a flake. Now the re-measure-once rule (a failing first
+    // reading gets one fresh window; both readings and the load average are in the detail) plus the 1.05 upper bound (C-m3).
+    const hudFps = await unspunFps(p.page, 120, 30000);
+    check(hudFps.v.ok, 'I2: the HUD page (unspun) is not DROPPING against its own display rate (a failing reading is re-measured once)', fpsDetail(hudFps));
+    summary.hud_fps = { remeasure: hudFps.remeasure, fps: hudFps.m.fps.fps, display_hz: hudFps.m.fps.display_hz, ratio: hudFps.v.ratio };
     check(/fps \d/.test(hudText) && /expected/.test(hudText) && /replay p50/.test(hudText) && /heap: wasm/.test(hudText), 'HUD overlay shows fps, reconciliation, breakdown, heap', hudText.split('\n')[0]);
     summary.hud = m;
     await p.page.screenshot({ path: path.join(shots, 'hud.png') });
@@ -728,11 +742,11 @@ try {
     // snap rate, and the old rule also reports DROPPING: this check bites only where the display measures >= ~48 Hz.)
     const r = await open(base + '?hud=1&area=levt/test', undefined, { drop: false });
     await waitState(r.page, ['area-ready'], 60000);
-    await waitFrames(r.page, 90, 20000);
-    const h = (await r.page.evaluate(() => window.__lomn.metrics)).fps;
+    const unspun = await unspunFps(r.page, 90, 20000);  // C-m7: the same re-measure-once rule as the HUD page above
+    const h = unspun.m.fps;
     const how = (f) => `${f.display_snapped === true ? 'snapped' : f.display_snapped === false ? 'UNSNAPPED' : 'snap flag absent'} from median ${f.display_median_ms ?? f.display_p10_ms} ms, ${f.display_samples} samples`;
-    check(h.display_hz > 0 && h.dropping === false, 'I2: the display rate is measured before the first area; the unspun run is not DROPPING',
-          `display ${h.display_hz} Hz (${how(h)}), fps ${h.fps}`);
+    check(unspun.v.ok && h.display_hz > 0 && h.dropping === false, 'I2: the display rate is measured before the first area; the unspun run is not DROPPING (a failing reading is re-measured once)',
+          `display ${h.display_hz} Hz (${how(h)}), ${fpsDetail(unspun)}`);
     // The snap rule, deterministically (the pure function behind the measurement): standard rates only within +-3 %, otherwise
     // the raw rate, marked unsnapped; and no median in 58..62 Hz ever reads as 72 Hz (the old 66 Hz boundary).
     const classify = (ms) => r.page.evaluate((x) => { const M = window.__lomn.engine.M; return JSON.parse(M.UTF8ToString(M._lomn_debug_classify_display(x))); }, ms);
@@ -756,8 +770,7 @@ try {
     // Repeatability: the measurement run 10 more times on this one page gives one rate (and it equals the boot measurement).
     const runs = [], runs0 = h.display_runs;
     for (let i = 0; i < 10; ++i) {
-      await r.page.evaluate(() => window.__lomn.engine.M._lomn_debug_remeasure());
-      await r.page.waitForFunction((k) => window.__lomn.metrics.fps.display_runs >= k, runs0 + i + 1, { timeout: 90000 });
+      await remeasureDisplay(r.page);  // C-m3: the shared helper (also used when a reading is above 1.05 x the measured rate)
       const f = (await r.page.evaluate(() => window.__lomn.metrics)).fps;
       runs.push({ hz: f.display_hz, snapped: f.display_snapped, ms: f.display_median_ms ?? f.display_p10_ms });
     }
