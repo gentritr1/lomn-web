@@ -1,5 +1,5 @@
-.class C props(a, b)
 .class D props(w)
+.class C props(a, b)
 .function main 0
     CreateStackVariables 1
     CreateObject C
