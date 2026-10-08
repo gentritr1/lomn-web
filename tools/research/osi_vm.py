@@ -910,6 +910,7 @@ class Vm:
         self.last_error: Optional[VmError] = None
         self._nest = 0
         self._outer_marker = None
+        self._outer_saved_pc = 0
         self._ipc, self._iop = 0, 0
         self._sha = hashlib.sha256(self.image).hexdigest()
         self.pcs_seen: Optional[set] = None
@@ -1009,6 +1010,7 @@ class Vm:
         outer = self._nest == 1
         if outer:
             self._outer_marker = self.depth
+            self._outer_saved_pc = self.pc        # the value CallWithReturn's {0xff, PC} marker gets (0x60b484)
         try:
             return self._call_with_return(nb, args)
         except VmError as e:
@@ -1024,15 +1026,14 @@ class Vm:
 
     def reset_after_error(self) -> None:
         """Our host behaviour (D10): refcount and context depth to 0, pop (with dispose) to and including the failed
-        outermost call's 0xff marker, PC = the marker's value. fpu_pc stays 64."""
+        outermost call's 0xff marker, PC = the marker's value (the PC that call saved, 0x60b484 / restored at 0x60b5a2),
+        even when the script itself already popped the marker. fpu_pc stays 64."""
         m = self._outer_marker if self._outer_marker is not None else 0
-        marker = self.stack[m] if m < self.depth else None
         while self.depth > m:
             v = self.stack[self.depth - 1]
             self.depth -= 1
             self.heap.dispose(v)
-        if marker is not None and marker.type == T_FRAME:
-            self.pc = marker.value
+        self.pc = self._outer_saved_pc
         self.refcount = 0
         self.context_depth = 0
         self.frame = self.scan_frame()          # "After an error": framePtr pointed into the failed frame (M4)

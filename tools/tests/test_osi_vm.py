@@ -930,3 +930,27 @@ def test_atoi_saturates_like_strtol():
     assert c_atoi(b"3000000000") == 0x7FFFFFFF
     assert c_atoi(b"-2147483649") == 0x80000000
     assert c_atoi(b"42") == 42
+
+
+def test_reset_restores_pc_even_when_the_script_popped_the_marker():
+    """D10 / consult §1.0: reset_after_error sets PC = the outer call's marker value. In conformance program
+    b-30-cap-underflow the script pops the {0xff, 0} marker itself, then underflows; the next call's marker must still
+    save PC 0 (C++ and the conform-trace-cmp agree: `I 0000002e 45    1    1 00ff:00000000`)."""
+    asm = """.function main2 0 @m2
+.function main 0
+    Pop
+err:
+    Pop
+    Return
+m2:
+    PushConstant0
+    Return
+"""
+    vm, e, lines, info = err(asm)
+    assert e.message == "Stack underflow" and e.pc == info["labels"]["err"] and e.depth == 0
+    vm.reset_after_error()
+    assert vm.snapshot().pc == 0 and vm.depth == 0
+    tr = osi_vm.ListTrace()
+    vm.trace = vm.heap.trace = tr
+    assert vm.call("main2", []).ok
+    assert tr.lines[1] == "I %08x 45    1    1 00ff:00000000" % info["labels"]["m2"]
