@@ -187,3 +187,21 @@ handlers ≥2: x/96, row×message pairs: y/111, falsifiers: k/31, argc violation
 - 0xff pushes nothing and stops Run: a `main` that halts leaves `{0xff marker, nothing}` for `CallWithReturn`, so the
   result is nothing and the depth 0.
 - `BCLUnused`: 2 programs on two different unused bytes (`.byte`).
+
+## 6. Format amendments (controller rulings, 2026-10-08, after corpus group B)
+
+Both runners (`lomn_osi_conform`, `osi_vm.py --conform`) implement these. They close gaps the corpus authors met.
+
+1. **Re-entrant test natives:** a test native may carry `"calls": {"entry": "<name>", "args": [<v>…]}`. When the native runs, the runner performs `vm.call(entry, args)` **before** the native returns. The nested call's result is disposed by the host right after its `R`, as for any engine call. The native then returns its own `returns`.
+2. **Host-supplied engine arguments** may be written `{"text": "…"}` (and `{"hex": "…"}`), like test-native `returns`. The runner allocates them on the VM heap as dynamic strings (type 0x16, `A s` events, in argument index order) before the call. They count in `heap.allocs` and `heap.live`.
+3. **Empty stack top:** in `expect_error`, `"top": null` means depth 0. The trace prints `----:--------`.
+4. **Errors at a memoised 0x82 site:** `op` is the pristine byte `0x82`, never `0x84`. This is the same rule as the `I` line.
+5. **Errors raised before `Run` starts** (SetPCAndArgs: argc > 10): `pc` is the entry point's code offset (SetPCAndArgs sets PC before the check), `op` is the byte at that offset, and `depth`/`top` describe the stack at the throw.
+6. **Game type ids** always come from `data/osi/types.json`, also under `"registry": "none"`.
+7. **`heap` is optional.** A runner compares only the fields present in the expectation.
+8. **Entry-point names and FindFunction's prefix match:** "main" matches the query "main2". A program that uses a second entry point therefore declares the longer name first (e.g. `.function main2 …` before `.function main …`). This is not a runner rule, but authors of both groups must follow it.
+9. **Unreachable row×message pairs.** A pair whose message the original can never show as the final error is exempt from coverage when listed here with its row-text justification. The path that would raise it is still covered by a program asserting the actual final message.
+   - 0x82 "Requested variant conversion unimplimented…", "Too few parameters…" and "Too many parameters…", and 0x83 "Argument type mismatch…": all of these are raised inside the catch(…) and overwritten by Error("Script is calling …") (0x82/0x83 errors cells).
+   - 0x91 "Reference beyond end of string table", 0x93/0x94/0x96 "Assigning into string table is illegal" and 0x95 "Removal from string table is illegal": these need a 0x13 value, which no handler and no CreateVariant overload creates (opcodes.md variant types).
+
+   Further pairs may be added only with the same kind of citation.
