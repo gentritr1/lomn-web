@@ -135,6 +135,15 @@ Each milestone gets a spec and a plan (Opus 5.5), one Fable 5.1 precision review
   - **Fable 5.1:** only for one precise review of each sub-milestone's spec and plan before implementation, and for the final review at the end of each milestone (M2, M3…).
   - **Opus 5.5 at medium effort:** the controller, design-heavy implementation, risky-code reviews, and sub-milestone final reviews.
   - **Sonnet 5.5:** well-specified implementation, corpus authoring, mechanical fixes, and scoped re-reviews.
+  - **Haiku 5.5 (`claude-haiku-5-5`): proposed, to be confirmed by experiment E3.** Use it only for bounded jobs that stay under 100k tokens (its price rises 5× above that) and whose output a script or the controller checks:
+    - code searches and lookups that return a short summary;
+    - triage of long build and test logs (counts plus the first error with file:line);
+    - ledger, metrics, board and README bookkeeping from given facts;
+    - mechanical edits from an exact list;
+    - hygiene scans: personal paths, game data in git.
+
+    Never use it for reviews, design, asm or RE readings, rulings, or code whose mistakes tests could miss.
+  - **E3 (run in the first sub-milestone on credits):** Haiku 5.5 vs Sonnet 5.5 on the same inputs for log triage, bookkeeping and mechanical edits, interleaved, 3 runs each. Adopt Haiku for a class only if its first-time-correct rate matches Sonnet's.
   - Start a fresh session per sub-milestone and resume from this file. Fast mode stays off.
   - Record $ spent per sub-milestone from the Console dashboard.
 - **Verification:**
