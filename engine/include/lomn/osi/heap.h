@@ -41,7 +41,6 @@ class Heap {
 
   // Duplicate (0x60aa20): +1 reference for 0x01, 0x05, 0x20..0xfe; a deep copy (new handle) for 0x16; nothing else.
   Variant duplicate(Variant v);
-  void duplicate_in_place(Variant& v) { v = duplicate(v); }
   // Dispose (0x60a930): -1 reference (free at 0) for 0x01, 0x05, 0x20..0xfe; 0x16 deletes the string. An object frees
   // its properties and an array its elements back to front, after its own `F` record (depth first, as the recursive
   // destructors do), using an explicit worklist rather than recursion.

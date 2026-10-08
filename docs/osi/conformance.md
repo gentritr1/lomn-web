@@ -52,6 +52,11 @@ test time; the binary is never committed.
 - `pc` may be a label from the `.asm` (the runner resolves it through the assembler's label table).
 - Values are written as `value` (decimal u32) or `bits` (8 hex digits). Floats only as bits, so an author must compute the
   f32 pattern with `tools/osi/expect_calc.py` and the row's formula.
+- **`value` or `bits` is MANDATORY in every value expectation** (`expect.result`, `expect.globals.<name>`,
+  `expect_error.top`). `{"type": X}` alone is not a valid expectation: the C++ runner compares it as value 0 and the
+  oracle compares the type only, so the two runners would disagree. `text`, `hex` and `game` are the other forms and
+  need no `value`. `found` is not part of the format: the C++ runner checks an `expect.found` key if present, the oracle
+  ignores it, and no corpus file may contain one. `tools/tests/test_conformance_report.py` fails on both rules.
 - `fpu_pc` (optional in `expect`, `expect_error`) is the precision state after the call; after any error it is 64 (D8′/D10).
   `reset_after_error()` does not change `fpu_pc`, so a second entry point (`main2`) called after an error runs at 64.
 

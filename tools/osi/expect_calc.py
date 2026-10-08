@@ -311,7 +311,10 @@ def atof(text: bytes, inexact_ok: bool = False) -> dict:
         return dict(float_result(0xFF800000 if s.startswith("-") else 0x7F800000), pc_after=None)
     exact = Fraction(s) if not s.endswith(".") else Fraction(s[:-1] or "0")
     b = f32_bits(exact)
-    if Fraction(struct.unpack("<f", struct.pack("<I", b))[0]) != exact and not inexact_ok:
+    # The f32 store overflows to +-inf or flushes to +-0 for text beyond the f32 range (the oracle's c_atof then f32_bits
+    # returns those bits as they are). Those bits have no finite Fraction, so the exactness check does not apply to them.
+    out_of_range = (b & 0x7FFFFFFF) in (0, 0x7F800000)
+    if not out_of_range and Fraction(struct.unpack("<f", struct.pack("<I", b))[0]) != exact and not inexact_ok:
         raise CalcError("atof(%r) is not exactly an f32: the CRT reading is UNVERIFIED" % s)
     if exact == 0 and s.lstrip().startswith("-"):
         b = 0x80000000

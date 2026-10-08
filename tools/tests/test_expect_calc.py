@@ -11,6 +11,7 @@ import ast
 import importlib.util
 import math
 import struct
+import sys
 from pathlib import Path
 
 import pytest
@@ -223,6 +224,32 @@ def test_atof_overflow_flag_uses_the_adjusted_exponent(ec):
     assert ec.atof(b"0.01e-32767") == {"type": "0x12", "bits": "00000000", "pc_after": None}
     assert ec.atof(b"-0.01e-32767") == {"type": "0x12", "bits": "00000000", "pc_after": None}   # +0.0 (0x65c626-0x65c635)
     assert ec.atof(b"0.1e-32767", inexact_ok=True)["pc_after"] == 64      # adjusted -32768 is in range
+
+
+def _oracle():
+    sys.path.insert(0, str(REPO / "tools" / "osi"))
+    sys.path.insert(0, str(REPO / "tools" / "research"))
+    import osi_vm
+    return osi_vm
+
+
+@pytest.mark.parametrize("text, bits", [
+    (b"1e400", "7f800000"), (b"-1e400", "ff800000"),          # past f32 max: the f32 store overflows to +-inf
+    (b"1e-400", "00000000"), (b"-1e-400", "80000000"),        # below f32 min: flushes to +-0
+])
+def test_atof_beyond_f32_range_gives_infinity_or_signed_zero(ec, text, bits):
+    # Oracle reading (osi_vm.c_atof, then f32_bits): the decimal is a double, +-inf or +-0.0, switch to 64 bits.
+    # Before the fix, expect_calc raised OverflowError ("cannot convert Infinity to integer ratio") or a CalcError.
+    assert ec.atof(text) == {"type": "0x12", "bits": bits, "pc_after": 64}
+    assert ec.atof(text, inexact_ok=True) == {"type": "0x12", "bits": bits, "pc_after": 64}
+
+
+def test_atof_beyond_f32_range_matches_the_oracle_functions(ec):
+    osi_vm = _oracle()
+    for text in (b"1e400", b"-1e400", b"1e-400", b"-1e-400"):
+        value, switched = osi_vm.c_atof(text)
+        assert switched is True
+        assert ec.atof(text) == {"type": "0x12", "bits": "%08x" % osi_vm.f32_bits(value), "pc_after": 64}
 
 
 def test_percent_f_refuses_values_beyond_18_digits(ec):

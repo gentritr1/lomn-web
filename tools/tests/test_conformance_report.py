@@ -21,6 +21,71 @@ def _report(cr, d, group=None):
     return cr.report(d, REPO / "docs" / "osi" / "opcodes.md", REPO / "docs" / "osi" / "types.md", group)
 
 
+CORPUS = REPO / "tests" / "osi" / "conformance"
+_NON_VALUE_FORMS = ("text", "hex", "game")   # docs/osi/conformance.md §1: these need no value/bits
+
+
+def _value_specs(doc):
+    """(where, spec) for every value expectation: expect.result, expect.globals.<name>, expect_error.top."""
+    ok, err = doc.get("expect") or {}, doc.get("expect_error") or {}
+    out = [("expect.result", ok["result"])] if "result" in ok else []
+    out += [("expect.globals." + name, spec) for name, spec in (ok.get("globals") or {}).items()]
+    if "top" in err:
+        out.append(("expect_error.top", err["top"]))
+    return out
+
+
+def _has_key(node, key):
+    if isinstance(node, dict):
+        return key in node or any(_has_key(v, key) for v in node.values())
+    if isinstance(node, list):
+        return any(_has_key(v, key) for v in node)
+    return False
+
+
+def _problems(doc):
+    # null is "expected empty" (e.g. expect_error.top: null = depth 0), so it is not a value expectation
+    out = [where + " has neither value nor bits" for where, spec in _value_specs(doc)
+           if spec is not None and not any(k in spec for k in _NON_VALUE_FORMS + ("value", "bits"))]
+    if _has_key(doc, "found"):
+        out.append("found key present (not part of the format)")
+    return out
+
+
+def _scan(root):
+    """{path: problems} for every <group>/<id>.expect.json under root that breaks the §1 rule."""
+    bad = {}
+    for path in sorted(root.glob("*/*.expect.json")):
+        problems = _problems(json.loads(path.read_text()))
+        if problems:
+            bad[str(path.relative_to(root))] = problems
+    return bad
+
+
+def test_corpus_value_expectations_have_value_or_bits_and_no_found():
+    assert len(list(CORPUS.glob("*/*.expect.json"))) > 0   # the scan must not be vacuous
+    assert _scan(CORPUS) == {}
+
+
+@pytest.mark.parametrize("doc, want", [
+    ({"expect": {"result": {"type": "0x10"}}}, ["expect.result has neither value nor bits"]),
+    ({"expect": {"globals": {"g": {"type": "0x12"}}}}, ["expect.globals.g has neither value nor bits"]),
+    ({"expect_error": {"top": {"type": "0x12"}}}, ["expect_error.top has neither value nor bits"]),
+    ({"expect": {"ok": True, "found": True}}, ["found key present (not part of the format)"]),
+    ({"expect": {"result": {"type": "0x10", "value": 0}}}, []),
+    ({"expect": {"result": {"type": "0x12", "bits": "3f800000"}}}, []),
+    ({"expect": {"result": {"text": "abc"}}, "expect_error": {"top": {"game": "GcTimer"}}}, []),
+])
+def test_guard_flags_a_value_expectation_without_value_or_bits(doc, want):
+    assert _problems(doc) == want
+
+
+def test_guard_flags_a_planted_file(tmp_path):
+    (tmp_path / "x").mkdir()
+    (tmp_path / "x" / "bad.expect.json").write_text(json.dumps({"expect": {"result": {"type": "0x10"}}}))
+    assert _scan(tmp_path) == {"x/bad.expect.json": ["expect.result has neither value nor bits"]}
+
+
 def test_measured_denominators(cr, tmp_path):
     r = _report(cr, tmp_path)
     assert (r["handlers"], r["pairs"], r["falsifiers"], r["argc"], r["programs"]) == ((0, 96), (0, 111), (0, 31), (0, 20), 0)
