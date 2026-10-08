@@ -1,0 +1,37 @@
+{
+  "id": "0x52-method-returns-dynamic-string-to-caller",
+  "rows": [
+    "0x52"
+  ],
+  "falsifier": "Return disposes the result string before re-pushing it",
+  "alternative": "the caller's 0xb2 reads a freed handle: a dangling-handle error or garbage, not 56",
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 56
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24,
+    "heap": {
+      "live": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      },
+      "allocs": {
+        "o": 1,
+        "a": 0,
+        "s": 2,
+        "g": 0
+      }
+    }
+  },
+  "note": "0x52 row, type-2 marker via 0x12/0x51: m builds the dynamic string '56' (allocs s 2) and returns it; Return disposes the argument (this: the Dup'd object reference, refcount 2 -> 1) but must keep r. main's 0xb2 reads atoi('56') = 56 and frees it; Return frees the object. allocs o 1, s 2; live 0. Helpers: 0x13, 0x35, 0x12, 0x51, 0x70, 0xb2. Mutant C05."
+}

@@ -1,0 +1,37 @@
+{
+  "id": "0x52-returns-object-to-caller",
+  "rows": [
+    "0x52"
+  ],
+  "falsifier": "Return disposes the result object before re-pushing it",
+  "alternative": "the local's dispose then frees the object (refcount 0) and the caller's 0x11 reads a freed object: a dangling-handle error, not 77",
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 77
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24,
+    "heap": {
+      "live": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      },
+      "allocs": {
+        "o": 1,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      }
+    }
+  },
+  "note": "0x52 row: Pop WITH dispose of the locals, r moved. sub's local 0 holds the object (refcount 1); GetVariableValue duplicates it (2) and Return pops r without dispose, then disposes the local (1): the object lives on in r only. main reads property a (77, set with 0x10) and 0x11 frees the object (allocs o 1, live 0). Helpers: 0x50, 0x13, 0x21/0x22, 0x10, 0x11. Mutant C05."
+}
