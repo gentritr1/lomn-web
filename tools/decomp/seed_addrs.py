@@ -12,8 +12,9 @@ both so the decomp can create functions there.
 fnptr rule: walk back from the call site to the end of the previous RegisterFunction call, or at most WALK_BACK bytes,
 whichever is nearer; every `68 imm32` (push imm32) in that window whose imm lies in `.text` is a candidate; the fn
 pointer is the last candidate. The first registration of an initializer also sees the ScInitFunc pushes (several
-candidates); later ones see exactly their own (the fn pointer is followed only by the name and class string pushes,
-which point into data, not `.text`).
+candidates); later ones see exactly their own. Between the fn pointer push and the E8 there is no push imm32: measured
+on all 1,056 sites, the gap is `lea r,[ebp-x]; push r` twice (the stack _ScBaseString name and class arguments),
+then either `call rel32; mov ecx,eax` (368), `mov ecx,esi` / `mov ecx,edi` (382), or nothing (306).
 
 enclosing rule (M2a-0 T2, controller ruling): the nearest frame prologue (`55 89 e5` or `55 8b ec`) at a 16-byte aligned
 address before the call site, at most ENCLOSING_WALK_BACK bytes back within `.text`. Most registering functions are

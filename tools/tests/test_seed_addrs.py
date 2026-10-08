@@ -11,6 +11,7 @@ TEXT_VA = BASE + 0x1000
 CRT_VA = BASE + 0x2000
 FAKE_REGF = TEXT_VA + 0x180
 FAKE_REGT = TEXT_VA + 0x1A0
+CRT_SLACK_PTR = TEXT_VA + 0x80  # in .CRT raw bytes past its vsz
 
 
 def push(v):
@@ -25,7 +26,8 @@ PROLOGUE = b"\x55\x89\xE5"  # push ebp; mov ebp, esp
 
 
 def synthetic_pe(prologue=True):
-    """Minimal PE32: .text (RVA 0x1000, 0x200 bytes) and .CRT (RVA 0x2000, 3 dwords). Returns (bytes, expected).
+    """Minimal PE32: .text (RVA 0x1000, 0x200 bytes) and .CRT (RVA 0x2000, vsz 3 dwords, raw 0x200 bytes with a .text
+    pointer in the slack past vsz). Returns (bytes, expected).
     The registrations sit in one function with an aligned frame prologue at 0x401010 (prologue=False: int3 instead),
     preceded in the walk-back by an unaligned decoy prologue that must be skipped."""
     code = bytearray()
@@ -50,10 +52,11 @@ def synthetic_pe(prologue=True):
     emit(push(0x00403004))
     site1 = here()
     emit(call(site1, FAKE_REGF))
-    # site 2: one .text candidate; site 1's pushes are behind the previous registration site and must not count
+    # site 2: one .text candidate; site 1's pushes are behind the previous registration site and must not count.
+    # The fn pointer push is the instruction immediately before the E8 (it ends exactly at the site).
     emit(b"\x8B\xC8")                 # mov ecx, eax (filler)
-    emit(push(0x401140))
     emit(push(0x00403008))
+    emit(push(0x401140))
     site2 = here()
     emit(call(site2, FAKE_REGF))
     # a RegisterType call and a decoy call elsewhere in .text
@@ -63,7 +66,8 @@ def synthetic_pe(prologue=True):
     emit(b"\xC3")
     text = bytes(code).ljust(0x200, b"\xCC")
     text = text[:0x180] + b"\xC3" + text[0x181:0x1A0] + b"\xC3" + text[0x1A1:]
-    crt = struct.pack("<III", 0x401000, 0x00000000, 0x401060).ljust(0x200, b"\0")
+    # .CRT: vsz 0xC (3 dwords); a .text pointer in the raw padding past vsz is not mapped and must be ignored
+    crt = struct.pack("<IIII", 0x401000, 0x00000000, 0x401060, CRT_SLACK_PTR).ljust(0x200, b"\0")
 
     hdr = bytearray(0x400)
     hdr[0:2] = b"MZ"
@@ -114,6 +118,15 @@ def test_refuses_non_canonical_exe(tmp_path):
     exe, _ = synthetic_pe()
     p = tmp_path / "LEGOBionicle.exe"
     p.write_bytes(exe)
+    with pytest.raises(SystemExit, match="not the canonical exe"):
+        seed_addrs.main([str(p), str(tmp_path / "out")])
+    assert not (tmp_path / "out").exists()
+
+
+def test_refuses_before_parsing(tmp_path):
+    # Non-PE bytes: the sha check must come first, so this is the refusal, not a parse error.
+    p = tmp_path / "garbage.exe"
+    p.write_bytes(b"garbage")
     with pytest.raises(SystemExit, match="not the canonical exe"):
         seed_addrs.main([str(p), str(tmp_path / "out")])
     assert not (tmp_path / "out").exists()
