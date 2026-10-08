@@ -1,0 +1,35 @@
+{
+  "id": "0x18-get-by-table-string",
+  "rows": [
+    "0x18"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 7
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24,
+    "heap": {
+      "live": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      },
+      "allocs": {
+        "o": 1,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      }
+    }
+  },
+  "note": "0x18 row, type 1: 'id = FindMemberID(s), push Duplicate(*GetProperty(o, id)); o and s disposed'. The name is a string-table entry (0x11) 'a', which is the symbol a. a was set to 7: result 7."
+}

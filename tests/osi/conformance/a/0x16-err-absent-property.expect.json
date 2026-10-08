@@ -1,0 +1,22 @@
+{
+  "id": "0x16-err-absent-property",
+  "rows": [
+    "0x16"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "Reference to non-existant member property \"zz\"",
+    "pc": "@fail",
+    "op": "0x16",
+    "depth": 5,
+    "top": {
+      "type": "0x10",
+      "value": 77
+    },
+    "fpu_pc": 64
+  },
+  "note": "0x16 errors cell: property absent, %s = symbol name. Stack: marker, local0, return marker, this, 77 = depth 5."
+}

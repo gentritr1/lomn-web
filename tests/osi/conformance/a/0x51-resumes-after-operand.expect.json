@@ -1,0 +1,35 @@
+{
+  "id": "0x51-resumes-after-operand",
+  "rows": [
+    "0x51"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 2
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24,
+    "heap": {
+      "live": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      },
+      "allocs": {
+        "o": 1,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      }
+    }
+  },
+  "note": "0x51 row: the return marker holds the PC after the n byte. The method returns 11, which main pops (0x30) before pushing and returning 2."
+}

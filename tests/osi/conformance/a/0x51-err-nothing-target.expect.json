@@ -1,0 +1,22 @@
+{
+  "id": "0x51-err-nothing-target",
+  "rows": [
+    "0x51"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "Internal error: Jump to non-integral address",
+    "pc": "@fail",
+    "op": "0x51",
+    "depth": 2,
+    "top": {
+      "type": "0x10",
+      "value": 4
+    },
+    "fpu_pc": 64
+  },
+  "note": "0x51 errors cell: t = nothing. t popped; the argument 4 stays: depth 2, top int 4."
+}

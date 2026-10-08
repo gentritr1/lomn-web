@@ -1,0 +1,37 @@
+{
+  "id": "0xa1-set-green-clamps-negative",
+  "rows": [
+    "0xa1"
+  ],
+  "falsifier": "the channel value is masked (& 0xff) instead of clamped",
+  "alternative": "channel 0xfe instead of 0xff: colour 0x11fe3344",
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x15",
+      "value": 301937476
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24,
+    "heap": {
+      "live": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      },
+      "allocs": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      }
+    }
+  },
+  "note": "0xa1 row: 'c v -> c'; v popped first; v clamped: (uint32)v > 255 -> 255; c' = c with bits 23..16 <- v; pushed as 0x15'. (uint32)-2 > 255, so a negative clamps to 255 (a mask & 0xff would give 0xfe): 0x11223344 with the green channel <- 0xff = 0x11ff3344. Helper: 0x48 pushes the colour."
+}

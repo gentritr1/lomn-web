@@ -1,0 +1,22 @@
+{
+  "id": "0x1a-err-non-object",
+  "rows": [
+    "0x1a"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "Member property of non object variable",
+    "pc": "@fail",
+    "op": "0x1a",
+    "depth": 2,
+    "top": {
+      "type": "0x10",
+      "value": 5
+    },
+    "fpu_pc": 64
+  },
+  "note": "0x1a errors cell: o neither a game type nor 1 (int 3); note the wording 'object', not 'member'. v stays: depth 2."
+}

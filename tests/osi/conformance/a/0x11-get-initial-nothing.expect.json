@@ -1,0 +1,35 @@
+{
+  "id": "0x11-get-initial-nothing",
+  "rows": [
+    "0x11"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x0f",
+      "value": 0
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24,
+    "heap": {
+      "live": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      },
+      "allocs": {
+        "o": 1,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      }
+    }
+  },
+  "note": "0x11 row: 'o popped, push Duplicate(*GetProperty(o, m)); o disposed'. A new object's properties are nothing (0x13 row: 'every property nothing'), so the value is nothing {0x0f,0}; o is freed at once (refcount 1 -> 0)."
+}

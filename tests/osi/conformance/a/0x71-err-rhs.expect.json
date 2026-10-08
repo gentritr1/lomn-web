@@ -1,0 +1,22 @@
+{
+  "id": "0x71-err-rhs",
+  "rows": [
+    "0x71"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "Invalid operand to operator '-' (rhs) (type:11)",
+    "pc": "@fail",
+    "op": "0x71",
+    "depth": 1,
+    "top": {
+      "type": "0xff",
+      "value": 0
+    },
+    "fpu_pc": 64
+  },
+  "note": "0x71 errors cell: b non-number (a string-table entry 0x11): rhs. Strings are errors for '-'. depth 1."
+}

@@ -1,0 +1,35 @@
+{
+  "id": "0x12-call-method",
+  "rows": [
+    "0x12"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 33
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24,
+    "heap": {
+      "live": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      },
+      "allocs": {
+        "o": 1,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      }
+    }
+  },
+  "note": "0x12 row: 'o popped, FindMethod(o, m) ... pushes {0x10, address}; o disposed'. The pushed int is a host address, so it is only used as the 0x51 target (helpers 0x35 Dup, 0x51). The method pushes 33 and returns it to main's Return."
+}

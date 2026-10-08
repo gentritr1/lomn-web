@@ -1,0 +1,36 @@
+{
+  "id": "0x53-forward-and-backward-loop",
+  "rows": [
+    "0x53",
+    "0x54"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 3
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24,
+    "heap": {
+      "live": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      },
+      "allocs": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      }
+    }
+  },
+  "note": "0x53 row: branch target = (address after d) + d with d signed; 0x54 jumps backward (negative d). Counter 3 -> 0 takes 3 iterations: local 1 ends at 3. Helpers: 0x24, 0x25, 0x21, 0x22."
+}

@@ -1,0 +1,22 @@
+{
+  "id": "0x19-err-undefined-method",
+  "rows": [
+    "0x19"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "Call to undefined member method",
+    "pc": "@fail",
+    "op": "0x19",
+    "depth": 1,
+    "top": {
+      "type": "0xff",
+      "value": 0
+    },
+    "fpu_pc": 64
+  },
+  "note": "0x19 errors cell: FindMethod finds nothing for zz (a symbol, not a method of C). Both popped: depth 1."
+}

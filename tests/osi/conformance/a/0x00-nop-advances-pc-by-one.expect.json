@@ -1,0 +1,37 @@
+{
+  "id": "0x00-nop-advances-pc-by-one",
+  "rows": [
+    "0x00"
+  ],
+  "falsifier": "Nop advances PC by more than 1 and so skips the next instruction",
+  "alternative": "the Pop is skipped, Return pops 4 as its result: result 4 instead of 9",
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 9
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24,
+    "heap": {
+      "live": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      },
+      "allocs": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      }
+    }
+  },
+  "note": "0x00 row: PC+=1. Nop then Pop (removes the 4) then Return gives 9. A Nop that skipped one byte would leave 4 on top."
+}

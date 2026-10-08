@@ -1,0 +1,24 @@
+{
+  "id": "0x73-err-float-divide-by-negative-zero",
+  "rows": [
+    "0x73"
+  ],
+  "falsifier": "only +0.0 is a zero divisor",
+  "alternative": "no error: -inf (ff800000)",
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "Divide by 0",
+    "pc": "@fail",
+    "op": "0x73",
+    "depth": 1,
+    "top": {
+      "type": "0xff",
+      "value": 0
+    },
+    "fpu_pc": 64
+  },
+  "note": "0x73 errors cell: 'float b == +-0.0 ... the compare is an ordered equality, so -0.0 errors'. depth 1."
+}

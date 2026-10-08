@@ -1,0 +1,35 @@
+{
+  "id": "0x16-get-this-initial-nothing",
+  "rows": [
+    "0x16"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x0f",
+      "value": 0
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24,
+    "heap": {
+      "live": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      },
+      "allocs": {
+        "o": 1,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      }
+    }
+  },
+  "note": "0x16 row: 'pushes Duplicate(*GetProperty(this, m))'. A fresh object's property a is nothing."
+}

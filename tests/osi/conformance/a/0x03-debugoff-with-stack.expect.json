@@ -1,0 +1,22 @@
+{
+  "id": "0x03-debugoff-with-stack",
+  "rows": [
+    "0x03"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "Debugger not enabled! but encountered DebugOff",
+    "pc": "@fail",
+    "op": "0x03",
+    "depth": 3,
+    "top": {
+      "type": "0x10",
+      "value": 4294967295
+    },
+    "fpu_pc": 64
+  },
+  "note": "0x03 row: always errors; no stack change. marker + nothing + int -1 (0xffffffff): depth 3, top the int."
+}

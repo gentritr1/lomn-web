@@ -1,0 +1,37 @@
+{
+  "id": "0x10-set-overwrite-disposes-old",
+  "rows": [
+    "0x10"
+  ],
+  "falsifier": "the old property value is not disposed (leaked) when overwritten",
+  "alternative": "the inner D object is never freed: heap live o 1 instead of 0",
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 1
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24,
+    "heap": {
+      "live": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      },
+      "allocs": {
+        "o": 2,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      }
+    }
+  },
+  "note": "0x10 row: 'old prop disposed'. o.a first holds a D object (refcount 1), then the int 1 replaces it, which frees D. allocs o = 2 (C and D), live 0 after Return."
+}

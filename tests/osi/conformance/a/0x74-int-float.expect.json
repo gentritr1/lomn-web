@@ -1,0 +1,35 @@
+{
+  "id": "0x74-int-float",
+  "rows": [
+    "0x74"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x12",
+      "bits": "41000000"
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24,
+    "heap": {
+      "live": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      },
+      "allocs": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      }
+    }
+  },
+  "note": "0x74 row: int,float -> the int is loaded by fild, (float)pow(2.0, 3.0) = 8.0, a float result (41000000)."
+}

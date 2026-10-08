@@ -1,0 +1,22 @@
+{
+  "id": "0x70-err-string-lhs-int",
+  "rows": [
+    "0x70"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "Invalid operand to string operator '+' (lhs) (type:10)",
+    "pc": "@fail",
+    "op": "0x70",
+    "depth": 1,
+    "top": {
+      "type": "0xff",
+      "value": 0
+    },
+    "fpu_pc": 64
+  },
+  "note": "0x70 errors cell: b string, a not; prints a's type 0x10. depth 1."
+}

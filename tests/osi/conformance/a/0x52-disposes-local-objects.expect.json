@@ -1,0 +1,37 @@
+{
+  "id": "0x52-disposes-local-objects",
+  "rows": [
+    "0x52"
+  ],
+  "falsifier": "Return pops the locals without disposing them",
+  "alternative": "both objects leak: live o 2 instead of 0",
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 5
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24,
+    "heap": {
+      "live": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      },
+      "allocs": {
+        "o": 2,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      }
+    }
+  },
+  "note": "0x52 row: 'Pop WITH dispose'. Both locals hold the only reference to an object: allocs o 2, live 0."
+}

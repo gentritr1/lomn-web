@@ -1,0 +1,35 @@
+{
+  "id": "0x13-result-is-object-handle",
+  "rows": [
+    "0x13"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x01",
+      "value": 1
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24,
+    "heap": {
+      "live": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      },
+      "allocs": {
+        "o": 1,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      }
+    }
+  },
+  "note": "0x13 row: pushes {1, obj}. The result is the object variant, type 1; its value is the first object handle (trace.md section 1 / D7: per-kind monotonic counters starting at 1). The host disposes the result after R: live 0. FORMAT-GAP: conformance.md does not say how a handle result is written; this uses {type,value} like an int."
+}

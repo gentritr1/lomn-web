@@ -1,0 +1,22 @@
+{
+  "id": "0x18-err-absent-property",
+  "rows": [
+    "0x18"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "Reference to non-existant member property \"zz\"",
+    "pc": "@fail",
+    "op": "0x18",
+    "depth": 1,
+    "top": {
+      "type": "0xff",
+      "value": 0
+    },
+    "fpu_pc": 64
+  },
+  "note": "0x18 errors cell: property absent; zz is a symbol (so FindMemberID has an id, notes: no error path on unknown names) but not a property of C. %s = the symbol name 'zz' (the row says only %s: AMBIGUOUS-TEXT). Both popped: depth 1."
+}

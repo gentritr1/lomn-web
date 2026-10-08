@@ -1,0 +1,27 @@
+{
+  "id": "0x17-err-this-not-object",
+  "rows": [
+    "0x17"
+  ],
+  "entry": "f",
+  "args": [
+    {
+      "type": "0x10",
+      "value": 4
+    }
+  ],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "Member method of non member variable",
+    "pc": "@fail",
+    "op": "0x17",
+    "depth": 2,
+    "top": {
+      "type": "0x10",
+      "value": 4
+    },
+    "fpu_pc": 64
+  },
+  "note": "0x17 errors cell: this.type != 1. depth 2 (marker + argument)."
+}

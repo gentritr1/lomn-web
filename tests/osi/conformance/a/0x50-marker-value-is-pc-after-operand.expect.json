@@ -1,0 +1,23 @@
+{
+  "id": "0x50-marker-value-is-pc-after-operand",
+  "rows": [
+    "0x50",
+    "0x53"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "Results of comparison expression is not integral",
+    "pc": "@fail",
+    "op": "0x53",
+    "depth": 2,
+    "top": {
+      "type": "0x02",
+      "value": 53
+    },
+    "fpu_pc": 64
+  },
+  "note": "0x50 row: 'the return marker {type 2, value = PC after the n byte}'. sub fails at once, so the top of the stack is that marker: depth 2 (0xff marker + type-2 marker), value = the file offset of label ret, the byte after the n operand."
+}

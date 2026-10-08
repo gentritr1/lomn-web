@@ -1,0 +1,37 @@
+{
+  "id": "0x18-get-by-string-selects-symbol",
+  "rows": [
+    "0x18"
+  ],
+  "falsifier": "the name is ignored and the first property is read",
+  "alternative": "result 3 instead of 5",
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 5
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24,
+    "heap": {
+      "live": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      },
+      "allocs": {
+        "o": 1,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      }
+    }
+  },
+  "note": "0x18 row: FindMemberID(s) then GetProperty. a=3, b=5, name 'b' -> 5."
+}

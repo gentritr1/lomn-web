@@ -1,0 +1,40 @@
+{
+  "id": "0x24-increment-argument",
+  "rows": [
+    "0x24"
+  ],
+  "entry": "f",
+  "args": [
+    {
+      "type": "0x10",
+      "value": 9
+    }
+  ],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 10
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24,
+    "heap": {
+      "live": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      },
+      "allocs": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      }
+    }
+  },
+  "note": "0x24 row: a frame index; argument slot 0: 9 -> 10."
+}

@@ -1,0 +1,37 @@
+{
+  "id": "0x12-selects-method-by-symbol",
+  "rows": [
+    "0x12"
+  ],
+  "falsifier": "the member operand is ignored and the first method record is returned",
+  "alternative": "m1 runs: result 11 instead of 22",
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 22
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24,
+    "heap": {
+      "live": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      },
+      "allocs": {
+        "o": 1,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      }
+    }
+  },
+  "note": "0x12 row: FindMethod scans the class method records {u16 symbol, u32 offset} for the symbol m. m2 -> 22."
+}

@@ -1,0 +1,24 @@
+{
+  "id": "0x75-err-lhs-before-zero",
+  "rows": [
+    "0x75"
+  ],
+  "falsifier": "the zero divisor is tested before the type checks",
+  "alternative": "'Divide by 0' instead",
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "Invalid operand to operator '%' (lhs) (type:0F)",
+    "pc": "@fail",
+    "op": "0x75",
+    "depth": 1,
+    "top": {
+      "type": "0xff",
+      "value": 0
+    },
+    "fpu_pc": 64
+  },
+  "note": "0x75 errors cell: 'Divide by 0 (b == 0, tested after both type checks)'. a nothing, b 0: the lhs type error."
+}

@@ -1,0 +1,24 @@
+{
+  "id": "0x53-err-float-nonzero",
+  "rows": [
+    "0x53"
+  ],
+  "falsifier": "a nonzero float condition counts as true and falls through",
+  "alternative": "no error: result 1",
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "Results of comparison expression is not integral",
+    "pc": "@fail",
+    "op": "0x53",
+    "depth": 1,
+    "top": {
+      "type": "0xff",
+      "value": 0
+    },
+    "fpu_pc": 64
+  },
+  "note": "0x53 errors cell: c.type is neither 0x0f nor 0x10 (float 1.0). Popped: depth 1."
+}

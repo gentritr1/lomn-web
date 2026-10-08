@@ -1,0 +1,35 @@
+{
+  "id": "0xbc-isgameobject-obj",
+  "rows": [
+    "0xbc"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 0
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24,
+    "heap": {
+      "live": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      },
+      "allocs": {
+        "o": 1,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      }
+    }
+  },
+  "note": "0xbc row. The operand is a script object (type 1): result 0. The operand is disposed (live 0): a script object (1) is below 0x20."
+}

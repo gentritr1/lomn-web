@@ -1,0 +1,35 @@
+{
+  "id": "0x1a-set-by-dynamic-string",
+  "rows": [
+    "0x1a"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 9
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24,
+    "heap": {
+      "live": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      },
+      "allocs": {
+        "o": 1,
+        "a": 0,
+        "s": 2,
+        "g": 0
+      }
+    }
+  },
+  "note": "0x1a row: s may be a 0x16. 'b' + '' is a dynamic string (allocs s 2) that 0x1a disposes. b = 9."
+}

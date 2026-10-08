@@ -1,0 +1,37 @@
+{
+  "id": "0x24-wraps-at-int-max",
+  "rows": [
+    "0x24"
+  ],
+  "falsifier": "the increment saturates or promotes instead of wrapping",
+  "alternative": "result 0x7fffffff (saturated) instead of 0x80000000",
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 2147483648
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24,
+    "heap": {
+      "live": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      },
+      "allocs": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      }
+    }
+  },
+  "note": "0x24 row: 32-bit wrap. 0x7fffffff + 1 = 0x80000000 = 2147483648 as u32."
+}

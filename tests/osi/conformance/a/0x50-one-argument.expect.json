@@ -1,0 +1,35 @@
+{
+  "id": "0x50-one-argument",
+  "rows": [
+    "0x50"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 20
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24,
+    "heap": {
+      "live": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      },
+      "allocs": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      }
+    }
+  },
+  "note": "0x50 row: 'a1..an t -> {2, retPC} a1..an; the return marker is Inserted below the n arguments; framePtr = slot above the marker'. n = 1: the argument 20 is framePtr[0] in sub; sub returns it and main's Return passes it on."
+}

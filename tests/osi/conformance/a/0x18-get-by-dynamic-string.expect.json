@@ -1,0 +1,35 @@
+{
+  "id": "0x18-get-by-dynamic-string",
+  "rows": [
+    "0x18"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 8
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24,
+    "heap": {
+      "live": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      },
+      "allocs": {
+        "o": 1,
+        "a": 0,
+        "s": 2,
+        "g": 0
+      }
+    }
+  },
+  "note": "0x18 row: s text may be 'the dynamic string (0x16)'. 'b' + '' (0x70, helper) is a dynamic string 'b': two 0x11 operands are converted (allocs s 2). 0x18 disposes s. b = 8."
+}

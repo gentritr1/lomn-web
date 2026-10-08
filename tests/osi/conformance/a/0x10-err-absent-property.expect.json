@@ -1,0 +1,22 @@
+{
+  "id": "0x10-err-absent-property",
+  "rows": [
+    "0x10"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "Reference to non-existant member property \"zz\"",
+    "pc": "@fail",
+    "op": "0x10",
+    "depth": 1,
+    "top": {
+      "type": "0xff",
+      "value": 0
+    },
+    "fpu_pc": 64
+  },
+  "note": "0x10 errors cell: type 1, property absent, %s = member-symbol name (zz is a symbol, not a property of C). The row's order for type 1 is 'v popped, prop = GetProperty': o and v are both popped at the throw: depth 1 (marker). AMBIGUOUS-ORDER: if v were popped after the lookup the depth would be 2."
+}

@@ -1,0 +1,37 @@
+{
+  "id": "0x11-get-duplicates-keeps-property",
+  "rows": [
+    "0x11"
+  ],
+  "falsifier": "0x11 moves the value out of the property instead of duplicating it",
+  "alternative": "the second read finds nothing: result nothing instead of 9",
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 9
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24,
+    "heap": {
+      "live": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      },
+      "allocs": {
+        "o": 1,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      }
+    }
+  },
+  "note": "0x11 row: 'push Duplicate(...)'. Read a twice (discarding the first); both reads give 9."
+}

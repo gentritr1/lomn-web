@@ -1,0 +1,46 @@
+{
+  "id": "0xbc-isgameobject-game",
+  "rows": [
+    "0xbc"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [
+    {
+      "cls": "t",
+      "name": "obj",
+      "min": 0,
+      "max": 0,
+      "types": [],
+      "returns": {
+        "game": "GcTimer"
+      }
+    }
+  ],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 1
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24,
+    "heap": {
+      "live": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      },
+      "allocs": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 1
+      }
+    }
+  },
+  "note": "0xbc row. The operand is a GcTimer game handle (type 0x27: rank 7 in types.md, id = 0x20 + rank): result 1. The operand is disposed (live 0): 0x20 <= type < 0xff."
+}

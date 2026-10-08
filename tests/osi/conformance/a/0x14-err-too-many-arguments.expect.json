@@ -1,0 +1,35 @@
+{
+  "id": "0x14-err-too-many-arguments",
+  "rows": [
+    "0x14"
+  ],
+  "entry": "f",
+  "args": [
+    {
+      "type": "0x10",
+      "value": 1
+    },
+    {
+      "type": "0x10",
+      "value": 2
+    },
+    {
+      "type": "0x10",
+      "value": 3
+    }
+  ],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "Too many arguments to method",
+    "pc": "@fail",
+    "op": "0x14",
+    "depth": 4,
+    "top": {
+      "type": "0x10",
+      "value": 3
+    },
+    "fpu_pc": 64
+  },
+  "note": "0x14 errors cell: n < k. k = 3 arguments, n = 2. The check does not change the stack: marker + 3 arguments = depth 4, top the third argument."
+}

@@ -1,0 +1,22 @@
+{
+  "id": "0x50-err-float-target",
+  "rows": [
+    "0x50"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "Internal error: Jump to non-integral address",
+    "pc": "@fail",
+    "op": "0x50",
+    "depth": 2,
+    "top": {
+      "type": "0x10",
+      "value": 5
+    },
+    "fpu_pc": 64
+  },
+  "note": "0x50 errors cell: t.type != 0x10. t (the float) is popped first; the marker is inserted only after the check: marker + int 5 = depth 2, top int 5."
+}

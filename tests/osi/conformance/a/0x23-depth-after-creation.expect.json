@@ -1,0 +1,23 @@
+{
+  "id": "0x23-depth-after-creation",
+  "rows": [
+    "0x23",
+    "0x53"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "Results of comparison expression is not integral",
+    "pc": "@fail",
+    "op": "0x53",
+    "depth": 4,
+    "top": {
+      "type": "0x0f",
+      "value": 0
+    },
+    "fpu_pc": 64
+  },
+  "note": "0x23 row: pushes 3 nothings: marker + 3 = 4. The float condition is popped by 0x53 and errors: depth 4, top nothing."
+}

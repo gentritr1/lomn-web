@@ -1,0 +1,56 @@
+{
+  "id": "0x70-d8-all-readings",
+  "rows": [
+    "0x70"
+  ],
+  "falsifier": "any of: 53-bit formula (00/00/00), 64 from the start (00/00/01), 24 forever (01/01/01)",
+  "alternative": "the low bytes of (g1, g2, g3) are 01/00/01 under D8' and 00/00/00, 00/00/01, 01/01/01 under the three old readings",
+  "falsifier_id": [
+    "0x70#2",
+    "0x70#3",
+    "0x70#4"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x12",
+      "bits": "4b800001"
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 64,
+    "globals": {
+      "g1": {
+        "type": "0x12",
+        "bits": "4b800001"
+      },
+      "g2": {
+        "type": "0x12",
+        "bits": "4b800000"
+      },
+      "g3": {
+        "type": "0x12",
+        "bits": "4b800001"
+      }
+    },
+    "heap": {
+      "live": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      },
+      "allocs": {
+        "o": 0,
+        "a": 0,
+        "s": 1,
+        "g": 0
+      }
+    }
+  },
+  "note": "falsifier table lines 0x70#2-#4 in one program (conformance.md section 3): 16777217 + 1.0e-15 at 24 (g1 = 4b800001), the string '0.5' converted with 0xb1 (helper), then the same addition at 64 (g2 = 4b800000) and 16777217 + 1.0e-10 at 64 (g3 = 4b800001). All three from expect_calc.arith with the stated pc."
+}

@@ -1,0 +1,47 @@
+{
+  "id": "0x21-global-index-uses-low-byte",
+  "rows": [
+    "0x21"
+  ],
+  "falsifier": "the operand 0x8001 selects global 0 (bit 15 alone, index ignored)",
+  "alternative": "result 1 (g) instead of 5 (h)",
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 5
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24,
+    "globals": {
+      "g": {
+        "type": "0x10",
+        "value": 1
+      },
+      "h": {
+        "type": "0x10",
+        "value": 5
+      }
+    },
+    "heap": {
+      "live": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      },
+      "allocs": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      }
+    }
+  },
+  "note": "0x21 row: 'idx & 0x8000 selects a global ... uses only idx & 0xff': 0x8001 is global index 1 = h (the table order of .globals g h). g = 1, h = 5: result 5."
+}

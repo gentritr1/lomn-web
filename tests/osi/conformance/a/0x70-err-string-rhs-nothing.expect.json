@@ -1,0 +1,22 @@
+{
+  "id": "0x70-err-string-rhs-nothing",
+  "rows": [
+    "0x70"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "Invalid operand to string operator '+' (rhs) (type:0F)",
+    "pc": "@fail",
+    "op": "0x70",
+    "depth": 1,
+    "top": {
+      "type": "0xff",
+      "value": 0
+    },
+    "fpu_pc": 64
+  },
+  "note": "0x70 errors cell: a string, b nothing: %02.2X of 0x0f prints 0F (uppercase hex). Both popped: depth 1."
+}

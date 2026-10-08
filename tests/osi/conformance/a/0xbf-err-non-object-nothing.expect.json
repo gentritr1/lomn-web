@@ -1,0 +1,22 @@
+{
+  "id": "0xbf-err-non-object-nothing",
+  "rows": [
+    "0xbf"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "Cant get classID of non object",
+    "pc": "@fail",
+    "op": "0xbf",
+    "depth": 1,
+    "top": {
+      "type": "0xff",
+      "value": 0
+    },
+    "fpu_pc": 64
+  },
+  "note": "0xbf errors cell: nothing is not an object. o popped: depth 1."
+}

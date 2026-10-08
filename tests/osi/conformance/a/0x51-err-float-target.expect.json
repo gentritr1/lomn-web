@@ -1,0 +1,22 @@
+{
+  "id": "0x51-err-float-target",
+  "rows": [
+    "0x51"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "Internal error: Jump to non-integral address",
+    "pc": "@fail",
+    "op": "0x51",
+    "depth": 1,
+    "top": {
+      "type": "0xff",
+      "value": 0
+    },
+    "fpu_pc": 64
+  },
+  "note": "0x51 errors cell: t.type != 0x10 (a float). t popped: depth 1."
+}

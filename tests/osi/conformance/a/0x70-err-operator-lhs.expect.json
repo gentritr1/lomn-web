@@ -1,0 +1,22 @@
+{
+  "id": "0x70-err-operator-lhs",
+  "rows": [
+    "0x70"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "Invalid operand to operator '+' (lhs) (type:0F)",
+    "pc": "@fail",
+    "op": "0x70",
+    "depth": 1,
+    "top": {
+      "type": "0xff",
+      "value": 0
+    },
+    "fpu_pc": 64
+  },
+  "note": "0x70 errors cell: non-numbers after the three float cases; a nothing (0x0f), b int. lhs reported. depth 1."
+}

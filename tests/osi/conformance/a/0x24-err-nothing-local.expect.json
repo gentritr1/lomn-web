@@ -1,0 +1,22 @@
+{
+  "id": "0x24-err-nothing-local",
+  "rows": [
+    "0x24"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "increment of non-integral type",
+    "pc": "@fail",
+    "op": "0x24",
+    "depth": 2,
+    "top": {
+      "type": "0x0f",
+      "value": 0
+    },
+    "fpu_pc": 64
+  },
+  "note": "0x24 errors cell: var.type != 0x10; a fresh local is nothing. depth 2, top nothing."
+}

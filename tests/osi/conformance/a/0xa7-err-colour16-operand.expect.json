@@ -1,0 +1,22 @@
+{
+  "id": "0xa7-err-colour16-operand",
+  "rows": [
+    "0xa7"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "cant access alpha value of anything but a color",
+    "pc": "@fail",
+    "op": "0xa7",
+    "depth": 1,
+    "top": {
+      "type": "0xff",
+      "value": 0
+    },
+    "fpu_pc": 64
+  },
+  "note": "0xa7 errors cell: 'so a 0x14 colour from 0x49 errors'. Helper 0x49 pushes {0x14, 0x7fff}. c popped: depth 1."
+}

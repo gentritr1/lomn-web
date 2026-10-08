@@ -1,0 +1,37 @@
+{
+  "id": "0x04-line-skips-first-operand",
+  "rows": [
+    "0x04"
+  ],
+  "falsifier": "the HH operands are decoded as code (PC advances only 1 or 3)",
+  "alternative": "operand bytes 52 00 execute: a Return with 4 on top, result 4 instead of 9",
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 9
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24,
+    "heap": {
+      "live": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      },
+      "allocs": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      }
+    }
+  },
+  "note": "0x04 row: 'PC+=5 (the HH operands are skipped, never read)'. The first H is 0x0052, i.e. bytes 52 00: a Return if it were executed. With PC+=5 the Pop removes the 4 and Return gives 9."
+}

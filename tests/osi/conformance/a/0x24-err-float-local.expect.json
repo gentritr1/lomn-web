@@ -1,0 +1,22 @@
+{
+  "id": "0x24-err-float-local",
+  "rows": [
+    "0x24"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "increment of non-integral type",
+    "pc": "@fail",
+    "op": "0x24",
+    "depth": 2,
+    "top": {
+      "type": "0x12",
+      "bits": "3f800000"
+    },
+    "fpu_pc": 64
+  },
+  "note": "0x24 errors cell: var.type != 0x10. Local 0 holds f32 1.0 (3f800000). No stack change: marker + local = depth 2."
+}

@@ -1,0 +1,35 @@
+{
+  "id": "0x17-this-method-call",
+  "rows": [
+    "0x17"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 44
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24,
+    "heap": {
+      "live": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      },
+      "allocs": {
+        "o": 1,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      }
+    }
+  },
+  "note": "0x17 row: 'pushes {0x10, FindMethod(this, m)}'. m1 duplicates this (slot 0), takes m2's address and calls it with 0x51; m2 returns 44 up through m1 and main."
+}

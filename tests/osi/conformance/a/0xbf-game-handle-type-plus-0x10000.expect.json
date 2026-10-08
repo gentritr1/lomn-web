@@ -1,0 +1,46 @@
+{
+  "id": "0xbf-game-handle-type-plus-0x10000",
+  "rows": [
+    "0xbf"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [
+    {
+      "cls": "t",
+      "name": "obj",
+      "min": 0,
+      "max": 0,
+      "types": [],
+      "returns": {
+        "game": "GcTimer"
+      }
+    }
+  ],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 65575
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24,
+    "heap": {
+      "live": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      },
+      "allocs": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 1
+      }
+    }
+  },
+  "note": "0xbf row: 'game type -> type + 0x10000'. GcTimer is type 0x27 (types.md rank 7), so 0x10027 = 65575. The handle is disposed (allocs g 1, live 0). Helper: 0x82 + the test native t.obj."
+}

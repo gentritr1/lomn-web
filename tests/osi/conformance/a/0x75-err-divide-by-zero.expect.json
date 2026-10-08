@@ -1,0 +1,22 @@
+{
+  "id": "0x75-err-divide-by-zero",
+  "rows": [
+    "0x75"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "Divide by 0",
+    "pc": "@fail",
+    "op": "0x75",
+    "depth": 1,
+    "top": {
+      "type": "0xff",
+      "value": 0
+    },
+    "fpu_pc": 64
+  },
+  "note": "0x75 errors cell: b == 0 (after both type checks). depth 1."
+}

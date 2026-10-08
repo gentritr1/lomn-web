@@ -1,0 +1,22 @@
+{
+  "id": "0x1a-err-name-not-string",
+  "rows": [
+    "0x1a"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "Invalid type for member set (must be a string)",
+    "pc": "@fail",
+    "op": "0x1a",
+    "depth": 2,
+    "top": {
+      "type": "0x10",
+      "value": 5
+    },
+    "fpu_pc": 64
+  },
+  "note": "0x1a errors cell: s not 0x11/0x16 (int 1). 's popped first, then o': both popped; v is only popped on the success branches: marker + v = depth 2, top int 5. AMBIGUOUS-ORDER: if the s check came before the o pop, depth 3."
+}

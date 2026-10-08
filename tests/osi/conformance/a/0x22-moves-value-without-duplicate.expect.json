@@ -1,0 +1,37 @@
+{
+  "id": "0x22-moves-value-without-duplicate",
+  "rows": [
+    "0x22"
+  ],
+  "falsifier": "0x22 duplicates v into the variable and does not drop the popped reference",
+  "alternative": "the object keeps two references, one is never released: live o 1 instead of 0",
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x0f",
+      "value": 0
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24,
+    "heap": {
+      "live": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      },
+      "allocs": {
+        "o": 1,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      }
+    }
+  },
+  "note": "0x22 row: 'v popped (no dispose) ... var <- v' (moved, no Duplicate). One reference, released by Return: live 0."
+}

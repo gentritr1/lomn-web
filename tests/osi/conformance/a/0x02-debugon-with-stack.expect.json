@@ -1,0 +1,22 @@
+{
+  "id": "0x02-debugon-with-stack",
+  "rows": [
+    "0x02"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "Debugger not enabled! but encountered DebugOn",
+    "pc": "@fail",
+    "op": "0x02",
+    "depth": 3,
+    "top": {
+      "type": "0x12",
+      "bits": "3fc00000"
+    },
+    "fpu_pc": 64
+  },
+  "note": "0x02 row: always errors, no stack change: marker + int 7 + float 1.5 (f32 bits 3fc00000) = depth 3, top the float."
+}

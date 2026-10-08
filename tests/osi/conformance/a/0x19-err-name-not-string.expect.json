@@ -1,0 +1,22 @@
+{
+  "id": "0x19-err-name-not-string",
+  "rows": [
+    "0x19"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "Invalid method type for function call (must be a string)",
+    "pc": "@fail",
+    "op": "0x19",
+    "depth": 1,
+    "top": {
+      "type": "0xff",
+      "value": 0
+    },
+    "fpu_pc": 64
+  },
+  "note": "0x19 errors cell: s not 0x11/0x16 (int 1) with o a valid object. Both popped: depth 1."
+}

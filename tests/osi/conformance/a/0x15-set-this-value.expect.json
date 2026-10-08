@@ -1,0 +1,35 @@
+{
+  "id": "0x15-set-this-value",
+  "rows": [
+    "0x15"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 5
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24,
+    "heap": {
+      "live": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      },
+      "allocs": {
+        "o": 1,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      }
+    }
+  },
+  "note": "0x15 row: 'v popped, prop = GetProperty(this, m), old disposed, prop <- v'; this = framePtr[0]. The method stores 5 into a; main reads a (0x11) after the call: 5. Helpers: 0x12, 0x51, 0x21/0x22, 0x11, 0x30."
+}

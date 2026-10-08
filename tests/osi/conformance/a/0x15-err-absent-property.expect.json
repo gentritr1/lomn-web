@@ -1,0 +1,22 @@
+{
+  "id": "0x15-err-absent-property",
+  "rows": [
+    "0x15"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "Reference to non-existant member property \"zz\"",
+    "pc": "@fail",
+    "op": "0x15",
+    "depth": 5,
+    "top": {
+      "type": "0x10",
+      "value": 77
+    },
+    "fpu_pc": 64
+  },
+  "note": "0x15 errors cell: property absent. stack_effect order: type check, 'v popped WITHOUT dispose', GetProperty. The 5 is popped, the 77 below it is the top. Stack: marker, local0 (object), return marker, this, 77 = depth 5. AMBIGUOUS-ORDER: if the lookup came before the pop the depth would be 6, top 5."
+}

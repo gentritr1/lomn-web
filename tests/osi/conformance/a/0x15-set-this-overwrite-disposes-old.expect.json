@@ -1,0 +1,37 @@
+{
+  "id": "0x15-set-this-overwrite-disposes-old",
+  "rows": [
+    "0x15"
+  ],
+  "falsifier": "the old property value is not disposed when overwritten",
+  "alternative": "the D object leaks: live o 1 instead of 0",
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 1
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24,
+    "heap": {
+      "live": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      },
+      "allocs": {
+        "o": 2,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      }
+    }
+  },
+  "note": "0x15 row: 'old prop disposed'. a holds a D object, then 1 replaces it. allocs o 2 (C, D), live 0."
+}

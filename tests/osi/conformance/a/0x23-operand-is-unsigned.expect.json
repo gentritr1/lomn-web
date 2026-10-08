@@ -1,0 +1,37 @@
+{
+  "id": "0x23-operand-is-unsigned",
+  "rows": [
+    "0x23"
+  ],
+  "falsifier": "the operand is read signed (200 -> -56, no locals are created)",
+  "alternative": "slot 199 lies above the stack top: Return never pops it, so the object is never freed: live o 1 instead of 0",
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 1
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24,
+    "heap": {
+      "live": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      },
+      "allocs": {
+        "o": 1,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      }
+    }
+  },
+  "note": "Operand-format notes: 0x23 reads its byte unsigned. 200 nothings are pushed (depth 201, within the 1,000 slots); local 199 receives an object that Return's Pop-with-dispose frees (allocs o 1, live 0)."
+}

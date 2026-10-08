@@ -1,0 +1,22 @@
+{
+  "id": "0xa6-err-int-operand",
+  "rows": [
+    "0xa6"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "cant access blue value of anything but a color",
+    "pc": "@fail",
+    "op": "0xa6",
+    "depth": 1,
+    "top": {
+      "type": "0xff",
+      "value": 0
+    },
+    "fpu_pc": 64
+  },
+  "note": "0xa6 errors cell: c.type != 0x15 (an int). c popped: depth 1."
+}

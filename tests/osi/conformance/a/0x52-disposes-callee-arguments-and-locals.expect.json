@@ -1,0 +1,35 @@
+{
+  "id": "0x52-disposes-callee-arguments-and-locals",
+  "rows": [
+    "0x52"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 5
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24,
+    "heap": {
+      "live": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      },
+      "allocs": {
+        "o": 2,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      }
+    }
+  },
+  "note": "0x52 row: all slots down to the marker are disposed, arguments included. sub's argument (object 1) and local (object 2) are freed: allocs o 2, live 0; result 5."
+}

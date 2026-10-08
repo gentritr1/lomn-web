@@ -1,0 +1,37 @@
+{
+  "id": "0x71-float-int-order",
+  "rows": [
+    "0x71"
+  ],
+  "falsifier": "fsubr is read as b - a",
+  "alternative": "-3.5 (c0600000) instead of 3.5 (40600000)",
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x12",
+      "bits": "40600000"
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24,
+    "heap": {
+      "live": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      },
+      "allocs": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      }
+    }
+  },
+  "note": "0x71 5.5 2 - = 40600000 (expect_calc.arith, pc=24). 0x71 row: float a, int b: fild b, fsubr dword a = a - b (0x6043b1)."
+}

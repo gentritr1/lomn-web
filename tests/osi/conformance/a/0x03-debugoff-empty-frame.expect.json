@@ -1,0 +1,22 @@
+{
+  "id": "0x03-debugoff-empty-frame",
+  "rows": [
+    "0x03"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "Debugger not enabled! but encountered DebugOff",
+    "pc": "@fail",
+    "op": "0x03",
+    "depth": 1,
+    "top": {
+      "type": "0xff",
+      "value": 0
+    },
+    "fpu_pc": 64
+  },
+  "note": "0x03 row: always errors like 0x02; depth 1 (marker only)."
+}

@@ -1,0 +1,24 @@
+{
+  "id": "0x70-err-string-total-255",
+  "rows": [
+    "0x70"
+  ],
+  "falsifier": "the boundary is 256 characters (255 accepted)",
+  "alternative": "no error at 200 + 55 = 255 characters",
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "kLenTooLong",
+    "pc": "@fail",
+    "op": "0x70",
+    "depth": 1,
+    "top": {
+      "type": "0xff",
+      "value": 0
+    },
+    "fpu_pc": 64
+  },
+  "note": "0x70 row: 'if len(a)+len(b) >= 255, append throws BEFORE anything is pushed: a and b are already popped'. 200 + 55 = 255 characters: kLenTooLong (our error text for the non-OSI throw). Stack 3 slots before, 2 popped: depth 1, top the marker."
+}

@@ -1,0 +1,22 @@
+{
+  "id": "0x72-err-lhs",
+  "rows": [
+    "0x72"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "Invalid left-hand-side operand to operator '*' (type:0F)",
+    "pc": "@fail",
+    "op": "0x72",
+    "depth": 1,
+    "top": {
+      "type": "0xff",
+      "value": 0
+    },
+    "fpu_pc": 64
+  },
+  "note": "0x72 errors cell: lhs wording differs ('left-hand-side'). a nothing: depth 1."
+}

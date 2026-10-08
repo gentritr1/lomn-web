@@ -1,0 +1,22 @@
+{
+  "id": "0x12-err-undefined-method",
+  "rows": [
+    "0x12"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "Call to undefined member method",
+    "pc": "@fail",
+    "op": "0x12",
+    "depth": 1,
+    "top": {
+      "type": "0xff",
+      "value": 0
+    },
+    "fpu_pc": 64
+  },
+  "note": "0x12 errors cell: no method with that symbol (zz; C has only m). o is popped before FindMethod: depth 1."
+}

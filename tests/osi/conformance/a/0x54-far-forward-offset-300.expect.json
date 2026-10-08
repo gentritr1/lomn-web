@@ -1,0 +1,37 @@
+{
+  "id": "0x54-far-forward-offset-300",
+  "rows": [
+    "0x54"
+  ],
+  "falsifier": "the offset is read as 8 bits (300 -> 44)",
+  "alternative": "PC lands inside the filler, on a Return with 1 on top: result 1 instead of 4",
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 4
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24,
+    "heap": {
+      "live": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      },
+      "allocs": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      }
+    }
+  },
+  "note": "0x54 row: operand s16 d. The 100 filler pairs (PushConstanti8 9 / Return, 3 bytes each) make d = 300; the target pushes 4 and returns it."
+}

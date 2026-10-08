@@ -1,0 +1,22 @@
+{
+  "id": "0x53-err-string",
+  "rows": [
+    "0x53"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "Results of comparison expression is not integral",
+    "pc": "@fail",
+    "op": "0x53",
+    "depth": 1,
+    "top": {
+      "type": "0xff",
+      "value": 0
+    },
+    "fpu_pc": 64
+  },
+  "note": "0x53 errors cell: a string-table index (0x11) is not integral. Popped: depth 1."
+}

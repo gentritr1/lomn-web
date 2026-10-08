@@ -1,0 +1,22 @@
+{
+  "id": "0x75-err-rhs-float",
+  "rows": [
+    "0x75"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "Invalid operand to operator '%' (rhs) (type:12)",
+    "pc": "@fail",
+    "op": "0x75",
+    "depth": 1,
+    "top": {
+      "type": "0xff",
+      "value": 0
+    },
+    "fpu_pc": 64
+  },
+  "note": "0x75 errors cell: b a float. depth 1."
+}

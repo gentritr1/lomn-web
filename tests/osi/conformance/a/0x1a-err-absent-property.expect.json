@@ -1,0 +1,22 @@
+{
+  "id": "0x1a-err-absent-property",
+  "rows": [
+    "0x1a"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "Reference to non-existant member property \"zz\"",
+    "pc": "@fail",
+    "op": "0x1a",
+    "depth": 1,
+    "top": {
+      "type": "0xff",
+      "value": 0
+    },
+    "fpu_pc": 64
+  },
+  "note": "0x1a errors cell: property absent (type 1 path: 'v popped, id = FindMemberID(s), prop = GetProperty'): v is popped before the lookup, so only the marker is left: depth 1. AMBIGUOUS-ORDER as for 0x10."
+}

@@ -1,0 +1,37 @@
+{
+  "id": "0x10-set-selects-property-by-symbol",
+  "rows": [
+    "0x10"
+  ],
+  "falsifier": "the member operand is ignored and the same (first) property is always written",
+  "alternative": "b's store overwrites a: result 5 instead of 3",
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 3
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24,
+    "heap": {
+      "live": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      },
+      "allocs": {
+        "o": 1,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      }
+    }
+  },
+  "note": "0x10 row: prop = GetProperty(o, m) (first i whose symbol is m, 0x6086a0). a=3 then b=5, a read back is 3."
+}

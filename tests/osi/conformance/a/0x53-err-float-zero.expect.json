@@ -1,0 +1,25 @@
+{
+  "id": "0x53-err-float-zero",
+  "rows": [
+    "0x53"
+  ],
+  "falsifier": "a float 0.0 condition counts as false and branches",
+  "alternative": "no error: the branch is taken, result 2",
+  "falsifier_id": "0x53#notes",
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "Results of comparison expression is not integral",
+    "pc": "@fail",
+    "op": "0x53",
+    "depth": 1,
+    "top": {
+      "type": "0xff",
+      "value": 0
+    },
+    "fpu_pc": 64
+  },
+  "note": "0x53 errors cell and notes: 'a float 0.0 condition is an ERROR, not a branch'. c is popped without dispose: depth 1."
+}

@@ -1,0 +1,25 @@
+{
+  "id": "0x70-err-string-too-long-260",
+  "rows": [
+    "0x70"
+  ],
+  "falsifier": "the sum is truncated or accepted instead of throwing",
+  "alternative": "no error: a string result",
+  "falsifier_id": "0x70#notes",
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "kLenTooLong",
+    "pc": "@fail",
+    "op": "0x70",
+    "depth": 1,
+    "top": {
+      "type": "0xff",
+      "value": 0
+    },
+    "fpu_pc": 64
+  },
+  "note": "0x70 row: 'if len(a)+len(b) >= 255, append throws BEFORE anything is pushed: a and b are already popped'. 200 + 60 = 260 characters: kLenTooLong (our error text for the non-OSI throw). Stack 3 slots before, 2 popped: depth 1, top the marker."
+}

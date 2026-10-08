@@ -1,0 +1,27 @@
+{
+  "id": "0x15-err-this-not-object",
+  "rows": [
+    "0x15"
+  ],
+  "entry": "f",
+  "args": [
+    {
+      "type": "0x10",
+      "value": 4
+    }
+  ],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "Member property of non member variable",
+    "pc": "@fail",
+    "op": "0x15",
+    "depth": 3,
+    "top": {
+      "type": "0x10",
+      "value": 9
+    },
+    "fpu_pc": 64
+  },
+  "note": "0x15 errors cell: framePtr[0].type != 1 (here the int argument 4). notes cell: 'the type check happens before the pop, so on error v is still on the stack': marker + argument + v = depth 3, top int 9."
+}

@@ -1,0 +1,37 @@
+{
+  "id": "0x53-int-min-is-not-false",
+  "rows": [
+    "0x53"
+  ],
+  "falsifier": "the condition is tested as a signed or low-bits value",
+  "alternative": "0x80000000 has zero low 31 bits: the branch is taken, result 2 instead of 1",
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 1
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24,
+    "heap": {
+      "live": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      },
+      "allocs": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      }
+    }
+  },
+  "note": "0x53 row: int != 0 falls through. 0x80000000 (as the i32 -2147483648) is nonzero."
+}

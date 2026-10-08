@@ -1,0 +1,33 @@
+{
+  "id": "0x10-err-unregistered-game-variable",
+  "rows": [
+    "0x10"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [
+    {
+      "cls": "t",
+      "name": "obj",
+      "min": 0,
+      "max": 0,
+      "types": [],
+      "returns": {
+        "game": "GcTimer"
+      }
+    }
+  ],
+  "registry": "none",
+  "expect_error": {
+    "message": "Reference to unregistered Game Variable",
+    "pc": "@fail",
+    "op": "0x10",
+    "depth": 2,
+    "top": {
+      "type": "0x10",
+      "value": 5
+    },
+    "fpu_pc": 64
+  },
+  "note": "0x10 errors cell: game type o, map miss (always-error, 'The game-variable map'). o (the GcTimer handle) is popped first; the lookup misses before the getter and before v is popped: marker + v = depth 2, top int 5. Helper: 0x82 builds the game handle from the test native t.obj."
+}

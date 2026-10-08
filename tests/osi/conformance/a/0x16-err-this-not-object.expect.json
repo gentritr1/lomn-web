@@ -1,0 +1,27 @@
+{
+  "id": "0x16-err-this-not-object",
+  "rows": [
+    "0x16"
+  ],
+  "entry": "f",
+  "args": [
+    {
+      "type": "0x10",
+      "value": 4
+    }
+  ],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "Member property of non member variable",
+    "pc": "@fail",
+    "op": "0x16",
+    "depth": 2,
+    "top": {
+      "type": "0x10",
+      "value": 4
+    },
+    "fpu_pc": 64
+  },
+  "note": "0x16 errors cell: this.type != 1 (the int argument). Nothing popped or pushed: marker + argument = depth 2."
+}

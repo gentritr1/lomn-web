@@ -1,0 +1,22 @@
+{
+  "id": "0xa0-err-value-not-integral",
+  "rows": [
+    "0xa0"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "cant set red to a non-integral value",
+    "pc": "@fail",
+    "op": "0xa0",
+    "depth": 1,
+    "top": {
+      "type": "0xff",
+      "value": 0
+    },
+    "fpu_pc": 64
+  },
+  "note": "0xa0 errors cell: v.type != 0x10 (the float 1.0), c a valid colour. Both popped: depth 1. AMBIGUOUS-ORDER: the row does not say whether c is popped before the error."
+}

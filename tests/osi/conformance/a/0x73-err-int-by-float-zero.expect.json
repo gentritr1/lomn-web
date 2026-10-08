@@ -1,0 +1,22 @@
+{
+  "id": "0x73-err-int-by-float-zero",
+  "rows": [
+    "0x73"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "Divide by 0",
+    "pc": "@fail",
+    "op": "0x73",
+    "depth": 1,
+    "top": {
+      "type": "0xff",
+      "value": 0
+    },
+    "fpu_pc": 64
+  },
+  "note": "0x73 errors cell: int a, float b == 0.0: the same zero test of b. depth 1."
+}

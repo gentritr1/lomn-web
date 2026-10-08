@@ -1,0 +1,22 @@
+{
+  "id": "0xa0-err-colour-operand",
+  "rows": [
+    "0xa0"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "cant access red value of anything but a color",
+    "pc": "@fail",
+    "op": "0xa0",
+    "depth": 1,
+    "top": {
+      "type": "0xff",
+      "value": 0
+    },
+    "fpu_pc": 64
+  },
+  "note": "0xa0 errors cell: c.type != 0x15 (the int 7). v and c are both popped (v popped first, then c): depth 1."
+}

@@ -1,0 +1,27 @@
+{
+  "id": "0x14-err-zero-limit",
+  "rows": [
+    "0x14"
+  ],
+  "entry": "f",
+  "args": [
+    {
+      "type": "0x10",
+      "value": 7
+    }
+  ],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "Too many arguments to method",
+    "pc": "@fail",
+    "op": "0x14",
+    "depth": 2,
+    "top": {
+      "type": "0x10",
+      "value": 7
+    },
+    "fpu_pc": 64
+  },
+  "note": "0x14 errors cell: n = 0 < k = 1. depth 2 (marker + argument), top int 7."
+}

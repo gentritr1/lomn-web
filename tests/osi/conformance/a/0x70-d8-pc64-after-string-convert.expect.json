@@ -1,0 +1,38 @@
+{
+  "id": "0x70-d8-pc64-after-string-convert",
+  "rows": [
+    "0x70"
+  ],
+  "falsifier": "the precision stays 24 after a string -> float conversion",
+  "alternative": "'24 forever' gives 16777218.0 (4b800001) instead of 16777216.0 (4b800000)",
+  "falsifier_id": "0x70#3",
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x12",
+      "bits": "4b800000"
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 64,
+    "heap": {
+      "live": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      },
+      "allocs": {
+        "o": 0,
+        "a": 0,
+        "s": 1,
+        "g": 0
+      }
+    }
+  },
+  "note": "falsifier table line 0x70#3. The 0xb1 on the string '0.5' (helper; row 0xb1: atof, 0x60bd0d) sets fpu_pc 64 for good (D8'). 16777217 + 1.0e-15 then rounds at 64 bits to 16777217 and at f32 to even: 16777216.0 = 4b800000 (expect_calc.arith(+, 16777217, 1.0e-15, pc=64)). The 0x11 string is converted in place (allocs s 1) and freed."
+}

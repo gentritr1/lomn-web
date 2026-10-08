@@ -1,0 +1,37 @@
+{
+  "id": "0x21-string-deep-copy",
+  "rows": [
+    "0x21"
+  ],
+  "falsifier": "Duplicate of a dynamic string shares it instead of copying",
+  "alternative": "allocs s 2 instead of 3",
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x0f",
+      "value": 0
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24,
+    "heap": {
+      "live": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      },
+      "allocs": {
+        "o": 0,
+        "a": 0,
+        "s": 3,
+        "g": 0
+      }
+    }
+  },
+  "note": "0x21 row: Duplicate (opcodes.md 'Pop and ownership': Duplicate deep-copies a 0x16 string). 0x70 converts both table strings (allocs s 2) and frees b; the read copies the local's string (allocs s 3); Pop frees the copy and Return frees the local: live 0. Helpers: 0x70, 0x22."
+}

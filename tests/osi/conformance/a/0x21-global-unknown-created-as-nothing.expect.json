@@ -1,0 +1,41 @@
+{
+  "id": "0x21-global-unknown-created-as-nothing",
+  "rows": [
+    "0x21"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x0f",
+      "value": 0
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24,
+    "globals": {
+      "g": {
+        "type": "0x0f",
+        "value": 0
+      }
+    },
+    "heap": {
+      "live": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      },
+      "allocs": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      }
+    }
+  },
+  "note": "0x21 row notes: 'the first access to an unknown global creates it as nothing: no error'. The result is nothing and the global g now exists as nothing."
+}

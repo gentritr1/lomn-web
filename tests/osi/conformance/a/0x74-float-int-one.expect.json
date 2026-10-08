@@ -1,0 +1,38 @@
+{
+  "id": "0x74-float-int-one",
+  "rows": [
+    "0x74"
+  ],
+  "falsifier": "float^int is a numeric power (2.0^1 = 2.0, or the value truncation (float)(int)x gives 4.0)",
+  "alternative": "2.0 (40000000) or 4.0 (40800000) instead of 2147483648.0 (4f000000)",
+  "falsifier_id": "0x74#notes",
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x12",
+      "bits": "4f000000"
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24,
+    "heap": {
+      "live": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      },
+      "allocs": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      }
+    }
+  },
+  "note": "0x74 row: float a, int b: repeat b times x <- (float)(int32 bits of x) * x. x = 2.0 = bits 0x40000000 = 1073741824; 1073741824 * 2.0 = 2147483648.0 = 4f000000 (the row's guard)."
+}

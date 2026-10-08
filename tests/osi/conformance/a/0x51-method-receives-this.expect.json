@@ -1,0 +1,35 @@
+{
+  "id": "0x51-method-receives-this",
+  "rows": [
+    "0x51"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 1
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24,
+    "heap": {
+      "live": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      },
+      "allocs": {
+        "o": 1,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      }
+    }
+  },
+  "note": "0x51 row: 'a1..an t -> {2, retPC} a1..an; PC = t.value'. t comes from 0x12 (helper). n = 1: the object is framePtr[0] in the method; 0xbb (helper) says it is an object: 1."
+}

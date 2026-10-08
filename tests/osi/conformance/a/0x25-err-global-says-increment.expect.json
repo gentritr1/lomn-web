@@ -1,0 +1,24 @@
+{
+  "id": "0x25-err-global-says-increment",
+  "rows": [
+    "0x25"
+  ],
+  "falsifier": "a global decrement raises the 'decrement' text",
+  "alternative": "message 'decrement of non-integral type'",
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "increment of non-integral type",
+    "pc": "@fail",
+    "op": "0x25",
+    "depth": 1,
+    "top": {
+      "type": "0xff",
+      "value": 0
+    },
+    "fpu_pc": 64
+  },
+  "note": "0x25 errors cell: '\"increment of non-integral type\" (GLOBAL variable not int - the original's copy-paste message)'. Marker only: depth 1."
+}
