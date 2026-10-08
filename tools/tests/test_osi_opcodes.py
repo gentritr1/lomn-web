@@ -151,6 +151,25 @@ def test_doc_generated_columns_are_current(gen, rows):
         assert {k: md[op][k] for k in gen.GENERATED} == r
 
 
+# Review-confirmed semantics (fix round 1), pinned as substrings of specific cells. This is a tripwire against an edit
+# silently flipping a reading; the semantic gate is M2a-1's conformance suite. Each fact names its asm evidence.
+PINNED_FACTS = [
+    (0x78, "stack_effect", "LOGICAL shr"),                      # shr edx, cl at 0x605a76
+    (0x75, "stack_effect", "unsigned div"),                     # div ecx at 0x604a9b
+    (0x53, "errors", "(c.type neither 0x0f nor 0x10: float"),   # cmp 0xf / 0x10 then Error at 0x600e38
+    (0x54, "stack_effect", "PC = (address after d) + d"),       # movsx + add at 0x600e9c
+    (0x70, "errors", "kLenTooLong"),                            # SrThrow(0x83aa20) in append 0x4f5c9f-0x4f5ca9
+    (0x82, "stack_effect", "ADDRESS OF THE ARGUMENT'S STACK SLOT"),  # *(args[i]+4) at 0x60198c-0x601abc
+    (0x82, "errors", 'all end in Error("Script is calling %s.%s"'),  # .exc catch(...) 0x601cd3 -> Error 0x601dd3
+    (0xB2, "stack_effect", "TRUNCATION toward zero"),           # or 0x0c00 + fistp at 0x60bc4b-0x60bc5a
+]
+
+
+@pytest.mark.parametrize("op,col,fact", PINNED_FACTS, ids=["%02x-%s" % (o, c) for o, c, _ in PINNED_FACTS])
+def test_doc_pins_review_confirmed_facts(op, col, fact):
+    assert fact in _own_parse_md(DOC.read_text())[op][col]
+
+
 def test_doc_authored_cells_cite_the_handler(rows):
     md = _own_parse_md(DOC.read_text())
     for r in rows:
