@@ -48,7 +48,7 @@ VmState Vm::snapshot() const {
   s.frame = frame_;
   s.context_depth = context_depth_;
   s.refcount = refcount_;
-  if (s.depth) s.top = const_cast<Stack&>(stack_).top();
+  if (s.depth) s.top = stack_.top();
   s.halted = halted_;
   s.fpu_pc = fpu_pc_;
   return s;
@@ -164,9 +164,20 @@ CallResult Vm::call_impl(std::string_view name, const std::vector<Variant>& in) 
   return res;
 }
 
+// Must not throw (fix round 1, M7): a dangling handle met while disposing is recorded in internal_errors() and the
+// slot is dropped; the trace gets no record for it (it is our bookkeeping, not VM behaviour).
 void Vm::reset_after_error() {
   if (!last_error_) return;
-  while (stack_.depth() > saved_.depth) pop_dispose();
+  while (stack_.depth() > saved_.depth) {
+    const Variant v = stack_.pop();  // depth > saved depth >= 0: cannot underflow
+    try {
+      heap_.dispose(v);
+    } catch (const VmError& e) {
+      internal_errors_.push_back("reset_after_error: " + e.message);
+    } catch (const std::exception& e) {
+      internal_errors_.push_back(std::string("reset_after_error: ") + e.what());
+    }
+  }
   context_depth_ = saved_.context;
   refcount_ = saved_.refcount;
   pc_ = saved_.pc;
@@ -261,23 +272,43 @@ uint32_t Vm::find_method(uint32_t obj, uint16_t sym, const char* undefined_msg) 
   throw VmError(undefined_msg);
 }
 
-// FindMemberID (0x609ba0): the name is lower-cased (tolower table 0x762a18, A-Z only) and compared with strcmp against
-// each symbol-table entry; no match gives 0xffff (an id no property has).
-uint16_t Vm::find_member_id(const std::string& name) const {
+// FindMemberID (0x609ba0): the query is lower-cased (tolower table 0x762a18, A-Z only, into a static buffer) and
+// strcmp'd first against the script's lookup cache {symbol text, id} (count at script+0x1d8, entries from +0x48), then
+// against each raw symbol-table entry. A cache HIT returns its id with no insert (0x609c51-0x609c55). Every cache MISS
+// inserts {the last symbol compared, the id found} (0x609ca7-0x609cc8); when the symbol scan finds nothing the id is the
+// initial 0xffff (0x609baf), so the LAST symbol's text is cached as 0xffff and later lookups of it fail (poisoning,
+// opcodes.md row 0x18). The cache has no bound in the original: the 51st insert (entry 50) lands on the count at +0x1d8,
+// which we raise as undefined behaviour. With an empty symbol table the cached pointer is null; a later lookup would
+// strcmp a null pointer, also raised.
+uint16_t Vm::find_member_id(const std::string& name) {
   std::string low = NativeRegistry::fold(name);
   const size_t z = low.find('\0');
   if (z != std::string::npos) low.resize(z);
-  const auto& s = script_.symbols();
-  for (size_t i = 0; i < s.size() && i < 0xffff; ++i) {
-    std::string e = s[i];
-    const size_t ez = e.find('\0');
-    if (ez != std::string::npos) e.resize(ez);
-    if (e == low) return static_cast<uint16_t>(i);
+  for (const MemberCache& c : member_cache_) {
+    if (c.symbol < 0) throw VmError("Undefined behaviour: FindMemberID cache entry without a symbol");
+    if (upto_nul_copy(script_.symbols()[static_cast<size_t>(c.symbol)]) == low) return c.id;
   }
-  return 0xffff;
+  const auto& s = script_.symbols();
+  int last = -1;
+  uint16_t id = 0xffff;
+  for (size_t i = 0; i < s.size() && i < 0xffff; ++i) {
+    last = static_cast<int>(i);
+    if (upto_nul_copy(s[i]) == low) {
+      id = static_cast<uint16_t>(i);
+      break;
+    }
+  }
+  if (member_cache_.size() >= 50) throw VmError("Undefined behaviour: FindMemberID cache overflow (51st miss)");
+  member_cache_.push_back({last, id});
+  return id;
 }
 
 // The binary's "(type:%02.2X)" messages: the token is replaced by the type in at least 2 upper-case hex digits.
+std::string Vm::upto_nul_copy(const std::string& s) {
+  const size_t z = s.find('\0');
+  return z == std::string::npos ? s : s.substr(0, z);
+}
+
 std::string Vm::fmt_err(const char* fmt, uint32_t type) const {
   std::string s(fmt);
   const size_t at = s.find("%02.2X");

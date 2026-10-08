@@ -31,13 +31,11 @@ void Heap::free_(HeapKind k, uint32_t id) {
 }
 
 uint32_t Heap::new_object(uint16_t class_id, uint32_t nprops) {
-  Obj o;
-  o.live = true;
+  const uint32_t id = next_[kKindObject]++;
+  Obj& o = objs_[id];
   o.refs = 1;
   o.cls = class_id;
   o.props.assign(nprops, nothing());
-  objs_.push_back(std::move(o));
-  const uint32_t id = static_cast<uint32_t>(objs_.size());
   alloc_(kKindObject);
   char b[32];
   std::snprintf(b, sizeof b, "A o %08x %04x", id, class_id);
@@ -48,12 +46,10 @@ uint32_t Heap::new_object(uint16_t class_id, uint32_t nprops) {
 uint32_t Heap::new_array() { return new_array(0); }
 
 uint32_t Heap::new_array(uint32_t n) {
-  Arr a;
-  a.live = true;
+  const uint32_t id = next_[kKindArray]++;
+  Arr& a = arrs_[id];
   a.refs = 1;
   a.elems.assign(n, nothing());
-  arrs_.push_back(std::move(a));
-  const uint32_t id = static_cast<uint32_t>(arrs_.size());
   alloc_(kKindArray);
   char b[40];
   std::snprintf(b, sizeof b, "A a %08x %08x", id, n);
@@ -62,11 +58,8 @@ uint32_t Heap::new_array(uint32_t n) {
 }
 
 uint32_t Heap::new_string(std::string_view text) {
-  Str s;
-  s.live = true;
-  s.text.assign(text.data(), text.size());
-  strs_.push_back(std::move(s));
-  const uint32_t id = static_cast<uint32_t>(strs_.size());
+  const uint32_t id = next_[kKindString]++;
+  strs_[id].assign(text.data(), text.size());
   alloc_(kKindString);
   char b[40];
   std::snprintf(b, sizeof b, "A s %08x %3u", id, static_cast<unsigned>(text.size()));
@@ -75,12 +68,10 @@ uint32_t Heap::new_string(std::string_view text) {
 }
 
 uint32_t Heap::new_game(uint16_t type) {
-  Game g;
-  g.live = true;
+  const uint32_t id = next_[kKindGame]++;
+  Game& g = games_[id];
   g.refs = 1;
   g.type = type;
-  games_.push_back(g);
-  const uint32_t id = static_cast<uint32_t>(games_.size());
   alloc_(kKindGame);
   char b[32];
   std::snprintf(b, sizeof b, "A g %08x %02x", id, type);
@@ -91,29 +82,42 @@ uint32_t Heap::new_game(uint16_t type) {
 // A handle that is not live can only come from behaviour the table marks undefined (a stale slot, a fabricated engine
 // argument); it is reported instead of touching memory.
 Heap::Obj& Heap::obj(uint32_t id) {
-  if (id == 0 || id > objs_.size() || !objs_[id - 1].live) throw VmError("Undefined: dangling object handle");
-  return objs_[id - 1];
+  auto it = objs_.find(id);
+  if (it == objs_.end()) throw VmError("Undefined: dangling object handle");
+  return it->second;
+}
+const Heap::Obj& Heap::obj(uint32_t id) const {
+  auto it = objs_.find(id);
+  if (it == objs_.end()) throw VmError("Undefined: dangling object handle");
+  return it->second;
 }
 Heap::Arr& Heap::arr(uint32_t id) {
-  if (id == 0 || id > arrs_.size() || !arrs_[id - 1].live) throw VmError("Undefined: dangling array handle");
-  return arrs_[id - 1];
+  auto it = arrs_.find(id);
+  if (it == arrs_.end()) throw VmError("Undefined: dangling array handle");
+  return it->second;
 }
-Heap::Str& Heap::str(uint32_t id) {
-  if (id == 0 || id > strs_.size() || !strs_[id - 1].live) throw VmError("Undefined: dangling string handle");
-  return strs_[id - 1];
+std::string& Heap::str(uint32_t id) {
+  auto it = strs_.find(id);
+  if (it == strs_.end()) throw VmError("Undefined: dangling string handle");
+  return it->second;
 }
 Heap::Game& Heap::game(uint32_t id) {
-  if (id == 0 || id > games_.size() || !games_[id - 1].live) throw VmError("Undefined: dangling game handle");
-  return games_[id - 1];
+  auto it = games_.find(id);
+  if (it == games_.end()) throw VmError("Undefined: dangling game handle");
+  return it->second;
+}
+const Heap::Game& Heap::game(uint32_t id) const {
+  auto it = games_.find(id);
+  if (it == games_.end()) throw VmError("Undefined: dangling game handle");
+  return it->second;
 }
 
 bool Heap::live(HeapKind k, uint32_t id) const {
-  if (id == 0) return false;
   switch (k) {
-    case kKindObject: return id <= objs_.size() && objs_[id - 1].live;
-    case kKindArray: return id <= arrs_.size() && arrs_[id - 1].live;
-    case kKindString: return id <= strs_.size() && strs_[id - 1].live;
-    default: return id <= games_.size() && games_[id - 1].live;
+    case kKindObject: return objs_.count(id) != 0;
+    case kKindArray: return arrs_.count(id) != 0;
+    case kKindString: return strs_.count(id) != 0;
+    default: return games_.count(id) != 0;
   }
 }
 
@@ -125,41 +129,49 @@ Variant Heap::duplicate(Variant v) {
   } else if (is_game_type(v.type)) {
     ++game(v.value).refs;
   } else if (v.type == kString) {
-    std::string copy = str(v.value).text;
+    std::string copy = str(v.value);
     return Variant{kString, new_string(copy)};
   }
   // 0x13 (a string table) is never created (opcodes.md variant types): nothing to count.
   return v;
 }
 
-void Heap::dispose(const Variant& v) {
-  if (v.type == kObject) {
-    Obj& o = obj(v.value);
-    if (--o.refs > 0) return;
-    o.live = false;
-    std::vector<Variant> props = std::move(o.props);
-    o.props.clear();
-    free_(kKindObject, v.value);
-    for (size_t i = props.size(); i-- > 0;) dispose(props[i]);  // dtor 0x6085c0: back to front
-  } else if (v.type == kArray) {
-    Arr& a = arr(v.value);
-    if (--a.refs > 0) return;
-    a.live = false;
-    std::vector<Variant> el = std::move(a.elems);
-    a.elems.clear();
-    free_(kKindArray, v.value);
-    for (size_t i = el.size(); i-- > 0;) dispose(el[i]);  // dtor 0x5fc790: back to front
-  } else if (v.type == kString) {
-    Str& s = str(v.value);
-    s.live = false;
-    s.text.clear();
-    s.text.shrink_to_fit();
-    free_(kKindString, v.value);
-  } else if (is_game_type(v.type)) {
-    Game& g = game(v.value);
-    if (--g.refs > 0) return;
-    g.live = false;
-    free_(kKindGame, v.value);
+void Heap::dispose(const Variant& root) {
+  // Depth-first like the recursive destructors (0x6085c0, 0x5fc790): a freed object/array writes its F record, then its
+  // children are disposed back to front, each completely before the next. LIFO: pushing children front to back makes the
+  // LAST child the next one processed.
+  std::vector<Variant> work{root};
+  while (!work.empty()) {
+    const Variant v = work.back();
+    work.pop_back();
+    if (v.type == kObject) {
+      auto it = objs_.find(v.value);
+      if (it == objs_.end()) throw VmError("Undefined: dangling object handle");
+      if (--it->second.refs > 0) continue;
+      std::vector<Variant> props = std::move(it->second.props);
+      objs_.erase(it);
+      free_(kKindObject, v.value);
+      work.insert(work.end(), props.begin(), props.end());
+    } else if (v.type == kArray) {
+      auto it = arrs_.find(v.value);
+      if (it == arrs_.end()) throw VmError("Undefined: dangling array handle");
+      if (--it->second.refs > 0) continue;
+      std::vector<Variant> el = std::move(it->second.elems);
+      arrs_.erase(it);
+      free_(kKindArray, v.value);
+      work.insert(work.end(), el.begin(), el.end());
+    } else if (v.type == kString) {
+      auto it = strs_.find(v.value);
+      if (it == strs_.end()) throw VmError("Undefined: dangling string handle");
+      strs_.erase(it);
+      free_(kKindString, v.value);
+    } else if (is_game_type(v.type)) {
+      auto it = games_.find(v.value);
+      if (it == games_.end()) throw VmError("Undefined: dangling game handle");
+      if (--it->second.refs > 0) continue;
+      games_.erase(it);
+      free_(kKindGame, v.value);
+    }
   }
 }
 
@@ -173,9 +185,9 @@ Variant* Heap::property(uint32_t id, uint16_t symbol, const sage::OsiFile& scrip
 }
 
 std::vector<Variant>& Heap::elements(uint32_t id) { return arr(id).elems; }
-std::string& Heap::text(uint32_t id) { return str(id).text; }
-uint16_t Heap::class_id(uint32_t id) const { return const_cast<Heap*>(this)->obj(id).cls; }
-uint16_t Heap::game_type(uint32_t id) const { return const_cast<Heap*>(this)->game(id).type; }
+std::string& Heap::text(uint32_t id) { return str(id); }
+uint16_t Heap::class_id(uint32_t id) const { return obj(id).cls; }
+uint16_t Heap::game_type(uint32_t id) const { return game(id).type; }
 
 // ---- Stack ----
 void Stack::push(Variant v) {
@@ -209,6 +221,10 @@ Variant& Stack::at(uint32_t i) {
 }
 
 Variant& Stack::top() {
+  if (top_ == 0) throw VmError("Stack underflow");
+  return s_[top_ - 1];
+}
+const Variant& Stack::top() const {
   if (top_ == 0) throw VmError("Stack underflow");
   return s_[top_ - 1];
 }

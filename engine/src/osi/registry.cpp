@@ -46,18 +46,6 @@ struct Parser {
     i += n;
     return true;
   }
-  static void utf8(std::string& o, uint32_t cp) {
-    if (cp < 0x80) {
-      o += static_cast<char>(cp);
-    } else if (cp < 0x800) {
-      o += static_cast<char>(0xc0 | (cp >> 6));
-      o += static_cast<char>(0x80 | (cp & 0x3f));
-    } else {
-      o += static_cast<char>(0xe0 | (cp >> 12));
-      o += static_cast<char>(0x80 | ((cp >> 6) & 0x3f));
-      o += static_cast<char>(0x80 | (cp & 0x3f));
-    }
-  }
   bool string(std::string& o) {
     if (i >= s.size() || s[i] != '"') return fail("expected a string");
     ++i;
@@ -80,9 +68,13 @@ struct Parser {
         case 't': o += '\t'; break;
         case 'u': {
           if (i + 4 > s.size()) return fail("bad \\u");
-          uint32_t cp = static_cast<uint32_t>(std::strtoul(std::string(s.substr(i, 4)).c_str(), nullptr, 16));
+          const std::string hx(s.substr(i, 4));
+          char* end = nullptr;
+          const uint32_t cp = static_cast<uint32_t>(std::strtoul(hx.c_str(), &end, 16));
+          if (!end || *end) return fail("bad \\u");
+          if (cp > 0xff) return fail("\\u above 0xff: JSON text is latin-1 bytes");
           i += 4;
-          utf8(o, cp);
+          o += static_cast<char>(cp);  // latin-1: one byte
           break;
         }
         default: return fail("bad escape");
@@ -312,8 +304,9 @@ NativeRegistry NativeRegistry::load(std::string_view natives_json, std::string_v
       const Json* w = r.get("winner");
       if (w && w->type == Json::Bool && !w->b) continue;  // the map keeps the first registration (types.md)
       NativeEntry e = entry_from(r, types, pass == 0 ? Tier::Stub : Tier::Mod);
-      if (reg.index_.count(e.key)) continue;              // an exe key wins over a mod row
-      reg.index_[e.key] = reg.entries_.size();
+      auto k = std::make_pair(fold(e.cls), fold(e.name));
+      if (reg.index_.count(k)) continue;                  // an exe key wins over a mod row
+      reg.index_[k] = reg.entries_.size();
       reg.entries_.push_back(std::move(e));
     }
   }
@@ -321,12 +314,14 @@ NativeRegistry NativeRegistry::load(std::string_view natives_json, std::string_v
 }
 
 const NativeEntry* NativeRegistry::find(std::string_view cls, std::string_view fn) const {
-  auto it = index_.find(fold(std::string(cls) + "." + std::string(fn)));
+  auto it = index_.find(std::make_pair(fold(cls), fold(fn)));
   return it == index_.end() ? nullptr : &entries_[it->second];
 }
 
 void NativeRegistry::bind(std::string_view key, NativeFn fn, void* user, Tier tier) {
-  auto it = index_.find(fold(key));
+  const size_t dot = key.find('.');
+  auto it = dot == std::string_view::npos ? index_.end()
+                                          : index_.find(std::make_pair(fold(key.substr(0, dot)), fold(key.substr(dot + 1))));
   if (it == index_.end()) throw std::logic_error("bind: unknown native " + std::string(key));
   NativeEntry& e = entries_[it->second];
   e.fn = fn;
@@ -336,12 +331,13 @@ void NativeRegistry::bind(std::string_view key, NativeFn fn, void* user, Tier ti
 
 void NativeRegistry::add(NativeEntry e) {
   if (e.key.empty()) e.key = fold(e.cls + "." + e.name);
-  auto it = index_.find(e.key);
+  auto k = std::make_pair(fold(e.cls), fold(e.name));
+  auto it = index_.find(k);
   if (it != index_.end()) {
-    entries_[it->second] = std::move(e);
+    entries_[it->second] = std::move(e);  // replaced in place: references to the slot stay valid
     return;
   }
-  index_[e.key] = entries_.size();
+  index_[k] = entries_.size();
   entries_.push_back(std::move(e));
 }
 

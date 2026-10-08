@@ -92,7 +92,7 @@ int cmp_exact(double a, double b, Op op);
 // ConvertVariant's numeric/text conversions (opcodes.md "ConvertVariant").
 int32_t chop_to_int(uint32_t f32bits);           // fistp qword with chop, low 32 bits; NaN / |x| >= 2^63 -> 0
 uint32_t int_to_f32_bits(int32_t i);             // fild + one fstp dword rounding
-int32_t osi_atoi(const std::string& text);       // C atoi on the bytes up to the first NUL (32-bit wrap)
+int32_t osi_atoi(const std::string& text);       // _strtol(s, 0, 10) up to the first NUL; saturates (0x65cd95-0x65cdbb)
 // atof up to the first NUL, rounded once to f32 (`fstp dword`). *switches_pc is false only when ___strtold would take
 // its exponent-overflow path (|decimal exponent| > 32767), which skips ___dec2num (D8').
 uint32_t osi_atof_bits(const std::string& text, bool* switches_pc);

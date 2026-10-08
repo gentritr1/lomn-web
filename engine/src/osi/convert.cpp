@@ -4,6 +4,7 @@
 // `fstp dword` (f32: subnormals, overflow to +-inf). No host floating-point operation is involved except for
 // non-finite operands (IEEE double, then canonical NaN), so native == wasm32 by construction.
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -276,9 +277,17 @@ int32_t osi_atoi(const std::string& text) {
   while (i < s.size() && is_ws(s[i])) ++i;
   bool neg = false;
   if (i < s.size() && (s[i] == '+' || s[i] == '-')) neg = s[i++] == '-';
-  uint32_t v = 0;
-  while (i < s.size() && is_digit(s[i])) v = v * 10u + static_cast<uint32_t>(s[i++] - '0');  // wraps (UNVERIFIED)
-  return static_cast<int32_t>(neg ? 0u - v : v);
+  // _atoi (0x65cde0) = _strtol(s, 0, 10) (0x65cd40): the magnitude is accumulated with an overflow flag, then clamped by
+  // sign to 0x7fffffff / 0x80000000 (0x65cd95-0x65cdbb). It SATURATES; it does not wrap.
+  uint64_t v = 0;
+  bool over = false;
+  while (i < s.size() && is_digit(s[i])) {
+    v = v * 10u + static_cast<uint64_t>(s[i++] - '0');
+    if (v > 0x80000000ull) over = true, v = 0x80000001ull;
+  }
+  if (!neg) return (over || v > 0x7fffffffull) ? INT32_MAX : static_cast<int32_t>(v);
+  if (over || v > 0x80000000ull) return INT32_MIN;
+  return static_cast<int32_t>(0u - static_cast<uint32_t>(v));
 }
 
 uint32_t osi_atof_bits(const std::string& text, bool* switches_pc) {

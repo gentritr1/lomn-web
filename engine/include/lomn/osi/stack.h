@@ -21,6 +21,7 @@ class Stack {
   uint32_t depth() const { return top_; }
   Variant& at(uint32_t i);                       // slot i (0 = bottom), i < depth
   Variant& top();                                // the top slot; "Stack underflow" at depth 0
+  const Variant& top() const;
   // The frame base: the first slot scanning down from the top whose type is 2 or 0xff, plus one (0 when none).
   uint32_t find_frame() const;
 

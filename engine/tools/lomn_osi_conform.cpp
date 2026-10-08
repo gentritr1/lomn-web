@@ -62,10 +62,6 @@ uint32_t num_u32(const Json& j) {
   return static_cast<uint32_t>(j.num());
 }
 
-struct Ctx {
-  const TypeTable* types = nullptr;
-};
-
 // A type field: a number, "0x.." / decimal text, or a type name ("type:GcTimer", "GcTimer", "int", ...).
 bool type_of(const Json& j, const TypeTable& types, uint16_t& out) {
   if (j.type == Json::Number) {

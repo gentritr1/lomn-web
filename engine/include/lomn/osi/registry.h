@@ -4,6 +4,7 @@
 #pragma once
 #include <array>
 #include <cstdint>
+#include <deque>
 #include <map>
 #include <optional>
 #include <string>
@@ -67,7 +68,8 @@ class NativeRegistry {
   // on a malformed table.
   static NativeRegistry load(std::string_view natives_json, std::string_view mods_json, const TypeTable& types);
   const NativeEntry* find(std::string_view cls, std::string_view fn) const;  // case-folded token pair (A-Z only)
-  void bind(std::string_view key, NativeFn fn, void* user, Tier tier);       // unknown key -> std::logic_error
+  // key "cls.name" (split at the first '.'); unknown key -> std::logic_error
+  void bind(std::string_view key, NativeFn fn, void* user, Tier tier);
   void add(NativeEntry e);                                                    // tests, the conformance runner (replaces)
   // D11: default_ret if set; else none -> nothing, int -> 0, float -> 0.0, string -> "" (0x16), colour -> 0,
   // game -> a fresh game handle of ret_type, copy -> Duplicate of argument 0.
@@ -79,8 +81,10 @@ class NativeRegistry {
   static std::string fold(std::string_view s);  // A-Z -> a-z, every other byte unchanged
 
  private:
-  std::vector<NativeEntry> entries_;
-  std::map<std::string, size_t, std::less<>> index_;
+  // A deque: references to entries (the VM's memo, a NativeCall's `entry`) stay valid when later entries are added.
+  std::deque<NativeEntry> entries_;
+  // keyed on the folded (class, name) token pair, as RegisterFunction's ScOSIDualToken map is
+  std::map<std::pair<std::string, std::string>, size_t> index_;
   ReturnLog* log_ = nullptr;
 };
 

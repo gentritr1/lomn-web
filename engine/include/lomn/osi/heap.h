@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 #include "lomn/osi/variant.h"
@@ -42,7 +43,8 @@ class Heap {
   Variant duplicate(Variant v);
   void duplicate_in_place(Variant& v) { v = duplicate(v); }
   // Dispose (0x60a930): -1 reference (free at 0) for 0x01, 0x05, 0x20..0xfe; 0x16 deletes the string. An object frees
-  // its properties and an array its elements back to front, after its own `F` record.
+  // its properties and an array its elements back to front, after its own `F` record (depth first, as the recursive
+  // destructors do), using an explicit worklist rather than recursion.
   void dispose(const Variant& v);
 
   // GetProperty (0x6086a0): the first property whose symbol is `symbol` in the object's class record, else nullptr.
@@ -53,41 +55,40 @@ class Heap {
   uint16_t game_type(uint32_t h) const;
   bool live(HeapKind k, uint32_t id) const;
   HeapStats stats() const { return stats_; }
+  // Values held right now: live ones only (freed entries are erased; ids stay monotonic and are never reused, D7).
+  size_t stored() const { return objs_.size() + arrs_.size() + strs_.size() + games_.size(); }
 
  private:
   struct Obj {
-    bool live = false;
     int32_t refs = 0;
     uint16_t cls = 0;
     std::vector<Variant> props;
   };
   struct Arr {
-    bool live = false;
     int32_t refs = 0;
     std::vector<Variant> elems;
   };
-  struct Str {
-    bool live = false;
-    std::string text;
-  };
   struct Game {
-    bool live = false;
     int32_t refs = 0;
     uint16_t type = 0;
   };
   Obj& obj(uint32_t id);
   Arr& arr(uint32_t id);
-  Str& str(uint32_t id);
+  std::string& str(uint32_t id);
   Game& game(uint32_t id);
+  const Obj& obj(uint32_t id) const;
+  const Game& game(uint32_t id) const;
   void alloc_(HeapKind k);
   void free_(HeapKind k, uint32_t id);
   void emit(const char* s);
 
   TraceSink* trace_ = nullptr;
-  std::vector<Obj> objs_;
-  std::vector<Arr> arrs_;
-  std::vector<Str> strs_;
-  std::vector<Game> games_;
+  // live values only, keyed by handle (node-based: references stay valid while other handles come and go)
+  std::unordered_map<uint32_t, Obj> objs_;
+  std::unordered_map<uint32_t, Arr> arrs_;
+  std::unordered_map<uint32_t, std::string> strs_;
+  std::unordered_map<uint32_t, Game> games_;
+  std::array<uint32_t, 4> next_{{1, 1, 1, 1}};  // per-kind monotonic ids (D7)
   HeapStats stats_;
 };
 

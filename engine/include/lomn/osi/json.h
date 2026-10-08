@@ -12,7 +12,7 @@ namespace lomn::osi {
 struct Json {
   enum Type { Null, Bool, Number, String, Array, Object } type = Null;
   bool b = false;
-  std::string str;  // String: the decoded text (UTF-8 for \u escapes); Number: the source text
+  std::string str;  // String: latin-1 bytes (raw bytes kept; \uXXXX <= 0xff -> one byte, above is an error); Number: text
   std::vector<Json> arr;
   std::vector<std::pair<std::string, Json>> obj;
 

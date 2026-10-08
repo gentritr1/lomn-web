@@ -1470,3 +1470,158 @@ TEST_CASE("osi vm D11 typed stubs from the registry and sets_fpu_pc64") {
   CHECK(t.vm->fpu_pc() == 64);
   CHECK(t.starting("P ").size() == 1);
 }
+
+// ============================== fix round 1 (blind review I1-I3, the FindMemberID ruling) ==============================
+
+TEST_CASE("osi vm fix1 I1: atoi is _strtol(s, 0, 10) and SATURATES (0x65cde0 -> 0x65cd40, clamp 0x65cd95-0x65cdbb)") {
+  CHECK(osi_atoi("3000000000") == 2147483647);
+  CHECK(osi_atoi("-2147483649") == INT32_MIN);
+  CHECK(osi_atoi("2147483648") == 2147483647);
+  CHECK(osi_atoi("-2147483648") == INT32_MIN);
+  CHECK(osi_atoi("2147483647") == 2147483647);
+  CHECK(osi_atoi("99999999999999999999999") == 2147483647);
+  CHECK(osi_atoi("  -99999999999999999999x") == INT32_MIN);
+  // through the VM: 0xb2 on a string (row 0xb2: 0x11/0x16 -> atoi)
+  T t;
+  Asm a;
+  a.fn("main", 0).s("3000000000").op(0xb2).ret();
+  CallResult r = t.run(a);
+  CHECK(r.ok);
+  CHECK(r.result == I(2147483647));
+}
+
+TEST_CASE("osi vm fix1 I2: object dtor frees props back to front (0x6085cd-0x6085e3), exact F sequence") {
+  T t;
+  Asm a;
+  a.cls("k", {"p0", "p1"});
+  // o = new k; o.p0 = "a" (string 1 after 0xb0 copy...); keep it simple: dynamic strings via 0xb0 of 0x11
+  a.fn("main", 0).op(0x13).u16(0)                                  // o                       (A o 1)
+      .s("x").op(0xb0).op(0x33).u8(2).op(0x10).u16(a.sym("p0"))     // o.p0 = "x" (s1)         -> o
+      .s("y").op(0xb0).op(0x33).u8(2).op(0x10).u16(a.sym("p1"))     // o.p1 = "y" (s2)         -> o
+      .pop().nothing().ret();                                        // Pop disposes o
+  CallResult r = t.run(a);
+  REQUIRE_MESSAGE(r.ok, t.err());
+  CHECK(t.starting("F ") == std::vector<std::string>{"F o 00000001", "F s 00000002", "F s 00000001"});
+}
+
+TEST_CASE("osi vm fix1 I2: a nested engine call's marker is the PC after the invoking 0x82 (site+6, 0x6015c6-0x601780)") {
+  T t;
+  Asm a;
+  a.fn("inner", 0).label("in").i8(3).ret();
+  a.fn("main", 0).label("site").call("t", "reenter", 0).ret();
+  t.reg.add(entry("t", "reenter", 0, 0, {}, nat_reenter));
+  CallResult r = t.run(a);
+  REQUIRE_MESSAGE(r.ok, t.err());
+  char want[64];
+  std::snprintf(want, sizeof want, "I %08x 43    2    2 00ff:%08x", a.at("in"), a.at("site") + 6);
+  CHECK(t.has(want));
+}
+
+TEST_CASE("osi vm fix1 I2: 0x60 on two strings disposes a then b (0x6052ae/0x6052b9 order, string path 0x6053f6/0x605401)") {
+  T t;
+  Asm a;
+  a.fn("main", 0).s("ABC").s("abc").op(0x60).ret();
+  CallResult r = t.run(a);
+  REQUIRE(r.ok);
+  CHECK(r.result == I(1));
+  CHECK(t.starting("F ") == std::vector<std::string>{"F s 00000001", "F s 00000002"});
+  T u;
+  Asm b;
+  b.cls("k", {});
+  b.fn("main", 0).op(0x13).u16(0).op(0x13).u16(0).op(0x60).ret();  // two distinct objects: a (o1) then b (o2)
+  CallResult q = u.run(b);
+  REQUIRE(q.ok);
+  CHECK(q.result == I(0));
+  CHECK(u.starting("F ") == std::vector<std::string>{"F o 00000001", "F o 00000002"});
+}
+
+TEST_CASE("osi vm fix1 I3: heap storage is bounded by the live values, ids stay monotonic (D7)") {
+  StringTrace tr;
+  Heap h(&tr);
+  for (int i = 0; i < 10000; ++i) {
+    uint32_t s = h.new_string("x");
+    uint32_t o = h.new_object(0, 1);
+    uint32_t a = h.new_array(2);
+    uint32_t g = h.new_game(0x27);
+    h.dispose(Variant{kString, s});
+    h.dispose(Variant{kObject, o});
+    h.dispose(Variant{kArray, a});
+    h.dispose(Variant{0x27, g});
+  }
+  CHECK(h.stored() == 0);
+  CHECK(h.new_string("y") == 10001);  // never reused
+  CHECK(h.stored() == 1);
+  CHECK(h.stats().allocs[kKindString] == 10001);
+}
+
+TEST_CASE("osi vm fix1 M8: dispose of a deep chain is iterative (no recursion) and keeps the back-to-front order") {
+  Heap h;
+  uint32_t head = h.new_array(0);
+  uint32_t cur = head;
+  for (int i = 0; i < 200000; ++i) {  // a 200,000-deep chain of arrays: recursion would overflow the native stack
+    uint32_t nx = h.new_array(0);
+    h.elements(cur).push_back(Variant{kArray, nx});
+    cur = nx;
+  }
+  h.dispose(Variant{kArray, head});
+  CHECK(h.stats().live[kKindArray] == 0);
+  CHECK(h.stored() == 0);
+}
+
+TEST_CASE("osi vm fix1: FindMemberID miss-cache poisoning (0x609ca7-0x609cc8) and the 51st-insert overflow") {
+  T t;
+  Asm a;
+  a.cls("k", {"hp", "mp"});  // symbols: hp (0), mp (1); a miss compares both, so it caches {"mp", 0xffff}
+  a.fn("okhp", 0).op(0x13).u16(0).s("HP").op(0x18).ret();
+  a.fn("okmp", 0).op(0x13).u16(0).s("MP").op(0x18).ret();
+  a.fn("miss", 0).op(0x13).u16(0).s("nope").op(0x18).ret();
+  t.load(a);
+  // a fresh VM: "mp" resolves
+  CallResult r0 = t.vm->call("okmp", {});
+  CHECK(r0.ok);
+  // a new VM on the same script: miss first, then "mp" hits the poisoned entry
+  T u;
+  u.load(a);
+  CHECK_FALSE(u.vm->call("miss", {}).ok);
+  CHECK(u.err() == "Reference to non-existant member property \"nope\"");
+  u.vm->reset_after_error();
+  CHECK_FALSE(u.vm->call("okmp", {}).ok);
+  CHECK(u.err() == "Reference to non-existant member property \"MP\"");
+  u.vm->reset_after_error();
+  CallResult r2 = u.vm->call("okhp", {});  // hp was never poisoned
+  CHECK(r2.ok);
+  // inserts so far: miss (1), okmp hit the cache (0), okhp (1) = 2; 48 more misses fill 50 entries, the next overflows
+  for (int i = 0; i < 48; ++i) {
+    CHECK_FALSE(u.vm->call("miss", {}).ok);
+    CHECK(u.err() == "Reference to non-existant member property \"nope\"");
+    u.vm->reset_after_error();
+  }
+  CHECK_FALSE(u.vm->call("miss", {}).ok);
+  CHECK(u.err() == "Undefined behaviour: FindMemberID cache overflow (51st miss)");
+}
+
+TEST_CASE("osi vm fix1 M5/M7: JSON text is latin-1; reset_after_error never throws") {
+  Json j;
+  std::string err;
+  REQUIRE(parse_json("\"a\\u00e9\\u0000\"", j, &err));
+  CHECK(j.str == std::string("a\xe9\0", 3));
+  CHECK_FALSE(parse_json("\"\\u0100\"", j, &err));
+  REQUIRE(parse_json("\"\xff\x80\"", j, &err));
+  CHECK(j.str == "\xff\x80");
+  // M7: a fabricated (dangling) handle left on the stack by an error is dropped by the reset, not thrown
+  T t;
+  Asm a;
+  a.fn("main", 1).f(1.0f).rel(0x53, "z").label("z").ret();
+  t.load(a);
+  CHECK_FALSE(t.vm->call("main", {Variant{kString, 999}}).ok);
+  bool threw = false;
+  try {
+    t.vm->reset_after_error();
+  } catch (...) {
+    threw = true;
+  }
+  CHECK_FALSE(threw);
+  CHECK(t.vm->snapshot().depth == 0);
+  REQUIRE(t.vm->internal_errors().size() == 1);
+  CHECK(t.vm->internal_errors()[0] == "reset_after_error: Undefined: dangling string handle");
+}

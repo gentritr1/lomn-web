@@ -21,7 +21,7 @@ namespace lomn::osi {
 
 struct VmState {
   uint32_t pc = 0, depth = 0, frame = 0, context_depth = 0;
-  int refcount = 0;
+  int refcount = 0;     // our own bookkeeping (+1 per active call); not compared (the original adds +2 per Call)
   Variant top;          // valid when depth > 0
   bool halted = false;  // the last Run ended on 0xff
   int fpu_pc = 24;      // D8'
@@ -65,6 +65,8 @@ class Vm {
   uint64_t instructions() const { return instructions_; }
   int fpu_pc() const { return fpu_pc_; }
   uint32_t stack_high_water() const { return high_water_; }
+  // Host-side problems met where throwing is not allowed (reset_after_error); never traced.
+  const std::vector<std::string>& internal_errors() const { return internal_errors_; }
 
  private:
   static const char* const kDirectCallMessage;  // 0x84's text, reported at a memoised 0x82 site
@@ -93,7 +95,8 @@ class Vm {
   Variant& frame_slot(uint32_t idx);
   const sage::OsiClass& class_of(uint32_t obj);
   uint32_t find_method(uint32_t obj, uint16_t sym, const char* undefined_msg);  // FindMethod 0x608600
-  uint16_t find_member_id(const std::string& name) const; // FindMemberID 0x609ba0
+  uint16_t find_member_id(const std::string& name);       // FindMemberID 0x609ba0 (with its miss-poisoned cache)
+  static std::string upto_nul_copy(const std::string& s);
   std::string fmt_err(const char* fmt, uint32_t type) const;
 
   // shared handler bodies (each handler passes its own message literals)
@@ -149,13 +152,20 @@ class Vm {
   uint32_t high_water_ = 0;
   uint64_t native_seq_ = 0;
   std::map<std::string, Variant, std::less<>> globals_;
+  // D4 memo: site -> entry. NativeRegistry keeps entries in a deque, so the pointer survives later add() calls.
   std::unordered_map<uint32_t, const NativeEntry*> memo_;
+  struct MemberCache {
+    int symbol;   // symbol-table index of the cached text (-1: the null pointer of an empty symbol table)
+    uint16_t id;  // the cached result (0xffff for a poisoned miss)
+  };
+  std::vector<MemberCache> member_cache_;
+  std::vector<std::string> internal_errors_;
   std::optional<VmError> last_error_;
   int nesting_ = 0;
   struct Saved {
     uint32_t depth = 0, pc = 0, frame = 0;
     uint16_t context = 0;
-    int refcount = 0;
+    int refcount = 0;     // our own bookkeeping (+1 per active call); not compared (the original adds +2 per Call)
   } saved_;
 };
 
