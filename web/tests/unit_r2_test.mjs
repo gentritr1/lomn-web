@@ -171,11 +171,17 @@ function fakeEngine(Engine, fileBytes) {
   e.byNorm.set('root/data/fake.blk', entry);
   return { e, M, resident };
 }
-async function roundsError(e, probe) {
+// C-a2: rounds() runs under its own deadline (default 5 s): a stall (a file read whose promise never settles) is an error with a
+// message that names it, not a silent wait for the test timeout or the Makefile's 60 s `timeout`. The timer is always cleared.
+async function roundsError(e, probe, deadlineMs = 5000) {
+  let timer;
+  const stall = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`rounds(levt/fake) did not settle within ${deadlineMs} ms (a stalled read, or a guard that never fires)`)), deadlineMs); });
   try {
-    await e.rounds(probe, 'levt/fake');
+    await Promise.race([e.rounds(probe, 'levt/fake'), stall]);
   } catch (err) {
     return err.message;
+  } finally {
+    clearTimeout(timer);
   }
   return 'resolved without an error';
 }
@@ -208,4 +214,28 @@ test('T8 P3 rounds: a source that keeps missing the SAME range fails with "made 
   assert.equal(msg, 'levt/fake: prefetch made no progress (root/data/fake.blk)');
   assert.equal(calls, 2);
   assert.equal(resident.size, 1);
+});
+
+// M1 close-out C-a2: a rounds() that never settles (a file read whose promise never resolves) used to fail only at the test's own
+// 10 s timeout, and if the stalled thing held a handle (a timer, a pending fetch) the node process then lived on until the Makefile's
+// 60 s `timeout`. The error path now has its own bounded failure with a message that names the stall.
+test('C-a2 rounds: a file read that never settles fails with its own message at the bound, long before the 60 s make timeout', { timeout: 15000 }, async () => {
+  const { Engine } = await import('../app/engine.js');
+  const { e, M } = fakeEngine(Engine, 64);
+  e.source.file = () => new Promise(() => {});  // the read never settles
+  const hold = setInterval(() => {}, 1000);       // ... and keeps a handle open, as a pending fetch does
+  let calls = 0;
+  const probe = () => {
+    if (++calls > PROBE_BOUND) throw new Error('fake probe called too often');
+    M.misses = 'root/data/fake.blk\t0\t16\n';
+    return 1;
+  };
+  const t0 = Date.now();
+  try {
+    const msg = await roundsError(e, probe, 1500);
+    assert.match(msg, /rounds\(levt\/fake\) did not settle within 1500 ms/);
+    assert.ok(Date.now() - t0 < 5000, `took ${Date.now() - t0} ms`);
+  } finally {
+    clearInterval(hold);
+  }
 });
