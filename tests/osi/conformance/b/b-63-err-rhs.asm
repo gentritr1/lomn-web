@@ -2,7 +2,7 @@
 .function main2 0 @m2
 .function main 0
     PushConstanti8 1
-    PushConstantf32 bits:0x3f800000
+    PushConstanti8 1
     ConvertToString
 err:
     LessOrEqual

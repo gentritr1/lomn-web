@@ -60,5 +60,5 @@
       }
     }
   },
-  "note": "10 string arguments to a 0-argc function: all 10 are disposed by CallWithReturn when it pushes the arguments (F lines between C and the first I, in index order). allocs s 10 (the host's strings), live s 0."
+  "note": "opcodes.md 'Engine calls' section: 10 string arguments to a 0-argc function: all 10 are disposed by CallWithReturn when it pushes the arguments (F lines between C and the first I, in index order). allocs s 10 (the host's strings), live s 0."
 }

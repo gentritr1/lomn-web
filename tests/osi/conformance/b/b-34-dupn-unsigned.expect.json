@@ -1,0 +1,23 @@
+{
+  "id": "b-34-dupn-unsigned",
+  "rows": [
+    "0x34"
+  ],
+  "falsifier": "0x34 reads n unsigned",
+  "alternative": "signed n = -126 copies nothing; PopN 130 then also pops the 0xff marker and the result is not 8",
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 8
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24
+  },
+  "note": "0x34: operand u8 n (unsigned) = 130 (byte 0x82). The top 130 slots (7, 128 nothings, 8) are copied in order: depth 1 + 130 + 130 = 261. PopN 130 (unsigned) removes the copies, leaving the original 8 on top -> 8."
+}

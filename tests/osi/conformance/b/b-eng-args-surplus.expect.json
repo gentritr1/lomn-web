@@ -61,5 +61,5 @@
       }
     }
   },
-  "note": "argc 2 of 10: a0 = 5, a1 = \"x\" pushed; the 8 surplus strings disposed before the first I. main pops a1 with dispose (F s) and returns a0 = 5. allocs s 9, live s 0."
+  "note": "opcodes.md 'Engine calls' section: argc 2 of 10: a0 = 5, a1 = \"x\" pushed; the 8 surplus strings disposed before the first I. main pops a1 with dispose (F s) and returns a0 = 5. allocs s 9, live s 0."
 }

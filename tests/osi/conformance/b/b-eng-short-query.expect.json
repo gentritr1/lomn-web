@@ -22,5 +22,5 @@
     "context_depth": 0,
     "fpu_pc": 24
   },
-  "note": "FindFunction: a query shorter than the entry fails (its NUL meets a letter) -> SetPCAndArgs false -> Message 'Unable to locate function Set in scripts' (an M line, not an error), Run skipped, result nothing; the 0xff marker is popped: depth 0, context_depth 0. The int argument is neither pushed nor disposed."
+  "note": "opcodes.md 'Engine calls' section: FindFunction: a query shorter than the entry fails (its NUL meets a letter) -> SetPCAndArgs false -> Message 'Unable to locate function Set in scripts' (an M line, not an error), Run skipped, result nothing; the 0xff marker is popped: depth 0, context_depth 0. The int argument is neither pushed nor disposed."
 }

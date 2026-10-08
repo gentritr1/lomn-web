@@ -58,5 +58,5 @@
     "context_depth": 0,
     "fpu_pc": 24
   },
-  "note": "SetPCAndArgs: the callee gets exactly the declared argc (3) of the 10 supplied: a0..a2 pushed (1 2 3), a3..a9 disposed. 0x52 returns the top, a2 = 3 (all 10 pushed would give 10)."
+  "note": "opcodes.md 'Engine calls' section: SetPCAndArgs: the callee gets exactly the declared argc (3) of the 10 supplied: a0..a2 pushed (1 2 3), a3..a9 disposed. 0x52 returns the top, a2 = 3 (all 10 pushed would give 10)."
 }

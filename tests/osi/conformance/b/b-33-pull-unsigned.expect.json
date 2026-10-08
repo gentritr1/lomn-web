@@ -1,0 +1,23 @@
+{
+  "id": "b-33-pull-unsigned",
+  "rows": [
+    "0x33"
+  ],
+  "falsifier": "0x33 reads n unsigned",
+  "alternative": "signed n = -56 copies the slot 56 above the top (stale memory), not 7",
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 7
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24
+  },
+  "note": "0x33: operand u8 n (unsigned) = 200 (byte 0xc8). Stack above the marker: 7, then 199 nothings; top-1..top-199 are the nothings, top-200 is the 7: Duplicate(7) is pushed and returned."
+}

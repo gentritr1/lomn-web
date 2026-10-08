@@ -3,6 +3,8 @@
   "rows": [
     "0x31"
   ],
+  "falsifier": "0x31 reads n unsigned",
+  "alternative": "signed n = -56: no pop, the top stays a nothing (result nothing)",
   "entry": "main",
   "args": [],
   "natives": [],
@@ -17,5 +19,5 @@
     "context_depth": 0,
     "fpu_pc": 24
   },
-  "note": "0x31: n=2 (u8). 7 returned."
+  "note": "0x31: operand u8 n (unsigned) = 200 (byte 0xc8). 0x23 pushes 200 nothings above the 7 (stack holds 201 slots above the 0xff marker); PopN 200 pops them all; 7 returned."
 }

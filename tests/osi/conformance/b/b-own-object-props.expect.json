@@ -2,7 +2,10 @@
   "id": "b-own-object-props",
   "rows": [
     "0x30",
-    "0x10"
+    "0x10",
+    "0x13",
+    "0xb0",
+    "0x32"
   ],
   "falsifier": "the object owns (and frees) its properties",
   "alternative": "props not freed: heap.live.s = 2",

@@ -16,5 +16,5 @@
     },
     "fpu_pc": 64
   },
-  "note": "SetPCAndArgs: PC = the code pointer, then argc 11 > 10 -> Error. The 0xff marker is already pushed, no argument is: depth 1. pc = main's first instruction (PC was set before the check); op = its byte 0x45."
+  "note": "opcodes.md 'Engine calls' section: SetPCAndArgs: PC = the code pointer, then argc 11 > 10 -> Error. The 0xff marker is already pushed, no argument is: depth 1. pc = main's first instruction (PC was set before the check); op = its byte 0x45."
 }

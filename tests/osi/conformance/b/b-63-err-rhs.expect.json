@@ -18,5 +18,5 @@
     },
     "fpu_pc": 64
   },
-  "note": "0x63: int vs a 0x16 string (0xb0 of 1.0) -> rhs (type:16). depth 1 (both operands popped)."
+  "note": "0x63: int vs a 0x16 string (0xb0 of the int 1, \"%d\", no %f dependence) -> rhs (type:16). depth 1 (both operands popped)."
 }
