@@ -68,7 +68,7 @@ Known blind spots (stated, not hidden):
 
 ## 6. Natives
 
-The 1,056-row registry (`gen/osi/natives.json`: class, name, body address, min/max, 10 types) is generated from the completed corpus. A generator emits a typed, logging stub for each row. Each row is in one of three tiers:
+The 1,056-row registry (`data/osi/natives.json` (committed; was `gen/osi/natives.json` before the M2a-0 final-fix ruling): class, name, body address, min/max, 10 types) is generated from the completed corpus. A generator emits a typed, logging stub for each row. Each row is in one of three tiers:
 
 - **Tier 1, implemented:** cites its wrapper body and the method it calls; worked in the order the trace first hits them.
 - **Tier 2, stub proven safe:** a taint pass in the Python oracle shows its return value never reaches a branch, a tier-1 argument or a game-variable write on the menu path. A decided default is one line in the registry.
@@ -80,7 +80,7 @@ Each sub-milestone gets its own plan, written after the previous one lands (its 
 
 | Plan | Content |
 |---|---|
-| **M2a-0** Corpus completion + citation tables (no engine code) | Probes done 2026-10-08 (`docs/knowledge/research/2026-10-08-m2a0-probe{1,2,3}-*.md`): seeding works (body shapes: 5, not 1); the engine reads the binary `.fnt` inside the `.col`, never the text `.info`; input tuples are cited. Then: the seeded `make decomp` re-run (`.CRT` initializers, `&LAB_` bodies, registration callers) with the A11 `ScOSIVariant` by-value signature fix; generators for `docs/osi/opcodes.md`, `gen/osi/natives.json`, `docs/osi/types.md`. |
+| **M2a-0** Corpus completion + citation tables (no engine code) | Probes done 2026-10-08 (`docs/knowledge/research/2026-10-08-m2a0-probe{1,2,3}-*.md`): seeding works (body shapes: 5, not 1); the engine reads the binary `.fnt` inside the `.col`, never the text `.info`; input tuples are cited. Then: the seeded `make decomp` re-run (`.CRT` initializers, `&LAB_` bodies, registration callers) with the A11 `ScOSIVariant` by-value signature fix; generators for `docs/osi/opcodes.md`, `data/osi/natives.json` (committed; was `gen/osi/natives.json` before the M2a-0 final-fix ruling), `docs/osi/types.md`. |
 | **M2a-1** VM core + Python oracle + conformance | 96 handlers; stack, frames, variants, strings, arrays, objects; native-call protocol with a pluggable registry; re-entrant `Call`; per-site memoisation; caps with errors (never a write past slot 1,000). |
 | **M2a-2** Native framework, `Setup` to the first `Process` | Generated stubs; the natives `Setup` needs implemented; `lomn_view --script` runs `Setup` and N `Process` frames headless. |
 | **M2a-3** Menu systems | Tile fonts, HUD sprites/text/rectangles through the shim (FVF `0x42`, textured quads, HUD transform, order after the area), camera spline, SDL3 input → `Input`/`OnEvent`, `Bionicle.ini` via the VFS, sound stubs, D1/D3 flags. |
