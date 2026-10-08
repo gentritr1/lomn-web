@@ -730,6 +730,57 @@ at:
     assert vm.call("main2", []).ok and vm.fpu_pc == 64
 
 
+def test_engine_call_nesting_cap_d10():                              # port cap (not original), same as the C++ VM
+    asm = ".function main 0\nat:\nCallGameFunction t.deep 0\nReturn\n"
+    inner = []
+
+    def deep_native(levels):
+        left = [levels]
+
+        def fn(call):
+            if left[0] > 0:
+                left[0] -= 1
+                try:
+                    call.vm.call("main", [])
+                except osi_vm.VmError as e:
+                    if not inner:
+                        inner.append(e.message)
+                    raise
+            return I(1)
+        reg = osi_vm.NativeRegistry(TYPES)
+        reg.add(osi_vm.NativeEntry("t", "deep", "t.deep", 0, 0, (15,) * 10, "test", 0, None, fn, "test"))
+        return reg, left
+
+    reg, _ = deep_native(63)                                         # the outer call + 63 re-entries = 64 active
+    vm, res, lines, info = ok(asm, registry=reg)
+    assert not inner and sum(1 for l in lines if l.startswith("C ")) == 64
+    assert vm.depth == 0 and vm.context_depth == 0
+    reg, left = deep_native(64)                                      # the 65th call is refused before it starts
+    vm, e, lines, info = err(asm, registry=reg)
+    assert inner == ["Undefined: engine-call nesting limit (64)"]
+    assert e.message == "Script is calling t.deep" and e.pc == info["labels"]["at"] and e.op == 0x82
+    assert sum(1 for l in lines if l.startswith("C ")) == 64 and sum(1 for l in lines if l.startswith("E ")) == 1
+    assert vm.context_depth == 64
+    vm.reset_after_error()
+    assert vm.depth == 0 and vm.context_depth == 0
+    left[0] = 1                                                      # the nesting count was restored too
+    assert vm.call("main", []).ok
+
+
+def test_run_program_reports_recursion_error_as_host_error(monkeypatch, tmp_path):   # M1: --conform never aborts
+    asm = tmp_path / "x-recursion.asm"
+    asm.write_text(".function main 0\nPushConstanti8 1\nReturn\n")
+    (tmp_path / "x-recursion.expect.json").write_text(json.dumps(
+        {"id": "x-recursion", "rows": [], "entry": "main", "args": [], "natives": [], "registry": "none",
+         "expect": {"ok": True}}))
+
+    def boom(self, *a, **k):
+        raise RecursionError("maximum recursion depth exceeded")
+    monkeypatch.setattr(osi_vm.Vm, "_run", boom)
+    fails = osi_vm.run_program(asm)
+    assert fails == ["host error: Undefined: host exception: RecursionError: maximum recursion depth exceeded"]
+
+
 def test_stack_caps_d10():                                           # our two errors
     vm, e, lines, info = err(".function main 0\nrec:\nPushConstanti32 @rec\nJumpRelative 0\n")
     assert e.message == "Stack overflow (1000 slots)" and e.depth == 1000

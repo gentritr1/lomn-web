@@ -881,7 +881,9 @@ ERR = {
     "underflow": b"Stack underflow",
     "divzero": b"Divide by 0",
     "too_many_entry": b"Too many args required (max 10) to call requested entry point.",
+    "nest_cap": b"Undefined: engine-call nesting limit (64)",            # port cap (D10), not original
 }
+MAX_ENGINE_NESTING = 64
 
 
 class Vm:
@@ -1006,6 +1008,8 @@ class Vm:
         if len(args) > 10:
             raise ValueError("at most 10 engine arguments")
         args += [NOTHING] * (10 - len(args))
+        if self._nest >= MAX_ENGINE_NESTING:                    # port cap (D10): never the outermost call
+            raise self._err(ERR["nest_cap"])
         self._nest += 1
         outer = self._nest == 1
         if outer:
@@ -2407,6 +2411,8 @@ def run_program(asm_path: Path, trace_dir: Optional[Path] = None, *, natives_p=D
         fails.append("replay: %s" % e)
     except VmError as e:
         fails.append("host error: %s" % e.message)
+    except RecursionError as e:                                 # M1: like the C++ "Undefined: host exception: ..."
+        fails.append("host error: Undefined: host exception: RecursionError: %s" % e)
     finally:
         if trace is not None:
             trace.close()

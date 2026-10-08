@@ -44,6 +44,9 @@ class Vm {
 
   // Engine -> script call (opcodes.md "Engine calls": Call 0x60b320 / CallWithReturn 0x60b450 / SetPCAndArgs 0x60b5e0).
   // At most 10 arguments; their ownership moves to the VM (pushed or disposed). Re-entrant: a native may call it.
+  // Port cap (D10, not original): entering with kMaxEngineNesting calls already active throws
+  // "Undefined: engine-call nesting limit (64)", which unwinds like any other native error.
+  static constexpr int kMaxEngineNesting = 64;
   CallResult call(std::string_view name, const std::vector<Variant>& args = {});
   // 0x82 memoisation (D4): the native resolved at a call site (file offset), or nullptr.
   const NativeEntry* memo(uint32_t site_pc) const;

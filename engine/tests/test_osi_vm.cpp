@@ -1455,6 +1455,63 @@ TEST_CASE("osi vm re-entrancy: a native calls vm.call; nested C..R; an inner err
   CHECK(u.vm->snapshot().context_depth == 0);
 }
 
+// t.deep re-enters "main" until g_deep_left reaches 0; the innermost native records the error it saw (before 0x82
+// re-reports it as "Script is calling t.deep").
+int g_deep_left = 0;
+std::string g_deep_inner_err;
+Variant nat_deep(NativeCall& c, void*) {
+  if (g_deep_left-- > 0) {
+    try {
+      c.vm.call("main", {});
+    } catch (const VmError& e) {
+      if (g_deep_inner_err.empty()) g_deep_inner_err = e.message;
+      throw;
+    }
+  }
+  return make_int(1);
+}
+
+TEST_CASE("osi vm engine-call nesting cap (port, D10): 64 nested calls run, the 65th is an error unwound by 0x82") {
+  auto program = [] {
+    Asm a;
+    a.fn("main", 0).label("c").call("t", "deep", 0).ret();
+    return a;
+  };
+  {
+    T t;  // the outer call + 63 re-entries = 64 active calls
+    Asm a = program();
+    t.reg.add(entry("t", "deep", 0, 0, {}, nat_deep));
+    g_deep_left = 63;
+    g_deep_inner_err.clear();
+    CallResult r = t.run(a);
+    CHECK_MESSAGE(r.ok, t.err());
+    CHECK(g_deep_inner_err.empty());
+    CHECK(t.starting("C ").size() == 64);
+    CHECK(t.vm->snapshot().depth == 0);
+    CHECK(t.vm->snapshot().context_depth == 0);
+  }
+  T u;  // one more re-entry: the 65th call is refused before it starts
+  Asm b = program();
+  u.reg.add(entry("t", "deep", 0, 0, {}, nat_deep));
+  g_deep_left = 64;
+  g_deep_inner_err.clear();
+  CallResult q = u.run(b);
+  CHECK_FALSE(q.ok);
+  CHECK(g_deep_inner_err == "Undefined: engine-call nesting limit (64)");
+  CHECK(u.err() == "Script is calling t.deep");
+  CHECK(u.vm->last_error()->op == 0x82);
+  CHECK(u.vm->last_error()->pc == b.at("c"));
+  CHECK(u.starting("C ").size() == 64);  // the 65th call printed nothing
+  CHECK(u.starting("E ").size() == 1);
+  CHECK(u.vm->snapshot().context_depth == 64);  // at the throw (D10: the outer call does not unwind it)
+  u.vm->reset_after_error();
+  CHECK(u.vm->snapshot().depth == 0);
+  CHECK(u.vm->snapshot().context_depth == 0);
+  g_deep_left = 1;  // the nesting count was restored too: a fresh call may nest again
+  CallResult again = u.vm->call("main", {});
+  CHECK_MESSAGE(again.ok, u.err());
+}
+
 TEST_CASE("osi vm D11 typed stubs from the registry and sets_fpu_pc64") {
   NativeRegistry reg;
   NativeEntry e = entry("x", "mk", 0, 0, {}, nullptr);

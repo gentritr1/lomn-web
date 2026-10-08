@@ -163,6 +163,14 @@ described in words, never as decompiled code.
   outside what the original defines. We add two errors the original does not have, with our own texts:
   `"Stack overflow (1000 slots)"` on a push at depth 1,000 and `"Stack underflow"` on a pop at depth 0. A literal 0x84 in
   the file is our error `"Direct call without a memoised site"` (the original would call an arbitrary address).
+  **Engine-call nesting cap (port cap, not original behaviour).** Entering an engine call while 64 are already active
+  (a native re-entering the VM through `vm.call`, recursively) raises `"Undefined: engine-call nesting limit (64)"` in
+  both engines. The original has no cap: unbounded re-entry would overflow its native stack. The cap is never hit by the
+  outermost call, so the error unwinds through the calling native's 0x82/0x83 catch like any other native error and is
+  re-reported as `"Script is calling <cls>.<fn>"`; only the post-error snapshot shows it (depth and context_depth 64
+  for a script with no arguments). Measured real need: at most 1 active call over the A6 run (Setup + 600 frames of
+  `Base.osi`, 2026-10-09). The A6 stubs never re-enter, so 1 is a floor, not a measured game maximum. The cap keeps the
+  wasm32 C++ recursion (about 7 frames per level) inside its stack. Corpus: `b-eng-reenter-depth`.
 
 ## Variant types seen in the handlers
 

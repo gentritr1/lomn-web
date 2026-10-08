@@ -313,11 +313,16 @@ add_executable(lomn_tests tests/test_main.cpp tests/test_fs.cpp tests/test_rhi_n
                tests/test_area_states.cpp tests/test_sage_frame.cpp tests/test_view_texture_cache.cpp tests/test_fuzz_fragments.cpp
                tests/test_rhi_destroy.cpp tests/test_prefetch_fs.cpp tests/test_fly_camera.cpp  # M1b
                tests/test_osi_vm.cpp)  # M2a-1
+# wasm32 stack for the OSI VM (I2): a native re-entering the VM costs 1,648 bytes of C++ stack per engine call
+# (measured 2026-10-09, Vm::call -> call_impl -> run -> dispatch -> 0x82 -> native -> Vm::call), 116,240 bytes in use at
+# the 65th call's nesting-cap throw in lomn_osi_conform. 512 KiB = 4.5x that (the default 64 KiB runs out near level 33:
+# 65,152 bytes in use there). STACK_OVERFLOW_CHECK=2 makes any future overflow a clean trap instead of a write below the stack.
+set(LOMN_OSI_WASM_STACK -sSTACK_OVERFLOW_CHECK=2 -sSTACK_SIZE=524288)
 target_link_libraries(lomn_tests PRIVATE lomn_area lomn_osi)
 target_include_directories(lomn_tests PRIVATE "${LOMN_TOOLCHAIN_DIR}/include")
 target_compile_definitions(lomn_tests PRIVATE "LOMN_TESTS_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/tests\"")  # test_fuzz_fragments.cpp scans fuzz_fragments.h and xfile.cpp (native and wasm32 via NODERAWFS)
 if(EMSCRIPTEN)
-  target_link_options(lomn_tests PRIVATE -sNODERAWFS=1 -sALLOW_MEMORY_GROWTH=1)
+  target_link_options(lomn_tests PRIVATE -sNODERAWFS=1 -sALLOW_MEMORY_GROWTH=1 ${LOMN_OSI_WASM_STACK})
 endif()
 add_test(NAME unit COMMAND lomn_tests)
 # M1a-4 cleanup S1 (batch-1 review I-1): native-only sanitizer run of the untrusted-.x tests. A Release build cannot see
@@ -349,7 +354,7 @@ target_link_libraries(lomn_osi_conform PRIVATE lomn_osi)
 target_compile_options(lomn_osi_conform PRIVATE -Wall -Wextra)
 target_compile_definitions(lomn_osi_conform PRIVATE "LOMN_OSI_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/../data/osi\"")
 if(EMSCRIPTEN)
-  target_link_options(lomn_osi_conform PRIVATE -sNODERAWFS=1 -sALLOW_MEMORY_GROWTH=1)
+  target_link_options(lomn_osi_conform PRIVATE -sNODERAWFS=1 -sALLOW_MEMORY_GROWTH=1 ${LOMN_OSI_WASM_STACK})
 endif()
 add_test(NAME osi_conform COMMAND sh -c
          "timeout 120 python3 \"$1\" \"$2\" \"$3\" || exit 1; if [ -n \"$4\" ]; then timeout 300 \"$4\" \"$0\" \"$2\" --osi-dir \"$3\"; else timeout 300 \"$0\" \"$2\" --osi-dir \"$3\"; fi"
@@ -367,7 +372,7 @@ target_link_libraries(lomn_osi_run PRIVATE lomn_osi)
 target_compile_options(lomn_osi_run PRIVATE -Wall -Wextra)
 target_compile_definitions(lomn_osi_run PRIVATE "LOMN_OSI_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/../data/osi\"")
 if(EMSCRIPTEN)
-  target_link_options(lomn_osi_run PRIVATE -sNODERAWFS=1 -sALLOW_MEMORY_GROWTH=1)
+  target_link_options(lomn_osi_run PRIVATE -sNODERAWFS=1 -sALLOW_MEMORY_GROWTH=1 ${LOMN_OSI_WASM_STACK})
 endif()
 set(LOMN_OSI_A6_KEYS "down@100 down@160 enter@220 esc@280")
 foreach(mode digest window rerun)

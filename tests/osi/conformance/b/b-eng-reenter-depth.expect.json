@@ -1,0 +1,39 @@
+{
+  "id": "b-eng-reenter-depth",
+  "rows": [
+    "0x82"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [
+    {
+      "cls": "t",
+      "name": "reenter",
+      "min": 0,
+      "max": 0,
+      "types": [],
+      "returns": {
+        "type": "0x10",
+        "value": 7
+      },
+      "calls": {
+        "entry": "main",
+        "args": []
+      }
+    }
+  ],
+  "registry": "none",
+  "expect_error": {
+    "message": "Script is calling t.reenter",
+    "pc": "@c",
+    "op": "0x82",
+    "depth": 64,
+    "top": {
+      "type": "0xff",
+      "value": 61
+    },
+    "context_depth": 64,
+    "fpu_pc": 64
+  },
+  "note": "PORT behaviour, not original: the engine-call nesting cap of 64 (opcodes.md 'Errors in the port (D10, M2a-1)'; section 'Engine calls'). t.reenter calls vm.call(\"main\"), which calls t.reenter again, unbounded. The original has no cap (its native stack would overflow). Calls 1..64 each push one 0xff marker (main has no arguments; 0x82 pushes nothing before the native), so the 65th vm.call raises \"Undefined: engine-call nesting limit (64)\" before its marker, its C line or anything else. That inner error unwinds through each 0x82 catch like any native error, and the outermost 0x82 re-reports it as \"Script is calling t.reenter\" (opcodes.md 0x82 errors cell, conformance.md §6.9), so the cap shows only through the post-error snapshot: depth 64 and context_depth 64 at the throw (without the cap it would be the 1000-slot stack overflow at context_depth 1000). top = the 64th call's marker = the PC after the 6-byte 0x82 at @c. main2 after reset_after_error() shows the VM (and its nesting count) usable again."
+}

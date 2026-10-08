@@ -90,6 +90,9 @@ void Vm::record_error(const VmError& e) {
 }
 
 CallResult Vm::call(std::string_view name, const std::vector<Variant>& args) {
+  // Port cap (D10): never true for the outermost call, so the error always unwinds through the calling native's
+  // 0x82/0x83 catch.
+  if (nesting_ >= kMaxEngineNesting) throw VmError("Undefined: engine-call nesting limit (64)");
   const bool outer = nesting_ == 0;
   if (outer) {
     last_error_.reset();
