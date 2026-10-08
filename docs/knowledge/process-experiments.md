@@ -68,3 +68,12 @@ Arm order is counterbalanced: in M1a-4, batch 1 goes to Sonnet and batch 2 to Op
 **Reading.** Quality: no difference is detectable — every arm was approved first time, with no Critical findings and no Important finding attributable to the implementer. Speed and cost: not comparable this round — two batches were interrupted by a session restart, the batches differ in scope (batch B grew to 11 items), and host load ranged 7–150. Per item, Sonnet's batch B used ~31k tokens and ~6.3 min, Opus-medium's batch ~56k tokens and ~3.7 min, on different kinds of work.
 
 **Decision (per the rule above).** No replicated difference, so the default does not change: Sonnet stays the implementer for planned copy/fix-list work; Opus at default effort stays for reference builds and design-heavy tasks; Opus at medium effort is not adopted. Reviews stay on Opus. The split continues on the first M2 fix lists with matched scope and no restarts, which is when time and cost become comparable. Also learned: blind reviews need diff-only packages (commit trailers name the model).
+
+### E2 round 2 (M2a-0, 2026-10-08)
+
+| Task | Arm | Size | Review | Fix rounds | Wall | Tool calls |
+|---|---|---|---|---|---|---|
+| M2a-0 T1 seed addresses | Opus, medium | 121-line module + 140-line test | blind APPROVE; 1 Important caused by the brief (a test pin that the next task invalidates), 4 Minor test gaps | 1 (tests + docstring) | 4.7 min (+3.3) | 21 (+7) |
+| M2a-0 T3 native registry | Sonnet | 917-line generator + 500-line test + generated doc | blind APPROVE; 0 Important, 6 Minor | 1 | 28.6 min (+7.6) | 102 (+22) |
+
+**Reading.** Both arms were approved first time with no Critical findings and no implementer-caused Important finding. The Sonnet arm disclosed a TDD deviation: it drafted the module before the tests. It also added an unrequested third independent reader that made the registry stronger. The tasks differ about 6× in size, so time and cost per item are still not comparable. **Decision:** no change of default. M2a-1 pairs two deliberately matched tasks, one per arm, so time can be compared.
