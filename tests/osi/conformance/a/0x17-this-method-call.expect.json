@@ -31,5 +31,5 @@
       }
     }
   },
-  "note": "0x17 row: 'pushes {0x10, FindMethod(this, m)}'. m1 duplicates this (slot 0), takes m2's address and calls it with 0x51; m2 returns 44 up through m1 and main."
+  "note": "0x17 row: 'pushes {0x10, FindMethod(this, m)}'. m1 duplicates this (slot 0), takes m2's address and calls it with 0x51; m2 returns 44 up through m1 and main. helpers: CreateStackVariables (0x23), CreateObject (0x13), SetVariableValue (0x22), GetVariableValue (0x21), GetMemberFunction (0x12), JumpAbsolute (0x51)."
 }

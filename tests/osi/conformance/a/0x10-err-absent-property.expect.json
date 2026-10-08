@@ -18,5 +18,5 @@
     },
     "fpu_pc": 64
   },
-  "note": "0x10 errors cell: type 1, property absent, %s = member-symbol name (zz is a symbol, not a property of C). The row's order for type 1 is 'v popped, prop = GetProperty': o and v are both popped at the throw: depth 1 (marker). AMBIGUOUS-ORDER: if v were popped after the lookup the depth would be 2."
+  "note": "0x10 errors cell: type 1, property absent, %s = member-symbol name (zz is a symbol, not a property of C). The row's order for type 1 is 'v popped, prop = GetProperty'. Settled order (0x10 row, Order (asm), two independent readers): o popped 0x5fe664, v popped 0x5fe7fc before GetProperty 0x5fe818, so the absent-property error at 0x5fe845 leaves depth -2: o and v are both gone, depth 1 (marker). helpers: CreateObject (0x13)."
 }

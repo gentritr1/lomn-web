@@ -18,5 +18,5 @@
     },
     "fpu_pc": 64
   },
-  "note": "0xa1 errors cell: v.type != 0x10 (the float 1.0), c a valid colour. Both popped: depth 1. AMBIGUOUS-ORDER: the row does not say whether c is popped before the error."
+  "note": "0xa1 errors cell: v.type != 0x10 (the float 1.0), c a valid colour. Both popped: depth 1. Settled order (0xa1 row, Order (asm)): v then c are popped (0x600009, 0x600024) before both tests; the colour test comes first (error 0x600047), then v.type != 0x10 (error 0x60005d); either error leaves depth -2. helpers: PushConstantColor8888 (0x48)."
 }

@@ -18,5 +18,5 @@
     },
     "fpu_pc": 64
   },
-  "note": "0x71 errors cell: a.type != 0x10 once the float cases are excluded. a nothing: lhs. depth 1."
+  "note": "0x71 errors cell: a.type != 0x10 once the float cases are excluded. a nothing: lhs. depth 1. Order (asm, 0x71 row): both operands popped (0x6042c9/0x6042e4) before any test; depth -2."
 }

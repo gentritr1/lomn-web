@@ -29,5 +29,5 @@
     },
     "fpu_pc": 64
   },
-  "note": "0x11 errors cell: game type, map miss. o is popped (no dispose) before the lookup: depth 1 (marker)."
+  "note": "0x11 errors cell: game type, map miss. o is popped (no dispose) before the lookup: depth 1 (marker). helpers: CallGameFunction (0x82)."
 }

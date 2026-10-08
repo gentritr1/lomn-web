@@ -18,5 +18,5 @@
     },
     "fpu_pc": 64
   },
-  "note": "0x1a errors cell: property absent (type 1 path: 'v popped, id = FindMemberID(s), prop = GetProperty'): v is popped before the lookup, so only the marker is left: depth 1. AMBIGUOUS-ORDER as for 0x10."
+  "note": "0x1a errors cell: property absent (type 1 path: 'v popped, id = FindMemberID(s), prop = GetProperty'): v is popped before the lookup, so only the marker is left: depth 1. Settled order (0x1a row, Order (asm)): v is popped (0x5ff6f6) before FindMemberID/GetProperty, so the absent-property error at 0x5ff751 leaves depth -3 (s, o, v gone). helpers: CreateObject (0x13)."
 }

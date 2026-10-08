@@ -31,5 +31,5 @@
       }
     }
   },
-  "note": "0x70 row: string+string -> a with b's text appended in place, b disposed, a pushed; 0x11 operands converted first (a, then b). '12' + '34': both 0x11 operands become dynamic strings (allocs s 2), b is appended to a: '1234'; 0xb2 (helper) reads it with atoi: 1234. A swapped order would give 3412."
+  "note": "0x70 row: string+string -> a with b's text appended in place, b disposed, a pushed; 0x11 operands converted first (a, then b). '12' + '34': both 0x11 operands become dynamic strings (allocs s 2), b is appended to a: '1234'; 0xb2 (helper) reads it with atoi: 1234. A swapped order would give 3412. helpers: ConvertToInteger (0xb2)."
 }

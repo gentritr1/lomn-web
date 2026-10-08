@@ -31,5 +31,5 @@
       }
     }
   },
-  "note": "0x50 row: 'a1..an t -> {2, retPC} a1..an; the return marker is Inserted below the n arguments; framePtr = slot above the marker'. n = 1: the argument 20 is framePtr[0] in sub; sub returns it and main's Return passes it on."
+  "note": "0x50 row: 'a1..an t -> {2, retPC} a1..an; the return marker is Inserted below the n arguments; framePtr = slot above the marker'. n = 1: the argument 20 is framePtr[0] in sub; sub returns it and main's Return passes it on. helpers: GetVariableValue (0x21)."
 }

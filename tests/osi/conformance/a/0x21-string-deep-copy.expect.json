@@ -33,5 +33,5 @@
       }
     }
   },
-  "note": "0x21 row: Duplicate (opcodes.md 'Pop and ownership': Duplicate deep-copies a 0x16 string). 0x70 converts both table strings (allocs s 2) and frees b; the read copies the local's string (allocs s 3); Pop frees the copy and Return frees the local: live 0. Helpers: 0x70, 0x22."
+  "note": "0x21 row: Duplicate (opcodes.md 'Pop and ownership': Duplicate deep-copies a 0x16 string). 0x70 converts both table strings (allocs s 2) and frees b; the read copies the local's string (allocs s 3); Pop frees the copy and Return frees the local: live 0. Helpers: 0x70, 0x22. helpers: CreateStackVariables (0x23), Add (0x70), SetVariableValue (0x22)."
 }

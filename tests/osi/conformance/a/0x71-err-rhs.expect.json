@@ -18,5 +18,5 @@
     },
     "fpu_pc": 64
   },
-  "note": "0x71 errors cell: b non-number (a string-table entry 0x11): rhs. Strings are errors for '-'. depth 1."
+  "note": "0x71 errors cell: b non-number (a string-table entry 0x11): rhs. Strings are errors for '-'. depth 1. Order (asm, 0x71 row): both operands popped (0x6042c9/0x6042e4) before any test; depth -2."
 }

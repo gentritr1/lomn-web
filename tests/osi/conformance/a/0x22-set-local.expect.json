@@ -31,5 +31,5 @@
       }
     }
   },
-  "note": "0x22 row: 'frame: PushIntoFrame disposes framePtr[idx] and stores v'. Local 0 = 9."
+  "note": "0x22 row: 'frame: PushIntoFrame disposes framePtr[idx] and stores v'. Local 0 = 9. helpers: CreateStackVariables (0x23), GetVariableValue (0x21)."
 }

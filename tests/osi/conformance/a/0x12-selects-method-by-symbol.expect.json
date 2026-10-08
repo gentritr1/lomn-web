@@ -33,5 +33,5 @@
       }
     }
   },
-  "note": "0x12 row: FindMethod scans the class method records {u16 symbol, u32 offset} for the symbol m. m2 -> 22."
+  "note": "0x12 row: FindMethod scans the class method records {u16 symbol, u32 offset} for the symbol m. m2 -> 22. helpers: CreateObject (0x13), Dup (0x35), JumpAbsolute (0x51)."
 }

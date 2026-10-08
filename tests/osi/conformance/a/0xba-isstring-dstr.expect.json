@@ -31,5 +31,5 @@
       }
     }
   },
-  "note": "0xba row. The operand is a dynamic string (type 0x16) made by 0x70 (helper; allocs s 2): result 1. The operand is disposed (live 0): 'type = 0x11 or 0x16'."
+  "note": "0xba row. The operand is a dynamic string (type 0x16) made by 0x70 (helper; allocs s 2): result 1. The operand is disposed (live 0): 'type = 0x11 or 0x16'. helpers: Add (0x70)."
 }

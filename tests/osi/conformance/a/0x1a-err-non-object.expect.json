@@ -18,5 +18,5 @@
     },
     "fpu_pc": 64
   },
-  "note": "0x1a errors cell: o neither a game type nor 1 (int 3); note the wording 'object', not 'member'. v stays: depth 2."
+  "note": "0x1a errors cell: o neither a game type nor 1 (int 3); note the wording 'object', not 'member'. v stays: depth 2. Settled order (0x1a row, Order (asm)): s then o popped (0x5ff421, 0x5ff451); 'non object' (0x5ff6e2) comes BEFORE v is popped: depth -2, v on top."
 }

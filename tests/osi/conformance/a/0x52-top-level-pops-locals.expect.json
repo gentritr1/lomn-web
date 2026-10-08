@@ -31,5 +31,5 @@
       }
     }
   },
-  "note": "0x52 row: 'r popped, then Pop WITH dispose until a type-2 or 0xff marker has been popped. Type 0xff: push M back, then push r, Run stops'. The engine pops r: result 8, depth 0."
+  "note": "0x52 row: 'r popped, then Pop WITH dispose until a type-2 or 0xff marker has been popped. Type 0xff: push M back, then push r, Run stops'. The engine pops r: result 8, depth 0. helpers: CreateStackVariables (0x23)."
 }

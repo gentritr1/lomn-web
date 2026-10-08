@@ -31,5 +31,5 @@
       }
     }
   },
-  "note": "0xa0 row: 'c v -> c'; v popped first; v clamped: (uint32)v > 255 -> 255; c' = c with bits 31..24 <- v; pushed as 0x15'. v = 171 (0xab) is in range: 0x11223344 with the red channel <- 0xab = 0xab223344. Helper: 0x48 pushes the colour."
+  "note": "0xa0 row: 'c v -> c'; v popped first; v clamped: (uint32)v > 255 -> 255; c' = c with bits 31..24 <- v; pushed as 0x15'. v = 171 (0xab) is in range: 0x11223344 with the red channel <- 0xab = 0xab223344. Helper: 0x48 pushes the colour. helpers: PushConstantColor8888 (0x48)."
 }

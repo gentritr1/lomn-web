@@ -43,5 +43,5 @@
       }
     }
   },
-  "note": "0x21 row: 'idx & 0x8000 selects a global ... uses only idx & 0xff': 0x8001 is global index 1 = h (the table order of .globals g h). g = 1, h = 5: result 5."
+  "note": "0x21 row: 'idx & 0x8000 selects a global ... uses only idx & 0xff': 0x8001 is global index 1 = h (the table order of .globals g h). g = 1, h = 5: result 5. helpers: SetVariableValue (0x22)."
 }

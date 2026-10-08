@@ -20,5 +20,5 @@
     },
     "fpu_pc": 64
   },
-  "note": "0x70 row: 'if len(a)+len(b) >= 255, append throws BEFORE anything is pushed: a and b are already popped'. 200 + 55 = 255 characters: kLenTooLong (our error text for the non-OSI throw). Stack 3 slots before, 2 popped: depth 1, top the marker."
+  "note": "0x70 row: 'if len(a)+len(b) >= 255, append throws BEFORE anything is pushed: a and b are already popped'. 200 + 55 = 255 characters: kLenTooLong (our error text for the non-OSI throw). Stack 3 slots before, 2 popped: depth 1, top the marker. Order (asm, 0x70 row): both operands popped (0x60400d/0x60402e) before any test; depth -2."
 }

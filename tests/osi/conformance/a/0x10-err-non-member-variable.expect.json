@@ -18,5 +18,5 @@
     },
     "fpu_pc": 64
   },
-  "note": "0x10 errors cell: o (top, popped first, here the int 2) is neither type 1 nor 0x20..0xfe. 'v is popped' only on the success paths, so v (the int 1) stays: marker + v = depth 2, top int 1."
+  "note": "0x10 errors cell: o (top, popped first, here the int 2) is neither type 1 nor 0x20..0xfe. 'v is popped' only on the success paths, so v (the int 1) stays: marker + v = depth 2, top int 1. Settled order (0x10 row, Order (asm)): o popped 0x5fe664; this error (0x5fe7eb) is raised BEFORE v is popped: depth -1, v on top."
 }

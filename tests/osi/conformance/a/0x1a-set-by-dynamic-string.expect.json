@@ -31,5 +31,5 @@
       }
     }
   },
-  "note": "0x1a row: s may be a 0x16. 'b' + '' is a dynamic string (allocs s 2) that 0x1a disposes. b = 9."
+  "note": "0x1a row: s may be a 0x16. 'b' + '' is a dynamic string (allocs s 2) that 0x1a disposes. b = 9. helpers: CreateStackVariables (0x23), CreateObject (0x13), SetVariableValue (0x22), GetVariableValue (0x21), Add (0x70), GetMemberValue (0x11)."
 }

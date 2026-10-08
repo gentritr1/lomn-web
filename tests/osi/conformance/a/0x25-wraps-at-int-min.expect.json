@@ -33,5 +33,5 @@
       }
     }
   },
-  "note": "0x25 row: 32-bit wrap. 0x80000000 - 1 = 0x7fffffff = 2147483647."
+  "note": "0x25 row: 32-bit wrap. 0x80000000 - 1 = 0x7fffffff = 2147483647. helpers: CreateStackVariables (0x23), SetVariableValue (0x22), GetVariableValue (0x21)."
 }

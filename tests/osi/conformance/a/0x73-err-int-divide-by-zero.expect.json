@@ -18,5 +18,5 @@
     },
     "fpu_pc": 64
   },
-  "note": "0x73 errors cell: int b == 0 (tested after the two type checks). Both popped: depth 1."
+  "note": "0x73 errors cell: int b == 0 (tested after the two type checks). Both popped: depth 1. Order (asm, 0x73 row): both operands popped (0x604609/0x604624) before any test; depth -2."
 }

@@ -18,5 +18,5 @@
     },
     "fpu_pc": 64
   },
-  "note": "0xa1 errors cell: c.type != 0x15 (the int 7). v and c are both popped (v popped first, then c): depth 1."
+  "note": "0xa1 errors cell: c.type != 0x15 (the int 7). v and c are both popped (v popped first, then c): depth 1. Settled order (0xa1 row, Order (asm)): v then c popped (0x600009, 0x600024) before both tests; the colour test is first (error 0x600047); depth -2."
 }

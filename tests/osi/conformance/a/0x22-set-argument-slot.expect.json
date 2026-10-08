@@ -36,5 +36,5 @@
       }
     }
   },
-  "note": "0x22 row: frame index 0 is the first argument slot; it is replaced by 5."
+  "note": "0x22 row: frame index 0 is the first argument slot; it is replaced by 5. helpers: GetVariableValue (0x21)."
 }

@@ -37,5 +37,5 @@
       }
     }
   },
-  "note": "0x24 row: 'operand u16 idx (as 0x21)'; global g 5 -> 6."
+  "note": "0x24 row: 'operand u16 idx (as 0x21)'; global g 5 -> 6. helpers: SetVariableValue (0x22), GetVariableValue (0x21)."
 }

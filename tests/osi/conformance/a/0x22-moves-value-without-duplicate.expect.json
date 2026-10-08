@@ -33,5 +33,5 @@
       }
     }
   },
-  "note": "0x22 row: 'v popped (no dispose) ... var <- v' (moved, no Duplicate). One reference, released by Return: live 0."
+  "note": "0x22 row: 'v popped (no dispose) ... var <- v' (moved, no Duplicate). One reference, released by Return: live 0. helpers: CreateStackVariables (0x23), CreateObject (0x13)."
 }

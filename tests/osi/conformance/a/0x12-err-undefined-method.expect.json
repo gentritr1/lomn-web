@@ -18,5 +18,5 @@
     },
     "fpu_pc": 64
   },
-  "note": "0x12 errors cell: no method with that symbol (zz; C has only m). o is popped before FindMethod: depth 1."
+  "note": "0x12 errors cell: no method with that symbol (zz; C has only m). o is popped before FindMethod: depth 1. helpers: CreateObject (0x13)."
 }

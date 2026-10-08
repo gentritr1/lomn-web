@@ -31,5 +31,5 @@
       }
     }
   },
-  "note": "0x10 row, type 1: 'v popped, prop = GetProperty(o, m), old prop disposed, prop <- v (moved); o disposed'. o.a = 42, read back with 0x11 (helper), locals use 0x21/0x22 (helpers). The object is created once (allocs o 1) and freed by Return."
+  "note": "0x10 row, type 1: 'v popped, prop = GetProperty(o, m), old prop disposed, prop <- v (moved); o disposed'. o.a = 42, read back with 0x11 (helper), locals use 0x21/0x22 (helpers). The object is created once (allocs o 1) and freed by Return. helpers: CreateStackVariables (0x23), CreateObject (0x13), SetVariableValue (0x22), GetVariableValue (0x21), GetMemberValue (0x11)."
 }

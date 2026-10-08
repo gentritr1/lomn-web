@@ -1,0 +1,24 @@
+{
+  "id": "0x70-err-float-lhs-string-rhs",
+  "rows": [
+    "0x70"
+  ],
+  "falsifier": "a string with a valid float is reported by the plain operator lhs/rhs test",
+  "alternative": "Invalid operand to operator '+' (lhs) (type:12)",
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "Invalid operand to string operator '+' (lhs) (type:12)",
+    "pc": "@fail",
+    "op": "0x70",
+    "depth": 1,
+    "top": {
+      "type": "0xff",
+      "value": 0
+    },
+    "fpu_pc": 64
+  },
+  "note": "0x70 row, Order (asm) exception: string b with float a -> \"string operator '+' (lhs) (type:12)\" (0x604133). Both popped: depth 1."
+}

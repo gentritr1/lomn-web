@@ -31,5 +31,5 @@
       }
     }
   },
-  "note": "0xa5 row: 'c -> int((c >> 16) & 0xff)'. 0x11223344 >> 16 & 0xff = 0x22 = 34. Helper: 0x48."
+  "note": "0xa5 row: 'c -> int((c >> 16) & 0xff)'. 0x11223344 >> 16 & 0xff = 0x22 = 34. Helper: 0x48. helpers: PushConstantColor8888 (0x48)."
 }

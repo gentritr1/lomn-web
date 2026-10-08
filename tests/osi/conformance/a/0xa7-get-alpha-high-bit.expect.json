@@ -33,5 +33,5 @@
       }
     }
   },
-  "note": "0xa7 row: 'c -> int((c >> 0) & 0xff)'. 0xff80fe81 >> 0 & 0xff = 0x81 = 129 (top bit set, so an unmasked or signed read differs)."
+  "note": "0xa7 row: 'c -> int((c >> 0) & 0xff)'. 0xff80fe81 >> 0 & 0xff = 0x81 = 129 (top bit set, so an unmasked or signed read differs). helpers: PushConstantColor8888 (0x48)."
 }

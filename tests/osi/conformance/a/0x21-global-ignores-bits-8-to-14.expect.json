@@ -39,5 +39,5 @@
       }
     }
   },
-  "note": "0x21 row: 'ScOSIScript::GetGlobalVariable uses only idx & 0xff'. 0xa500 has bit 15 set, bits 8..14 = 0x25, low byte 0: global 0 = h = 5."
+  "note": "0x21 row: 'ScOSIScript::GetGlobalVariable uses only idx & 0xff'. 0xa500 has bit 15 set, bits 8..14 = 0x25, low byte 0: global 0 = h = 5. helpers: SetVariableValue (0x22)."
 }

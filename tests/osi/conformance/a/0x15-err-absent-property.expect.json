@@ -18,5 +18,5 @@
     },
     "fpu_pc": 64
   },
-  "note": "0x15 errors cell: property absent. stack_effect order: type check, 'v popped WITHOUT dispose', GetProperty. The 5 is popped, the 77 below it is the top. Stack: marker, local0 (object), return marker, this, 77 = depth 5. AMBIGUOUS-ORDER: if the lookup came before the pop the depth would be 6, top 5."
+  "note": "0x15 errors cell: property absent. stack_effect order: type check, 'v popped WITHOUT dispose', GetProperty. The 5 is popped, the 77 below it is the top. Stack: marker, local0 (object), return marker, this, 77 = depth 5. Settled order (0x15 row, Order (asm)): type test 0x5fec5a precedes any pop, v is popped 0x5fec7e before GetProperty 0x5fec98, so the absent-property error at 0x5fecc1 leaves depth -1 (the 5 is gone). helpers: CreateStackVariables (0x23), CreateObject (0x13), SetVariableValue (0x22), GetVariableValue (0x21), GetMemberFunction (0x12), JumpAbsolute (0x51)."
 }

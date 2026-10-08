@@ -33,5 +33,5 @@
       }
     }
   },
-  "note": "0x50 row: the n arguments keep their order above the marker (a1 deepest). framePtr[1] is the second argument, 5."
+  "note": "0x50 row: the n arguments keep their order above the marker (a1 deepest). framePtr[1] is the second argument, 5. helpers: GetVariableValue (0x21)."
 }

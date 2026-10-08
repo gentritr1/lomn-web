@@ -31,5 +31,5 @@
       }
     }
   },
-  "note": "0x13 row: 'ConstructObject: new ScOSIObject with classID = c'. D is the third class (index 2); 0xbf (helper) reads classID: 2."
+  "note": "0x13 row: 'ConstructObject: new ScOSIObject with classID = c'. D is the third class (index 2); 0xbf (helper) reads classID: 2. helpers: GetObjectClassID (0xbf)."
 }

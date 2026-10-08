@@ -31,5 +31,5 @@
       }
     }
   },
-  "note": "0x16 row. main stores 21 into a (0x10, helper) before the call; the method reads this.a: 21."
+  "note": "0x16 row. main stores 21 into a (0x10, helper) before the call; the method reads this.a: 21. helpers: CreateStackVariables (0x23), CreateObject (0x13), SetVariableValue (0x22), GetVariableValue (0x21), SetMemberValue (0x10), GetMemberFunction (0x12), JumpAbsolute (0x51)."
 }

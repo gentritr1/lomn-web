@@ -18,5 +18,5 @@
     },
     "fpu_pc": 64
   },
-  "note": "0x1a errors cell: s not 0x11/0x16 (int 1). 's popped first, then o': both popped; v is only popped on the success branches: marker + v = depth 2, top int 5. AMBIGUOUS-ORDER: if the s check came before the o pop, depth 3."
+  "note": "0x1a errors cell: s not 0x11/0x16 (int 1). 's popped first, then o': both popped; v is only popped on the success branches: marker + v = depth 2, top int 5. Settled order (0x1a row, Order (asm)): s then o popped (0x5ff421, 0x5ff451); the s-type error (0x5ff4f3) comes BEFORE v is popped: depth -2, v on top. helpers: CreateObject (0x13)."
 }

@@ -29,5 +29,5 @@
     },
     "fpu_pc": 64
   },
-  "note": "0x18 errors cell: game type o, map miss. Both popped: depth 1."
+  "note": "0x18 errors cell: game type o, map miss. Both popped: depth 1. Settled order (0x18 row, Order (asm)): s then o popped (0x5feec1, 0x5feef1) before every check; map miss 0x5ff0e1; depth -2. helpers: CallGameFunction (0x82)."
 }

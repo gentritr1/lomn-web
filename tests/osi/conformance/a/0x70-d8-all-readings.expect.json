@@ -52,5 +52,5 @@
       }
     }
   },
-  "note": "falsifier table lines 0x70#2-#4 in one program (conformance.md section 3): 16777217 + 1.0e-15 at 24 (g1 = 4b800001), the string '0.5' converted with 0xb1 (helper), then the same addition at 64 (g2 = 4b800000) and 16777217 + 1.0e-10 at 64 (g3 = 4b800001). All three from expect_calc.arith with the stated pc."
+  "note": "falsifier table lines 0x70#2-#4 in one program (conformance.md section 3): 16777217 + 1.0e-15 at 24 (g1 = 4b800001), the string '0.5' converted with 0xb1 (helper), then the same addition at 64 (g2 = 4b800000) and 16777217 + 1.0e-10 at 64 (g3 = 4b800001). All three from expect_calc.arith with the stated pc. helpers: SetVariableValue (0x22), ConvertToFloat (0xb1), GetVariableValue (0x21)."
 }

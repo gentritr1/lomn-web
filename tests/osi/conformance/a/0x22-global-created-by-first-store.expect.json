@@ -37,5 +37,5 @@
       }
     }
   },
-  "note": "0x22 row notes: 'storing to an unknown global creates it ... no error'. g holds f32 2.5 (bits 40200000)."
+  "note": "0x22 row notes: 'storing to an unknown global creates it ... no error'. g holds f32 2.5 (bits 40200000). helpers: GetVariableValue (0x21)."
 }

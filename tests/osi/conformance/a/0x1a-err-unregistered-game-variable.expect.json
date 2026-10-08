@@ -29,5 +29,5 @@
     },
     "fpu_pc": 64
   },
-  "note": "0x1a errors cell: game type, map miss. The lookup fails before the getter and before 'then v popped': depth 2 (marker + v), top int 5."
+  "note": "0x1a errors cell: game type, map miss. The lookup fails before the getter and before 'then v popped': depth 2 (marker + v), top int 5. Settled order (0x1a row, Order (asm)): s then o popped (0x5ff421, 0x5ff451); the map miss (0x5ff641) comes BEFORE v is popped: depth -2, v on top. helpers: CallGameFunction (0x82)."
 }

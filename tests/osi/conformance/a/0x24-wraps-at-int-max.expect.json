@@ -33,5 +33,5 @@
       }
     }
   },
-  "note": "0x24 row: 32-bit wrap. 0x7fffffff + 1 = 0x80000000 = 2147483648 as u32."
+  "note": "0x24 row: 32-bit wrap. 0x7fffffff + 1 = 0x80000000 = 2147483648 as u32. helpers: CreateStackVariables (0x23), SetVariableValue (0x22), GetVariableValue (0x21)."
 }

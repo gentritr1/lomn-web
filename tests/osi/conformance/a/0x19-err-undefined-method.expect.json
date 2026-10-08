@@ -18,5 +18,5 @@
     },
     "fpu_pc": 64
   },
-  "note": "0x19 errors cell: FindMethod finds nothing for zz (a symbol, not a method of C). Both popped: depth 1."
+  "note": "0x19 errors cell: FindMethod finds nothing for zz (a symbol, not a method of C). Both popped: depth 1. Settled order (0x19 row, Order (asm)): s then o popped (0x5ff284, 0x5ff29f); both tests pass; FindMethod fails (0x5ff350); depth -2. helpers: CreateObject (0x13)."
 }

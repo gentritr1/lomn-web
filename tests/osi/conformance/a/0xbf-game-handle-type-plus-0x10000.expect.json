@@ -42,5 +42,5 @@
       }
     }
   },
-  "note": "0xbf row: 'game type -> type + 0x10000'. GcTimer is type 0x27 (types.md rank 7), so 0x10027 = 65575. The handle is disposed (allocs g 1, live 0). Helper: 0x82 + the test native t.obj."
+  "note": "0xbf row: 'game type -> type + 0x10000'. GcTimer is type 0x27 (types.md rank 7), so 0x10027 = 65575. The handle is disposed (allocs g 1, live 0). Helper: 0x82 + the test native t.obj. helpers: CallGameFunction (0x82)."
 }

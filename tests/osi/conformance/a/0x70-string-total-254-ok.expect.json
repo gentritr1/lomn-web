@@ -34,5 +34,5 @@
       }
     }
   },
-  "note": "0x70 row notes: '200 + 54 (= 254 chars) succeeds'. Both table strings are converted (allocs s 2); the sum is a string, which 0xba (helper) reports as 1 and frees."
+  "note": "0x70 row notes: '200 + 54 (= 254 chars) succeeds'. Both table strings are converted (allocs s 2); the sum is a string, which 0xba (helper) reports as 1 and frees. helpers: IsString (0xba)."
 }

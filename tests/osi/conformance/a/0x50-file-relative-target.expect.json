@@ -34,5 +34,5 @@
       }
     }
   },
-  "note": "0x50 row: 'PC = script-file base (file offset 0 = OSI\\0) + t.value'; PushConstanti32 @sub pushes sub's file offset. sub is preceded by exactly 4 bytes of other code (early: 43 63 52 00) so that a base-4 reading is a valid but different program. sub pushes 7 and returns; the marker is popped and main's Return gives 7."
+  "note": "0x50 row: 'PC = script-file base (file offset 0 = OSI\\0) + t.value'; PushConstanti32 @sub pushes sub's file offset. sub is preceded by exactly 4 bytes of other code (early: 43 63 52 00) so that a base-4 reading is a valid but different program. sub pushes 7 and returns; the marker is popped and main's Return gives 7. helpers: Nop (0x00)."
 }

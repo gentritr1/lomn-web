@@ -33,5 +33,5 @@
       }
     }
   },
-  "note": "0x18 row: FindMemberID(s) then GetProperty. a=3, b=5, name 'b' -> 5."
+  "note": "0x18 row: FindMemberID(s) then GetProperty. a=3, b=5, name 'b' -> 5. helpers: CreateStackVariables (0x23), CreateObject (0x13), SetVariableValue (0x22), GetVariableValue (0x21), SetMemberValue (0x10)."
 }

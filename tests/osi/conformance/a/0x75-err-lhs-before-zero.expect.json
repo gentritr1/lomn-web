@@ -20,5 +20,5 @@
     },
     "fpu_pc": 64
   },
-  "note": "0x75 errors cell: 'Divide by 0 (b == 0, tested after both type checks)'. a nothing, b 0: the lhs type error."
+  "note": "0x75 errors cell: 'Divide by 0 (b == 0, tested after both type checks)'. a nothing, b 0: the lhs type error. Order (asm, 0x75 row): both popped (0x604a19/0x604a34) before any test; the zero test (0x604a80) comes after both type tests."
 }

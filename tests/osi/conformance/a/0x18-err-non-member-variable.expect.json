@@ -18,5 +18,5 @@
     },
     "fpu_pc": 64
   },
-  "note": "0x18 errors cell: o neither a game type nor 1 (int 5). Both popped: depth 1."
+  "note": "0x18 errors cell: o neither a game type nor 1 (int 5). Both popped: depth 1. Settled order (0x18 row, Order (asm)): s then o popped (0x5feec1, 0x5feef1) before every check; o not type 1 -> 0x5ff171; depth -2."
 }

@@ -31,5 +31,5 @@
       }
     }
   },
-  "note": "0x72 row and D8': at fpu_pc 64 (after the 0xb1 on '0.5', helper) the same product equals one rounding: 0x002c7cd5 (expect_calc.arith(*, ..., pc=64)). The 0x11 string is converted in place (allocs s 1) and freed."
+  "note": "0x72 row and D8': at fpu_pc 64 (after the 0xb1 on '0.5', helper) the same product equals one rounding: 0x002c7cd5 (expect_calc.arith(*, ..., pc=64)). The 0x11 string is converted in place (allocs s 1) and freed. helpers: ConvertToFloat (0xb1)."
 }

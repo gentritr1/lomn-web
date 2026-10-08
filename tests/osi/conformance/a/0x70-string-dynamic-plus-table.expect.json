@@ -31,5 +31,5 @@
       }
     }
   },
-  "note": "0x70 row: string+string -> a with b's text appended in place, b disposed, a pushed; 0x11 operands converted first (a, then b). ('1'+'2') + '3': the inner Add allocates 2 strings, the outer converts the 0x11 '3' (allocs s 3): '123' -> atoi 123."
+  "note": "0x70 row: string+string -> a with b's text appended in place, b disposed, a pushed; 0x11 operands converted first (a, then b). ('1'+'2') + '3': the inner Add allocates 2 strings, the outer converts the 0x11 '3' (allocs s 3): '123' -> atoi 123. helpers: ConvertToInteger (0xb2)."
 }

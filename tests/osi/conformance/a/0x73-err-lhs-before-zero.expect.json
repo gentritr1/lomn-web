@@ -20,5 +20,5 @@
     },
     "fpu_pc": 64
   },
-  "note": "0x73 errors cell: int,int path: 'the two type checks, then b == 0'. a nothing, b 0: the lhs type error. depth 1."
+  "note": "0x73 errors cell: int,int path: 'the two type checks, then b == 0'. a nothing, b 0: the lhs type error. depth 1. Order (asm, 0x73 row): both operands popped (0x604609/0x604624) before any test; depth -2."
 }

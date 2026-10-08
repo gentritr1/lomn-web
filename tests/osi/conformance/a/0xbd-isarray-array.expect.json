@@ -31,5 +31,5 @@
       }
     }
   },
-  "note": "0xbd row. The operand is an array (type 5; helper 0x90): result 1. The operand is disposed (live 0): type == 5."
+  "note": "0xbd row. The operand is an array (type 5; helper 0x90): result 1. The operand is disposed (live 0): type == 5. helpers: CreateArray (0x90)."
 }

@@ -31,5 +31,5 @@
       }
     }
   },
-  "note": "0xb8 row. The operand is a script object (type 1): result 0. The operand is disposed (live 0): an object is not an int."
+  "note": "0xb8 row. The operand is a script object (type 1): result 0. The operand is disposed (live 0): an object is not an int. helpers: CreateObject (0x13)."
 }

@@ -32,5 +32,5 @@
       }
     }
   },
-  "note": "0x53 row: branch target = (address after d) + d with d signed; 0x54 jumps backward (negative d). Counter 3 -> 0 takes 3 iterations: local 1 ends at 3. Helpers: 0x24, 0x25, 0x21, 0x22."
+  "note": "0x53 row: branch target = (address after d) + d with d signed; 0x54 jumps backward (negative d). Counter 3 -> 0 takes 3 iterations: local 1 ends at 3. Helpers: 0x24, 0x25, 0x21, 0x22. helpers: CreateStackVariables (0x23), SetVariableValue (0x22), GetVariableValue (0x21), DecrementVariable (0x25), IncrementVariable (0x24)."
 }

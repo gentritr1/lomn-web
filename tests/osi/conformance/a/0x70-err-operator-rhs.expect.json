@@ -18,5 +18,5 @@
     },
     "fpu_pc": 64
   },
-  "note": "0x70 errors cell: a int (a number), b nothing: rhs reported. depth 1."
+  "note": "0x70 errors cell: a int (a number), b nothing: rhs reported. depth 1. Order (asm, 0x70 row): both operands popped (0x60400d/0x60402e) before any test; depth -2."
 }

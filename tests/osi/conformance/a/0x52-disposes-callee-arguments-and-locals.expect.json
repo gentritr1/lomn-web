@@ -31,5 +31,5 @@
       }
     }
   },
-  "note": "0x52 row: all slots down to the marker are disposed, arguments included. sub's argument (object 1) and local (object 2) are freed: allocs o 2, live 0; result 5."
+  "note": "0x52 row: all slots down to the marker are disposed, arguments included. sub's argument (object 1) and local (object 2) are freed: allocs o 2, live 0; result 5. helpers: CreateObject (0x13), JumpRelative (0x50), CreateStackVariables (0x23), SetVariableValue (0x22)."
 }

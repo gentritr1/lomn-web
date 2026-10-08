@@ -31,5 +31,5 @@
       }
     }
   },
-  "note": "0x13 row: 'pushes {1, obj}', refcount 1. Observed with 0xbb (helper): type 1 -> 1, which also disposes it (live 0)."
+  "note": "0x13 row: 'pushes {1, obj}', refcount 1. Observed with 0xbb (helper): type 1 -> 1, which also disposes it (live 0). helpers: IsAnObject (0xbb)."
 }

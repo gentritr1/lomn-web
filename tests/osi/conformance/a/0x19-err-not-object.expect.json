@@ -18,5 +18,5 @@
     },
     "fpu_pc": 64
   },
-  "note": "0x19 errors cell: o.type != 1 (int 5). 's popped first, then o': both popped, depth 1."
+  "note": "0x19 errors cell: o.type != 1 (int 5). 's popped first, then o': both popped, depth 1. Settled order (0x19 row, Order (asm)): s then o popped (0x5ff284, 0x5ff29f) before every check; the o test first (0x5ff2c2); depth -2."
 }

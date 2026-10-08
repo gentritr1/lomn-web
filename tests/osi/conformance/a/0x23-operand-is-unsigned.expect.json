@@ -33,5 +33,5 @@
       }
     }
   },
-  "note": "Operand-format notes: 0x23 reads its byte unsigned. 200 nothings are pushed (depth 201, within the 1,000 slots); local 199 receives an object that Return's Pop-with-dispose frees (allocs o 1, live 0)."
+  "note": "Operand-format notes: 0x23 reads its byte unsigned. 200 nothings are pushed (depth 201, within the 1,000 slots); local 199 receives an object that Return's Pop-with-dispose frees (allocs o 1, live 0). helpers: CreateObject (0x13), SetVariableValue (0x22)."
 }

@@ -18,5 +18,5 @@
     },
     "fpu_pc": 64
   },
-  "note": "0x72 errors cell: b non-number: rhs. depth 1."
+  "note": "0x72 errors cell: b non-number: rhs. depth 1. Order (asm, 0x72 row): both operands popped (0x604469/0x604484) before any test; depth -2."
 }

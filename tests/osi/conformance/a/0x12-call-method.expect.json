@@ -31,5 +31,5 @@
       }
     }
   },
-  "note": "0x12 row: 'o popped, FindMethod(o, m) ... pushes {0x10, address}; o disposed'. The pushed int is a host address, so it is only used as the 0x51 target (helpers 0x35 Dup, 0x51). The method pushes 33 and returns it to main's Return."
+  "note": "0x12 row: 'o popped, FindMethod(o, m) ... pushes {0x10, address}; o disposed'. The pushed int is a host address, so it is only used as the 0x51 target (helpers 0x35 Dup, 0x51). The method pushes 33 and returns it to main's Return. helpers: CreateObject (0x13), Dup (0x35), JumpAbsolute (0x51)."
 }

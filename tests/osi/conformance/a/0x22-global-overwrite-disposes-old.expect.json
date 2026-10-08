@@ -39,5 +39,5 @@
       }
     }
   },
-  "note": "0x22 row: 'global: old disposed, var <- v'. Same as the frame program, with a global; g ends as the int 3."
+  "note": "0x22 row: 'global: old disposed, var <- v'. Same as the frame program, with a global; g ends as the int 3. helpers: Add (0x70), GetVariableValue (0x21)."
 }

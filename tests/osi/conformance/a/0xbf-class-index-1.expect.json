@@ -31,5 +31,5 @@
       }
     }
   },
-  "note": "0xbf row: type 1 -> classID = class index: class B = 1."
+  "note": "0xbf row: type 1 -> classID = class index: class B = 1. helpers: CreateObject (0x13)."
 }

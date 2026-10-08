@@ -31,5 +31,5 @@
       }
     }
   },
-  "note": "0x51 row: 'a1..an t -> {2, retPC} a1..an; PC = t.value'. t comes from 0x12 (helper). n = 1: the object is framePtr[0] in the method; 0xbb (helper) says it is an object: 1."
+  "note": "0x51 row: 'a1..an t -> {2, retPC} a1..an; PC = t.value'. t comes from 0x12 (helper). n = 1: the object is framePtr[0] in the method; 0xbb (helper) says it is an object: 1. helpers: CreateObject (0x13), Dup (0x35), GetMemberFunction (0x12), GetVariableValue (0x21), IsAnObject (0xbb)."
 }

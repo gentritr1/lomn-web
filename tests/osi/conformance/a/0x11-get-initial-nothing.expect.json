@@ -31,5 +31,5 @@
       }
     }
   },
-  "note": "0x11 row: 'o popped, push Duplicate(*GetProperty(o, m)); o disposed'. A new object's properties are nothing (0x13 row: 'every property nothing'), so the value is nothing {0x0f,0}; o is freed at once (refcount 1 -> 0)."
+  "note": "0x11 row: 'o popped, push Duplicate(*GetProperty(o, m)); o disposed'. A new object's properties are nothing (0x13 row: 'every property nothing'), so the value is nothing {0x0f,0}; o is freed at once (refcount 1 -> 0). helpers: CreateObject (0x13)."
 }

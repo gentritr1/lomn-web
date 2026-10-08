@@ -18,5 +18,5 @@
     },
     "fpu_pc": 64
   },
-  "note": "0x70 errors cell: a string, b nothing: %02.2X of 0x0f prints 0F (uppercase hex). Both popped: depth 1."
+  "note": "0x70 errors cell: a string, b nothing: %02.2X of 0x0f prints 0F (uppercase hex). Both popped: depth 1. Order (asm, 0x70 row): both operands popped (0x60400d/0x60402e) before any test; depth -2."
 }

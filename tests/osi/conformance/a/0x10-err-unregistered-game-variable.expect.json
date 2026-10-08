@@ -29,5 +29,5 @@
     },
     "fpu_pc": 64
   },
-  "note": "0x10 errors cell: game type o, map miss (always-error, 'The game-variable map'). o (the GcTimer handle) is popped first; the lookup misses before the getter and before v is popped: marker + v = depth 2, top int 5. Helper: 0x82 builds the game handle from the test native t.obj."
+  "note": "0x10 errors cell: game type o, map miss (always-error, 'The game-variable map'). o (the GcTimer handle) is popped first; the lookup misses before the getter and before v is popped: marker + v = depth 2, top int 5. Helper: 0x82 builds the game handle from the test native t.obj. Settled order (0x10 row, Order (asm)): o popped 0x5fe664; the map-miss error (0x5fe778) is raised BEFORE v is popped: depth -1, v on top. helpers: CallGameFunction (0x82)."
 }

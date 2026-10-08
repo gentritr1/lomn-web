@@ -33,5 +33,5 @@
       }
     }
   },
-  "note": "0x21 row: '-> Duplicate(var)'. Read, pop, read again: 9 both times."
+  "note": "0x21 row: '-> Duplicate(var)'. Read, pop, read again: 9 both times. helpers: CreateStackVariables (0x23), SetVariableValue (0x22)."
 }

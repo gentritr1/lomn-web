@@ -33,5 +33,5 @@
       }
     }
   },
-  "note": "Operand-format notes: 0x14 reads its byte unsigned. n = 200, k = 0: 200 nothings are pushed (depth 201, within the 1,000 slots); slot 199 is nothing."
+  "note": "Operand-format notes: 0x14 reads its byte unsigned. n = 200, k = 0: 200 nothings are pushed (depth 201, within the 1,000 slots); slot 199 is nothing. helpers: GetVariableValue (0x21)."
 }

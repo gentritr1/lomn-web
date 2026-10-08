@@ -18,5 +18,5 @@
     },
     "fpu_pc": 64
   },
-  "note": "0x25 errors cell: 'decrement of non-integral type' (frame variable not int). depth 2, top f32 1.0."
+  "note": "0x25 errors cell: 'decrement of non-integral type' (frame variable not int). depth 2, top f32 1.0. helpers: CreateStackVariables (0x23), SetVariableValue (0x22)."
 }

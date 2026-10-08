@@ -33,5 +33,5 @@
       }
     }
   },
-  "note": "0xa0 row: 'c v -> c'; v popped first; v clamped: (uint32)v > 255 -> 255; c' = c with bits 31..24 <- v; pushed as 0x15'. v = 256 > 255 clamps to 255 (a mask & 0xff would give 0): 0x11223344 with the red channel <- 0xff = 0xff223344. Helper: 0x48 pushes the colour."
+  "note": "0xa0 row: 'c v -> c'; v popped first; v clamped: (uint32)v > 255 -> 255; c' = c with bits 31..24 <- v; pushed as 0x15'. v = 256 > 255 clamps to 255 (a mask & 0xff would give 0): 0x11223344 with the red channel <- 0xff = 0xff223344. Helper: 0x48 pushes the colour. helpers: PushConstantColor8888 (0x48)."
 }

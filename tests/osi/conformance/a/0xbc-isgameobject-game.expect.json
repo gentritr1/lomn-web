@@ -42,5 +42,5 @@
       }
     }
   },
-  "note": "0xbc row. The operand is a GcTimer game handle (type 0x27: rank 7 in types.md, id = 0x20 + rank): result 1. The operand is disposed (live 0): 0x20 <= type < 0xff."
+  "note": "0xbc row. The operand is a GcTimer game handle (type 0x27: rank 7 in types.md, id = 0x20 + rank): result 1. The operand is disposed (live 0): 0x20 <= type < 0xff. helpers: CallGameFunction (0x82)."
 }

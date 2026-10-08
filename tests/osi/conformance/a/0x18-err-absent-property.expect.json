@@ -18,5 +18,5 @@
     },
     "fpu_pc": 64
   },
-  "note": "0x18 errors cell: property absent; zz is a symbol (so FindMemberID has an id, notes: no error path on unknown names) but not a property of C. %s = the symbol name 'zz' (the row says only %s: AMBIGUOUS-TEXT). Both popped: depth 1."
+  "note": "0x18 errors cell: property absent; zz is a symbol (so FindMemberID has an id, notes: no error path on unknown names) but not a property of C. %s = s's text, 'zz' (0x18 row, Order (asm): property error 0x5ff1b9, text from s at 0x5ff19f). Both popped before the checks (0x5feec1, 0x5feef1): depth 1. helpers: CreateObject (0x13)."
 }

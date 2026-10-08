@@ -36,5 +36,5 @@
       }
     }
   },
-  "note": "0x24 row: a frame index; argument slot 0: 9 -> 10."
+  "note": "0x24 row: a frame index; argument slot 0: 9 -> 10. helpers: GetVariableValue (0x21)."
 }

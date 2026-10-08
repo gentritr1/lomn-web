@@ -18,5 +18,5 @@
     },
     "fpu_pc": 64
   },
-  "note": "0xa6 errors cell: 'so a 0x14 colour from 0x49 errors'. Helper 0x49 pushes {0x14, 0x7fff}. c popped: depth 1."
+  "note": "0xa6 errors cell: 'so a 0x14 colour from 0x49 errors'. Helper 0x49 pushes {0x14, 0x7fff}. c popped: depth 1. helpers: PushConstantColor5551 (0x49)."
 }

@@ -40,5 +40,5 @@
       }
     }
   },
-  "note": "0x14 row: n == k pads nothing and does not error; slot 1 is the second argument, 2."
+  "note": "0x14 row: n == k pads nothing and does not error; slot 1 is the second argument, 2. helpers: GetVariableValue (0x21)."
 }

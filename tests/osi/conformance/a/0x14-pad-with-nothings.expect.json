@@ -36,5 +36,5 @@
       }
     }
   },
-  "note": "0x14 row: 'a1..ak -> a1..ak nothing x (n-k)': k = 1 argument above the frame base, n = 3, so two nothings are appended; frame slot 2 is nothing."
+  "note": "0x14 row: 'a1..ak -> a1..ak nothing x (n-k)': k = 1 argument above the frame base, n = 3, so two nothings are appended; frame slot 2 is nothing. helpers: GetVariableValue (0x21)."
 }

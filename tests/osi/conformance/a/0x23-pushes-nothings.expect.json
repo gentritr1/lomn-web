@@ -31,5 +31,5 @@
       }
     }
   },
-  "note": "0x23 row: '-> nothing x n'. Local 2 of 3 is nothing."
+  "note": "0x23 row: '-> nothing x n'. Local 2 of 3 is nothing. helpers: GetVariableValue (0x21)."
 }

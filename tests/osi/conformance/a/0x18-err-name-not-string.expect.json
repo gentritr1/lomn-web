@@ -18,5 +18,5 @@
     },
     "fpu_pc": 64
   },
-  "note": "0x18 errors cell: s not 0x11/0x16 (here int 1). stack_effect: 's popped first, then o (both no dispose)': both are popped at the throw, depth 1. AMBIGUOUS-ORDER: if the s check came before the o pop the depth would be 2."
+  "note": "0x18 errors cell: s not 0x11/0x16 (here int 1). stack_effect: 's popped first, then o (both no dispose)': both are popped at the throw, depth 1. Settled order (0x18 row, Order (asm)): s then o are popped (0x5feec1, 0x5feef1) before every check, the s-type test comes first (error 0x5fef93), and every error leaves depth -2. helpers: CreateObject (0x13)."
 }

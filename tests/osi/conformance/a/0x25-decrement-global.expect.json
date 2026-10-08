@@ -37,5 +37,5 @@
       }
     }
   },
-  "note": "0x25 row: global g 5 -> 4."
+  "note": "0x25 row: global g 5 -> 4. helpers: SetVariableValue (0x22), GetVariableValue (0x21)."
 }

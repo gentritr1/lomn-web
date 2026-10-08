@@ -1,0 +1,24 @@
+{
+  "id": "0x71-err-invalid-lhs-float-rhs",
+  "rows": [
+    "0x71"
+  ],
+  "falsifier": "the (rhs) message is reported when a valid float meets an invalid partner",
+  "alternative": "Invalid operand to operator '-' (rhs) (type:12)",
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect_error": {
+    "message": "Invalid operand to operator '-' (lhs) (type:0F)",
+    "pc": "@fail",
+    "op": "0x71",
+    "depth": 1,
+    "top": {
+      "type": "0xff",
+      "value": 0
+    },
+    "fpu_pc": 64
+  },
+  "note": "0x71 errors cell and Order (asm) (lhs 0x6043f7, rhs 0x604414): both operands popped first (0x6042c9/0x6042e4), depth 1; after the float cases the lhs test is a.type != 0x10, so one valid float with one invalid operand always raises the (lhs) message. a = nothing, b = float 1.5: (lhs) with type 0F."
+}

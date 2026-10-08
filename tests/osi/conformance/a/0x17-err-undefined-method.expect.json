@@ -18,5 +18,5 @@
     },
     "fpu_pc": 64
   },
-  "note": "0x17 errors cell: FindMethod finds no method zz. Stack: marker, local0, return marker, this, 77 = depth 5."
+  "note": "0x17 errors cell: FindMethod finds no method zz. Stack: marker, local0, return marker, this, 77 = depth 5. helpers: CreateStackVariables (0x23), CreateObject (0x13), SetVariableValue (0x22), GetVariableValue (0x21), GetMemberFunction (0x12), JumpAbsolute (0x51)."
 }

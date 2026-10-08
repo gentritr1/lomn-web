@@ -34,5 +34,5 @@
       }
     }
   },
-  "note": "falsifier table line 0x70#3. The 0xb1 on the string '0.5' (helper; row 0xb1: atof, 0x60bd0d) sets fpu_pc 64 for good (D8'). 16777217 + 1.0e-15 then rounds at 64 bits to 16777217 and at f32 to even: 16777216.0 = 4b800000 (expect_calc.arith(+, 16777217, 1.0e-15, pc=64)). The 0x11 string is converted in place (allocs s 1) and freed."
+  "note": "falsifier table line 0x70#3. The 0xb1 on the string '0.5' (helper; row 0xb1: atof, 0x60bd0d) sets fpu_pc 64 for good (D8'). 16777217 + 1.0e-15 then rounds at 64 bits to 16777217 and at f32 to even: 16777216.0 = 4b800000 (expect_calc.arith(+, 16777217, 1.0e-15, pc=64)). The 0x11 string is converted in place (allocs s 1) and freed. helpers: ConvertToFloat (0xb1)."
 }

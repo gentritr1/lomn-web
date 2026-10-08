@@ -31,5 +31,5 @@
       }
     }
   },
-  "note": "0x51 row: the return marker holds the PC after the n byte. The method returns 11, which main pops (0x30) before pushing and returning 2."
+  "note": "0x51 row: the return marker holds the PC after the n byte. The method returns 11, which main pops (0x30) before pushing and returning 2. helpers: CreateObject (0x13), Dup (0x35), GetMemberFunction (0x12)."
 }

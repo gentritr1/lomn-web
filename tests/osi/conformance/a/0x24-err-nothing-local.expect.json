@@ -18,5 +18,5 @@
     },
     "fpu_pc": 64
   },
-  "note": "0x24 errors cell: var.type != 0x10; a fresh local is nothing. depth 2, top nothing."
+  "note": "0x24 errors cell: var.type != 0x10; a fresh local is nothing. depth 2, top nothing. helpers: CreateStackVariables (0x23)."
 }

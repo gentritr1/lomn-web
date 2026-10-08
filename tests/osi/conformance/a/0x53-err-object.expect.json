@@ -18,5 +18,5 @@
     },
     "fpu_pc": 64
   },
-  "note": "0x53 errors cell: an object condition is not integral. Popped: depth 1."
+  "note": "0x53 errors cell: an object condition is not integral. Popped: depth 1. helpers: CreateObject (0x13)."
 }

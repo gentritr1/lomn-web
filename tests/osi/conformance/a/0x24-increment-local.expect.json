@@ -31,5 +31,5 @@
       }
     }
   },
-  "note": "0x24 row: 'var.value += 1 in place (32-bit wrap)'. 41 -> 42."
+  "note": "0x24 row: 'var.value += 1 in place (32-bit wrap)'. 41 -> 42. helpers: CreateStackVariables (0x23), SetVariableValue (0x22), GetVariableValue (0x21)."
 }

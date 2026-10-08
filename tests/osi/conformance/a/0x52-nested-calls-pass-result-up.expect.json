@@ -31,5 +31,5 @@
       }
     }
   },
-  "note": "0x52 row: type-2 returns push r for the caller, whose own Return passes it on, until the 0xff marker. 3."
+  "note": "0x52 row: type-2 returns push r for the caller, whose own Return passes it on, until the 0xff marker. 3. helpers: JumpRelative (0x50)."
 }

@@ -20,5 +20,5 @@
     },
     "fpu_pc": 64
   },
-  "note": "0x25 errors cell: '\"increment of non-integral type\" (GLOBAL variable not int - the original's copy-paste message)'. Marker only: depth 1."
+  "note": "0x25 errors cell: '\"increment of non-integral type\" (GLOBAL variable not int - the original's copy-paste message)'. Marker only: depth 1. helpers: SetVariableValue (0x22)."
 }

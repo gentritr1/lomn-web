@@ -34,5 +34,5 @@
       }
     }
   },
-  "note": "falsifier table line 0x70#4. At 64 bits the 1e-10 addend survives the first rounding (16777217.0000000001...), so the f32 rounding goes up: 16777218.0 = 4b800001 (expect_calc.arith(+, 16777217, 1.0e-10, pc=64))."
+  "note": "falsifier table line 0x70#4. At 64 bits the 1e-10 addend survives the first rounding (16777217.0000000001...), so the f32 rounding goes up: 16777218.0 = 4b800001 (expect_calc.arith(+, 16777217, 1.0e-10, pc=64)). helpers: ConvertToFloat (0xb1)."
 }

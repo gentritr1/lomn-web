@@ -33,5 +33,5 @@
       }
     }
   },
-  "note": "0x52 row: 'Type 2: push r, PC = M.value, framePtr recomputed as in 0x50'. sub makes 2 locals and returns 1; main pops that and reads its own local 0 = 9."
+  "note": "0x52 row: 'Type 2: push r, PC = M.value, framePtr recomputed as in 0x50'. sub makes 2 locals and returns 1; main pops that and reads its own local 0 = 9. helpers: CreateStackVariables (0x23), SetVariableValue (0x22), JumpRelative (0x50), GetVariableValue (0x21)."
 }

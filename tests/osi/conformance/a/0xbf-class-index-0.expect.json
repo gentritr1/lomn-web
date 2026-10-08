@@ -31,5 +31,5 @@
       }
     }
   },
-  "note": "0xbf row: type 1 -> the object's classID, the class index c given to 0x13: class A = 0."
+  "note": "0xbf row: type 1 -> the object's classID, the class index c given to 0x13: class A = 0. helpers: CreateObject (0x13)."
 }

@@ -31,5 +31,5 @@
       }
     }
   },
-  "note": "0x19 row: 'o s -> int(code address); id = FindMemberID(s); pushes {0x10, FindMethod(o, id)}; o and s disposed'. Method 'm' called through 0x51 (helper): 33."
+  "note": "0x19 row: 'o s -> int(code address); id = FindMemberID(s); pushes {0x10, FindMethod(o, id)}; o and s disposed'. Method 'm' called through 0x51 (helper): 33. helpers: CreateObject (0x13), Dup (0x35), JumpAbsolute (0x51)."
 }
