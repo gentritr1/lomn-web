@@ -1152,6 +1152,43 @@ process.exitCode = failed.length ? 1 : 0;
           'C-N1: the second switch succeeds (state area-ready, error cleared, no release failures, no rejected calls, no page exceptions)', JSON.stringify({ ...o, release_failures: m.release_failures, errors: p.w.errors }));
     await p.page.close();
   });
+  // M1 close-out C-N3: the page's own guard after engine.showArea (main.js: `if (dead) return false` before it sets area-ready). Today the
+  // C++ refusal in lomn_area_show makes it redundant for the I-1 test above (a switch that finishes after the loss never gets an
+  // "ok" from the engine). Here the engine call has ALREADY succeeded (the area was swapped, areas_shown +1) when the device is lost,
+  // before the page sets its state: the page must still not flip back to area-ready. The loss is delivered between the engine's return
+  // and the page's continuation by wrapping engine.showArea and holding its resolution until the page is in 'error'.
+  await section('C-N3 loss after the engine call succeeded', async () => {
+    const p = await open(base + '?size=1280x720&area=levt/test&pick=1', undefined, { drop: false });
+    await waitState(p.page, ['need-files']);
+    await p.page.setInputFiles('#byo-input', inst);
+    await waitState(p.page, ['area-ready'], 120000);
+    await waitFrames(p.page, 3);
+    p.w.expectGpuLoss = true;
+    const shown0 = await p.page.evaluate(() => window.__lomn.metrics.areas_shown);
+    await p.page.evaluate(() => {
+      const e = window.__lomn.engine, real = e.showArea.bind(e);
+      window.__gate = new Promise((r) => { window.__release = r; });
+      e.showArea = async (l, a) => { const r = await real(l, a); window.__engineReturned = true; await window.__gate; return r; };
+      window.__switch = window.__lomn.showArea('levt/stat');
+    });
+    await p.page.waitForFunction(() => window.__engineReturned === true, null, { timeout: 30000 });
+    const engineShown = await p.page.evaluate(() => ({ state: window.__lomn.state, shown: window.__lomn.metrics.areas_shown }));
+    const cdp = await p.page.context().newCDPSession(p.page);
+    await cdp.send('Browser.crashGpuProcess').catch(() => {});
+    const st = await waitState(p.page, ['area-ready'], 15000).catch(() => p.page.evaluate(() => ({ state: window.__lomn.state, message: window.__lomn.message })));
+    const f0 = await p.page.evaluate(() => window.__lomn.metrics?.frames ?? -1).catch(() => -1);
+    check(engineShown.state === 'loading-area' && engineShown.shown === shown0 + 1 && st.state === 'error' && /device lost|GPU/i.test(st.message),
+          'C-N3 setup: the engine had already swapped the area (areas_shown +1) when the GPU process crashed; the page was still in loading-area, then error',
+          `engine returned in ${engineShown.state}, areas_shown ${shown0} -> ${engineShown.shown}; after the crash ${st.state}: ${st.message}`);
+    await p.page.evaluate(() => window.__release());
+    const ret = await p.page.evaluate(() => window.__switch);
+    const o = await p.page.evaluate(() => ({ state: window.__lomn.state, message: window.__lomn.message, area: window.__lomn.load?.area, frames: window.__lomn.metrics?.frames ?? -1,
+                                              disabled: document.getElementById('area-picker').disabled, reload: !document.getElementById('reload').hidden }));
+    check(ret === false && o.state === 'error' && /device lost|GPU/i.test(o.message) && o.area === 'levt/test' && o.frames === f0 && o.disabled && o.reload,
+          'C-N3: the page refuses to flip to area-ready after a loss that landed between the engine\'s success and its own state change: state stays error, load not recorded, picker disabled',
+          `returned ${ret}; ${JSON.stringify(o)}; frames at loss ${f0}`);
+    await p.page.close();
+  });
   // M1 close-out C-f2 (browser): a tampered prefetch cache that holds ONE whole-file range per file (a superset) satisfies every read, so
   // the resident ranges the engine "touched" are the tampered ones; persisting them kept the superset for ever. The page now writes
   // back the exact reads (lomn_fs_reads), and the next visit loads the exact set.
