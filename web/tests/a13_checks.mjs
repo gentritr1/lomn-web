@@ -6,6 +6,7 @@
 //  - over-fetch was recorded per sweep row but never asserted (P14).
 
 export const FPS_MIN_RATIO = 0.95;          // the HUD rule: counted / expected intervals, DROPPING below it
+export const FPS_MAX_RATIO = 1.05;         // C-m3: above this the display rate was measured too low (a 60 Hz display read as 30 Hz): not a pass
 export const FPS_MIN_SAMPLES = 30;          // the engine's own floor for flagging DROPPING
 export const POSITIVE_CONTROL_MIN_PX = 100000;  // global constraints: the fog-off control must exceed the tolerance by >= 100,000 px
 
@@ -13,7 +14,7 @@ export const POSITIVE_CONTROL_MIN_PX = 100000;  // global constraints: the fog-o
 // dt_samples; expected = the window's duration at the display rate MEASURED on that page before its first area
 // (expected_intervals). The engine's expected_intervals is recomputed here from window_ms and display_hz, so a reading whose
 // window, rate and expectation do not reconcile fails by itself (an unverified sample count is not a measurement).
-export function fpsVerdict(f, { minRatio = FPS_MIN_RATIO, minSamples = FPS_MIN_SAMPLES } = {}) {
+export function fpsVerdict(f, { minRatio = FPS_MIN_RATIO, maxRatio = FPS_MAX_RATIO, minSamples = FPS_MIN_SAMPLES } = {}) {
   const reasons = [];
   const num = (x) => typeof x === 'number' && Number.isFinite(x);
   if (!f || ![f.dt_samples, f.window_ms, f.display_hz, f.expected_intervals].every(num)) return { ok: false, ratio: NaN, recomputed: NaN, reasons: ['fps metrics missing or not finite'] };
@@ -24,8 +25,12 @@ export function fpsVerdict(f, { minRatio = FPS_MIN_RATIO, minSamples = FPS_MIN_S
     reasons.push(`expected intervals ${f.expected_intervals} != window ${f.window_ms} ms x ${f.display_hz} Hz = ${recomputed.toFixed(1)}`);
   const ratio = f.expected_intervals > 0 ? f.dt_samples / f.expected_intervals : NaN;
   if (!(ratio >= minRatio)) reasons.push(`counted ${f.dt_samples} of ${Number(f.expected_intervals).toFixed(1)} expected intervals = ${Number.isNaN(ratio) ? 'n/a' : ratio.toFixed(3)} < ${minRatio}`);
+  // C-m3: the expectation is window x the MEASURED display rate, so a rate measured too low (30 Hz on a 60 Hz display) inflates the
+  // ratio and used to pass a 40 fps page at 1.33. A ratio above maxRatio is not a pass: the display rate must be measured again.
+  const underMeasured = ratio > maxRatio;
+  if (underMeasured) reasons.push(`counted ${f.dt_samples} of ${Number(f.expected_intervals).toFixed(1)} expected intervals = ${ratio.toFixed(3)} > ${maxRatio}: the display rate (${f.display_hz} Hz) was under-measured`);
   if (f.dropping !== false) reasons.push(`engine flag dropping = ${f.dropping}`);
-  return { ok: reasons.length === 0, ratio, recomputed, reasons };
+  return { ok: reasons.length === 0, ratio, recomputed, reasons, underMeasured };
 }
 
 // P13. seen = the GPUTexture/GPUBuffer live counts at each visit of the same area ({textures, buffers}). Flat is only a result
@@ -59,8 +64,10 @@ export function overFetchVerdict(rows) {
 // so a page that reads DROPPING (the engine flag, or fps < 0.95 x its display rate) is re-measured ONCE (`remeasure`, same
 // fields, taken on a fresh window) and fails only if the second reading drops again. A flagged page with no second reading
 // fails. The engine's flag must agree with fps < 0.95 x hz on every reading, first or second. Both readings are reported.
+// C-m3: a reading above 1.05 x hz (the display rate measured too low) is flagged and re-measured the same way.
 export function dropSamplesVerdict(samples, { min = 8, minRatio = FPS_MIN_RATIO } = {}) {
-  const low = (r) => r.dropping === true || !(r.fps >= minRatio * r.hz);
+  // C-m3: a page above maxRatio x its measured rate had the display under-measured: re-measured once like a low page.
+  const low = (r) => r.dropping === true || !(r.fps >= minRatio * r.hz) || r.fps > FPS_MAX_RATIO * r.hz;
   const incoherent = (r) => r.dropping !== (r.fps < minRatio * r.hz);
   const readings = (s) => (s.remeasure ? [s, s.remeasure] : [s]);
   const wrong = samples.filter((s) => low(s.remeasure ?? s) || (low(s) && !s.remeasure));

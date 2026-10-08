@@ -117,3 +117,34 @@ test('dropSamplesVerdict (P16): an engine flag that disagrees with fps < 0.95 x 
   assert.equal(dropSamplesVerdict([...ok, page(52.7, { remeasure: page(59.8, { dropping: true }) })]).ok, false);  // second reading incoherent
   assert.equal(dropSamplesVerdict(ok.slice(0, 7)).ok, false);
 });
+
+// ---- M1 close-out C-m3: the upper bound -----------------------------------------------------------------------------------------
+// A display rate measured too LOW (30 Hz on a 60 Hz display) makes the expectation too small: a page at 40 fps then scores 1.33 and the
+// lower bound alone passes it. Above 1.05 the display was under-measured: the verdict fails and says so (underMeasured), and the
+// caller re-measures the display once (fpsWithRemeasure below).
+test('fpsVerdict (C-m3): 40 fps against a display measured as 30 Hz (a 60 Hz display under-measured) does NOT pass', () => {
+  const f = unspun({ dt_samples: 400, frames_in_window: 401, window_ms: 10000, display_hz: 30, expected_intervals: 300, fps: 40, dropping: false });
+  const v = fpsVerdict(f);
+  assert.ok(Math.abs(v.ratio - 400 / 300) < 1e-9);
+  assert.equal(v.ok, false);
+  assert.equal(v.underMeasured, true);
+  assert.match(v.reasons.join(';'), /under-measured/);
+});
+test('fpsVerdict (C-m3): the bound is 1.05 inclusive; a low ratio is not "under-measured"', () => {
+  assert.equal(fpsVerdict(unspun({ dt_samples: 630, window_ms: 10000, expected_intervals: 600 })).ok, true);   // exactly 1.05
+  const over = fpsVerdict(unspun({ dt_samples: 636, window_ms: 10000, expected_intervals: 600 }));             // 1.06
+  assert.equal(over.ok, false);
+  assert.equal(over.underMeasured, true);
+  const low = fpsVerdict(unspun({ dt_samples: 564, window_ms: 10000, expected_intervals: 600 }));
+  assert.equal(low.ok, false);
+  assert.notEqual(low.underMeasured, true);
+  assert.notEqual(fpsVerdict(unspun()).underMeasured, true);
+});
+test('dropSamplesVerdict (C-m3): a page above 1.05 x its measured rate is re-measured once and passes only if the second reading is in range', () => {
+  const ok = Array.from({ length: 11 }, () => page(59.9));
+  const high = (extra = {}) => page(40, { dropping: false, hz: 30, ...extra });   // 60 Hz display measured as 30
+  assert.equal(dropSamplesVerdict([...ok, high()]).ok, false);                       // no second reading
+  assert.equal(dropSamplesVerdict([...ok, high({ remeasure: page(59.9) })]).ok, true);
+  assert.equal(dropSamplesVerdict([...ok, high({ remeasure: high() })]).ok, false);  // still above 1.05
+  assert.equal(dropSamplesVerdict([...ok, high({ remeasure: high() })]).wrong.length, 1);
+});

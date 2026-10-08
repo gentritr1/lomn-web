@@ -19,7 +19,7 @@ import { fileURLToPath } from 'node:url';
 import { blkTablesFingerprint, sha256hex } from '../app/fingerprint.js';
 import { serve } from './serve.mjs';
 import { decodePng, diffRgb, importSpecifiers, launch, networkCheck, waitFrames, waitState, watch, workerSharedFiles } from './lib.mjs';
-import { dropSamplesVerdict } from './a13_checks.mjs';
+import { dropSamplesVerdict, FPS_MAX_RATIO } from './a13_checks.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const [wasmDir, workArg, lomnView] = process.argv.slice(2);
@@ -204,6 +204,12 @@ const canvasPng = async (page, name) => {
   fs.writeFileSync(path.join(shots, name), png);
   return decodePng(png);
 };
+// C-m3/C-m7: the display rate is measured again on this page (the engine's own measurement, ~130 empty frames); resolves when it ran.
+const remeasureDisplay = async (page) => {
+  const runs0 = await page.evaluate(() => window.__lomn.metrics.fps.display_runs);
+  await page.evaluate(() => window.__lomn.engine.M._lomn_debug_remeasure());
+  await page.waitForFunction((k) => window.__lomn.metrics.fps.display_runs >= k, runs0 + 1, { timeout: 90000 });
+};
 const pageWatchers = [];
 // Review fix 2: every unspun page that showed an area is checked, just before it closes, against the display rate measured
 // on that same page: the engine's DROPPING flag must be false and must agree with fps < 0.95 x display_hz. Pages that resize,
@@ -228,8 +234,10 @@ const open = async (url, init, { drop = true } = {}) => {
           const sample = { url: url.replace(srv.url, ''), ...pick(m) };
           // T8 P16: a page that reads DROPPING (host load) is re-measured ONCE on a fresh window (its area shown again) and
           // fails only if it drops again; both readings and the load average are reported. Spun pages never get here.
-          if (m.dropping || m.fps < 0.95 * m.display_hz) {
+          // C-m3: also a reading ABOVE 1.05 x the display rate (the rate was measured too low); the display is measured again first.
+          if (m.dropping || m.fps < 0.95 * m.display_hz || m.fps > FPS_MAX_RATIO * m.display_hz) {
             try {
+              if (m.fps > FPS_MAX_RATIO * m.display_hz) await remeasureDisplay(page);
               await page.evaluate(() => window.__lomn.showArea(window.__lomn.load.area));
               await waitFrames(page, 60, 20000);
               const m2 = await read();
