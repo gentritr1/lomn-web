@@ -145,7 +145,9 @@ def run(cmd, cwd, timeout, log_name=None):
             (LOGDIR / log_name).write_text(out)
         # Every FAIL line (a browser run prints many ok lines after the first failure, so the tail is not enough).
         fails = [l for l in out.splitlines() if "FAIL" in l or "ERROR" in l or "not ok" in l]
-        return p.returncode, "\n".join(fails)[-1500:] or out[-1500:], time.time() - t0
+        # ALL of them: a mutation that breaks several checks must not lose its first (targeted) FAIL line to a length
+        # cap (#23 was scored MISSED that way, 2026-10-08). Callers shorten only what they print.
+        return p.returncode, "\n".join(fails) or out[-1500:], time.time() - t0
     except subprocess.TimeoutExpired:
         return 124, "timeout", time.time() - t0
 
