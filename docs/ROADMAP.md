@@ -107,6 +107,22 @@ Each milestone gets a spec and a plan (Opus 5.5), one Fable 5.1 precision review
 - **M2 remaining, estimated:** the spec's total was 33–45 agent-hours, which leaves roughly 23–35 for M2a-2 → M2b. M2a-3 is the widest range. In sessions like today's, that is a few days of work, plus your screenshot round-trip.
 - **Whole game, estimated:** the board's sizing puts M2 → M6 at 21–39 milestone-sized units. An earlier Fable review put the gameplay work at 12–24 person-months in human terms. The playable-area milestone (M3) has no oracle as strong as the renderer's, so expect it to be slower per unit.
 
+### 4.1 Measured API cost (2026-10-09, Console credits)
+Four real tasks were run headless with `claude -p --output-format json`. The first request matched the Console log exactly. Details are in `.superpowers/sdd/cost-test/results.md`.
+
+| Run | Task | Model | Turns | Cost |
+|---|---|---|---|---|
+| A | small mechanical fix + guard test | Sonnet 5.5 | 8 | $0.19 |
+| B | the same task | Haiku 5.5 | 13 | $0.02 (same quality) |
+| C | medium bug fix (I1) with tests and doc | Sonnet 5.5 | 16 | $0.40 |
+| D | thorough review of C: 24k-input differential, asm check | Opus 5.5 medium | 26 | $0.86 (APPROVE) |
+
+**Budget estimate** (from the measured formula, scaled to the larger tasks of earlier steps; medium-low confidence):
+- One sub-milestone costs about $45–90: a Fable plan review, 5–8 Sonnet tasks, Opus reviews, Haiku bookkeeping, and an Opus controller in a fresh session.
+- **$200 covers about 2–4 sub-milestones,** roughly closing M2a-1 plus M2a-2 and M2a-3.
+- Reaching the first playable area (all of M2 plus M3) is about 8–11 sub-milestones, so about **$400–900**.
+- Re-estimate after the first full sub-milestone on credits, from the Console spend.
+
 ## 5. Needed from you
 **Checks you can do any time:**
 - the §2 viewer checks;
