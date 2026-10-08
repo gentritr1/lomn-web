@@ -352,7 +352,7 @@ try {
     const p = await open(base + '?size=1280x720&area=levt/test');
     await waitState(p.page, ['need-files']);
     await p.page.setInputFiles('#byo-input', inst);
-    const st = await waitState(p.page, ['area-ready'], 120000);
+    const st = await waitState(p.page, ['area-ready', 'area-error'], 120000);
     check(st.state === 'area-ready', 'OPFS path: copied, validated and showing levt/test', st.message || st.error);
     const info = await p.page.evaluate(() => ({ source: window.__lomn.source, copy: window.__lomn.copy, quota: window.__lomn.quota, load: window.__lomn.load, boot: window.__lomn.boot }));
     check(info.source?.kind === 'opfs' && info.source.how === 'copied' && info.copy?.bytes > 0, 'OPFS path: source is the copy', JSON.stringify(info.source));
@@ -396,7 +396,7 @@ try {
   // D. OPFS revisit: no input, no copy, cached prefetch set (1 round).
   if (!only) {
     const p = await open(base + '?size=1280x720&area=levt/test');
-    const st = await waitState(p.page, ['area-ready'], 60000);
+    const st = await waitState(p.page, ['area-ready', 'area-error'], 60000);
     const info = await p.page.evaluate(() => ({ source: window.__lomn.source, copy: window.__lomn.copy, load: window.__lomn.load }));
     check(st.state === 'area-ready' && info.source?.kind === 'opfs' && info.source.how === 'revisit' && !info.copy,
           'OPFS revisit: no picker, no copy', JSON.stringify(info.source));
@@ -430,7 +430,7 @@ try {
     const r = await open(base + '?size=1280x720&area=levt/test&pick=1');
     await waitState(r.page, ['need-files']);
     await r.page.setInputFiles('#byo-input', inst);
-    const st2 = await waitState(r.page, ['area-ready'], 120000);
+    const st2 = await waitState(r.page, ['area-ready', 'area-error'], 120000);
     check(st2.state === 'area-ready', 'I6: copied again for the following steps');
     await r.page.close();
   });
@@ -442,7 +442,7 @@ try {
       const d = await (await navigator.storage.getDirectory()).getDirectoryHandle('lomn-install');
       return window.__lomn.useDirectoryHandle(d);
     });
-    const st = await waitState(p.page, ['area-ready'], 60000);
+    const st = await waitState(p.page, ['area-ready', 'area-error'], 60000);
     const src = await p.page.evaluate(() => window.__lomn.source);
     check(ok && st.state === 'area-ready' && src.kind === 'handle' && src.how === 'picked', 'handle path: picked handle read in place (no copy)', JSON.stringify(src));
     await waitFrames(p.page, 3);
@@ -586,7 +586,7 @@ try {
     let st = await waitState(p.page, ['need-permission', 'area-ready']);
     check(st.state === 'need-permission' && /needs your permission again/.test(st.message), 'revisit with permission "prompt": asks again', st.message);
     await p.page.click('#regrant');
-    st = await waitState(p.page, ['area-ready'], 60000);
+    st = await waitState(p.page, ['area-ready', 'area-error'], 60000);
     check(st.state === 'area-ready', 'after the re-grant click the area shows');
     await p.page.close();
   }
@@ -936,7 +936,7 @@ try {
     const p = await open(base + '?size=1280x720&pick=1', undefined, { drop: false });
     await waitState(p.page, ['need-files']);
     await p.page.setInputFiles('#byo-input', tabDir);
-    const st = await waitState(p.page, ['area-ready'], 120000);
+    const st = await waitState(p.page, ['area-ready', 'area-error'], 120000);
     const info = await p.page.evaluate(() => ({ areas: window.__lomn.areas.map((a) => `${a.level}/${a.area}`), warnings: window.__lomn.sourceWarnings, files: window.__lomn.source?.files, validation: window.__lomn.validation?.ok }));
     const warn = (info.warnings ?? []).join('\n');
     check(st.state === 'area-ready' && info.validation === true && /control character U\+0009/.test(warn) && /control character U\+000A/.test(warn),

@@ -115,7 +115,7 @@ try {
     await waitState(p.page, ['need-files']);
     const t0 = Date.now();
     await p.page.setInputFiles('#byo-input', install);
-    const st = await waitState(p.page, ['area-ready', 'rejected', 'quota-short'], 600000);
+    const st = await waitState(p.page, ['area-ready', 'area-error', 'rejected', 'quota-short'], 600000);
     check(st.state === 'area-ready', 'real install: validated, copied to OPFS, lev1/vllg shown', st.message || st.error);
     const info = await p.page.evaluate(() => ({ v: window.__lomn.validation, source: window.__lomn.source, copy: window.__lomn.copy, quota: window.__lomn.quota, boot: window.__lomn.boot, ready: window.__lomn.metricsAtReady }));
     summary.heap_at_ready = info.ready.heap;
@@ -217,7 +217,7 @@ try {
       GPUTexture.prototype.destroy = function () { if (!this.__lomnGone) { this.__lomnGone = 1; live.textures--; live.texture_bytes -= this.__lomnBytes ?? 0; } return td.call(this); };
       GPUBuffer.prototype.destroy = function () { if (!this.__lomnGone) { this.__lomnGone = 1; live.buffers--; } return bd.call(this); };
     });
-    const st = await waitState(p.page, ['area-ready'], 120000);
+    const st = await waitState(p.page, ['area-ready', 'area-error'], 120000);
     const info = await p.page.evaluate(() => ({ source: window.__lomn.source, copy: window.__lomn.copy, load: window.__lomn.load, boot: window.__lomn.boot }));
     check(st.state === 'area-ready' && info.source.kind === 'opfs' && info.source.how === 'revisit' && !info.copy, 'revisit: no picker, no copy', JSON.stringify(info.source));
     summary.revisit_boot = info.boot;
@@ -253,7 +253,7 @@ try {
     const p = await open(base + '?size=1280x720&area=lev2/ghut&pick=1');
     await waitState(p.page, ['need-files']);
     await p.page.evaluate(async () => window.__lomn.useDirectoryHandle(await (await navigator.storage.getDirectory()).getDirectoryHandle('lomn-install')));
-    const st = await waitState(p.page, ['area-ready'], 120000);
+    const st = await waitState(p.page, ['area-ready', 'area-error'], 120000);
     const src = await p.page.evaluate(() => window.__lomn.source);
     check(st.state === 'area-ready' && src.kind === 'handle', 'handle path: ghut from a directory handle (no copy)', JSON.stringify(src));
     compare(await shot(p.page, 'handle_lev2_ghut.png'), refs['lev2/ghut'], 'lev2/ghut (handle path)');
