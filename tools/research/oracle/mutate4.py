@@ -7,7 +7,7 @@ Run ONLY in a scratch copy of the tree (it edits sources in place and restores t
 (.toolchain, web/node_modules) and PATH with node >= 23 and emsdk. Checks:
   unit     build/native/lomn_tests (doctest; includes the M1b null-backend, prefetch, fly-camera cases)
   gpu      build/native/lomn_gpu_destroy_test (Dawn)
-  node     node --test web/tests/unit_test.mjs
+  node     node --test web/tests/{unit,unit_r2,network_check,lib_wait,a13_checks}_test.mjs
   browser  node web/tests/byo_synthetic.mjs (Playwright, real GPU) after rebuilding lomn_web when engine code changed
 A mutation is CAUGHT when a listed check fails (or the build fails), MISSED otherwise. The no-op control must be MISSED.
 """
@@ -93,6 +93,16 @@ M = [
      "  const have = new Map(entries.map((e) => [lowerAscii(e.path), e.size]));\n", "  const have = new Map(entries.map((e) => [lowerAscii(e.path), e.size]));\n  return '';\n", ["node", "browser"]),
     ("M3 page: keys move the camera without canvas focus", "web/app/main.js",
      "const ours = () => document.activeElement === c || document.pointerLockElement === c;", "const ours = () => true;", ["browser"]),
+    # ---- M1 close-out (task 10) ----
+    ("C-N1 page: a failed area read is final (fail) instead of a recoverable areaError", "web/app/main.js",
+     "    if (!dead) areaError(err, name);", "    if (!dead) fail(err);", ["browser"]),
+    ("C-N2 network check: the per-path fetch limit is ignored", "web/tests/lib.mjs",
+     "    .filter((r) => r.count > r.max);", "    .filter((r) => false);", ["node"]),
+    ("C-N4 page: the requestAdapter() pre-check is removed", "web/app/main.js",
+     "      if (!(await navigator.gpu.requestAdapter())) adapterWhy = 'it returned no graphics adapter';\n", "", ["browser"]),
+    ("C-m1 webgpu: the surface depth texture is never explicitly destroyed", "engine/src/rhi/webgpu_device.cpp",
+     "    wgpuTextureDestroy(t);\n    ++gpu_destroys_;\n    if (surface_depth) --undestroyed_depth_;",
+     "    if (!surface_depth) wgpuTextureDestroy(t);\n    ++gpu_destroys_;\n    if (surface_depth) --undestroyed_depth_;", ["browser"]),
     ("no-op control (comment only; must be MISSED)", "engine/src/fs/prefetch_fs.cpp",
      "// outside the file: a caller error, not a miss", "// outside the file: a caller error (not a miss)", ["unit", "node"]),
 ]
@@ -119,6 +129,10 @@ EXPECT = {
     "I4 page: no Content-Security-Policy": r"CSP",
     "I6 byo: the copy is never compared with its manifest": r"I6",
     "M3 page: keys move the camera without canvas focus": r"M3",
+    # M1 close-out: the sections' own check labels (byo_synthetic.mjs). C-N2 is a node check (network_check_test.mjs positive controls).
+    "C-N1 page: a failed area read is final (fail) instead of a recoverable areaError": r"C-N1",
+    "C-N4 page: the requestAdapter() pre-check is removed": r"C-N4",
+    "C-m1 webgpu: the surface depth texture is never explicitly destroyed": r"C-m1",
 }
 
 
@@ -175,7 +189,7 @@ def main() -> int:
                 cmd = {
                     "unit": "timeout 300 build/native/lomn_tests",
                     "gpu": "timeout 120 build/native/lomn_gpu_destroy_test",
-                    "node": "cd web && timeout 60 node --test tests/unit_test.mjs tests/unit_r2_test.mjs",
+                    "node": "cd web && timeout 60 node --test tests/unit_test.mjs tests/unit_r2_test.mjs tests/network_check_test.mjs tests/lib_wait_test.mjs tests/a13_checks_test.mjs",
                     "browser": "cd web && timeout 600 node tests/byo_synthetic.mjs ../build/wasm ../build/mut-byo ../build/native/lomn_view",
                 }[c]
                 rc, out, secs = run(cmd, tree, 900, f"{i:02d}-{c}.log")
