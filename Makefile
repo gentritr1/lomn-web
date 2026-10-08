@@ -5,7 +5,7 @@ export LOMN_DATA LOMN_CACHE
 VENV := .venv
 PY := $(VENV)/bin/python
 EMSDK_ENV := source .toolchain/emsdk/emsdk_env.sh >/dev/null 2>&1
-.PHONY: setup check-data decomp worklist native wasm site test-tools test-native test-wasm test-web check perf perf-areas datacheck datacheck-wasm fuzz-osi fuzz-formats fuzz-formats-help a9-sweep a13-real manifest osi-tables
+.PHONY: setup check-data decomp worklist native wasm site test-tools test-native test-wasm test-web check perf perf-areas datacheck datacheck-wasm fuzz-osi fuzz-formats fuzz-formats-help a9-sweep a13-real manifest osi-tables osi-diff conform-trace-cmp
 
 setup: $(VENV)/.ok
 	timeout 3600 tools/toolchain.sh
@@ -163,6 +163,48 @@ fuzz-formats:
 	@if [ "$(FUZZ_N)" = "$(FUZZ_N_WASM)" ]; then grep '^fuzz_formats: ' build/asan/native/fuzz_formats.txt > build/asan/native/fuzz_totals.txt && \
 	  grep '^fuzz_formats: ' build/asan/wasm/fuzz_formats.txt > build/asan/wasm/fuzz_totals.txt && \
 	  cmp build/asan/native/fuzz_totals.txt build/asan/wasm/fuzz_totals.txt && echo "fuzz-formats: native == wasm32 per-format totals"; fi
+
+# M2a-1 T4 (A6): the differential run of the real Base.osi: Setup + 600 Process frames + the key taps, all natives typed
+# stubs (D11) + the Beta 1.5.0 mod rows (D12). Native lomn_osi_run, wasm32 lomn_osi_run under node, and the independent
+# Python oracle (own stubs, and replaying the native natives.log: the A9 path) must give byte-identical digests, and the
+# full trace of Setup + frames 0-2 must be byte-identical. Prints the four cmp results and the summary of each leg.
+# OSI_PERF=1 appends this run's A15 row (instructions/natives/script ms per frame, stack high-water) to perf/osi-a6.jsonl.
+OSI_KEYS ?= down@100 down@160 enter@220 esc@280
+OSI_FRAMES ?= 600
+OSI_DIFF := build/osi-diff
+OSI_TABLES := --natives data/osi/natives.json --mods data/osi/natives_beta150.json --types data/osi/types.json
+osi-diff: native wasm $(VENV)/.ok
+	@if [ -z "$(LOMN_DATA)" ]; then echo "osi-diff: LOMN_DATA is not set"; exit 2; fi
+	rm -rf $(OSI_DIFF) && mkdir -p $(OSI_DIFF)
+	set -o pipefail; timeout 300 build/native/lomn_osi_run "$(LOMN_DATA)/install/data/Base.osi" --frames $(OSI_FRAMES) --keys "$(OSI_KEYS)" \
+	  --digest $(OSI_DIFF)/native.digest --natives-log $(OSI_DIFF)/native.natives.log --trace $(OSI_DIFF)/native.window --trace-frames -1:2 \
+	  --perf-out $(OSI_DIFF)/osi-a6.jsonl --commit "$$(git rev-parse --short HEAD)" | tee $(OSI_DIFF)/native.summary
+	set -o pipefail; $(EMSDK_ENV) && timeout 600 node build/wasm/lomn_osi_run.js "$(LOMN_DATA)/install/data/Base.osi" --frames $(OSI_FRAMES) \
+	  --keys "$(OSI_KEYS)" --digest $(OSI_DIFF)/wasm.digest --trace $(OSI_DIFF)/wasm.window --trace-frames -1:2 | tee $(OSI_DIFF)/wasm.summary
+	set -o pipefail; timeout 600 $(PY) tools/research/osi_vm.py --run "$(LOMN_DATA)/install/data/Base.osi" $(OSI_TABLES) --frames $(OSI_FRAMES) \
+	  --keys "$(OSI_KEYS)" --digest $(OSI_DIFF)/python.digest | tee $(OSI_DIFF)/python.summary
+	timeout 600 $(PY) tools/research/osi_vm.py --run "$(LOMN_DATA)/install/data/Base.osi" $(OSI_TABLES) --frames $(OSI_FRAMES) \
+	  --keys "$(OSI_KEYS)" --replay $(OSI_DIFF)/native.natives.log --digest $(OSI_DIFF)/python_replay.digest > $(OSI_DIFF)/python_replay.summary
+	timeout 600 $(PY) tools/research/osi_vm.py --run "$(LOMN_DATA)/install/data/Base.osi" $(OSI_TABLES) --frames $(OSI_FRAMES) \
+	  --keys "$(OSI_KEYS)" --trace $(OSI_DIFF)/python.trace > /dev/null
+	awk '/^K      3 /{exit} {print}' $(OSI_DIFF)/python.trace > $(OSI_DIFF)/python.window
+	@cmp $(OSI_DIFF)/native.digest $(OSI_DIFF)/wasm.digest && echo "cmp 1/4 digest native == wasm32: OK"
+	@cmp $(OSI_DIFF)/native.digest $(OSI_DIFF)/python_replay.digest && echo "cmp 2/4 digest native == Python (replaying the native natives.log): OK"
+	@cmp $(OSI_DIFF)/native.digest $(OSI_DIFF)/python.digest && echo "cmp 3/4 digest native == Python (own stubs): OK"
+	@cmp $(OSI_DIFF)/native.window $(OSI_DIFF)/python.window && cmp $(OSI_DIFF)/native.window $(OSI_DIFF)/wasm.window && \
+	  echo "cmp 4/4 full trace Setup + frames 0-2 native == Python == wasm32: OK ($$(wc -l < $(OSI_DIFF)/native.window) lines)"
+	@echo "summary (native):"; cat $(OSI_DIFF)/native.summary
+	@if [ -n "$(OSI_PERF)" ]; then cat $(OSI_DIFF)/osi-a6.jsonl >> perf/osi-a6.jsonl && echo "appended to perf/osi-a6.jsonl"; fi
+
+# M2a-1 T4: the conformance corpus traces of the C++ runner and the Python oracle, compared file by file with cmp.
+conform-trace-cmp: native $(VENV)/.ok
+	rm -rf build/conform-trace && mkdir -p build/conform-trace
+	timeout 120 $(PY) tools/osi/conform_assemble.py tests/osi/conformance build/conform-trace/osi
+	timeout 300 build/native/lomn_osi_conform tests/osi/conformance --osi-dir build/conform-trace/osi --trace-dir build/conform-trace/cpp
+	timeout 300 $(PY) tools/research/osi_vm.py --conform tests/osi/conformance --trace-dir build/conform-trace/py
+	@n=0; bad=0; for f in $$( (cd build/conform-trace/cpp && find . -name '*.trace'; cd ../py && find . -name '*.trace') | sort -u); do \
+	  n=$$((n+1)); cmp -s "build/conform-trace/cpp/$$f" "build/conform-trace/py/$$f" || { bad=$$((bad+1)); echo "DIFF $$f"; }; done; \
+	  echo "conform-trace-cmp: $$((n-bad))/$$n traces byte-identical (C++ vs Python)"; [ $$bad -eq 0 ]
 
 check: test-tools test-native test-wasm test-web
 	@if [ -n "$(LOMN_DATA)" ]; then $(MAKE) datacheck datacheck-wasm a13-real; else echo "datacheck, a13-real SKIPPED (no LOMN_DATA)"; fi

@@ -357,6 +357,28 @@ add_test(NAME osi_conform COMMAND sh -c
          ${CMAKE_CURRENT_SOURCE_DIR}/../tests/osi/conformance ${CMAKE_CURRENT_BINARY_DIR}/osi_conformance
          "${CMAKE_CROSSCOMPILING_EMULATOR}")
 set_tests_properties(osi_conform PROPERTIES SKIP_RETURN_CODE 77)
+# M2a-1 T4 (A6): the differential run of the real Base.osi (Setup + 600 Process frames + the key taps, typed stubs)
+# against the independent Python oracle, natively and under node (NODERAWFS reads LOMN_DATA and data/osi). ctest
+# osi_a6_digest: C++ digest == oracle digest (own stubs) == oracle digest replaying the C++ natives.log, natives.log
+# equal, KEYSPEC expansion equal to tools/osi/keys.py; osi_a6_window: the full trace of Setup + frames 0-2 byte for
+# byte. `make osi-diff` adds the native == wasm32 cmp. Skipped without LOMN_DATA.
+add_executable(lomn_osi_run tools/lomn_osi_run.cpp)
+target_link_libraries(lomn_osi_run PRIVATE lomn_osi)
+target_compile_options(lomn_osi_run PRIVATE -Wall -Wextra)
+target_compile_definitions(lomn_osi_run PRIVATE "LOMN_OSI_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/../data/osi\"")
+if(EMSCRIPTEN)
+  target_link_options(lomn_osi_run PRIVATE -sNODERAWFS=1 -sALLOW_MEMORY_GROWTH=1)
+endif()
+set(LOMN_OSI_A6_KEYS "down@100 down@160 enter@220 esc@280")
+foreach(mode digest window rerun)
+  add_test(NAME osi_a6_${mode} COMMAND ${CMAKE_COMMAND} "-DRUNNER=${CMAKE_CROSSCOMPILING_EMULATOR}" -DEXE=$<TARGET_FILE:lomn_osi_run>
+           -DMODE=${mode} -DFRAMES=600 "-DKEYSPEC=${LOMN_OSI_A6_KEYS}" -DPY=python3
+           -DORACLE=${CMAKE_CURRENT_SOURCE_DIR}/../tools/research/osi_vm.py -DKEYSPY=${CMAKE_CURRENT_SOURCE_DIR}/../tools/osi/keys.py
+           -DDATA=${CMAKE_CURRENT_SOURCE_DIR}/../data/osi -DOUT=${CMAKE_CURRENT_BINARY_DIR}/osi_a6_${mode}
+           -DOSIASM=${CMAKE_CURRENT_SOURCE_DIR}/../tools/osi/osiasm.py -DASM=${CMAKE_CURRENT_SOURCE_DIR}/tests/data/osi_a6_rerun.asm
+           -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/osi_a6.cmake)
+  set_tests_properties(osi_a6_${mode} PROPERTIES SKIP_REGULAR_EXPRESSION "SKIPPED \\(no LOMN_DATA\\)" TIMEOUT 600)
+endforeach()
 # REF3 revision 2: crafted-input time/memory probes of the OSI reader, natively and as wasm32 (2 GB linear memory).
 add_executable(lomn_osi_probe tests/probe_osi.cpp)
 target_link_libraries(lomn_osi_probe PRIVATE lomn_sage)
