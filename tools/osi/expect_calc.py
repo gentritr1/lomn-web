@@ -182,7 +182,19 @@ def arith(op: str, a, b, *, pc: int) -> dict:
         return float_result(struct.unpack("<I", struct.pack("<f", r))[0])
     x, y = _exact(a), _exact(b)
     r = {"+": lambda: x + y, "-": lambda: x - y, "*": lambda: x * y, "/": lambda: x / y}[op]()
+    if r == 0:
+        # An exact zero result keeps the x87 (IEEE round-to-nearest) sign, which a Fraction cannot carry
+        # (C++ VM review, 2026-10-08): ×/÷ → sign(a) xor sign(b); + → −0 only for (−0) + (−0); − → −0 only for (−0) − (+0).
+        # An int operand is +0 when zero (fild of 0 gives +0).
+        na, nb = _negative(a), _negative(b)
+        neg = {"*": na != nb, "/": na != nb, "+": na and nb, "-": na and not nb}[op]
+        return float_result(0x80000000 if neg else 0)
     return float_result(f32_bits(round_p(r, pc)))
+
+
+def _negative(v) -> bool:
+    """Sign bit of an operand: an Int is negative iff n < 0; a Flt by its sign bit (so -0.0 counts as negative)."""
+    return v.n < 0 if isinstance(v, Int) else math.copysign(1.0, v.value) < 0
 
 
 def compare(op: str, a, b) -> dict:

@@ -222,3 +222,20 @@ def test_percent_f_refuses_values_beyond_18_digits(ec):
     for x in (2.0e17, -3.0e20):
         with pytest.raises(ec.CalcError, match="18 digits"):
             ec.to_string(ec.Flt(x))
+
+
+# Signed zero (C++ VM review 2026-10-08): an exact zero keeps the x87 sign; before this fix expect_calc returned +0 always.
+def test_exact_zero_results_keep_the_x87_sign(ec):
+    F, I = ec.Flt, ec.Int
+    neg0, pos0 = {"type": "0x12", "bits": "80000000"}, {"type": "0x12", "bits": "00000000"}
+    assert ec.arith("*", F(-1.0), I(0), pc=24) == neg0
+    assert ec.arith("*", I(0), F(-1.0), pc=24) == neg0
+    assert ec.arith("*", F(-0.0), F(-2.0), pc=24) == pos0
+    assert ec.arith("/", F(0.0), F(-5.0), pc=24) == neg0
+    assert ec.arith("/", F(-0.0), I(5), pc=64) == neg0
+    assert ec.arith("+", F(-0.0), F(-0.0), pc=24) == neg0
+    assert ec.arith("+", F(1.0), F(-1.0), pc=24) == pos0
+    assert ec.arith("+", I(3), F(-3.0), pc=24) == pos0
+    assert ec.arith("-", F(-0.0), F(0.0), pc=24) == neg0
+    assert ec.arith("-", F(-0.0), F(-0.0), pc=24) == pos0
+    assert ec.arith("-", I(3), F(3.0), pc=24) == pos0
