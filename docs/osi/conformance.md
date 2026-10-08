@@ -205,3 +205,6 @@ Both runners (`lomn_osi_conform`, `osi_vm.py --conform`) implement these. They c
    - 0x91 "Reference beyond end of string table", 0x93/0x94/0x96 "Assigning into string table is illegal" and 0x95 "Removal from string table is illegal": these need a 0x13 value, which no handler and no CreateVariant overload creates (opcodes.md variant types).
 
    Further pairs may be added only with the same kind of citation.
+10. **Heap values in expectations** (`result`, `top`, `globals`) are written as `{"type": <kind or game type>, "value": <handle>}`. The handle is the per-kind monotonic id of D7, starting at 1 for each kind (o, a, s, g) in a fresh VM. Example: the first object a program creates is `{"type": "0x01", "value": 1}`.
+11. **The engine marker** that `Vm::call` pushes is `{0xff, saved PC}`. In a fresh VM the saved PC is 0, and a nested call saves the PC of the instruction that invoked the native. Expectations write the top-level marker as `{"type": "0xff", "value": 0}`.
+12. **Pop-versus-check order on error paths** (members 0x10/0x15/0x18–0x1a, colour 0xa0–0xa3, arithmetic with one invalid operand). The asm settles each case, and opcodes.md records the outcome. An expectation follows opcodes.md as amended, never a guess.
