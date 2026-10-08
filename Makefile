@@ -26,8 +26,11 @@ decomp: check-data
 
 # M2a-0: OSI VM citation tables (docs/osi/). opcodes.md: generated columns from the canonical exe (as data), the decomp
 # corpus and Base.osi; the authored columns (stack_effect, errors, notes) are kept by op.
+# M2a-0 T3: registry.py writes gen/osi/natives.json (not committed: 1,056 native rows) and docs/osi/types.md (the variant-type
+# table: builtin ids, the game-type order rule, duplicates). It needs `make decomp` first (reads gen/decomp).
 osi-tables: $(VENV)/.ok
 	timeout 300 $(PY) tools/osi/opcodes.py --exe "$(LOMN_DATA)/reference/LEGOBionicle.exe" --osi "$(LOMN_DATA)/install/data/Base.osi" --corpus gen/decomp --out docs/osi/opcodes.md
+	timeout 300 $(PY) tools/osi/registry.py --exe "$(LOMN_DATA)/reference/LEGOBionicle.exe" --osi "$(LOMN_DATA)/install/data/Base.osi" --corpus gen/decomp --out-json gen/osi/natives.json --out-types docs/osi/types.md
 
 worklist: $(VENV)/.ok
 	timeout 1800 $(PY) tools/decomp/worklist.py check gen/decomp worklist/status.json . --ctest-dir build/native
