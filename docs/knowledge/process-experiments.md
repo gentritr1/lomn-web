@@ -77,3 +77,28 @@ Arm order is counterbalanced: in M1a-4, batch 1 goes to Sonnet and batch 2 to Op
 | M2a-0 T3 native registry | Sonnet | 917-line generator + 500-line test + generated doc | blind APPROVE; 0 Important, 6 Minor | 1 | 28.6 min (+7.6) | 102 (+22) |
 
 **Reading.** Both arms were approved first time with no Critical findings and no implementer-caused Important finding. The Sonnet arm disclosed a TDD deviation: it drafted the module before the tests. It also added an unrequested third independent reader that made the registry stronger. The tasks differ about 6× in size, so time and cost per item are still not comparable. **Decision:** no change of default. M2a-1 pairs two deliberately matched tasks, one per arm, so time can be compared.
+
+### E2 round 3 (M2a-1, matched corpus halves, 2026-10-08)
+
+| Task | Arm | Size | Review | Fix rounds | Wall | Tool calls | Tokens |
+|---|---|---|---|---|---|---|---|
+| M2a-1 corpus group a | Sonnet | 262 programs | APPROVE; 0 wrong expectations; 1 Important (a coverage gap) | 1 (2.9 min) | 21.3 min | 34 | 310k |
+| M2a-1 corpus group b | Opus, medium | 239 programs | APPROVE; 0 wrong expectations; minors only | 1 (1.8 min) | 15.6 min | 25 | 253k |
+
+**Reading.** On matched work both arms were approved first time, with equal correctness. Opus-medium was 27 % faster with fewer calls. A later, independent check found that both arms shared one misreading with every other party: atof wraps where `_strtold` actually saturates, and the sign of exact-zero results. The cause was the shared tables, not the model.
+
+## E3: Haiku 5.5 vs Sonnet 5.5 on bounded mechanical jobs (2026-10-09, Console credits, headless `claude -p`)
+
+| Rep | Task | Sonnet | Haiku | Verdict |
+|---|---|---|---|---|
+| 1 | S05 regex + anchors guard test | $0.187, 8 turns, 1.1 min | $0.017, 13 turns, 1.5 min | both correct (controller re-ran tests; regex vs the real failure line) |
+| 2 | review minors M3/M6 + expect_calc atof overflow | $0.321, 13 turns, 1.4 min | $0.038, 32 turns, 2.5 min | both correct (controller: native build, osi 1028/1028, pytest); Haiku's merged |
+
+**Reading after 2 of 3 reps.** Quality was equal both times. Haiku costs 8.5–11× less and uses 1.5–2.5× the turns and 1.4–1.8× the wall time. Rep 3 is still needed before Haiku is adopted for this class. On the owner's plan (2026-10-09 billing split), the $ saving matters only for credit-billed runs.
+
+## API cost reference (2026-10-09, Console credits; the JSON cost matches the Console log)
+- Medium fix, Sonnet: $0.40.
+- Opus-medium review: $0.86–1.37.
+- I2 (two engines, CMake, measurement), Opus-medium implementer: $2.25.
+
+Details in `.superpowers/sdd/cost-test/results.md` (git-ignored) and ROADMAP §4.1.

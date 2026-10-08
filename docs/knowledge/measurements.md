@@ -472,3 +472,18 @@ Run by the controller on a frozen `git archive 8b91a14` of `m1-integration` (own
 - **Full `mutate4.py`, all 38 entries** (run in chunks 1–13, 14–26, 23 + 27–38 with the fixed scorer, 33–38): **37 CAUGHT, each on its targeted check; the no-op control (#38) MISSED.** This closes the "full rerun PENDING" note above.
   - Entry #23 was first scored MISSED although its targeted `FAIL C1: GPU process crash …` line was in the log: `mutate4.run()` kept only the last 1,500 characters of the FAIL lines, and #23 breaks 7 checks. Fixed in `d72cc7c` (every FAIL line is kept; `tools/tests/test_mutate4_run.py` fails on the old `run()`); #23 re-run: CAUGHT on C1.
   - One chunk was killed by a 30-minute tool limit mid-entry #33 and left that mutation applied in the frozen copy; the file was restored from the commit, the tree re-compared (0 differences) and #33–#38 re-run.
+
+## M2a-1 OSI VM (2026-10-08/09, native Release Apple M1 Pro + wasm32 under Node 20; game data: Beta 1.5.0 install)
+- **A6 differential:** Base.osi Setup + 600 frames + keys. The digests are byte-identical across native, wasm32 and the Python oracle, in both own-stub and replay modes.
+  - Setup takes 48,850 instructions; 600 frames take 390,706 (553 per frame).
+  - The trace window is 55,170 lines.
+- **Conformance:** 528 programs: 521 at the A5 gate, + 6 falsifiers from the mutation run (5 in group a, 1 in group b), + `b-eng-reenter-depth`. Results: 528/528 on native, wasm32 and the oracle, and 528/528 C++ vs Python traces byte-identical.
+- **Mutation bite:**
+  - 47 entries (33 consult + 13 settled + the control);
+  - 44 caught at first; the 2 survivors were closed by new corpus programs, and the control stays MISSED.
+  - A review on 2026-10-09 showed the pre-fix atof model gives 492 C++-vs-oracle mismatches on 6,013 boundary strings, and 0 after the I1 fix (24,052 strings).
+- **Fuzz** (`make fuzz-osi-vm`, ASan+UBSan): 5,000 inputs, 96/96 opcodes fetched, 0 internal errors, 0 invariant failures.
+- **Engine-call nesting:**
+  - Base.osi reaches a maximum depth of 1 in A6. This is a floor: the stub natives never re-enter. Re-measure in M2a-2.
+  - Port cap: 64.
+  - wasm stack: 1,648 bytes per level, 116,240 bytes at the cap. The default 64 KiB runs out near level 33. `STACK_SIZE` = 512 KiB (4.5× need).
