@@ -29,9 +29,11 @@ decomp: check-data
 # M2a-0 T3: registry.py writes data/osi/natives.json (COMMITTED: 1,056 native rows, names/addresses/counts/type names only,
 # so M2a-2 needs no Ghidra run) and docs/osi/types.md (the variant-type
 # table: builtin ids, the game-type order rule, duplicates). It needs `make decomp` first (reads gen/decomp).
+# M2a-1 T0: also the `ret`/`sets_fpu_pc64` columns, data/osi/types.json (game-type ids) and data/osi/natives_beta150.json
+# (the Beta 1.5.0 mod natives, decoded from install/mods/*.dll read as data). All three are COMMITTED.
 osi-tables: $(VENV)/.ok
 	timeout 300 $(PY) tools/osi/opcodes.py --exe "$(LOMN_DATA)/reference/LEGOBionicle.exe" --osi "$(LOMN_DATA)/install/data/Base.osi" --corpus gen/decomp --out docs/osi/opcodes.md
-	timeout 300 $(PY) tools/osi/registry.py --exe "$(LOMN_DATA)/reference/LEGOBionicle.exe" --osi "$(LOMN_DATA)/install/data/Base.osi" --corpus gen/decomp --out-json data/osi/natives.json --out-types docs/osi/types.md
+	timeout 300 $(PY) tools/osi/registry.py --exe "$(LOMN_DATA)/reference/LEGOBionicle.exe" --osi "$(LOMN_DATA)/install/data/Base.osi" --corpus gen/decomp --out-json data/osi/natives.json --out-types docs/osi/types.md --out-types-json data/osi/types.json --mods "$(LOMN_DATA)/install/mods" --out-mods data/osi/natives_beta150.json
 
 worklist: $(VENV)/.ok
 	timeout 1800 $(PY) tools/decomp/worklist.py check gen/decomp worklist/status.json . --ctest-dir build/native

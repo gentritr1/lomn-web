@@ -63,13 +63,14 @@ bool no_operand(uint8_t op) {
   return k.count(op) != 0;
 }
 
-bool read_strings(Cursor& c, std::vector<std::string>& out) {
+bool read_strings(Cursor& c, std::vector<std::string>& out, std::vector<uint32_t>* offsets = nullptr) {
   uint16_t n = 0;
   if (!c.u16(n) || uint64_t(n) * 2 > c.remaining()) return false;
   out.clear();
   for (uint32_t i = 0; i < n; ++i) {
     uint8_t len = 0;
     std::string s;
+    if (offsets) offsets->push_back(static_cast<uint32_t>(c.pos()));
     if (!c.u8(len) || !c.str(len, s) || !c.skip(1)) return false;
     out.push_back(std::move(s));
   }
@@ -100,7 +101,7 @@ bool OsiFile::parse_tables(std::vector<uint8_t> bytes, std::string* err) {
   if (!c.str(4, magic) || magic != std::string("OSI\0", 4)) return fail(err, "bad magic");
   if (!c.u16(major_) || !c.u16(minor_)) return fail(err, "truncated header");
   if (major_ != 4) return fail(err, "unsupported version " + std::to_string(major_) + "." + std::to_string(minor_));
-  if (!read_strings(c, strings_) || !read_strings(c, globals_)) return fail(err, "truncated string/global table");
+  if (!read_strings(c, strings_, &string_offsets_) || !read_strings(c, globals_)) return fail(err, "truncated string/global table");
   uint16_t nf = 0;
   if (!c.u16(nf) || uint64_t(nf) * 7 > c.remaining()) return fail(err, "bad function table");
   for (uint32_t i = 0; i < nf; ++i) {
@@ -109,7 +110,7 @@ bool OsiFile::parse_tables(std::vector<uint8_t> bytes, std::string* err) {
     uint32_t off = 0;
     uint16_t np = 0;
     if (!c.u8(len) || !c.str(len, name) || !c.u32(off) || !c.u16(np)) return fail(err, "truncated function table");
-    functions_.push_back({name, off});
+    functions_.push_back({name, off, np});
   }
   uint16_t nc = 0;
   if (!c.u16(nc) || uint64_t(nc) * 2 > c.remaining()) return fail(err, "bad class table");
@@ -119,7 +120,11 @@ bool OsiFile::parse_tables(std::vector<uint8_t> bytes, std::string* err) {
   uint64_t methods = 0;
   for (uint32_t i = 0; i < nc; ++i) {
     uint8_t np = 0, nm = 0;
-    if (!c.u8(np) || !c.skip(uint64_t(np) * 2) || !c.u8(nm) || uint64_t(nm) * 6 > c.remaining()) return fail(err, "truncated class");
+    if (!c.u8(np) || uint64_t(np) * 2 > c.remaining()) return fail(err, "truncated class");
+    classes_[i].props.resize(np);
+    for (uint32_t p = 0; p < np; ++p)
+      if (!c.u16(classes_[i].props[p])) return fail(err, "truncated class");
+    if (!c.u8(nm) || uint64_t(nm) * 6 > c.remaining()) return fail(err, "truncated class");
     methods += nm;
     if (methods > kMaxOsiMethods) return fail(err, "method tables exceed kMaxOsiMethods");
     classes_[i].methods.reserve(nm);
@@ -141,7 +146,7 @@ bool OsiFile::parse_tables(std::vector<uint8_t> bytes, std::string* err) {
       if (m.offset >= d_.size()) return fail(err, "method offset outside the file");
     }
   for (const auto& f : functions_)
-    if (f.second >= d_.size()) return fail(err, "function offset outside the file");
+    if (f.offset >= d_.size()) return fail(err, "function offset outside the file");
   return true;
 }
 
@@ -226,7 +231,7 @@ bool OsiFile::check_all(uint64_t* count, std::string* err, uint64_t* calls) cons
     return true;
   };
   for (const auto& f : functions_)
-    if (!walk(f.second)) return false;
+    if (!walk(f.offset)) return false;
   for (const OsiClass& k : classes_)
     for (const OsiMethod& m : k.methods)
       if (!walk(m.offset)) return false;

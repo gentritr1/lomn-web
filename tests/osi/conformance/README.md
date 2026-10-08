@@ -1,0 +1,29 @@
+# OSI VM conformance corpus
+
+The format, the coverage targets and the report are specified in [`docs/osi/conformance.md`](../../../docs/osi/conformance.md).
+Group `a/` (consult §1.4: nop/line, members, members-by-string, variables, calls/branch, arith, colour, type tests) and
+group `b/` (stack, push, compare, logic/bitwise, inc/dec, game-var, native calls, arrays, convert, halt, BCLUnused) each
+hold `<id>.asm` + `<id>.expect.json`; `.osi` files are assembled at test time and never committed.
+Coverage: `.venv/bin/python tools/osi/conformance_report.py tests/osi/conformance/<group> --group <group> --missing`.
+
+## Authoring rules (copied from docs/osi/conformance.md §2; that file wins if they ever differ)
+
+1. The author reads **only** `docs/osi/opcodes.md`, `docs/osi/types.md`, this file, `docs/osi/trace.md`,
+   `tools/osi/osiasm.py` and `tools/osi/expect_calc.py`. Forbidden: `engine/` (all of it), `tools/research/osi_vm.py`,
+   and the other corpus group's work in progress. The reviewer checks the agent's tool log for them.
+2. Every expectation cites the row cell it comes from (`"rows"`), and a falsifier program states the alternative reading
+   it kills (`"falsifier"`, `"alternative"`). The reviewer's 5-sample check asks "does the alternative reading give a
+   different `expect`?"; if not, it is not a falsifier.
+3. Numbers come from `expect_calc.py` (exact rational → the D8′ rounding at an explicit `pc`; `"%d"`/`"%f"`;
+   `atoi`/`atof`; 32-bit wrap; unsigned div/mod; logical shifts; chop float → int) or from integer arithmetic the author
+   shows in the file's `"note"`. Running any interpreter to produce an expectation is forbidden: that would make the
+   corpus a copy of one implementation.
+4. Programs never depend on behaviour the table marks undefined: 0x11 on a non-object, `0x33 0`, a literal 0x84 except the
+   D10 error program, INT_MIN / −1, stack over/underflow except our two error programs, behaviour after an error.
+   Decimal text given to `atof` is exactly representable in f32 (`"0.5"`, `"-2.25"`, `"3"`); `%f` programs are tagged
+   `"UNVERIFIED-CRT"` in `note` (consult risk 3).
+5. Programs are minimal: one row under test, the fewest other instructions, and those from the "trusted core" (0x40–0x47,
+   0x30, 0x52), which get their own programs first.
+6. **Precision (D8′).** A program that does mixed int/float arithmetic states the `fpu_pc` it runs at. It is 24 unless the
+   program (or its test natives) performed a string → float conversion before (0xb1 on a 0x11/0x16; a float-declared
+   argument given a string; a native with `sets_fpu_pc64`). Compute the value with `expect_calc.arith(op, a, b, pc=…)`.

@@ -3,6 +3,7 @@
 // every per-file / per-method cap (REF3 revision 2: values measured on the real Base.osi, see osi.h).
 // The time/memory side of the caps is probed by probe_osi.cpp (ctest osi_probe, native and wasm32).
 #include <cstdint>
+#include <cstdio>
 #include <string>
 #include <vector>
 
@@ -282,4 +283,56 @@ TEST_CASE("osi: a backward branch before the file start ends the walk at the nex
   CHECK(n == 3);
   std::vector<sage::OsiCall> calls;
   CHECK(o.eval_calls("lego_area_statt", "initfull", calls, &err));
+}
+
+// M2a-1 T0: what the VM needs from the table reader (additive accessors; eval_calls/check_all unchanged).
+TEST_CASE("osi: M2a-1 accessors - class props, function argc, globals, symbols, image bytes, string offsets") {
+  test::OsiSpec s;
+  s.code = test::osi_statt_program();
+  s.props = {3, 0x1234};
+  s.globals = {"screenlist", "g1"};
+  s.functions = 2;
+  s.function_argc = {3, 10};
+  const std::vector<uint8_t> bytes = test::build_osi(s);
+  sage::OsiFile o;
+  std::string err;
+  REQUIRE_MESSAGE(o.parse(bytes, &err), err);
+  REQUIRE(o.classes().size() == 1);
+  CHECK(o.classes()[0].props == std::vector<uint16_t>{3, 0x1234});
+  REQUIRE(o.functions().size() == 2);
+  CHECK(o.functions()[0].name == "f");
+  CHECK(o.functions()[0].argc == 3);
+  CHECK(o.functions()[1].argc == 10);
+  CHECK(o.functions()[0].offset == o.classes()[0].methods[0].offset);
+  CHECK(o.globals() == std::vector<std::string>{"screenlist", "g1"});
+  CHECK(o.symbols() == std::vector<std::string>{"initfull"});
+  CHECK(o.bytes() == bytes);  // the image the VM executes (D4: never written)
+  // string-table entry i: its u8 length at string_offsets()[i], then exactly strings()[i]'s bytes
+  REQUIRE(o.string_offsets().size() == o.strings().size());
+  for (size_t i = 0; i < o.strings().size(); ++i) {
+    const uint32_t at = o.string_offsets()[i];
+    REQUIRE(at + 1 + o.strings()[i].size() < bytes.size());
+    CHECK(bytes[at] == o.strings()[i].size());
+    CHECK(std::string(bytes.begin() + at + 1, bytes.begin() + at + 1 + bytes[at]) == o.strings()[i]);
+  }
+  CHECK(o.string_offsets()[0] == 10);  // 'OSI\0', u16 major, u16 minor, u16 count
+  // the evaluator is unaffected by the new fields
+  std::vector<sage::OsiCall> calls;
+  REQUIRE_MESSAGE(o.eval_calls("lego_area_statt", "initfull", calls, &err), err);
+  CHECK(calls.size() == 2);
+}
+
+TEST_CASE("osi: the synthetic statt image is pinned byte for byte (tools/tests/test_osiasm.py rebuilds it)") {
+  // Measured 2026-10-08 (scratch dump of test::statt_osi()); the same hex is pinned in tools/tests/test_osiasm.py.
+  const char* want =
+      "4f5349000400010004000e6763617265616469726563746f720006736574666f67000f67636c696768746469726563746f72000f73657463"
+      "6176656c69676874696e670000000000010000010000710000000f6c65676f5f617265615f737461747400010008696e697466756c6c0000"
+      "0040808080ff45440000a040714544000048427144cdcccc3d820000010004304301820200030001304752";
+  std::string got;
+  char buf[3];
+  for (uint8_t b : test::statt_osi()) {
+    std::snprintf(buf, sizeof buf, "%02x", b);
+    got += buf;
+  }
+  CHECK(got == want);
 }

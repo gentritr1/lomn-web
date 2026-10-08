@@ -13,8 +13,22 @@ committed (rows in execution order, keys sorted), so consumers need no Ghidra ru
   initializer), `winner` whether this row is the one the map keeps, `called_by_base_osi` whether `Base.osi` has a 0x82 site
   for the case-folded key, `phase` `crt` or `scinit`.
   Rows are in execution order. Menu tagging is out of scope here (moved to M2a-2).
+- **M2a-1 fields:** `ret`, `ret_class`, `default`, `sets_fpu_pc64` (section below).
 - **Arguments** are `(this, class&, func&, fnptr, MAX, MIN, type0..type9)`; MAX is stored at +0xc of the 36-byte
   `RegisteredFunction` and MIN at +0xd (`RegisterFunction` 0x5fab30). Each type is a u16 at +0xe + 2i.
+
+## Return kinds (`ret`, D11) and the precision flag (`sets_fpu_pc64`, D8')
+
+- `ret` is the kind of the `CreateVariant` overload the native's body calls (`gen/decomp/calls.jsonl`); `none` when it
+  calls none (those bodies store {0x0f, 0} themselves). No body calls overloads of two kinds. The 63 overloads are
+  classified twice, from the type store in each body and from its mangled parameter in `symbols.txt`: 1 colour, 1 copy, 2 float, 45 game, 12 int, 2 string.
+- `ret_class` names the game type for `game`; `copy` is `CreateVariant(ScOSIVariant)` 0x6159e0, which copies its argument.
+  `default` is the per-row override of the stub return (D11); none is set.
+- Over the 1049 winners: colour 1, copy 3, float 129, game 56, int 223, none 621, string 16.
+- `sets_fpu_pc64` is true when the body reaches `___dec2num` (0x65f80a: `or word [ebp-0xe], 0x300; fldcw` at
+  0x65f886-0x65f88c, no restore before `ret` 0x65f8a8) in the static call graph without entering the VM: `gcscripttools.stringtofloat`.
+- Game-type ids are in `data/osi/types.json` (id = 0x20 + rank below). The Beta 1.5.0 mod natives (D12) are in
+  `data/osi/natives_beta150.json`, decoded from `install/mods/*.dll` read as data (`mod_registrations`).
 
 ## Builtin variant types
 

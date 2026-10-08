@@ -655,7 +655,7 @@ def test_committed_natives_json_is_fresh_and_data_free(reg, canonical_exe, lomn_
     rows = json.loads(COMMITTED_JSON.read_text())
     assert len(rows) == 1056
     fields = {"cls", "name", "key", "site", "body", "max", "min", "types", "crt_index", "init", "winner",
-              "called_by_base_osi", "phase"}
+              "called_by_base_osi", "phase", "ret", "ret_class", "default", "sets_fpu_pc64"}
     for r in rows:
         assert set(r) == fields
         assert all(isinstance(r[k], str) for k in ("cls", "name", "key", "site", "body", "init", "phase"))
@@ -666,3 +666,149 @@ def test_committed_natives_json_is_fresh_and_data_free(reg, canonical_exe, lomn_
 def test_makefile_writes_the_committed_json():
     mk = (REPO / "Makefile").read_text()
     assert "--out-json data/osi/natives.json" in mk and "gen/osi/natives.json" not in mk
+    assert "--out-types-json data/osi/types.json" in mk and "--out-mods data/osi/natives_beta150.json" in mk
+
+
+# ---------------------------------------------------------------------------------- M2a-1 T0: ret column (D11), D8'
+# Measured 2026-10-08 by a scratch script independent of registry.py (scratchpad m2a1-t0/ret_counts.py: the kind of
+# each CreateVariant overload from the `->type = ...` store in its decompiled body; per winner body the overloads it calls
+# in gen/decomp/calls.jsonl). Each body calls at most one overload (428 call one, 621 call none).
+RET_KINDS = {"none": 621, "int": 223, "float": 129, "string": 16, "colour": 1, "game": 56, "copy": 3}
+RET_KINDS_BASE = {"none": 408, "int": 127, "float": 60, "string": 12, "game": 41, "copy": 2}
+COPY_KEYS = {"scslosifileio.loadosiobject", "scslosifileio.loadosiobjectfrommemcard", "scslosistringfuncs.getstringtable"}
+# The 63 overloads by the type they store (docs/osi/opcodes.md "Variant types": 12 int, 2 float, 1 colour, 2 string,
+# 45 game types, 1 copy).
+OVERLOAD_KINDS = {"int": 12, "float": 2, "colour": 1, "string": 2, "game": 45, "copy": 1}
+NEW_FIELDS = {"ret", "ret_class", "default", "sets_fpu_pc64"}
+
+
+def test_createvariant_overload_kinds_agree_with_the_mangled_names(res):
+    ov = res["overloads"]
+    assert len(ov) == 63
+    counts = {}
+    for o in ov.values():
+        counts[o["kind"]] = counts.get(o["kind"], 0) + 1
+    assert counts == OVERLOAD_KINDS
+    assert {o["cls"] for o in ov.values() if o["kind"] == "game"} == set(TYPE_ORDER)
+    assert ov[0x6159E0]["kind"] == "copy" and ov[0x447890]["kind"] == "colour" and ov[0x4077F0]["kind"] == "float"
+
+
+def test_ret_column_kind_counts_are_pinned(rows):
+    win = [r for r in rows if r["winner"]]
+    got, base = {}, {}
+    for r in win:
+        got[r["ret"]] = got.get(r["ret"], 0) + 1
+        if r["called_by_base_osi"]:
+            base[r["ret"]] = base.get(r["ret"], 0) + 1
+    assert got == RET_KINDS and sum(got.values()) == 1049
+    assert base == RET_KINDS_BASE and sum(base.values()) == 650
+    assert {r["key"] for r in win if r["ret"] == "copy"} == COPY_KEYS
+    for r in rows:
+        assert (r["ret_class"] in TYPE_ORDER) if r["ret"] == "game" else r["ret_class"] is None, r["key"]
+        assert r["default"] is None
+
+
+def test_ret_column_spot_checks(rows):
+    win = {r["key"]: r for r in rows if r["winner"]}
+    assert (win["sctilefont.create"]["ret"], win["sctilefont.create"]["ret_class"]) == ("game", "ScTileFont")
+    assert win["sctilefont.setcolor"]["ret"] == "none"
+    assert win["gcsaver.findmaska"]["ret"] == "int"
+    assert win["gcscripttools.stringtofloat"]["ret"] == "float"
+
+
+def test_sets_fpu_pc64_only_on_the_atof_native(rows):
+    """D8': ___dec2num (0x65f80a) sets x87 precision control to 64 bits and never restores it; the only native whose
+    body reaches it (calls.jsonl, not entering ScOSIVirtualMachine::*) is gcscripttools.stringtofloat (0x564d50 ->
+    StringToFloat 0x5654b0 -> _atof 0x65c7b0 -> _strtod -> ___strtold -> ___dec2num)."""
+    assert {r["key"] for r in rows if r["sets_fpu_pc64"]} == {"gcscripttools.stringtofloat"}
+
+
+# ----------------------------------------------------------------------------------------------- types.json
+TYPES_JSON = REPO / "data" / "osi" / "types.json"
+
+
+def test_types_json_ids_follow_first_use_order(res, reg):
+    t = reg.render_types_json(res)
+    doc = json.loads(t)
+    game = [e for e in doc["types"] if e["kind"] == "game"]
+    assert [e["name"] for e in game] == ["type:" + c for c in TYPE_ORDER]
+    assert [e["id"] for e in game] == list(range(0x20, 0x20 + 45))
+    assert [e["rank"] for e in game] == list(range(45))
+    builtin = {e["name"]: e["id"] for e in doc["types"] if e["kind"] != "game"}
+    assert builtin == {"nothing": 0x0F, "int": 0x10, "string-id": 0x11, "float": 0x12, "colour16": 0x14, "colour": 0x15,
+                       "string": 0x16, "byref": 0x200, "unknown:0x0": 0}
+    assert TYPES_JSON.exists() and TYPES_JSON.read_text() == t
+
+
+# ----------------------------------------------------------------------------------------------- mod natives (D12)
+MODS_JSON = REPO / "data" / "osi" / "natives_beta150.json"
+# Decoded 2026-10-08 from the DLL bytes (scratchpad m2a1-t0/mods_decode.py, then registry.mod_registrations):
+# (dll, site, cls, name, body, max, min, declared types, ret)
+MOD_ROWS = [
+    ("BetterSaver.dll", "0x1000264f", "gcsaver", "clearcinema", "0x10001e40", 0, 0, [], "none"),
+    ("BetterSaver.dll", "0x10002678", "bettersaver", "save", "0x10001f40", 0, 0, [], "none"),
+    ("BetterSaver.dll", "0x100026a4", "bettersaver", "getbooleanvalue", "0x10001f70", 1, 1, ["int"], "int"),
+    ("BetterSaver.dll", "0x100026cd", "bettersaver", "setbooleanvalue", "0x10001ff0", 2, 2, ["int", "int"], "none"),
+    ("BetterSaver.dll", "0x100026f9", "bettersaver", "removebooleanvalue", "0x10002030", 1, 1, ["int"], "int"),
+    ("BetterSaver.dll", "0x10002722", "bettersaver", "togglebooleanvalue", "0x100020a0", 1, 1, ["int"], "int"),
+    ("BetterSaver.dll", "0x1000274e", "bettersaver", "getintegervalue", "0x10002130", 1, 1, ["int"], "int"),
+    ("BetterSaver.dll", "0x10002777", "bettersaver", "setintegervalue", "0x100021b0", 2, 2, ["int", "int"], "none"),
+    ("BetterSaver.dll", "0x100027a3", "bettersaver", "decrementintegervalue", "0x100021f0", 1, 1, ["int"], "int"),
+    ("BetterSaver.dll", "0x100027cc", "bettersaver", "incrementintegervalue", "0x10002270", 1, 1, ["int"], "int"),
+    ("BetterSaver.dll", "0x100027f8", "bettersaver", "removeintegervalue", "0x100022f0", 1, 1, ["int"], "int"),
+    ("BetterSaver.dll", "0x10002821", "bettersaver", "getfloatvalue", "0x10002360", 1, 1, ["int"], "float"),
+    ("BetterSaver.dll", "0x1000284d", "bettersaver", "setfloatvalue", "0x10002400", 2, 2, ["int", "float"], "none"),
+    ("BetterSaver.dll", "0x10002876", "bettersaver", "removefloatvalue", "0x10002440", 1, 1, ["int"], "int"),
+    ("OSIProject.DebugServer.dll", "0x10005933", "lsdebugger", "setwireframe", "0x10005690", 1, 1, ["int"], "none"),
+    ("OSIProject.DebugServer.dll", "0x1000596d", "lsdebugger", "setcollisionboxes", "0x100056c0", 1, 1, ["int"], "none"),
+    ("OSIProject.DebugServer.dll", "0x100059a7", "lsdebugger", "settriggerplanes", "0x100056f0", 1, 1, ["int"], "none"),
+    ("OSIProject.DebugServer.dll", "0x100059e1", "lsdebugger", "settriggerboxes", "0x10005720", 1, 1, ["int"], "none"),
+    ("OSIProject.DebugServer.dll", "0x10005a1b", "lsdebugger", "printstack", "0x10005750", 0, 0, [], "none"),
+]
+# The 7 mod keys Base.osi calls (D2 amendment), with their 0x82 site counts (osi.py walk; `BetterSaver.Save` x7 and
+# `bettersaver.save` x1 fold to one key).
+MOD_CALLED = {"bettersaver.save": 8, "bettersaver.getbooleanvalue": 6, "bettersaver.setbooleanvalue": 6,
+              "lsdebugger.setwireframe": 2, "lsdebugger.setcollisionboxes": 2, "lsdebugger.settriggerplanes": 2,
+              "lsdebugger.settriggerboxes": 2}
+
+
+@pytest.fixture(scope="module")
+def mods(reg, lomn_data, rows):
+    return reg.mod_registrations(lomn_data / "install" / "mods", lomn_data / "install" / "data" / "Base.osi", rows)
+
+
+def test_mod_rows_decoded_from_the_dll_bytes(mods):
+    got = [(m["dll"], m["site"], m["cls"], m["name"], m["body"], m["max"], m["min"],
+            [t for t in m["types"] if t is not None], m["ret"]) for m in mods]
+    assert got == MOD_ROWS
+    for m in mods:
+        assert len(m["types"]) == 10 and m["types"][m["max"]:] == [None] * (10 - m["max"])
+        assert m["key"] == (m["cls"] + "." + m["name"]).lower() and m["tier"] == "mod"
+        assert m["collides_with_exe"] is False and m["winner"] is True
+        assert m["sets_fpu_pc64"] is False and m["default"] is None and m["ret_class"] is None
+
+
+def test_mod_rows_called_by_base_osi_and_site_literals(mods):
+    called = {m["key"]: m for m in mods if m["called_by_base_osi"]}
+    assert {k: m["base_osi_sites"] for k, m in called.items()} == MOD_CALLED
+    for m in called.values():
+        assert m["site_literals"] == "consistent", m["key"]       # never AMBIGUOUS: every literal matches its slot type
+    assert all(m["base_osi_sites"] == 0 and m["site_literals"] is None for m in mods if not m["called_by_base_osi"])
+
+
+def test_shim_forwards_max_then_min_to_register_function(lomn_data):
+    """LOMNHook::Util::OSIRegisterFunction (ijl15.dll 0x100035a0) pushes its own [ebp+0x40]..[ebp+0x14] (t9..t0, then
+    arg 5, arg 4) and calls 0x5fab30 (`mov eax, 0x5fab30; call eax`), so its 4th parameter lands in RegisterFunction's
+    MAX slot and its 5th in MIN: the shim order is (fn, cls, name, MAX, MIN, t0..t9). Own PE reading."""
+    dll = (lomn_data / "install" / "ijl15.dll").read_bytes()
+    secs, read = _own_pe(dll)
+    pushes = read(0x100035F7, 3) + read(0x10003600, 3) + read(0x10003607, 3)
+    assert pushes == bytes.fromhex("ff7540ff753cff7538")
+    body = read(0x10003610, 0x30)
+    want = b"".join(bytes([0xFF, 0x75, d]) for d in range(0x34, 0x13, -4))
+    assert want in body
+    assert read(0x10003632, 7) == bytes.fromhex("b830ab5f00ffd0")
+
+
+def test_committed_mods_json_is_fresh(reg, mods):
+    assert MODS_JSON.exists() and MODS_JSON.read_text() == reg.render_rows(mods)

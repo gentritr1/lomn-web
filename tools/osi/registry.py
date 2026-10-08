@@ -459,6 +459,278 @@ def createvariant_types(corpus: Path, image: Image, funcs: list[dict]) -> list[d
     return out
 
 
+# --------------------------------------------------------------------------------- M2a-1 T0: the ret column (D11)
+# Kind of each scalar CreateVariant overload, from the `->type = 0x..` store in its decompiled body (cross-checked
+# against the mangled parameter in symbols.txt by overload_kinds()).
+_STORE_KIND = {0x10: "int", 0x12: "float", 0x15: "colour", 0x16: "string"}
+# Mangled parameter of `?CreateVariant@@YA?AVScOSIVariant@@<param>@Z` -> kind (MSVC codes: M float, N double, F short,
+# G unsigned short, H int, J long, K unsigned long, E unsigned char, _N bool, W1 enum).
+_MANGLED_KIND = [(r"[MN]", "float"), (r"(F|G|H|J|K|E|_N|W1[\w@]+|VScIdentifier@*)", "int"), (r"UStRGBABytes@*", "colour"),
+                 (r"(PBD|V\?\$ScFixedStringTemplate@\$0PP@@*)", "string"), (r"V1@*", "copy"),
+                 (r"[PA]AV(\w+)@*", "game")]
+# ___dec2num (MSL strtod core): `fnstcw [ebp-0xe]; or word [ebp-0xe], 0x300; fldcw [ebp-0xe]` at 0x65f883-0x65f88c and
+# no restore before its `ret` at 0x65f8a8, so it leaves x87 precision control at 64 bits (D8').
+DEC2NUM = 0x65F80A
+
+
+def overload_kinds(corpus: Path, funcs: list[dict]) -> dict[int, dict]:
+    """{address: {"kind", "cls"}} for the 63 CreateVariant overloads. Reader 1: the type store in the decompiled body
+    (`->type = 0x10` / `theOSIType<Class>` / `*(ushort *)param_2...` = copy of the argument). Reader 2: the mangled
+    parameter in symbols.txt. They must agree."""
+    syms = {}
+    for line in (corpus / "symbols.txt").read_text().splitlines():
+        a, _, n = line.partition(" ")
+        m = re.fullmatch(r"\?CreateVariant@@YA\?AVScOSIVariant@@(.+)@Z", n.strip())
+        if m:
+            syms[int(a, 16)] = m.group(1)
+    out = {}
+    for f in funcs:
+        if f["name"] != "CreateVariant":
+            continue
+        a = int(f["addr"], 16)
+        t = strip_comments((corpus / "funcs" / ("%08x.c" % a)).read_text())
+        kinds = set()
+        for x in (s.strip() for s in re.findall(r"->type = ([^;]+);", t)):
+            if x == "0xf":
+                continue                      # the null-pointer branch of a game overload: nothing
+            if x.startswith("theOSIType"):
+                kinds.add(("game", x[len("theOSIType"):]))
+            elif re.fullmatch(r"0x[0-9a-f]+", x) and int(x, 16) in _STORE_KIND:
+                kinds.add((_STORE_KIND[int(x, 16)], None))
+            elif "param_2" in x:
+                kinds.add(("copy", None))
+            else:
+                raise RegistryError("CreateVariant %#x: type store %r not understood" % (a, x))
+        if len(kinds) != 1:
+            raise RegistryError("CreateVariant %#x stores %r" % (a, kinds))
+        kind, cls = kinds.pop()
+        mangled = syms.get(a)
+        mk = next(((k, re.fullmatch(p, mangled)) for p, k in _MANGLED_KIND if mangled and re.fullmatch(p, mangled)), None)
+        if mk is None or mk[0] != kind or (kind == "game" and mk[1].group(1) != cls):
+            raise RegistryError("CreateVariant %#x: body says %s/%s, symbol says %r" % (a, kind, cls, mangled))
+        out[a] = {"kind": kind, "cls": cls}
+    return out
+
+
+def _callees(corpus: Path) -> dict[int, list[int]]:
+    out = {}
+    for c in map(json.loads, open(corpus / "calls.jsonl")):
+        out[int(c["from"], 16)] = [int(t, 16) for t in c["to"] if re.fullmatch(r"0x[0-9a-fA-F]+", t)]
+    return out
+
+
+def ret_column(body: int, callees: dict[int, list[int]], overloads: dict[int, dict]) -> tuple[str, str | None]:
+    """The native's return kind (D11): the kind of the single CreateVariant overload its body calls (calls.jsonl), or
+    "none" when it calls none (those bodies store {0x0f, 0} themselves). More than one kind raises."""
+    called = {(overloads[t]["kind"], overloads[t]["cls"]) for t in callees.get(body, []) if t in overloads}
+    if len(called) > 1:
+        raise RegistryError("native body %#x calls CreateVariant overloads of different kinds: %r" % (body, called))
+    return called.pop() if called else ("none", None)
+
+
+def reaches_dec2num(body: int, callees: dict[int, list[int]], funcs_by_addr: dict[int, str]) -> bool:
+    """Does the native's body reach ___dec2num in the static call graph? The walk does not enter
+    ScOSIVirtualMachine::* (a re-entrant call's own conversions are the VM's business, D8')."""
+    seen, stack = {body}, [body]
+    while stack:
+        a = stack.pop()
+        if a == DEC2NUM:
+            return True
+        if a != body and funcs_by_addr.get(a, "").startswith("ScOSIVirtualMachine::"):
+            continue
+        for t in callees.get(a, []):
+            if t not in seen:
+                seen.add(t)
+                stack.append(t)
+    return False
+
+
+# ------------------------------------------------------------------------------ M2a-1 T0: Beta 1.5.0 mod natives (D12)
+# The two mod DLLs of the owner's LOMN Beta 1.5.0 install, read as data. Each registers its natives in one straight-line
+# block (bounds below: from the first argument push to the last call); the block is decoded by `_decode_block`, which
+# accepts only the instructions these blocks contain and raises on anything else.
+#   BetterSaver.dll: cdecl LOMNHook::Util::OSIRegisterFunction (ijl15.dll export 0x100035a0; imported through the IAT
+#     slot 0x100081a8, `mov esi, [0x100081a8]; call esi`): (fn, cls, name, MAX, MIN, t0..t9). The shim pushes its 4th
+#     parameter into RegisterFunction's MAX slot and its 5th into MIN (ijl15.dll 0x100035f7-0x1000362b, then
+#     `mov eax, 0x5fab30; call eax`).
+#   OSIProject.DebugServer.dll: thiscall ScOSISystem::RegisterFunction 0x5fab30 directly (`mov edi, 0x5fab30;
+#     call edi`, ecx = [0x74d644]) with (class&, func&, fn, MAX, MIN, t0..t9); the two names are _ScBaseString locals
+#     built by the imported ctor `??0_ScBaseString@Native@LOMNHook@@QAE@PBD@Z` (IAT 0x10008188, called via esi).
+MOD_DLLS = (
+    {"dll": "BetterSaver.dll", "sha256": "82cf5d3296866a604b87329e9abe6fc60d8700faf3cb5377a16d37f3a45f56b4",
+     "lo": 0x10002622, "hi": 0x1000287B, "calls": {"shim": 0x100081A8},
+     "via": "LOMNHook::Util::OSIRegisterFunction (cdecl: fn, cls, name, MAX, MIN, t0..t9)"},
+    {"dll": "OSIProject.DebugServer.dll", "sha256": "fd09892422a027ee0b14e5279669fc9d1a611f2e05130fa51eb3e6153cc6cb1f",
+     "lo": 0x100058E5, "hi": 0x10005A1D, "calls": {"ctor": 0x10008188, "direct": 0x5FAB30},
+     "via": "ScOSISystem::RegisterFunction 0x5fab30 (thiscall: class&, func&, fn, MAX, MIN, t0..t9)"},
+)
+
+
+class _Pe:
+    def __init__(self, d: bytes):
+        self.d = d
+        pe = struct.unpack_from("<I", d, 0x3C)[0]
+        if d[pe:pe + 4] != b"PE\0\0":
+            raise RegistryError("not a PE file")
+        nsec, optsz = struct.unpack_from("<H", d, pe + 6)[0], struct.unpack_from("<H", d, pe + 20)[0]
+        self.base = struct.unpack_from("<I", d, pe + 24 + 28)[0]
+        self.secs = []
+        for i in range(nsec):
+            o = pe + 24 + optsz + 40 * i
+            vsz, rva, rsz, roff = struct.unpack_from("<IIII", d, o + 8)
+            self.secs.append((self.base + rva, min(vsz, rsz), roff))
+
+    def off(self, va: int) -> int:
+        for v, n, r in self.secs:
+            if v <= va < v + n:
+                return r + va - v
+        raise RegistryError("va %#x is not file-backed" % va)
+
+    def cstr(self, va: int) -> str:
+        o = self.off(va)
+        return self.d[o:self.d.index(b"\0", o)].decode("latin-1")
+
+
+def _decode_block(pe: _Pe, lo: int, hi: int, calls: dict[str, int]) -> list[dict]:
+    """Forward decode of one registration block, simulating esp so that `lea reg, [esp+d]` locals resolve."""
+    d, o, end = pe.d, pe.off(lo), pe.off(hi)
+    roles = {v: k for k, v in calls.items()}
+    esp, pushes, regs, strings, rows = 0, [], {}, {}, []
+    while o < end:
+        va = lo + o - pe.off(lo)
+        b = d[o]
+        if b == 0x6A:                                            # push imm8
+            esp -= 4; pushes.append(d[o + 1]); o += 2
+        elif b == 0x68:                                          # push imm32
+            esp -= 4; pushes.append(struct.unpack_from("<I", d, o + 1)[0]); o += 5
+        elif b == 0x50:                                          # push eax (a local's address)
+            esp -= 4; pushes.append(regs["eax"]); o += 1
+        elif d[o:o + 3] in (b"\x8d\x44\x24", b"\x8d\x4c\x24"):   # lea eax|ecx, [esp+d8]
+            regs["eax" if d[o + 1] == 0x44 else "ecx"] = ("local", esp + d[o + 3]); o += 4
+        elif d[o:o + 2] in (b"\x8b\x35", b"\x8b\x0d"):           # mov esi|ecx, [abs]
+            regs["esi" if d[o + 1] == 0x35 else "ecx"] = struct.unpack_from("<I", d, o + 2)[0]; o += 6
+        elif b == 0xBF:                                          # mov edi, imm32
+            regs["edi"] = struct.unpack_from("<I", d, o + 1)[0]; o += 5
+        elif d[o:o + 2] in (b"\xff\xd6", b"\xff\xd7"):           # call esi | call edi
+            role = roles.get(regs.get("esi" if d[o + 1] == 0xD6 else "edi"))
+            if role == "ctor":                                   # thiscall ctor(const char*): ret 4
+                strings[regs["ecx"][1]] = pe.cstr(pushes.pop())
+                esp += 4
+            elif role in ("shim", "direct"):
+                args = [pushes.pop() for _ in range(15)]         # first argument first
+                if role == "shim":
+                    fn, cls, name = args[0], pe.cstr(args[1]), pe.cstr(args[2])
+                else:
+                    cls, name, fn = strings[args[0][1]], strings[args[1][1]], args[2]
+                    esp += 60                                    # RegisterFunction ends `ret 0x3c` (0x5fac2b)
+                rows.append({"site": va, "cls": cls, "name": name, "body": fn, "max": args[3], "min": args[4],
+                             "raw_types": args[5:15]})
+            else:
+                raise RegistryError("call through an unknown register value at %#x" % va)
+            o += 2
+        elif d[o:o + 2] == b"\x83\xc4":                          # add esp, imm8 (cdecl cleanup; args already taken)
+            esp += d[o + 2]; o += 3
+        else:
+            raise RegistryError("registration block: unexpected byte %02x at %#x" % (b, va))
+    if pushes:
+        raise RegistryError("registration block %#x..%#x leaves %d unconsumed pushes" % (lo, hi, len(pushes)))
+    return rows
+
+
+def _mod_ret(pe: _Pe, body: int) -> str:
+    """Return kind of a mod native: every `mov word [reg], ax|cx` (66 89 /r, mod 00) in the body, each paired with the
+    nearest preceding `mov eax|ecx, imm32`. The body ends at the first run of two int3 (MSVC padding)."""
+    d, o = pe.d, pe.off(body)
+    e = o
+    while not (d[e] == 0xCC and d[e + 1] == 0xCC):
+        e += 1
+    kinds = set()
+    for i in range(o, e - 2):
+        if d[i] == 0x66 and d[i + 1] == 0x89 and d[i + 2] >> 6 == 0 and (d[i + 2] >> 3) & 7 in (0, 1):
+            reg = (d[i + 2] >> 3) & 7
+            k = next((k for k in range(i - 5, o - 1, -1) if d[k] == 0xB8 + reg), None)
+            if k is None:
+                raise RegistryError("mod native %#x: type store at %#x without a constant" % (body, body + i - o))
+            t = struct.unpack_from("<I", d, k + 1)[0]
+            kinds.add({0x0F: "none", 0x10: "int", 0x12: "float", 0x16: "string"}.get(t, "unknown:%#x" % t))
+    if len(kinds) != 1:
+        raise RegistryError("mod native %#x: return kinds %r" % (body, kinds))
+    return kinds.pop()
+
+
+_LITERAL_TYPE = {int: "int", float: "float", str: "string"}
+
+
+def mod_registrations(mods_dir: Path, osi_path: Path | None, exe_rows: list[dict]) -> list[dict]:
+    """The Beta 1.5.0 mod tier (D12): every RegisterFunction call the two mod DLLs make, decoded from their bytes, with
+    the return kind read from each body. Cross-check (D12 fallback): at every Base.osi 0x82 site of a mod key the argc
+    must lie in [min, max] and every plain-push literal argument must match its declared slot type; `site_literals` is
+    "consistent", or "AMBIGUOUS" when a site disagrees (no row is: test_osi_registry)."""
+    import hashlib
+    exe_keys = {r["key"] for r in exe_rows}
+    sites: dict[str, list[dict]] = collections.defaultdict(list)
+    if osi_path:
+        spec = importlib.util.spec_from_file_location("osi_research", TOOLS / "research" / "osi.py")
+        osi = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(osi)
+        d = Path(osi_path).read_bytes()
+        o = osi.parse(d)
+    out = []
+    for spec_ in MOD_DLLS:
+        raw = (Path(mods_dir) / spec_["dll"]).read_bytes()
+        if hashlib.sha256(raw).hexdigest() != spec_["sha256"]:
+            raise RegistryError("%s is not the Beta 1.5.0 build these offsets were read from" % spec_["dll"])
+        pe = _Pe(raw)
+        for r in _decode_block(pe, spec_["lo"], spec_["hi"], spec_["calls"]):
+            key = (r["cls"] + "." + r["name"]).lower()
+            out.append({"cls": r["cls"], "name": r["name"], "key": key, "dll": spec_["dll"], "via": spec_["via"],
+                        "site": "0x%08x" % r["site"], "body": "0x%08x" % r["body"], "max": r["max"], "min": r["min"],
+                        "types": [type_name(t, r["max"], i) for i, t in enumerate(r["raw_types"])],
+                        "ret": _mod_ret(pe, r["body"]), "ret_class": None, "default": None, "sets_fpu_pc64": False,
+                        "tier": "mod", "collides_with_exe": key in exe_keys, "winner": key not in exe_keys})
+    if osi_path:
+        wanted = {m["key"] for m in out}
+        for h in osi.find_plain_push_calls(d, o, wanted):
+            sites[h["call"]].append(h)
+    for m in out:
+        hs = sites.get(m["key"], [])
+        m["called_by_base_osi"] = bool(hs)
+        m["base_osi_sites"] = len(hs)
+        if not hs:
+            m["site_literals"] = None
+            continue
+        ok = True
+        for h in hs:
+            if not m["min"] <= h["argc"] <= m["max"]:
+                ok = False
+            for i, v in enumerate(h["args"] or []):
+                if v is None:
+                    continue
+                if isinstance(v, str) and v.startswith("0x"):     # PushConstantColor (0x48) literal text
+                    lt = "colour"
+                else:
+                    lt = _LITERAL_TYPE[type(v)]
+                if lt != m["types"][i]:
+                    ok = False
+        m["site_literals"] = "consistent" if ok else "AMBIGUOUS"
+    return out
+
+
+def render_rows(rows: list[dict]) -> str:
+    return "[\n" + ",\n".join(json.dumps(r, separators=(",", ":"), sort_keys=True) for r in rows) + "\n]\n"
+
+
+def render_types_json(res: dict) -> str:
+    """data/osi/types.json: the builtin ids (docs/osi/types.md) and the 45 game types with id = 0x20 + first-use rank
+    (the order rule in types.md; an inference from the static order, never observed at run time)."""
+    types = [{"id": i, "name": n, "kind": "builtin"} for i, n in sorted(BUILTIN.items())]
+    types.append({"id": 0, "name": UNKNOWN_PREFIX + "0x0", "kind": "literal"})
+    for e in res["replay"].order:
+        types.append({"id": FIRST_TYPE_ID + e["rank"], "name": "type:" + e["class"], "kind": "game", "rank": e["rank"]})
+    doc = {"schema": 1, "source": "tools/osi/registry.py (make osi-tables); ids per docs/osi/types.md", "types": types}
+    return json.dumps(doc, indent=1, sort_keys=True) + "\n"
+
+
 def crt_layout(exe_bytes: bytes, crt_listed: list[int]) -> list[int]:
     """The raw dwords of the `.CRT` section as `__RunInit` (0x65f530) walks them: it starts at 0x76f004 and stops at the
     first zero dword. Returns the pointers it would call; raises unless that is exactly `crt_listed` (seed_addrs' list; a
@@ -804,9 +1076,13 @@ def build(exe_bytes: bytes, corpus: Path, osi_path: Path | None, check: bool = T
                             % ([e["class"] for e in replay.order], asm_order))
     pairs = base_osi_pairs(osi_path) if osi_path else set()
     wins = winner_flags(parsed)
+    overloads = overload_kinds(corpus, funcs)
+    callees = _callees(corpus)
+    by_addr = {int(f["addr"], 16): f["name"] for f in funcs}
     rows = []
     for r, win in zip(parsed, wins):
         key = (r["cls"] + "." + r["name"]).lower()
+        ret, ret_class = ret_column(r["body"], callees, overloads)
         rows.append({
             "cls": r["cls"], "name": r["name"], "key": key,
             "site": "0x%08x" % r["site"], "body": "0x%08x" % r["body"],
@@ -815,6 +1091,8 @@ def build(exe_bytes: bytes, corpus: Path, osi_path: Path | None, check: bool = T
             "crt_index": r["crt_index"], "init": "0x%08x" % r["init"],
             "winner": win, "called_by_base_osi": key in pairs,
             "phase": r["phase"],
+            "ret": ret, "ret_class": ret_class, "default": None,
+            "sets_fpu_pc64": reaches_dec2num(r["body"], callees, by_addr),
         })
     keys = {r["key"] for r in rows}
     argc_bad = argc_violations(osi_path, rows) if osi_path else []
@@ -828,7 +1106,7 @@ def build(exe_bytes: bytes, corpus: Path, osi_path: Path | None, check: bool = T
         raise RegistryError("insert_one result flags are not (1, 0): %r" % flags)
     return {"rows": rows, "parsed": parsed, "replay": replay, "crt": crt, "cross_check": cc, "asm_check": ac,
             "missing": sorted(pairs - keys), "base_pairs": pairs, "asm_type_order": asm_order, "getit": getit, "flags": flags,
-            "createvariant": cv, "prologues": prologues, "argc_violations": argc_bad,
+            "createvariant": cv, "overloads": overloads, "prologues": prologues, "argc_violations": argc_bad,
             "type_sites": type_site_accounting(funcs, seeds["type_sites"], crt)}
 
 
@@ -868,8 +1146,26 @@ def render_types(res: dict) -> str:
     w("  initializer), `winner` whether this row is the one the map keeps, `called_by_base_osi` whether `Base.osi` has a 0x82 site")
     w("  for the case-folded key, `phase` `crt` or `scinit`.")
     w("  Rows are in execution order. Menu tagging is out of scope here (moved to M2a-2).")
+    w("- **M2a-1 fields:** `ret`, `ret_class`, `default`, `sets_fpu_pc64` (section below).")
     w("- **Arguments** are `(this, class&, func&, fnptr, MAX, MIN, type0..type9)`; MAX is stored at +0xc of the 36-byte")
     w("  `RegisteredFunction` and MIN at +0xd (`RegisterFunction` 0x5fab30). Each type is a u16 at +0xe + 2i.")
+    w("")
+    w("## Return kinds (`ret`, D11) and the precision flag (`sets_fpu_pc64`, D8')")
+    w("")
+    kinds = collections.Counter(r["ret"] for r in rows if r["winner"])
+    ov = collections.Counter(o["kind"] for o in res["overloads"].values())
+    w("- `ret` is the kind of the `CreateVariant` overload the native's body calls (`gen/decomp/calls.jsonl`); `none` when it")
+    w("  calls none (those bodies store {0x0f, 0} themselves). No body calls overloads of two kinds. The %d overloads are" % len(res["overloads"]))
+    w("  classified twice, from the type store in each body and from its mangled parameter in `symbols.txt`: %s."
+      % ", ".join("%d %s" % (n, k) for k, n in sorted(ov.items())))
+    w("- `ret_class` names the game type for `game`; `copy` is `CreateVariant(ScOSIVariant)` 0x6159e0, which copies its argument.")
+    w("  `default` is the per-row override of the stub return (D11); none is set.")
+    w("- Over the %d winners: %s." % (sum(kinds.values()), ", ".join("%s %d" % (k, n) for k, n in sorted(kinds.items()))))
+    w("- `sets_fpu_pc64` is true when the body reaches `___dec2num` (0x65f80a: `or word [ebp-0xe], 0x300; fldcw` at")
+    w("  0x65f886-0x65f88c, no restore before `ret` 0x65f8a8) in the static call graph without entering the VM: %s."
+      % ", ".join("`%s`" % r["key"] for r in rows if r["sets_fpu_pc64"]))
+    w("- Game-type ids are in `data/osi/types.json` (id = 0x20 + rank below). The Beta 1.5.0 mod natives (D12) are in")
+    w("  `data/osi/natives_beta150.json`, decoded from `install/mods/*.dll` read as data (`mod_registrations`).")
     w("")
     w("## Builtin variant types")
     w("")
@@ -1037,7 +1333,7 @@ def render_types(res: dict) -> str:
 def write_rows(rows: list[dict], path: Path) -> None:
     """One row per line, in execution order, keys sorted: byte-stable across runs (data/osi/natives.json is committed)."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("[\n" + ",\n".join(json.dumps(r, separators=(",", ":"), sort_keys=True) for r in rows) + "\n]\n")
+    path.write_text(render_rows(rows))
 
 
 def main(argv=None) -> int:
@@ -1047,6 +1343,9 @@ def main(argv=None) -> int:
     ap.add_argument("--corpus", required=True)
     ap.add_argument("--out-json", required=True)
     ap.add_argument("--out-types", required=True)
+    ap.add_argument("--out-types-json", help="data/osi/types.json (M2a-1 T0)")
+    ap.add_argument("--mods", help="install/mods directory: decode the Beta 1.5.0 mod registrations (D12)")
+    ap.add_argument("--out-mods", help="data/osi/natives_beta150.json (needs --mods)")
     ap.add_argument("--check", action="store_true", help="exit 1 if --out-types is not up to date")
     a = ap.parse_args(argv)
     res = build(Path(a.exe).read_bytes(), Path(a.corpus), Path(a.osi))
@@ -1070,6 +1369,18 @@ def main(argv=None) -> int:
     Path(a.out_types).parent.mkdir(parents=True, exist_ok=True)
     Path(a.out_types).write_text(doc)
     print("wrote %s and %s" % (a.out_json, a.out_types))
+    kinds = collections.Counter(r["ret"] for r in rows if r["winner"])
+    print("ret kinds over %d winners: %s; sets_fpu_pc64: %s" % (sum(kinds.values()), dict(sorted(kinds.items())),
+          [r["key"] for r in rows if r["sets_fpu_pc64"]]))
+    if a.out_types_json:
+        Path(a.out_types_json).write_text(render_types_json(res))
+        print("wrote %s" % a.out_types_json)
+    if a.mods and a.out_mods:
+        mods = mod_registrations(Path(a.mods), Path(a.osi), rows)
+        Path(a.out_mods).write_text(render_rows(mods))
+        print("wrote %s: %d mod rows, %d called by Base.osi, site literals %s" % (
+            a.out_mods, len(mods), sum(m["called_by_base_osi"] for m in mods),
+            dict(collections.Counter(m["site_literals"] for m in mods if m["called_by_base_osi"]))))
     return 0
 
 

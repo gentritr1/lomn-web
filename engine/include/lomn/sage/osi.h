@@ -74,6 +74,13 @@ struct OsiMethod {
 struct OsiClass {
   std::string name;
   std::vector<OsiMethod> methods;
+  std::vector<uint16_t> props;  // M2a-1: the class record's property symbols (GetProperty 0x6086a0 searches these)
+};
+// M2a-1: one global-function table entry {u8 len, name, u32 offset, u16 argc} (FindFunction 0x609ce0).
+struct OsiFunction {
+  std::string name;
+  uint32_t offset = 0;
+  uint16_t argc = 0;
 };
 
 class OsiFile {
@@ -83,6 +90,13 @@ class OsiFile {
   uint16_t minor() const { return minor_; }
   const std::vector<std::string>& strings() const { return strings_; }
   const std::vector<OsiClass>& classes() const { return classes_; }
+  // M2a-1 T0 accessors for the script VM (additive; parse/eval_calls/check_all behave as before):
+  const std::vector<OsiFunction>& functions() const { return functions_; }  // in file order, with declared argc
+  const std::vector<std::string>& globals() const { return globals_; }       // the global-name table (0x21/0x22)
+  const std::vector<std::string>& symbols() const { return symbols_; }       // member/method symbol names
+  const std::vector<uint8_t>& bytes() const { return d_; }                   // the whole image (never written, D4)
+  // File offset of string-table entry i's u8 length byte; its text (strings()[i], raw bytes) follows it.
+  const std::vector<uint32_t>& string_offsets() const { return string_offsets_; }
   const OsiClass* find_class(const std::string& name) const;  // case-insensitive
   // The method's name (its symbol; parse() checked the index). Methods sharing a symbol share the one string.
   const std::string& method_name(const OsiMethod& m) const { return symbols_[m.symbol]; }
@@ -105,7 +119,8 @@ class OsiFile {
   std::vector<uint8_t> d_;
   uint16_t major_ = 0, minor_ = 0;
   std::vector<std::string> strings_, globals_, symbols_, sources_;
-  std::vector<std::pair<std::string, uint32_t>> functions_;
+  std::vector<OsiFunction> functions_;
+  std::vector<uint32_t> string_offsets_;
   std::vector<OsiClass> classes_;
 };
 

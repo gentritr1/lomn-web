@@ -67,16 +67,50 @@ described in words, never as decompiled code.
   and an int operand of a mixed int/float operation (0x60–0x64, 0x70–0x73, and 0x74's int,float path; in 0x74's float,int path the fild reinterprets x's bits and b is a loop count) is loaded **exactly** with `fild dword`
   (a 32-bit int is exact on the x87): it is **not** converted to f32 first. The operation then runs on the exact
   operands, and:
-  - arithmetic (0x70–0x73, and the `_pow` result of 0x74) is rounded **once**, by the final `fstp dword` to f32. Port
-    it as `(float)((double)a OP (double)b)`;
+  - arithmetic (0x70–0x73, and the `_pow` result of 0x74) is computed on the x87 at the **current precision-control
+    setting** and then rounded to f32 by the final `fstp dword` (D8′, below);
   - comparisons (0x60–0x64) are `fcomp dword` against the f32 operand with no rounding at all. Port them as
     `(double)a CMP (double)b`. Every compare's `fnstsw` test is ordered: any NaN gives 0 (false), and +0.0 equals −0.0.
 
-  UNVERIFIED caveat (stated once, applies to every row): the port formula assumes the x87 precision-control field
-  rounds intermediates to 53 bits (the Windows default). Direct3D 8 may set 24-bit precision at run time; the
-  arithmetic would then round the exact result straight to 24 bits, which can differ from the formula only on a
-  double-rounding tie. Compares and `fild` are exact under every setting. The falsifiers below have exact results that
-  fit in 53 bits, so they hold under every setting. 0x75 has no float path at all (no x87 instruction).
+  **D8′ — precision control is VM state `fpu_pc` ∈ {24, 64}** (controller ruling 2026-10-08, replacing D8; the probe that
+  found it is EXECUTED, its reachability INFERRED from the static call graph):
+  - **Initial value 24.** `CreateDirectXWindow` (0x52e570) calls `CreateDevice` without `D3DCREATE_FPU_PRESERVE` (M1
+    R23), which sets 24-bit precision, and `SetUpRenderer` runs before `SetUpScripting`. INFERRED; it becomes
+    UNVERIFIED if `d3d8.dll` or another runtime path changes the precision before `Setup` (not readable from this exe).
+  - **64 from then on, permanently**, once the VM performs a string → float conversion: `ConvertVariant` (0x60b9d0) calls
+    `_atof` (0x65c7b0) at **0x60bd0d** for a 0x11/0x16 source with target 0x12 (0xb1 on a string, and a float-declared
+    native argument given a 0x11/0x16 in 0x82/0x83/0x84). `_atof` → `_strtod` → `___strtold` → `___dec2num`
+    (0x65f80a), which runs `fnstcw [ebp−0xe]; or word [ebp−0xe], 0x300; fldcw [ebp−0xe]` at 0x65f883–**0x65f886**–0x65f88c
+    and returns at 0x65f8a8 without restoring. `___strtold` reaches it on every in-range parse (0x65c66d), so the
+    switch happens whenever `_atof` runs, even when the text parses to 0. Its other caller (0x662f70) is in a function
+    with no callers (controller-checked: dead code).
+  - **The native `gcscripttools.stringtofloat`** (body 0x564d50 → `GcScriptTools::StringToFloat` 0x5654b0, whose
+    `_atof` call is at **0x5654bc**) sets 64 when it runs. The registry marks it (`sets_fpu_pc64` in
+    `data/osi/natives.json`); the VM applies the flag when it calls that native, stubs included.
+  - **After an error** `fpu_pc` becomes 64: the C++ exception runtime runs `fninit` (control word 0x037f, precision 64)
+    before jumping to every landing pad, at **0x657068** (`FUN_00657010`, cleanup pads) and **0x657245**
+    (`FUN_00657080`, catch pads), from `___throw` (0x657260). In the original every VM error ends the game (see "After
+    an error"); our VM keeps running (D10), so it models the landing pads by setting 64 when an error is recorded.
+  - **Every other control-word writer leaves the precision bits alone** (scan of `.text`, EXECUTED 2026-10-08): 484
+    `fldcw` sites are the compiler's float → int idiom `fnstcw X; or X, 0xc00; fldcw X; fistp; and X, 0xf3ff; fldcw X`,
+    which changes only the rounding bits — among them `ConvertVariant` 0x60bc45–0x60bc69, which restores from the saved
+    word; 14 are save / load-constant / restore pairs in the MSL math functions (acos … hypot, and `___num2dec`, the
+    `%f` path); there is no `fldenv`, `frstor` or `fxrstor`, and no `_controlfp` / `_control87` / `_fpreset` import.
+  - **Port:** result = round_f32(round_p(exact a OP b)), p = `fpu_pc` significand bits, round to nearest even, the
+    intermediate with the x87 extended exponent range. At p = 24 that is one rounding of the exact result except when the
+    result is an f32 subnormal (the intermediate stays normal, then `fstp dword` rounds again). At p = 64 it is double
+    rounding through 64 bits. C++: TwoSum/TwoProduct + round-to-odd (consult M23) for 24, an exact 64-bit step for 64;
+    Python: `fractions` (`tools/osi/expect_calc.py`).
+  - **Not affected:** float,float arithmetic (double rounding through ≥ 2·24+2 bits is innocuous for + − × ÷: 0
+    mismatches between p 24, 53 and 64 in 80,000 random f32 pairs with uniform bit patterns and 80,000 with exponents
+    biased to exponents 110–145, i.e. magnitudes 2^−17 … 2^19, EXECUTED with a rational script), every compare, `fild`, int → float (0xb1 on an int), and float → int.
+    0x74's `_pow` runs its own x87 code at the current setting (UNVERIFIED; corpus programs use exact powers only). 0x75
+    has no float path at all (no x87 instruction).
+  - **Not the original:** the earlier port formula `(float)((double)a OP (double)b)` is the 53-bit setting, which this
+    exe never uses while the script runs. It differs from both readings: `16777217 1.0e-15 +` → 4b800001 at 24,
+    4b800000 at 64 and at 53; `16777217 1.0e-10 +` → 4b800001 at 24 and 64, 4b800000 at 53.
+  - **Trace:** the header records the initial mode (`fpu=pc24`); a record `P <pc:08x> 64` is written when the mode
+    switches, before the next `I` line (`docs/osi/trace.md`).
 - **`ConvertVariant(v, target)`** (0x60b9d0), used by 0x82–0x84 and 0xb0–0xb2:
   - same type → `Duplicate`;
   - target int: float → **truncation** (the asm sets the x87 rounding field to chop, `fistp qword`, keeps the low 32
@@ -92,6 +126,17 @@ described in words, never as decompiled code.
   overwrites the caller's variant (its `ScOSIVariant&` argument) with `ConvertStringIDToDynamicString(v)`
   (0x60bbf9–0x60bc02, 0x60bcf9–0x60bd02) and then reads the text. Called from 0x82–0x84 on a stack slot, that slot
   stays a 0x16 string. See "Objects, arrays and strings" below.
+- **NaN results (D9, M2a-1).** Any f32 result that is a NaN is stored as **0xffc00000**, the x87 "real indefinite" an
+  `fstp dword` writes for an invalid operation (stable x87 knowledge; UNVERIFIED on this exe). Both interpreters
+  canonicalise, because wasm32 NaN payloads are not deterministic across engines. A NaN *operand* keeps its bits until an
+  operation produces a new value.
+- **Errors in the port (D10, M2a-1).** Inside our VM an error unwinds to the outermost engine call, which records it,
+  writes the trace's `E` line and returns failure without touching VM state, so a snapshot shows exactly the state "After
+  an error" documents (operands already popped stay popped, nothing pushed, 0x82: converted arguments stay converted).
+  `fpu_pc` becomes 64 at that moment (the landing-pad `fninit`, D8′). Resetting afterwards is our own host behaviour,
+  outside what the original defines. We add two errors the original does not have, with our own texts:
+  `"Stack overflow (1000 slots)"` on a push at depth 1,000 and `"Stack underflow"` on a pop at depth 0. A literal 0x84 in
+  the file is our error `"Direct call without a memoised site"` (the original would call an arbitrary address).
 
 ## Variant types seen in the handlers
 
@@ -224,6 +269,9 @@ Each line is `a b op` → the value the original computes, then the value the ol
 reading gives. Ints are written without a decimal point and floats with one. Every expected value was computed
 from the exact rational result rounded once to f32 (a scratch Python script using `fractions` and `numpy.float32`,
 not committed). Every finite exact result fits in 53 bits, so the values do not depend on the x87 precision setting; the `1.0e30 1.0e-30 /` row overflows to +inf under every precision setting.
+The last two lines (D8′) are the exception: they are the same program run at `fpu_pc` 24 and, after a 0xb1 on a string,
+at 64; their "old reading" column is the 53-bit formula. `tools/osi/expect_calc.py` reproduces every line
+(`tools/tests/test_expect_calc.py`, both settings for the first 11).
 f32(16777217) = 16777216.0 and f32(16777219) = 16777220.0 (round to nearest even).
 
 | row | program | original (asm reading) | old reading |
@@ -239,6 +287,8 @@ f32(16777217) = 16777216.0 and f32(16777219) = 16777220.0 (round to nearest even
 | 0x72 | `16777217 3.0 *` | 50331652.0 | 50331648.0 |
 | 0x73 | `50331651 3.0 /` | 16777216.0 | 16777218.0 |
 | 0x73 | `1.0e30 1.0e-30 /` | +inf, no error | (old note: "no IEEE inf") |
+| 0x70 | `16777217 1.0e-15 +` at `fpu_pc` 24 (no string → float before it) | 16777218.0 (4b800001) | 16777216.0 (4b800000) |
+| 0x70 | `16777217 1.0e-15 +` at `fpu_pc` 64 (after `"0.5"` 0xb1) | 16777216.0 (4b800000) | 16777216.0 (4b800000) |
 
 0x74 (int,float), 0xb1 (int → float) and 0xb2 did not change meaning: `pow` already took `(double)a`, and
 `ConvertVariant` already rounds an int to f32 once. Guards kept for them: 0xb1 `16777217` → 16777216.0; 0xb2
@@ -353,6 +403,13 @@ without their epilogues, so the state at exit is as follows.
 
 A port that chooses to keep running after a script error is outside what the original defines. It must reset these
 four itself, and conformance tests must not depend on behaviour after an error.
+
+## Trace format (M2a-1)
+
+The differential runs (native, wasm32, Python) and the conformance runners write the fixed-format text trace specified
+in [`docs/osi/trace.md`](trace.md): one record per instruction, native call, allocation, free, precision switch (`P`,
+D8′) and error, with every float printed as its 8 hex f32 bits. Traces are compared byte for byte. The conformance
+corpus format and its authoring rules are in [`docs/osi/conformance.md`](conformance.md).
 
 ## Table
 
@@ -473,10 +530,10 @@ Regenerate the generated columns with `make osi-tables`. `--check` exits 1 if th
 | 0x6d | BCLBitwiseAnd | 0x605730 | 0x751e38 | 63 (+0xfc) | none | 10 | a b → int(a & b), 32-bit [0x605730] | "Invalid operand to operator '&' (lhs) (type:%02.2X)"; "… (rhs) …" (non-int) [0x605730] |  |
 | 0x6e | BCLBitwiseOr | 0x6057e0 | 0x751e48 | 64 (+0x100) | none | 14 | a b → int(a OR (bitwise) b), 32-bit [0x6057e0] | "Invalid operand to operator '\|' (lhs) (type:%02.2X)"; "… (rhs) …" (non-int) [0x6057e0] |  |
 | 0x6f | BCLBitwiseXor | 0x605890 | 0x751e58 | 65 (+0x104) | none | 0 | a b → int(a XOR b), 32-bit [0x605890] | "Invalid operand to operator '@' (lhs) (type:%02.2X)"; "… (rhs) …" (non-int) [0x605890] | The original spells XOR as '@' in its message. |
-| 0x70 | BCLAdd | 0x603ff0 | 0x751e68 | 50 (+0xc8) | none | 1500 | a b → a+b (b popped first, 0x60400d, then a, 0x60402e; both without dispose); 0x11 operands are first converted to dynamic strings (a 0x604053, then b 0x60407e); string+string → a with b's text appended in place (ScFixedString::append 0x4f5c80; capacity mMaxSize = 0xff, set by the ctors 0x46de40 and 0x60b8d0), b disposed (0x6040f3), a pushed; if len(a)+len(b) ≥ 255, append throws BEFORE anything is pushed: a and b are already popped without dispose (0x60400d, 0x60402e) and 0x11 operands already copied to new dynamic strings, so the stack is 2 slots shorter and nothing is disposed (both leak); float,float → fld a, fadd dword b, fstp dword (0x604165–0x604169); int a, float b → the int is loaded exactly by fild (0x6041b7), fadd dword b (0x6041bd), fstp dword (0x6041bf); float a, int b → fild b (0x604207), fadd dword a (0x604213), fstp dword (0x604215); so every float result is (float)((double)a + (double)b), rounded once to f32; int,int → int, add (0x604283), 32-bit two's-complement wrap, pushed with a's type word [0x603ff0] | "Invalid operand to string operator '+' (rhs) (type:%02.2X)" (a string, b not; prints b's type, 0x60410c); "Invalid operand to string operator '+' (lhs) (type:%02.2X)" (b string, a not; prints a's type, 0x604133); "Invalid operand to operator '+' (lhs) …" (0x60424f) / "… (rhs) …" (0x60426f) (non-numbers, after the three float cases); kLenTooLong — a NON-OSI ScError (0x83aa20, qualifier kNoQualifier 0x839118) thrown by SrThrow (0x4d91f0) inside ScFixedString::append (0x4f5c80–0x4f5ca9: throws when mStrSize ≥ mMaxSize − n, unsigned) for string+string with len(a)+len(b) ≥ 255; the call site 0x6040bf has only an exception specification (!ScCatchMessage!) and no catch, so it leaves the handler [0x603ff0] | Only '+' concatenates; string + int is an error (no implicit conversion). There is no truncation. Falsifiers: a 200-char string + a 60-char string must raise kLenTooLong; 200 + 54 (= 254 chars) succeeds; `16777217 1.0 +` → 16777218.0 (the 'int converted to float first' reading gives 16777216.0). |
-| 0x71 | BCLSubtract | 0x6042b0 | 0x751e78 | 51 (+0xcc) | none | 1555 | a b → a−b (b popped first, 0x6042c9, then a, 0x6042e4; both without dispose); float,float → fld a, fsub dword b, fstp dword (0x604314–0x604318); int a, float b → the int is loaded exactly by fild (0x60435e), fsub dword b (0x604361), fstp dword (0x604363), with no f32 rounding of the int; float a, int b → fild b (0x6043a8), fsubr dword a = a − b (0x6043b1), fstp dword (0x6043b3); so every float result is (float)((double)a − (double)b), rounded once to f32; int,int → int, sub (0x60441d), 32-bit two's-complement wrap, pushed with a's type word [0x6042b0] | "Invalid operand to operator '-' (lhs) (type:%02.2X)" (a.type ≠ 0x10 once the three float cases are excluded, 0x6043ef); "… '-' (rhs) …" (b, 0x60440c) [0x6042b0] | Strings, nothing and objects are errors. Falsifier: `16777217 1.0 -` → 16777216.0 (the 'int converted to float first' reading gives 16777215.0). |
-| 0x72 | BCLMultiply | 0x604450 | 0x751e88 | 52 (+0xd0) | none | 257 | a b → a×b (b popped first, 0x604469, then a, 0x604484; both without dispose); float,float → fld a, fmul dword b, fstp dword (0x6044b4–0x6044b8); int a, float b → the int is loaded exactly by fild (0x6044fe), fmul dword b (0x604501), fstp dword (0x604503); float a, int b → fild b (0x604548), fmul dword a (0x604551), fstp dword (0x604553); so every float result is (float)((double)a × (double)b), rounded once to f32; int,int → int, imul (0x6045c0), low 32 bits (two's-complement wrap), pushed with a's type word [0x604450] | "Invalid left-hand-side operand to operator '*' (type:%02.2X)" (lhs — different wording; a.type ≠ 0x10 once the three float cases are excluded, 0x60458f); "Invalid operand to operator '*' (rhs) (type:%02.2X)" (b, 0x6045ac) [0x604450] | Falsifier: `16777217 3.0 *` → 50331652.0 (the 'int converted to float first' reading gives 50331648.0). |
-| 0x73 | BCLDivide | 0x6045f0 | 0x751e98 | 53 (+0xd4) | none | 38 | a b → a÷b (b popped first, 0x604609, then a, 0x604624; both without dispose); float,float: zero test of b (fld 0.0 from 0x74f388, fcomp dword b, `and ah,0x44; cmp ah,0x40` = equal and ordered, 0x60464e–0x60465e), then fld a, fdiv dword b, fstp dword (0x604679–0x60467d); int a, float b: the same zero test of b (0.0 from 0x74f38c, 0x6046bd–0x6046cd), then the int is loaded exactly by fild (0x6046e8), fdiv dword b (0x6046eb), fstp dword (0x6046ed); float a, int b: b == 0 (cmp dword, 0x604725), then fild b (0x60473e), fdivr dword a = a ÷ b (0x604747), fstp dword (0x604749); so every float result is (float)((double)a ÷ (double)b), rounded once to f32; int,int: the two type checks, then b == 0 (0x6047aa), then cdq; idiv (0x6047c3–0x6047c4), truncating toward 0, pushed as type 0x10 (0x6047c6) [0x6045f0] | "Divide by 0" (0x74f557; float b == ±0.0 — the compare is an ordered equality, so −0.0 errors and a NaN b does not; int b == 0; tested before the division in every case, and in int,int after the two type checks); "Invalid operand to operator '/' (lhs) (type:%02.2X)" (0x60477f); "… '/' (rhs) …" (0x60479c) [0x6045f0] | Zero divisors are errors, but a float result can still be ±inf (f32 overflow at the final fstp dword: `1.0e30 1.0e-30 /` → +inf, no error) or NaN (a NaN operand passes the zero test). INT_MIN / −1 raises a CPU fault (#DE) in the original (UNVERIFIED crash; untestable). Falsifier: `50331651 3.0 /` → 16777216.0 (the 'int converted to float first' reading gives 16777218.0). |
+| 0x70 | BCLAdd | 0x603ff0 | 0x751e68 | 50 (+0xc8) | none | 1500 | a b → a+b (b popped first, 0x60400d, then a, 0x60402e; both without dispose); 0x11 operands are first converted to dynamic strings (a 0x604053, then b 0x60407e); string+string → a with b's text appended in place (ScFixedString::append 0x4f5c80; capacity mMaxSize = 0xff, set by the ctors 0x46de40 and 0x60b8d0), b disposed (0x6040f3), a pushed; if len(a)+len(b) ≥ 255, append throws BEFORE anything is pushed: a and b are already popped without dispose (0x60400d, 0x60402e) and 0x11 operands already copied to new dynamic strings, so the stack is 2 slots shorter and nothing is disposed (both leak); float,float → fld a, fadd dword b, fstp dword (0x604165–0x604169); int a, float b → the int is loaded exactly by fild (0x6041b7), fadd dword b (0x6041bd), fstp dword (0x6041bf); float a, int b → fild b (0x604207), fadd dword a (0x604213), fstp dword (0x604215); so every float result is the exact result rounded per the precision state `fpu_pc` (Conventions, D8′); int,int → int, add (0x604283), 32-bit two's-complement wrap, pushed with a's type word [0x603ff0] | "Invalid operand to string operator '+' (rhs) (type:%02.2X)" (a string, b not; prints b's type, 0x60410c); "Invalid operand to string operator '+' (lhs) (type:%02.2X)" (b string, a not; prints a's type, 0x604133); "Invalid operand to operator '+' (lhs) …" (0x60424f) / "… (rhs) …" (0x60426f) (non-numbers, after the three float cases); kLenTooLong — a NON-OSI ScError (0x83aa20, qualifier kNoQualifier 0x839118) thrown by SrThrow (0x4d91f0) inside ScFixedString::append (0x4f5c80–0x4f5ca9: throws when mStrSize ≥ mMaxSize − n, unsigned) for string+string with len(a)+len(b) ≥ 255; the call site 0x6040bf has only an exception specification (!ScCatchMessage!) and no catch, so it leaves the handler [0x603ff0] | Only '+' concatenates; string + int is an error (no implicit conversion). There is no truncation. Falsifiers: a 200-char string + a 60-char string must raise kLenTooLong; 200 + 54 (= 254 chars) succeeds; `16777217 1.0 +` → 16777218.0 (the 'int converted to float first' reading gives 16777216.0). |
+| 0x71 | BCLSubtract | 0x6042b0 | 0x751e78 | 51 (+0xcc) | none | 1555 | a b → a−b (b popped first, 0x6042c9, then a, 0x6042e4; both without dispose); float,float → fld a, fsub dword b, fstp dword (0x604314–0x604318); int a, float b → the int is loaded exactly by fild (0x60435e), fsub dword b (0x604361), fstp dword (0x604363), with no f32 rounding of the int; float a, int b → fild b (0x6043a8), fsubr dword a = a − b (0x6043b1), fstp dword (0x6043b3); so every float result is the exact result rounded per the precision state `fpu_pc` (Conventions, D8′); int,int → int, sub (0x60441d), 32-bit two's-complement wrap, pushed with a's type word [0x6042b0] | "Invalid operand to operator '-' (lhs) (type:%02.2X)" (a.type ≠ 0x10 once the three float cases are excluded, 0x6043ef); "… '-' (rhs) …" (b, 0x60440c) [0x6042b0] | Strings, nothing and objects are errors. Falsifier: `16777217 1.0 -` → 16777216.0 (the 'int converted to float first' reading gives 16777215.0). |
+| 0x72 | BCLMultiply | 0x604450 | 0x751e88 | 52 (+0xd0) | none | 257 | a b → a×b (b popped first, 0x604469, then a, 0x604484; both without dispose); float,float → fld a, fmul dword b, fstp dword (0x6044b4–0x6044b8); int a, float b → the int is loaded exactly by fild (0x6044fe), fmul dword b (0x604501), fstp dword (0x604503); float a, int b → fild b (0x604548), fmul dword a (0x604551), fstp dword (0x604553); so every float result is the exact result rounded per the precision state `fpu_pc` (Conventions, D8′); int,int → int, imul (0x6045c0), low 32 bits (two's-complement wrap), pushed with a's type word [0x604450] | "Invalid left-hand-side operand to operator '*' (type:%02.2X)" (lhs — different wording; a.type ≠ 0x10 once the three float cases are excluded, 0x60458f); "Invalid operand to operator '*' (rhs) (type:%02.2X)" (b, 0x6045ac) [0x604450] | Falsifier: `16777217 3.0 *` → 50331652.0 (the 'int converted to float first' reading gives 50331648.0). |
+| 0x73 | BCLDivide | 0x6045f0 | 0x751e98 | 53 (+0xd4) | none | 38 | a b → a÷b (b popped first, 0x604609, then a, 0x604624; both without dispose); float,float: zero test of b (fld 0.0 from 0x74f388, fcomp dword b, `and ah,0x44; cmp ah,0x40` = equal and ordered, 0x60464e–0x60465e), then fld a, fdiv dword b, fstp dword (0x604679–0x60467d); int a, float b: the same zero test of b (0.0 from 0x74f38c, 0x6046bd–0x6046cd), then the int is loaded exactly by fild (0x6046e8), fdiv dword b (0x6046eb), fstp dword (0x6046ed); float a, int b: b == 0 (cmp dword, 0x604725), then fild b (0x60473e), fdivr dword a = a ÷ b (0x604747), fstp dword (0x604749); so every float result is the exact result rounded per the precision state `fpu_pc` (Conventions, D8′); int,int: the two type checks, then b == 0 (0x6047aa), then cdq; idiv (0x6047c3–0x6047c4), truncating toward 0, pushed as type 0x10 (0x6047c6) [0x6045f0] | "Divide by 0" (0x74f557; float b == ±0.0 — the compare is an ordered equality, so −0.0 errors and a NaN b does not; int b == 0; tested before the division in every case, and in int,int after the two type checks); "Invalid operand to operator '/' (lhs) (type:%02.2X)" (0x60477f); "… '/' (rhs) …" (0x60479c) [0x6045f0] | Zero divisors are errors, but a float result can still be ±inf (f32 overflow at the final fstp dword: `1.0e30 1.0e-30 /` → +inf, no error) or NaN (a NaN operand passes the zero test). INT_MIN / −1 raises a CPU fault (#DE) in the original (UNVERIFIED crash; untestable). Falsifier: `50331651 3.0 /` → 16777216.0 (the 'int converted to float first' reading gives 16777218.0). |
 | 0x74 | BCLPower | 0x6047f0 | 0x751ea8 | 54 (+0xd8) | none | 0 | a b → a^b by case (asm 0x604829–0x6049e5; two fldz at 0x604829 reserve two x87 slots that every path releases with one fcompp): float,float → (float)pow((double)a,(double)b) (_pow 0x604870, one rounding by fstp dword 0x604878; the three later fld/fstp dword pairs are no-ops on an f32); int,float → the int is loaded exactly by fild (0x6048d4) and widened to double: (float)pow((double)a,(double)b) (_pow 0x6048e9, fstp dword 0x6048f1); float a, int b → repeat b times (b unsigned: −1 = 2^32−1): x ← (float)(int32 reinterpretation of x's bits) × x, result float; int,int → repeat b times x ← x×x (wrapping imul, 0x6049c0–0x6049cf), i.e. a^(2^b), result int with a's type word [0x6047f0] | "Invalid operand to operator '^' (lhs) (type:%02.2X)" (0x604990); "Invalid operand to operator '^' (rhs) (type:%02.2X)" (string 0x74f5ff, 0x6049af; the decomp drops both arguments) [0x6047f0] | Resolved from the asm: the float^int loop (0x604944–0x604953) copies x's raw bits (written by the previous fstp) to a temporary and loads them with fild, so x ← (float)(int32 bits of x) × x. The decomp's (float)(int)x reads like a value truncation and is wrong. Falsifier kept as a guard: `2.0 1 ^` → 2147483648.0 (not 4.0, not 2.0). The int,int loop squares: `3 2 ^` → 81, not 9; b = 0 leaves a unchanged (a^0 = a). 0 uses in Base.osi. |
 | 0x75 | BCLModulus | 0x604a00 | 0x751eb8 | 55 (+0xdc) | none | 12 | a b → int((uint32)a mod (uint32)b) (unsigned div: xor edx, edx; div ecx at 0x604a99–0x604a9b; remainder pushed with a's type word); there is no float path and no x87 instruction in this handler [0x604a00] | "Invalid operand to operator '%' (lhs) (type:%02.2X)" (a, 0x604a55); "… '%' (rhs) …" (b, 0x604a72) (non-int; floats included); "Divide by 0" (b == 0, tested after both type checks, 0x604a80–0x604a86) [0x604a00] | Falsifier: `-1 3 %` → 0 (unsigned), not −1 (C signed %). 12 uses. |
 | 0x76 | BCLBitwiseNot | 0x605aa0 | 0x751ec8 | 67 (+0x10c) | none | 6 | a → int(~a); nothing → int 1 (the same nothing rule as 0x6c) [0x605aa0] | "Invalid operand to operator '~' (type:%02.2X)" [0x605aa0] |  |

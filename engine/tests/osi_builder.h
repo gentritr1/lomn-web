@@ -21,6 +21,11 @@ struct OsiSpec {
   uint32_t extra_classes = 0;
   uint8_t extra_methods = 0;
   std::string extra_symbol = "m";
+  // M2a-1 T0 (accessor tests): class 0's property symbols, the global-name table, each function's declared argc
+  // (function k gets function_argc[k], 0 when absent). Defaults keep every existing byte unchanged.
+  std::vector<uint16_t> props;
+  std::vector<std::string> globals;
+  std::vector<uint16_t> function_argc;
 };
 
 inline void osi_put16(std::vector<uint8_t>& b, uint32_t v) {
@@ -44,7 +49,7 @@ inline std::vector<uint8_t> build_osi(const OsiSpec& s) {
     }
   };
   table(s.strings);
-  table({});  // globals
+  table(s.globals);
   osi_put16(b, s.functions);
   std::vector<size_t> fpatch;
   for (uint32_t k = 0; k < s.functions; ++k) {
@@ -52,10 +57,11 @@ inline std::vector<uint8_t> build_osi(const OsiSpec& s) {
     b.push_back('f');
     fpatch.push_back(b.size());
     osi_put32(b, 0);
-    osi_put16(b, 0);
+    osi_put16(b, k < s.function_argc.size() ? s.function_argc[k] : 0);
   }
-  osi_put16(b, 1 + s.extra_classes);  // class 0: no properties, one method: symbol 0 = "initfull"
-  b.push_back(0);
+  osi_put16(b, 1 + s.extra_classes);  // class 0: s.props (none by default), one method: symbol 0 = "initfull"
+  b.push_back(static_cast<uint8_t>(s.props.size()));
+  for (uint16_t p : s.props) osi_put16(b, p);
   b.push_back(1);
   osi_put16(b, 0);
   const size_t mpatch = b.size();

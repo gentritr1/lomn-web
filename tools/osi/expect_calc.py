@@ -1,0 +1,261 @@
+"""M2a-1 T0: the conformance-expectation calculator (docs/osi/conformance.md, rule 3).
+
+It evaluates ONE table row's arithmetic from literal operands, so a corpus author can compute an `.expect.json` value
+without running any interpreter. It reads no script and knows no instruction encoding: the author applies the row (which
+operand is popped first, which type wins, which error fires) and calls the matching helper here. Every result is given in
+the corpus format: {"type": "0x10", "value": <u32>} or {"type": "0x12", "bits": "<8 hex digits>"}.
+
+Semantics, each from docs/osi/opcodes.md (row cited) and the D8' ruling (2026-10-08):
+- Floats are f32 values. Mixed and float arithmetic (rows 0x70-0x73) is computed exactly, then rounded to `pc`
+  significant bits with the x87 extended exponent range (unbounded here), then rounded to f32 by the final `fstp dword`:
+  result = round_f32(round_pc(exact)). `pc` is the VM's precision-control state (D8'): 24 from CreateDevice, 64 for
+  ever after the VM's first string->float conversion (`___dec2num` 0x65f886 leaves PC = 64). It must be passed
+  explicitly; 53 (the old `(float)((double)a OP (double)b)` formula) is not the original and is refused.
+  At pc 24 this equals one rounding of the exact result except when the result is an f32 subnormal (the extended
+  exponent keeps a 24-bit intermediate normal, then `fstp dword` rounds again). For f32 OP f32 both pc values give the
+  exact-once result (double rounding through >= 2*24+2 bits is innocuous; measured 0 mismatches in 160,000 pairs).
+- NaN results are stored as 0xffc00000 (D9). ±inf results come from f32 overflow at the final rounding.
+- Compares (0x60-0x64) are exact, unordered -> 0, +0.0 == -0.0; no precision dependence.
+- Ints are int32: + - * wrap; / truncates toward zero (signed idiv, 0x73); % is UNSIGNED (0x75); >> is LOGICAL (0x78);
+  shift counts use the low 5 bits (x86 shl/shr by cl). Zero divisors raise "Divide by 0" (float ±0.0 included).
+- float -> int (0xb2, int native arguments) chops toward zero and keeps the low 32 bits of the 64-bit result; NaN or
+  |x| >= 2^63 store the integer indefinite, whose low dword is 0.
+- int -> float (0xb1) rounds once. int -> text is "%d"; float -> text is "%f" of the f32 widened exactly to double
+  (Python's %f equals libc's here, consult M21; the original's CRT is UNVERIFIED). text -> int is atoi, text -> float is
+  atof rounded once to f32; atof also switches the VM to pc 64 (D8'), which `atof` reports as "pc_after".
+"""
+from __future__ import annotations
+
+import math
+import re
+import struct
+from fractions import Fraction
+
+NAN_BITS = 0xFFC00000          # D9: the x87 real indefinite
+PRECISIONS = (24, 64)          # D8': the two values the VM's precision-control state takes
+
+
+class CalcError(Exception):
+    """The row raises an error here (the message is the row's text) or the case is outside what is defined."""
+
+
+def _u32(n: int) -> int:
+    return n & 0xFFFFFFFF
+
+
+def _s32(n: int) -> int:
+    n &= 0xFFFFFFFF
+    return n - (1 << 32) if n & 0x80000000 else n
+
+
+class Int:
+    """An int32 operand (value wrapped to 32 bits)."""
+
+    def __init__(self, n: int):
+        self.n = _s32(n)
+
+    def __repr__(self):
+        return "Int(%d)" % self.n
+
+
+class Flt:
+    """An f32 operand: Flt(1.5) rounds the Python float to f32 once (as PushConstantf32's literal); Flt.bits(b) takes
+    the raw pattern."""
+
+    def __init__(self, x: float):
+        self.b = struct.unpack("<I", struct.pack("<f", x))[0]
+
+    @classmethod
+    def bits(cls, b: int) -> "Flt":
+        f = cls.__new__(cls)
+        f.b = b & 0xFFFFFFFF
+        return f
+
+    @property
+    def value(self) -> float:
+        return struct.unpack("<f", struct.pack("<I", self.b))[0]
+
+    def __repr__(self):
+        return "Flt.bits(0x%08x)" % self.b
+
+
+def int_result(n: int) -> dict:
+    return {"type": "0x10", "value": _u32(n)}
+
+
+def float_result(b: int) -> dict:
+    return {"type": "0x12", "bits": "%08x" % b}
+
+
+def round_p(x: Fraction, p: int) -> Fraction:
+    """x rounded to p significant bits, ties to even, unbounded exponent."""
+    if x == 0:
+        return x
+    sign = -1 if x < 0 else 1
+    a = abs(x)
+    e = a.numerator.bit_length() - a.denominator.bit_length()
+    if Fraction(2) ** e > a:
+        e -= 1
+    q = a / Fraction(2) ** (e - p + 1)
+    n = q.numerator // q.denominator
+    r = q - n
+    if r > Fraction(1, 2) or (r == Fraction(1, 2) and n % 2):
+        n += 1
+    return sign * Fraction(n) * Fraction(2) ** (e - p + 1)
+
+
+def f32_bits(x: Fraction) -> int:
+    """The binary32 pattern of x rounded once: ties to even, subnormals, overflow to ±inf. Zero is +0.0."""
+    if x == 0:
+        return 0
+    sign = 0x80000000 if x < 0 else 0
+    a = abs(x)
+    e = a.numerator.bit_length() - a.denominator.bit_length()
+    if Fraction(2) ** e > a:
+        e -= 1
+    e = max(e, -126)
+    q = a / Fraction(2) ** (e - 23)
+    n = q.numerator // q.denominator
+    r = q - n
+    if r > Fraction(1, 2) or (r == Fraction(1, 2) and n % 2):
+        n += 1
+    if n == 1 << 24:
+        n, e = 1 << 23, e + 1
+    if e > 127:
+        return sign | 0x7F800000
+    if n < 1 << 23:
+        return sign | n
+    return sign | ((e + 127) << 23) | (n - (1 << 23))
+
+
+def _special(v) -> bool:
+    return isinstance(v, Flt) and not math.isfinite(v.value)
+
+
+def _exact(v) -> Fraction:
+    return Fraction(v.n) if isinstance(v, Int) else Fraction(v.value)
+
+
+def _check_pc(pc: int) -> None:
+    if pc not in PRECISIONS:
+        raise ValueError("pc must be 24 or 64 (D8'); %r is not a state the VM takes" % (pc,))
+
+
+def arith(op: str, a, b, *, pc: int) -> dict:
+    """Rows 0x70 (+), 0x71 (-), 0x72 (*), 0x73 (/) on numeric operands. Strings and other types are the row's errors,
+    which the author reads from the table."""
+    _check_pc(pc)
+    if op not in "+-*/" or len(op) != 1:
+        raise ValueError("op %r" % op)
+    if isinstance(a, Int) and isinstance(b, Int):
+        if op == "+":
+            return int_result(a.n + b.n)
+        if op == "-":
+            return int_result(a.n - b.n)
+        if op == "*":
+            return int_result(a.n * b.n)
+        if b.n == 0:
+            raise CalcError("Divide by 0")
+        if a.n == -2**31 and b.n == -1:
+            raise CalcError("undefined: INT_MIN / -1 faults (#DE) in the original")
+        q = abs(a.n) // abs(b.n)
+        return int_result(q if (a.n < 0) == (b.n < 0) else -q)
+    if op == "/" and isinstance(b, Flt) and b.value == 0.0:   # ordered equality: ±0.0 errors, a NaN divisor does not
+        raise CalcError("Divide by 0")
+    if op == "/" and isinstance(b, Int) and b.n == 0:
+        raise CalcError("Divide by 0")
+    if _special(a) or _special(b):
+        x = float(a.n) if isinstance(a, Int) else a.value
+        y = float(b.n) if isinstance(b, Int) else b.value
+        try:
+            r = {"+": lambda: x + y, "-": lambda: x - y, "*": lambda: x * y, "/": lambda: x / y}[op]()
+        except ZeroDivisionError:
+            raise CalcError("Divide by 0")
+        if math.isnan(r):
+            return float_result(NAN_BITS)
+        return float_result(struct.unpack("<I", struct.pack("<f", r))[0])
+    x, y = _exact(a), _exact(b)
+    r = {"+": lambda: x + y, "-": lambda: x - y, "*": lambda: x * y, "/": lambda: x / y}[op]()
+    return float_result(f32_bits(round_p(r, pc)))
+
+
+def compare(op: str, a, b) -> dict:
+    """Rows 0x60 (=, numeric cases), 0x61 (<), 0x62 (>), 0x63 (<=), 0x64 (>=): exact, unordered -> 0."""
+    for v in (a, b):
+        if isinstance(v, Flt) and math.isnan(v.value):
+            return int_result(0)
+    if _special(a) or _special(b):
+        x = float(a.n) if isinstance(a, Int) else a.value
+        y = float(b.n) if isinstance(b, Int) else b.value
+    else:
+        x, y = _exact(a), _exact(b)
+    r = {"=": x == y, "<": x < y, ">": x > y, "<=": x <= y, ">=": x >= y}[op]
+    return int_result(1 if r else 0)
+
+
+def modulus(a: Int, b: Int) -> dict:
+    """Row 0x75: unsigned remainder (xor edx, edx; div)."""
+    if b.n == 0:
+        raise CalcError("Divide by 0")
+    return int_result(_u32(a.n) % _u32(b.n))
+
+
+def shift_left(a: Int, b: Int) -> dict:
+    return int_result(_u32(a.n) << (b.n & 31))
+
+
+def shift_right(a: Int, b: Int) -> dict:
+    """Row 0x78: logical shift."""
+    return int_result(_u32(a.n) >> (b.n & 31))
+
+
+def int_to_float(a: Int) -> dict:
+    """Row 0xb1 on an int: fild (exact) then one fstp dword rounding."""
+    return float_result(f32_bits(Fraction(a.n)))
+
+
+def float_to_int(a: Flt) -> dict:
+    """Row 0xb2 on a float: chop, fistp qword, low 32 bits; NaN or |x| >= 2^63 -> integer indefinite (low dword 0)."""
+    x = a.value
+    if math.isnan(x) or abs(x) >= 2.0 ** 63:
+        return int_result(0)
+    return int_result(int(x))   # int() truncates toward zero; the low 32 bits are kept by int_result
+
+
+def to_string(v) -> bytes:
+    """Row 0xb0: int -> "%d", float -> "%f" of the f32 widened to double (libc formatting, UNVERIFIED vs the CRT)."""
+    if isinstance(v, Int):
+        return b"%d" % v.n
+    x = v.value
+    if not math.isfinite(x):
+        raise CalcError("%f of a non-finite value: the original CRT's text is UNVERIFIED; do not author it")
+    return (b"%f" % x)
+
+
+_WS = b" \t\n\v\f\r"
+_INT = re.compile(rb"[+-]?[0-9]+")
+_DEC = re.compile(rb"[+-]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
+
+
+def atoi(text: bytes) -> dict:
+    """atoi: leading white space, optional sign, decimal digits; anything else ends the number; no digits -> 0.
+    Overflow is wrapped to 32 bits here and is UNVERIFIED (corpus programs must stay in range)."""
+    m = _INT.match(text.lstrip(_WS))
+    return int_result(int(m.group(0)) if m else 0)
+
+
+def atof(text: bytes, inexact_ok: bool = False) -> dict:
+    """atof then one f32 rounding (row 0xb1 on a string). Only decimal text is defined here; a value that is not
+    exactly an f32 raises unless inexact_ok (the CRT's decimal->double step is UNVERIFIED; consult risk 3). The VM's
+    precision state is 64 afterwards in every case (D8'): "pc_after"."""
+    m = _DEC.match(text.lstrip(_WS))
+    if not m:
+        return dict(float_result(0), pc_after=64)
+    s = m.group(0).decode("ascii")
+    exact = Fraction(s) if not s.endswith(".") else Fraction(s[:-1] or "0")
+    b = f32_bits(exact)
+    if Fraction(struct.unpack("<f", struct.pack("<I", b))[0]) != exact and not inexact_ok:
+        raise CalcError("atof(%r) is not exactly an f32: the CRT reading is UNVERIFIED" % s)
+    if exact == 0 and s.lstrip().startswith("-"):
+        b = 0x80000000
+    return dict(float_result(b), pc_after=64)
