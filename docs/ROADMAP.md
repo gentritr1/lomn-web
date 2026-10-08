@@ -160,6 +160,9 @@ Four real tasks were run headless with `claude -p --output-format json`. The fir
 
     Never use it for reviews, design, asm or RE readings, rulings, or code whose mistakes tests could miss.
   - **E3 (run in the first sub-milestone on credits):** Haiku 5.5 vs Sonnet 5.5 on the same inputs for log triage, bookkeeping and mechanical edits, interleaved, 3 runs each. Adopt Haiku for a class only if its first-time-correct rate matches Sonnet's.
+  - **Billing split (owner direction 2026-10-09):**
+    - **Max 20x plan,** via subagents from the desktop session: Fable 5.1 reviews, the controller, and by default implementation and Opus reviews.
+    - **$200 Console credits,** via headless `claude -p` with `.superpowers/sdd/cost-test/run.sh`: overflow when plan limits are hit, parallel bursts, and runs where exact $ per task is wanted.
   - Start a fresh session per sub-milestone and resume from this file. Fast mode stays off.
   - Record $ spent per sub-milestone from the Console dashboard.
 - **Verification:**
