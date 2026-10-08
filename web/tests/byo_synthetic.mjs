@@ -687,11 +687,22 @@ try {
     check(sweep.byo.fails.length === 0, `responsive sweep, BYO page (${widths.length} widths 360..1920): no horizontal scroll, no overlap`,
           `min clearance ${sweep.byo.min.toFixed(1)} px` + (sweep.byo.fails.length ? ' ' + JSON.stringify(sweep.byo.fails.slice(0, 3)) : ''));
     await pb.page.close();
-    const pv = await open(base + '?hud=1&area=levt/stat', undefined, { drop: false });
+    // M1 close-out C-m1: the page counts GPUTexture creates / destroy() calls (gpuLiveHook) and the engine's resize calls (wrapped below);
+    // the native counter shares code with the wgpuTextureDestroy call, so only this browser-side count sees a removed Destroy.
+    const pv = await open(base + '?hud=1&area=levt/stat', gpuLiveHook, { drop: false });
     await waitState(pv.page, ['area-ready'], 60000);
+    await pv.page.evaluate(() => {
+      const M = window.__lomn.engine.M, real = M._lomn_resize;
+      window.__resizes = 0;
+      M._lomn_resize = (w, h) => { window.__resizes++; return real(w, h); };
+    });
+    const gpuStep = () => pv.page.evaluate(() => ({ created: window.__gpuLive.created, destroyed: window.__gpuLive.destroyed, textures: window.__gpuLive.textures, resizes: window.__resizes }));
+    const g00 = await gpuStep();
+    const resizeSteps = [];
     const msgs0 = pv.w.console.length;
     const pixelWidths = new Set([360, 1000, 1920]);
     for (const w of widths) {
+      const g0 = await gpuStep();
       await pv.page.setViewportSize({ width: w, height: 1000 });
       const f0 = (await pv.page.evaluate(() => window.__lomn.metrics)).frames;
       await pv.page.waitForFunction((k) => {
@@ -699,6 +710,8 @@ try {
         return m.frames > k + 3 && m.surface.width === c.width && m.surface.height === c.height && c.width === Math.round(c.parentElement.clientWidth);
       }, f0, { timeout: 15000 });
       const m = await pv.page.evaluate(() => window.__lomn.metrics);
+      const g1 = await gpuStep();
+      resizeSteps.push({ w, resizes: g1.resizes - g0.resizes, created: g1.created - g0.created, destroyed: g1.destroyed - g0.destroyed, textures: g1.textures });
       const r = await pv.page.evaluate(layout, ['header h1', '#status', '#message', '#viewer .bar > *', '#canvas']);
       const hudInside = await pv.page.evaluate(() => {
         const h = document.getElementById('hud').getBoundingClientRect(), c = document.getElementById('canvas').getBoundingClientRect();
@@ -726,6 +739,17 @@ try {
     check(sweep.viewer.fails.length === 0 && gpuMsgs.length === 0,
           `responsive sweep, viewer (${widths.length} widths): no h-scroll/overlap, HUD inside the canvas, every resize draws all draws, 0 rejected, no WebGPU message`,
           `min clearance ${sweep.viewer.min.toFixed(1)} px` + (sweep.viewer.fails.length ? ' ' + JSON.stringify(sweep.viewer.fails.slice(0, 3)) : '') + (gpuMsgs.length ? ' ' + gpuMsgs.slice(0, 3) : ''));
+    {
+      // each canvas-size change (lomn_resize) creates one depth texture and destroys its predecessor: created == destroyed == resizes in
+      // every step, and the live texture count after the sweep is the count before it (a missing Destroy leaves them to garbage collection)
+      const bad = resizeSteps.filter((x) => x.created !== x.resizes || x.destroyed !== x.resizes);
+      const total = resizeSteps.reduce((n, x) => n + x.resizes, 0);
+      const end = await gpuStep();
+      summary.resize_gpu = { steps: resizeSteps.length, resizes: total, created: end.created - g00.created, destroyed: end.destroyed - g00.destroyed, live_before: g00.textures, live_after: end.textures };
+      check(bad.length === 0 && total >= 20 && end.textures === g00.textures && end.destroyed - g00.destroyed === total,
+            `C-m1: over the ${widths.length}-width resize sweep every canvas-size change destroyed exactly one depth texture (GPUTexture.destroy count == resize count == creates) and the live texture count stayed flat`,
+            `${total} resizes, ${end.created - g00.created} creates, ${end.destroyed - g00.destroyed} destroys, live textures ${g00.textures} -> ${end.textures}` + (bad.length ? '; offenders ' + JSON.stringify(bad.slice(0, 3)) : ''));
+    }
     summary.responsive = { widths: widths.length, byo_min_clearance_px: sweep.byo.min, viewer_min_clearance_px: sweep.viewer.min, pixels: sweep.pixels };
     await pv.page.close();
   }
