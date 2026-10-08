@@ -841,7 +841,7 @@ def test_run_reruns_process_on_int_zero(tmp_path, capsys):
     assert kinds == ["K", "C", "C", "C", "K", "C"]
     assert lines[1] == lines[2] == lines[3]                              # same time, dt and counter on a re-run
     assert lines[5].split()[3:6] != lines[1].split()[3:6] and lines[5].split()[5] == "0010:00000001"
-    assert "process passes: total 4 over 2 frames, max 3, frames with re-runs 1 (first: 0:3)" in out
+    assert "process passes: total 4 over 2 frames, max 3, frames with re-runs 1 (first: 0:3), frames skipped 0" in out
 
 
 def test_run_rerun_is_capped_at_ten_more(tmp_path, capsys):          # cmp [ebp-0xd4], 0xa; jb (0x4a957d)
@@ -907,3 +907,18 @@ def test_reset_after_error_rescans_the_frame():                       # M4
     assert vm.snapshot().frame == 1
     vm.reset_after_error()
     assert vm.snapshot().frame == 0 and vm.depth == 0
+
+
+def test_run_skips_the_frame_after_eleven_int_zero_passes(tmp_path, capsys):
+    """Fix round 2: PM+0x40 parity (toggle 0x4a92fd-0x4a930a, check 0x4a937d, set-on-true 0x4a93b7-0x4a93c1 and
+    0x4a94a6-0x4a94bb). A process that returns int 0 on all 11 passes of frame k does not run on frame k+1 and runs
+    again on k+2; the K line, the time and the counter of frame k+1 are unchanged (0x4a922d-0x4a92f2, 0x4a95b6)."""
+    lines, out = _run_cli(tmp_path, PROC % 100, 3, capsys)
+    kinds = [l.split()[0] for l in lines]
+    assert kinds == ["K"] + ["C"] * 11 + ["K", "K"] + ["C"] * 11
+    ks = [l for l in lines if l.startswith("K ")]
+    assert [k.split()[4] for k in ks] == ["00000000", "00000001", "00000002"]       # counter increments every frame
+    assert len({k.split()[2] for k in ks}) == 3                                       # time advances every frame
+    assert lines[-1].split()[5] == "0010:00000002"                                   # frame 2's call carries k = 2
+    assert "process passes: total 22 over 3 frames, max 11, frames with re-runs 2 (first: 0:11 2:11), " \
+           "frames skipped 1 (first: 1)" in out

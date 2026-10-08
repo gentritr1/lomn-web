@@ -2499,6 +2499,7 @@ def run_base(a) -> int:
     stop = "none"
     per_frame = []
     pass_counts: list[int] = []
+    pm_flag, proc_byte = 0, 1     # registered so that it runs on the first frame (the shipped script runs every frame)
     keys = key_calls(a.keys) if a.keys else {}
     dt = struct.unpack("<d", struct.pack("<Q", DT_BITS_DOUBLE))[0]
     time = 0.0
@@ -2521,8 +2522,16 @@ def run_base(a) -> int:
                     if not r.ok:
                         err = vm.last_error
                         break
+                # PM+0x40 parity (0x4a92fd-0x4a930a, toggled every frame after the time update): the first pass runs the
+                # process only if its byte at +8 equals the flag (0x4a937d; +9 'paused' is never set for it, 0x4a9383);
+                # a pass that returns true writes +8 = NOT flag (0x4a93b7-0x4a93c1, re-runs 0x4a94a6-0x4a94bb). A process
+                # still false after the 10th re-run keeps +8 == this frame's flag, so it is skipped on the next frame
+                # (no C Process line) and runs again the frame after. The time, the K line, the key calls (separate
+                # engine calls) and the counter PM+0x44 (0x4a95b6) are unconditional.
+                pm_flag ^= 1
                 passes = 0
-                while err is None:
+                eligible = proc_byte == pm_flag
+                while err is None and eligible:
                     # ScSLOSIProcess::Process (0x43b33f-0x43b35f) returns false only for an int 0 result (nothing and
                     # every other type -> true). ScProcessManager::Process re-runs the processes that returned false
                     # with the same time, dt and counter, at most 10 more times (0x4a930d counter 0; 0x4a955b inc;
@@ -2532,7 +2541,10 @@ def run_base(a) -> int:
                     if not r.ok:
                         err = vm.last_error
                         break
-                    if not (r.result.type == T_INT and r.result.value == 0) or passes >= 11:
+                    if not (r.result.type == T_INT and r.result.value == 0):
+                        proc_byte = pm_flag ^ 1
+                        break
+                    if passes >= 11:
                         break
                 pass_counts.append(passes)
                 per_frame.append((k, vm.instructions - i0, vm.native_calls - n0, len(vm.pcs_seen)))
@@ -2558,9 +2570,11 @@ def run_base(a) -> int:
         print("distinct_pcs_by_frame (first 5, last): %s ... %s"
               % (" ".join(str(p[3]) for p in frames[:5]), frames[-1][3]))
     rerun = [(i, n) for i, n in enumerate(pass_counts) if n > 1]
-    print("process passes: total %d over %d frames, max %d, frames with re-runs %d%s"
+    skipped = [i for i, n in enumerate(pass_counts) if n == 0]
+    print("process passes: total %d over %d frames, max %d, frames with re-runs %d%s, frames skipped %d%s"
           % (sum(pass_counts), len(pass_counts), max(pass_counts, default=0), len(rerun),
-             (" (first: %s)" % " ".join("%d:%d" % x for x in rerun[:5])) if rerun else ""))
+             (" (first: %s)" % " ".join("%d:%d" % x for x in rerun[:5])) if rerun else "", len(skipped),
+             (" (first: %s)" % " ".join(str(i) for i in skipped[:5])) if skipped else ""))
     print("stop: %s" % stop)
     print("script sha256 unchanged: %s" % (hashlib.sha256(vm.image).hexdigest() == hashlib.sha256(script).hexdigest()))
     return 0
