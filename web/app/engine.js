@@ -208,7 +208,12 @@ export class Engine {
     const reads = r.cached ? this.M.UTF8ToString(this.M._lomn_fs_reads()) : touched;
     const read = new Set(touched.split('\n').filter(Boolean));
     const overFetch = this.fetched.filter((x) => !read.has(`${x.path}\t${x.offset}\t${x.length}`)).reduce((n, x) => n + x.length, 0);
-    if (!this.M._lomn_area_show()) throw new Error(this.lastError());
+    if (!this.M._lomn_area_show()) {
+      // lomn_area_show releases the previous area's GPU objects before it uploads the new one: a failure from here on has lost it.
+      const err = new Error(this.lastError());
+      err.previousAreaGone = true;
+      throw err;
+    }
     await this.store.set(this.cacheKey + key, reads).catch(() => {});
     this.load = { area: `${level}/${area}`, ...r, touched, over_fetch_bytes: overFetch, concurrency: this.concurrency, load_total_ms: performance.now() - t0 };
     return this.load;

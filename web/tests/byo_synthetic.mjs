@@ -1102,6 +1102,56 @@ fs.writeFileSync(path.join(work, 'results.json'), JSON.stringify({ results, summ
 const failed = results.filter((r) => !r.ok);
 console.log(`byo_synthetic: ${results.length - failed.length}/${results.length} checks passed`);
 process.exitCode = failed.length ? 1 : 0;
+  // M1 close-out C-N1 (ruling): only GPU device loss is final. A file read that fails during an area switch (a file that vanished, a
+  // permission revoked mid-session) shows the message, keeps the previous area rendering, re-enables the picker and lets the next switch
+  // work (pre-fix: fail() = state 'error', picker disabled, Reload only). One read is made to reject once (Blob.prototype.arrayBuffer
+  // while the page is in 'loading-area'), first during the FIRST area load (no previous area), then during a switch (levt/test stays).
+  await section('C-N1 recoverable area error', async () => {
+    const p = await open(base + '?size=1280x720&area=levt/test&pick=1', `
+      window.__fail = 1; const ab = Blob.prototype.arrayBuffer;
+      Blob.prototype.arrayBuffer = function () {
+        if (window.__fail > 0 && window.__lomn?.state === 'loading-area') { window.__fail--; return Promise.reject(new Error('TEST: file no longer readable')); }
+        return ab.call(this);
+      };`, { drop: false });
+    await waitState(p.page, ['need-files']);
+    await p.page.setInputFiles('#byo-input', inst);
+    let st = await waitState(p.page, ['area-error', 'area-ready'], 120000);
+    const ui = () => p.page.evaluate(() => ({ state: window.__lomn.state, message: window.__lomn.message, error: window.__lomn.error ?? null, areaError: window.__lomn.areaError ?? null,
+      picker: !document.getElementById('area-picker').disabled, pickerValue: document.getElementById('area-picker').value, reload: !document.getElementById('reload').hidden,
+      loading: !document.getElementById('loading').hidden, area: window.__lomn.load?.area ?? null }));
+    let o = await ui();
+    check(st.state === 'area-error' && /^Could not load levt\/test: TEST: file no longer readable/.test(o.message) && /Pick an area to try again/.test(o.message) &&
+          o.picker && !o.reload && !o.loading && !o.error && /TEST: file no longer readable/.test(o.areaError),
+          'C-N1: a read that fails during the FIRST area load -> area-error with the message, picker enabled, no Reload, not the final error', JSON.stringify(o));
+    // the next switch works, through the real picker
+    await p.page.selectOption('#area-picker', 'levt/test');
+    st = await waitState(p.page, ['area-ready'], 60000);
+    await waitFrames(p.page, 3);
+    comparePixels(await canvasPng(p.page, 'c_n1_test.png'), refs.test, 'levt/test (after a failed first load)');
+    o = await ui();
+    check(st.state === 'area-ready' && o.areaError === null && o.picker && o.area === 'levt/test', 'C-N1: the next switch after the failed first load succeeds and clears the error', JSON.stringify(o));
+    // a failure during a switch: levt/test keeps rendering
+    await p.page.evaluate(async () => { await window.__lomn.forgetCachedSet('levt/stat'); window.__fail = 1; });
+    await p.page.selectOption('#area-picker', 'levt/stat');
+    st = await waitState(p.page, ['area-error', 'area-ready'], 60000);
+    o = await ui();
+    const f0 = await p.page.evaluate(() => window.__lomn.metrics.frames);
+    await p.page.waitForFunction((k) => window.__lomn.metrics.frames > k + 10, f0, { timeout: 15000 });
+    check(st.state === 'area-error' && /^Could not load levt\/stat: TEST: file no longer readable\. Still showing levt\/test\./.test(o.message) && o.picker && o.pickerValue === 'levt/test' &&
+          !o.reload && !o.loading && !o.error && o.area === 'levt/test',
+          'C-N1: a read that fails during a SWITCH -> area-error naming the failed area and the one still shown, picker enabled and back on the shown area', JSON.stringify(o));
+    comparePixels(await canvasPng(p.page, 'c_n1_still_test.png'), refs.test, 'levt/test (still rendering after the failed switch)');
+    // the second switch works
+    await p.page.selectOption('#area-picker', 'levt/stat');
+    st = await waitState(p.page, ['area-ready'], 60000);
+    await waitFrames(p.page, 3);
+    comparePixels(await canvasPng(p.page, 'c_n1_stat.png'), refs.stat, 'levt/stat (second switch after the failed one)');
+    const m = await p.page.evaluate(() => window.__lomn.metrics);
+    o = await ui();
+    check(st.state === 'area-ready' && o.area === 'levt/stat' && o.areaError === null && m.release_failures === 0 && m.rejected_last_frame === 0 && p.w.errors.length === 0,
+          'C-N1: the second switch succeeds (state area-ready, error cleared, no release failures, no rejected calls, no page exceptions)', JSON.stringify({ ...o, release_failures: m.release_failures, errors: p.w.errors }));
+    await p.page.close();
+  });
   // M1 close-out C-f2 (browser): a tampered prefetch cache that holds ONE whole-file range per file (a superset) satisfies every read, so
   // the resident ranges the engine "touched" are the tampered ones; persisting them kept the superset for ever. The page now writes
   // back the exact reads (lomn_fs_reads), and the next visit loads the exact set.

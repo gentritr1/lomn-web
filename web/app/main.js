@@ -1,7 +1,10 @@
 // LOMN Web viewer page: bring-your-own files -> validation -> (copy) -> engine -> area viewer.
 // window.__lomn: {state, message, error, build, source, areas, metrics (getter), load, boot, copy, showArea(), ...}.
 // States: boot | need-files | need-permission | validating | rejected | quota-short | copying | starting | ready |
-//         loading-area | area-ready | error. Tests wait on these (never on time).
+//         loading-area | area-ready | area-error | error. Tests wait on these (never on time).
+// error is FINAL (fail(): a lost GPU device, no WebGPU / adapter, a failed start): the controls are disabled and only Reload helps.
+// area-error is RECOVERABLE (areaError(): a file read failed during an area switch): the message is shown, the picker works,
+// the previous area keeps rendering (M1 close-out C-N1).
 import { checkBuilds } from './fingerprint.js';
 import { copyToOpfs, describeWalkFailure, filesSource, handleSource, opfsClear, opfsCopy, opfsDirExists, quotaCheck, sameFiles, totalBytes, validate, WalkError } from './byo.js';
 import { createEngine } from './engine.js';
@@ -36,6 +39,17 @@ function fail(err, { reload = true } = {}) {
   $('byo').hidden = true;
   for (const id of ['area-picker', 'reset-camera', 'pick-dir', 'regrant']) $(id).disabled = true;
   setState('error', L.error);
+}
+// M1 close-out C-N1 (ruling): only GPU device loss is final. A failed file read during an area switch (a file that vanished, a
+// permission revoked mid-session, a flaky disk) leaves the engine and the previous area exactly as they were (the failure is before
+// lomn_area_show, which is what swaps the area), so the page says what failed, keeps the previous area rendering, re-enables the
+// picker and lets the next switch try again. Never reached after a loss: `dead` keeps the first reason.
+function areaError(err, name) {
+  const why = String(err?.message ?? err);
+  L.areaError = why;
+  const keeping = L.load?.area && !err?.previousAreaGone ? ` Still showing ${L.load.area}.` : '';
+  if (L.load?.area && !err?.previousAreaGone) $('area-picker').value = L.load.area;
+  setState('area-error', `Could not load ${name}: ${why}.${keeping} Pick an area to try again.`);
 }
 // An extra line in the persistent warning box (the box may already hold the unknown-data warning).
 function addWarning(text) {
@@ -340,7 +354,7 @@ async function showArea(name) {
     setState('area-ready', name);
     return true;
   } catch (err) {
-    if (!dead) fail(err);  // after a loss the first reason (the loss) stays
+    if (!dead) areaError(err, name);  // after a loss the first reason (the loss) stays; any other failure is recoverable (C-N1)
     return false;
   } finally {
     busy = false;
@@ -349,6 +363,7 @@ async function showArea(name) {
   }
 }
 
+    L.areaError = null;  // a later success clears the last recoverable error (C-N1)
 // Free-fly camera input: WASD / arrows move, Q/E down/up, Shift faster; drag (or pointer lock after a click) looks.
 function startInput() {
   const c = $('canvas');
