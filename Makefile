@@ -5,7 +5,7 @@ export LOMN_DATA LOMN_CACHE
 VENV := .venv
 PY := $(VENV)/bin/python
 EMSDK_ENV := source .toolchain/emsdk/emsdk_env.sh >/dev/null 2>&1
-.PHONY: setup check-data decomp worklist native wasm site test-tools test-native test-wasm test-web check perf perf-areas datacheck datacheck-wasm fuzz-osi fuzz-formats fuzz-formats-help a9-sweep a13-real manifest
+.PHONY: setup check-data decomp worklist native wasm site test-tools test-native test-wasm test-web check perf perf-areas datacheck datacheck-wasm fuzz-osi fuzz-formats fuzz-formats-help a9-sweep a13-real manifest osi-tables
 
 setup: $(VENV)/.ok
 	timeout 3600 tools/toolchain.sh
@@ -23,6 +23,11 @@ decomp: check-data
 	timeout 300 $(PY) tools/decomp/worklist.py dashboard gen/decomp worklist/status.json docs/dashboard.html
 	timeout 300 $(PY) tools/decomp/surface.py "$(LOMN_DATA)/reference/LEGOBionicle.exe" gen/decomp tools/decomp/data/d3d8_vtables.txt docs/surface.md
 	timeout 300 $(PY) tools/census.py "$(LOMN_DATA)/install" gen/census && cp gen/census/census.md docs/census.md
+
+# M2a-0: OSI VM citation tables (docs/osi/). opcodes.md: generated columns from the canonical exe (as data), the decomp
+# corpus and Base.osi; the authored columns (stack_effect, errors, notes) are kept by op.
+osi-tables: $(VENV)/.ok
+	timeout 300 $(PY) tools/osi/opcodes.py --exe "$(LOMN_DATA)/reference/LEGOBionicle.exe" --osi "$(LOMN_DATA)/install/data/Base.osi" --corpus gen/decomp --out docs/osi/opcodes.md
 
 worklist: $(VENV)/.ok
 	timeout 1800 $(PY) tools/decomp/worklist.py check gen/decomp worklist/status.json . --ctest-dir build/native
