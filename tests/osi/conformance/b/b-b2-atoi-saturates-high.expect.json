@@ -1,0 +1,37 @@
+{
+  "id": "b-b2-atoi-saturates-high",
+  "rows": [
+    "0xb2"
+  ],
+  "falsifier": "atoi wraps out-of-range text to 32 bits",
+  "alternative": "result value 3000000000 mod 2^32 = 3000000000 (as u32), i.e. -1294967296",
+  "entry": "main",
+  "args": [],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 2147483647
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24,
+    "heap": {
+      "live": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      },
+      "allocs": {
+        "o": 0,
+        "a": 0,
+        "s": 1,
+        "g": 0
+      }
+    }
+  },
+  "note": "0xb2 on a 0x11: ConvertVariant converts it to a dynamic string in place (A s 1), then atoi = _strtol (0x65cd40) saturates 3000000000 to 0x7fffffff (0x65cd95-0x65cdbb); 0xb2 disposes a after the conversion (F s 1). expect_calc.atoi = 2147483647. Added by the controller after the C++ VM review (all three readers had wrapped)."
+}

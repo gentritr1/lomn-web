@@ -136,7 +136,7 @@ described in words, never as decompiled code.
 - **`ConvertVariant(v, target)`** (0x60b9d0), used by 0x82–0x84 and 0xb0–0xb2:
   - same type → `Duplicate`;
   - target int: float → **truncation** (the asm sets the x87 rounding field to chop, `fistp qword`, keeps the low 32
-    bits), string → `atoi`;
+    bits), string → `atoi` = `_strtol(s, 0, 10)` (0x65cde0 → 0x65cd40), which **saturates** out-of-range values to 0x7fffffff / 0x80000000 (0x65cd95–0x65cdbb; it does not wrap — corrected 2026-10-08, the C++ VM review found all three readers had wrapped);
   - target float: int → `(float)int` (exact `fild`, one rounding by `fstp dword`, 0x60bd53–0x60bd55), string →
     `atof`, rounded once by `fstp dword` (0x60bd13);
   - target 0x16: int → `"%d"`, float → `"%f"`, 0x11 → dynamic copy;

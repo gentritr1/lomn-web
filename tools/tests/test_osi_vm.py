@@ -922,3 +922,11 @@ def test_run_skips_the_frame_after_eleven_int_zero_passes(tmp_path, capsys):
     assert lines[-1].split()[5] == "0010:00000002"                                   # frame 2's call carries k = 2
     assert "process passes: total 22 over 3 frames, max 11, frames with re-runs 2 (first: 0:11 2:11), " \
            "frames skipped 1 (first: 1)" in out
+
+
+def test_atoi_saturates_like_strtol():
+    # _atoi -> _strtol saturates (0x65cd95-0x65cdbb); controller fix after the C++ VM review (all readers had wrapped).
+    from osi_vm import c_atoi
+    assert c_atoi(b"3000000000") == 0x7FFFFFFF
+    assert c_atoi(b"-2147483649") == 0x80000000
+    assert c_atoi(b"42") == 42

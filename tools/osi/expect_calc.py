@@ -258,10 +258,12 @@ _DEC = re.compile(rb"[+-]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
 
 
 def atoi(text: bytes) -> dict:
-    """atoi: leading white space, optional sign, decimal digits; anything else ends the number; no digits -> 0.
-    Overflow is wrapped to 32 bits here and is UNVERIFIED (corpus programs must stay in range)."""
+    """atoi = _strtol(s, 0, 10) (0x65cde0 -> 0x65cd40): leading white space, optional sign, decimal digits; anything
+    else ends the number; no digits -> 0. Out-of-range values SATURATE to 0x7fffffff / 0x80000000 (errno ERANGE),
+    0x65cd95-0x65cdbb (corrected 2026-10-08 after the C++ VM review: all three readers had wrapped)."""
     m = _INT.match(text.lstrip(_WS))
-    return int_result(int(m.group(0)) if m else 0)
+    n = int(m.group(0)) if m else 0
+    return int_result(max(-2**31, min(2**31 - 1, n)))
 
 
 def atof(text: bytes, inexact_ok: bool = False) -> dict:

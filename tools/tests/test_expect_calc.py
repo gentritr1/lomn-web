@@ -239,3 +239,11 @@ def test_exact_zero_results_keep_the_x87_sign(ec):
     assert ec.arith("-", F(-0.0), F(0.0), pc=24) == neg0
     assert ec.arith("-", F(-0.0), F(-0.0), pc=24) == pos0
     assert ec.arith("-", I(3), F(3.0), pc=24) == pos0
+
+
+# atoi saturates like _strtol (0x65cd95-0x65cdbb); all three readers had wrapped (C++ VM review 2026-10-08).
+def test_atoi_saturates(ec):
+    assert ec.atoi(b"3000000000") == {"type": "0x10", "value": 2147483647}
+    assert ec.atoi(b"-2147483649") == {"type": "0x10", "value": 2147483648}
+    assert ec.atoi(b"99999999999") == {"type": "0x10", "value": 2147483647}
+    assert ec.atoi(b" -12x") == {"type": "0x10", "value": 4294967284}

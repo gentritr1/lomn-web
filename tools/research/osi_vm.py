@@ -769,8 +769,9 @@ _ATOF = re.compile(rb"[+-]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
 
 
 def c_atoi(text: bytes) -> int:
+    # _atoi -> _strtol(s, 0, 10) saturates out-of-range values (0x65cd95-0x65cdbb), ERANGE; it does not wrap.
     m = _ATOI.match(cstr(text).lstrip(_WS))
-    return (int(m.group(0)) & M32) if m else 0
+    return (max(-2**31, min(2**31 - 1, int(m.group(0)))) & M32) if m else 0
 
 
 def _strtold_overflow(s: str) -> tuple[bool, bool, bool]:
