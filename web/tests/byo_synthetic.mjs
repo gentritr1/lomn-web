@@ -1138,6 +1138,75 @@ try {
           'C-N1: the second switch succeeds (state area-ready, error cleared, no release failures, no rejected calls, no page exceptions)', JSON.stringify({ ...o, release_failures: m.release_failures, errors: p.w.errors }));
     await p.page.close();
   });
+  // M1 close-out C-N4: a navigator.gpu that exists but whose requestAdapter() resolves null (a blocklisted GPU) stops before any copy,
+  // like the missing-navigator.gpu case (final I-3): a named message, no copy worker, OPFS unchanged (pre-fix it copies, then fails).
+  await section('C-N4 no WebGPU adapter', async () => {
+    const p = await open(base + '?pick=1', `
+      GPU.prototype.requestAdapter = async () => null;
+      window.__workers = 0; const W = window.Worker; window.Worker = class extends W { constructor(...a) { super(...a); window.__workers++; } };`, { drop: false });
+    const before = await opfsList(p.page);
+    const st = await waitState(p.page, ['need-files'], 15000);
+    check(st.state === 'error' && /^This browser has WebGPU, but it returned no graphics adapter/.test(st.message) && /Chrome|Edge/.test(st.message),
+          'C-N4: requestAdapter() resolving null -> a named, final message before any file is chosen', `${st.state}: ${st.message}`);
+    const noWork = await p.page.evaluate(() => window.__lomn.validation === undefined && !window.__lomn.engine && /no graphics adapter/.test(window.__lomn.noAdapter ?? ''));
+    check(noWork, 'C-N4: no validation or engine work ran (noAdapter recorded)');
+    await p.page.setInputFiles('#byo-input', inst);
+    const moved = await p.page.waitForFunction(() => window.__lomn.state !== 'error' && window.__lomn.state !== 'need-files', null, { timeout: 4000 }).then(() => true, () => false);
+    const after = await opfsList(p.page);
+    const workers = await p.page.evaluate(() => window.__workers);
+    const final = await p.page.evaluate(() => ({ state: window.__lomn.state, copy: window.__lomn.copy ?? null, byoHidden: document.getElementById('byo').hidden, reload: !document.getElementById('reload').hidden }));
+    check(!moved && final.state === 'error' && !final.copy && workers === 0 && JSON.stringify(before) === JSON.stringify(after) && final.byoHidden && !final.reload,
+          'C-N4: choosing a folder anyway copies nothing (no copy worker, OPFS listing unchanged), the folder choice is hidden, no Reload button',
+          `state ${final.state}; left error ${moved}; workers ${workers}; OPFS entries ${before.length} -> ${after.length}; byo hidden ${final.byoHidden}; reload ${final.reload}`);
+    await p.page.close();
+    // control: a requestAdapter() that REJECTS is named too (the page does not hang in boot)
+    const q = await open(base + '?pick=1', `GPU.prototype.requestAdapter = async () => { throw new Error('TEST: adapter request failed'); };`, { drop: false });
+    const st2 = await waitState(q.page, ['need-files'], 15000);
+    check(st2.state === 'error' && /requesting an adapter failed \(TEST: adapter request failed\)/.test(st2.message), 'C-N4: a requestAdapter() that throws is named in the final message', `${st2.state}: ${st2.message}`);
+    await q.page.close();
+  });
+  // M1 close-out C-f2 (browser): a tampered prefetch cache that holds ONE whole-file range per file (a superset) satisfies every read, so
+  // the resident ranges the engine "touched" are the tampered ones; persisting them kept the superset for ever. The page now writes
+  // back the exact reads (lomn_fs_reads), and the next visit loads the exact set.
+  await section('C-f2 tampered superset cache', async () => {
+    const p = await open(base + '?size=1280x720&area=levt/test&pick=1', undefined, { drop: false });
+    await waitState(p.page, ['need-files']);
+    await p.page.setInputFiles('#byo-input', inst);
+    const st0 = await waitState(p.page, ['area-ready'], 120000);
+    if (st0.state !== 'area-ready') throw new Error(`the install did not load: ${st0.state}: ${st0.error ?? st0.message}`);
+    const want = new Set(nativeRanges('levt/stat').split('\n'));
+    const files = [...new Set([...want].map((l) => l.split('\t')[0]))];
+    const idbGetRaw = (key) => p.page.evaluate((k) => new Promise((res) => {
+      const r = indexedDB.open('lomn-web', 1);
+      r.onsuccess = () => { const g = r.result.transaction('kv').objectStore('kv').get(k); g.onsuccess = () => { r.result.close(); res(g.result ?? null); }; };
+    }), key);
+    const tampered = await p.page.evaluate((fl) => new Promise((res, rej) => {
+      const e = window.__lomn.engine, key = e.cacheKey + 'area:levt/stat';
+      const text = fl.map((f) => `${f}\t0\t${e.byNorm.get(f).size}\n`).join('');
+      const r = indexedDB.open('lomn-web', 1);
+      r.onerror = () => rej(r.error);
+      r.onsuccess = () => { const t = r.result.transaction('kv', 'readwrite'); t.objectStore('kv').put(text, key); t.oncomplete = () => { r.result.close(); res({ key, text }); }; t.onerror = () => rej(t.error); };
+    }), files);
+    const load = await p.page.evaluate(() => window.__lomn.showArea('levt/stat').then(() => window.__lomn.load));
+    const touched = new Set(load.touched.trim().split('\n'));
+    const saved = await idbGetRaw(tampered.key);
+    const savedSet = new Set((saved ?? '').trim().split('\n'));
+    const same = (a, b) => a.size === b.size && [...a].every((x) => b.has(x));
+    check(load.cached && load.rounds === 1 && !same(touched, want) && tampered.text.trim().split('\n').every((l) => touched.has(l)),
+          'C-f2 setup: the tampered whole-file ranges satisfy every read in one round, so the TOUCHED set is the tampered superset (not the native reads)',
+          `${load.rounds} round(s), cached ${load.cached}, touched ${touched.size} lines vs native ${want.size}`);
+    check(saved !== tampered.text && same(savedSet, want), 'C-f2: what is written back is exactly the native read set of levt/stat, not the tampered superset',
+          `persisted ${savedSet.size} lines vs native ${want.size}; tampered ${tampered.text.trim().split('\n').length} lines`);
+    // the next visit loads the exact set: one round, the fetched ranges are the native ones
+    await p.page.evaluate(async () => { await window.__lomn.showArea('levt/test'); });
+    const again = await p.page.evaluate(() => window.__lomn.showArea('levt/stat').then(() => window.__lomn.load));
+    const touched2 = new Set(again.touched.trim().split('\n'));
+    check(again.cached && again.rounds === 1 && same(touched2, want) && again.over_fetch_bytes === 0, 'C-f2: the following visit loads the healed set: one round, touched == native reads, 0 B over-fetch',
+          `${again.rounds} round(s), touched ${touched2.size} lines, over-fetch ${again.over_fetch_bytes}`);
+    await p.page.close();
+  });
+  // KEEP LAST (with C1 and I-1 above): this is the third GPU-process crash of the run; after repeated crashes Chromium stops handing out a
+  // WebGPU adapter (requestAdapter() resolves null), so no section that needs the GPU may follow it.
   // M1 close-out C-N3: the page's own guard after engine.showArea (main.js: `if (dead) return false` before it sets area-ready). Today the
   // C++ refusal in lomn_area_show makes it redundant for the I-1 test above (a switch that finishes after the loss never gets an
   // "ok" from the engine). Here the engine call has ALREADY succeeded (the area was swapped, areas_shown +1) when the device is lost,
@@ -1173,72 +1242,6 @@ try {
     check(ret === false && o.state === 'error' && /device lost|GPU/i.test(o.message) && o.area === 'levt/test' && o.frames === f0 && o.disabled && o.reload,
           'C-N3: the page refuses to flip to area-ready after a loss that landed between the engine\'s success and its own state change: state stays error, load not recorded, picker disabled',
           `returned ${ret}; ${JSON.stringify(o)}; frames at loss ${f0}`);
-    await p.page.close();
-  });
-  // M1 close-out C-N4: a navigator.gpu that exists but whose requestAdapter() resolves null (a blocklisted GPU) stops before any copy,
-  // like the missing-navigator.gpu case (final I-3): a named message, no copy worker, OPFS unchanged (pre-fix it copies, then fails).
-  await section('C-N4 no WebGPU adapter', async () => {
-    const p = await open(base + '?pick=1', `
-      GPU.prototype.requestAdapter = async () => null;
-      window.__workers = 0; const W = window.Worker; window.Worker = class extends W { constructor(...a) { super(...a); window.__workers++; } };`, { drop: false });
-    const before = await opfsList(p.page);
-    const st = await waitState(p.page, ['need-files'], 15000);
-    check(st.state === 'error' && /^This browser has WebGPU, but it returned no graphics adapter/.test(st.message) && /Chrome|Edge/.test(st.message),
-          'C-N4: requestAdapter() resolving null -> a named, final message before any file is chosen', `${st.state}: ${st.message}`);
-    const noWork = await p.page.evaluate(() => window.__lomn.validation === undefined && !window.__lomn.engine && /no graphics adapter/.test(window.__lomn.noAdapter ?? ''));
-    check(noWork, 'C-N4: no validation or engine work ran (noAdapter recorded)');
-    await p.page.setInputFiles('#byo-input', inst);
-    const moved = await p.page.waitForFunction(() => window.__lomn.state !== 'error' && window.__lomn.state !== 'need-files', null, { timeout: 4000 }).then(() => true, () => false);
-    const after = await opfsList(p.page);
-    const workers = await p.page.evaluate(() => window.__workers);
-    const final = await p.page.evaluate(() => ({ state: window.__lomn.state, copy: window.__lomn.copy ?? null, byoHidden: document.getElementById('byo').hidden, reload: !document.getElementById('reload').hidden }));
-    check(!moved && final.state === 'error' && !final.copy && workers === 0 && JSON.stringify(before) === JSON.stringify(after) && final.byoHidden && !final.reload,
-          'C-N4: choosing a folder anyway copies nothing (no copy worker, OPFS listing unchanged), the folder choice is hidden, no Reload button',
-          `state ${final.state}; left error ${moved}; workers ${workers}; OPFS entries ${before.length} -> ${after.length}; byo hidden ${final.byoHidden}; reload ${final.reload}`);
-    await p.page.close();
-    // control: a requestAdapter() that REJECTS is named too (the page does not hang in boot)
-    const q = await open(base + '?pick=1', `GPU.prototype.requestAdapter = async () => { throw new Error('TEST: adapter request failed'); };`, { drop: false });
-    const st2 = await waitState(q.page, ['need-files'], 15000);
-    check(st2.state === 'error' && /requesting an adapter failed \(TEST: adapter request failed\)/.test(st2.message), 'C-N4: a requestAdapter() that throws is named in the final message', `${st2.state}: ${st2.message}`);
-    await q.page.close();
-  });
-  // M1 close-out C-f2 (browser): a tampered prefetch cache that holds ONE whole-file range per file (a superset) satisfies every read, so
-  // the resident ranges the engine "touched" are the tampered ones; persisting them kept the superset for ever. The page now writes
-  // back the exact reads (lomn_fs_reads), and the next visit loads the exact set.
-  await section('C-f2 tampered superset cache', async () => {
-    const p = await open(base + '?size=1280x720&area=levt/test&pick=1', undefined, { drop: false });
-    await waitState(p.page, ['need-files']);
-    await p.page.setInputFiles('#byo-input', inst);
-    await waitState(p.page, ['area-ready'], 120000);
-    const want = new Set(nativeRanges('levt/stat').split('\n'));
-    const files = [...new Set([...want].map((l) => l.split('\t')[0]))];
-    const idbGetRaw = (key) => p.page.evaluate((k) => new Promise((res) => {
-      const r = indexedDB.open('lomn-web', 1);
-      r.onsuccess = () => { const g = r.result.transaction('kv').objectStore('kv').get(k); g.onsuccess = () => { r.result.close(); res(g.result ?? null); }; };
-    }), key);
-    const tampered = await p.page.evaluate((fl) => new Promise((res, rej) => {
-      const e = window.__lomn.engine, key = e.cacheKey + 'area:levt/stat';
-      const text = fl.map((f) => `${f}\t0\t${e.byNorm.get(f).size}\n`).join('');
-      const r = indexedDB.open('lomn-web', 1);
-      r.onerror = () => rej(r.error);
-      r.onsuccess = () => { const t = r.result.transaction('kv', 'readwrite'); t.objectStore('kv').put(text, key); t.oncomplete = () => { r.result.close(); res({ key, text }); }; t.onerror = () => rej(t.error); };
-    }), files);
-    const load = await p.page.evaluate(() => window.__lomn.showArea('levt/stat').then(() => window.__lomn.load));
-    const touched = new Set(load.touched.trim().split('\n'));
-    const saved = await idbGetRaw(tampered.key);
-    const savedSet = new Set((saved ?? '').trim().split('\n'));
-    const same = (a, b) => a.size === b.size && [...a].every((x) => b.has(x));
-    check(load.cached && load.rounds === 1 && !same(touched, want) && tampered.text.trim().split('\n').every((l) => touched.has(l)),
-          'C-f2 setup: the tampered whole-file ranges satisfy every read in one round, so the TOUCHED set is the tampered superset (not the native reads)',
-          `${load.rounds} round(s), cached ${load.cached}, touched ${touched.size} lines vs native ${want.size}`);
-    check(saved !== tampered.text && same(savedSet, want), 'C-f2: what is written back is exactly the native read set of levt/stat, not the tampered superset',
-          `persisted ${savedSet.size} lines vs native ${want.size}; tampered ${tampered.text.trim().split('\n').length} lines`);
-    // the next visit loads the exact set: one round, the fetched ranges are the native ones
-    await p.page.evaluate(async () => { await window.__lomn.showArea('levt/test'); });
-    const again = await p.page.evaluate(() => window.__lomn.showArea('levt/stat').then(() => window.__lomn.load));
-    const touched2 = new Set(again.touched.trim().split('\n'));
-    check(again.cached && again.rounds === 1 && same(touched2, want) && again.over_fetch_bytes === 0, 'C-f2: the following visit loads the healed set: one round, touched == native reads, 0 B over-fetch',
-          `${again.rounds} round(s), touched ${touched2.size} lines, over-fetch ${again.over_fetch_bytes}`);
     await p.page.close();
   });
   // Review fix 2: every unspun page that showed an area (sampled as it closed) was NOT DROPPING against the display rate
