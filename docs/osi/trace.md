@@ -34,12 +34,12 @@ brackets are not printed.
 | `C` | `C <name> %d <a0> <a1> … <a9>` | engine → script call, after FindFunction. `%d` = the argc the script declares. **Always all 10 supplied variants**, in index order; unused ones are whatever the engine passed (normally `000f:00000000`) |
 | `M` | `M <name>` | Message "Unable to locate function": the call does not happen (no `C` line) |
 | `I` | `I %08x %02x %4d %4d <top>` | before each instruction executes: pc (file offset), the pristine opcode byte (0x82, never 0x84), stack depth, frame base index (0 when none), the top slot (`----:--------` at depth 0) |
-| `N` | `N %08x <cls>.<fn> %d <a0> … <aN-1> -> <r>` | after the native returns: the 0x82/0x83/0x84 pc, the class and function names as in the string table (case preserved; 0x83: the popped name), argc `%d`, the converted arguments, `->`, the result. With argc 0: `N %08x <cls>.<fn> 0 -> <r>` |
+| `N` | `N %08x <cls>.<fn> %d <a0> … <aN-1> -> <r>` | after the native returns: the 0x82/0x83/0x84 pc, the class and function names as in the string table (case preserved; 0x83: the popped name), argc `%d`, the converted arguments, `->`, the result. A **by-reference (0x200) parameter** prints as `0200:%08x` where the value is the **stack slot index** (0 = bottom of the stack) of the argument it refers to — never a host address and never the slot's contents; the value the native wrote into that slot appears only in `natives.log` as a `W` record; no `S` line is written for a by-ref argument (a string the native creates for the slot is an `A s` event in the native's own events, step 4). With argc 0: `N %08x <cls>.<fn> 0 -> <r>` |
 | `S` | `S %08x %3d <hex>`; empty string: `S %08x %3d` | the text of string handle h, length `%3d`, bytes as hex; for length 0 nothing follows the length (no trailing space) |
 | `A` | `A o %08x %04x`, `A a %08x %08x`, `A s %08x %3d`, `A g %08x %02x` | allocation of an object (class id), an array (element count), a dynamic string (length), a game handle (game type id) |
 | `F` | `F <k> %08x` | free, k ∈ {`o`,`a`,`s`,`g`}: a reference count reached zero or a string was deleted |
 | `P` | `P %08x 64` | precision control switched to 64 bits (D8′); pc = the instruction during which it happened |
-| `R` | `R <v>` | the engine call's result, after the marker pop |
+| `R` | `R <v>` | the engine call's result, after the marker pop. The **host disposes the result immediately after writing `R`** (the original's `Call` disposes it; for `CallWithReturn` our host does the same), so any `F` lines for it follow `R`, and `heap.live` in a conformance expectation is read after that disposal |
 | `E` | `E %08x %02x %4d "<message>"` | an error: pc, opcode and depth **at the throw**, then the message |
 | `K` | `K %6d %08x %08x %08x` | A6 frame header: frame number, fake time and dt as f32 bits, the Process counter |
 

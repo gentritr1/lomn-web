@@ -103,7 +103,7 @@ described in words, never as decompiled code.
     them `ConvertVariant` 0x60bc45–0x60bc69, which restores from the saved word; 26 are 13 save / load-constant /
     restore pairs in the MSL math functions (acos, asin, exp, tanh, cosh, sinh, ceil, floor, modf, hypot, trunc, exp2,
     and `___num2dec`, the `%f` path); 1 is `___dec2num`'s. There is no `fldenv`, `frstor` or `fxrstor`, and no
-    `_controlfp` / `_control87` / `_fpreset` import. DLLs (`d3d8.dll`, drivers) are outside the scan.
+    `_controlfp` / `_control87` / `_fpreset` import. DLLs (`d3d8.dll`, drivers, and `D3dx8cw.dll`, which ships with the install and has ~80 control-word writers) are outside the scan.
   - **Port — one rule for every f32 result of 0x70–0x73, whatever the operand types:** result =
     round_f32(round_p(exact a OP b)), p = `fpu_pc` significand bits, round to nearest even, with the x87 **extended
     exponent range** at the round_p step (the intermediate never overflows or goes subnormal); round_f32 is the final
@@ -292,7 +292,7 @@ as `!ScCatchMessage!!`) passes through.
 
 Each line is `a b op` → the value the original computes, then the value the old "int converted to float first"
 reading gives. Ints are written without a decimal point and floats with one. Every expected value was computed
-from the exact rational result rounded once to f32 (a scratch Python script using `fractions` and `numpy.float32`,
+from the exact rational result rounded per D8′ (round_p, then f32; single rounding except the subnormal ×/÷ line 0x72#2) (a scratch Python script using `fractions` and `numpy.float32`,
 not committed). For the first 11 lines every result rounds to the same f32 at 24, 53 and 64 bits (each one either is
 exact in 53 bits or overflows: `1.0e30 1.0e-30 /` is +inf under every setting), so they do not depend on the precision
 setting. The last four lines (D8′, fix round 1) are the exception: `0x70#2`–`0x70#4` run at `fpu_pc` 24 and, after a

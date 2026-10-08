@@ -155,6 +155,13 @@ def test_float_float_multiply_is_double_rounded_at_pc24_when_subnormal(ec):
     assert ec.arith("*", a, b, pc=64) == {"type": "0x12", "bits": "002c7cd5"}
 
 
+# Re-review M5 (controller re-verified with its own exact-rational script): the float/float divide path, same rule.
+def test_float_float_divide_is_double_rounded_at_pc24_when_subnormal(ec):
+    a, b = ec.Flt.bits(0x395EC8D0), ec.Flt.bits(0x78C19999)
+    assert ec.arith("/", a, b, pc=24) == {"type": "0x12", "bits": "0049a5d2"}
+    assert ec.arith("/", a, b, pc=64) == {"type": "0x12", "bits": "0049a5d3"}
+
+
 def test_f32_bits_subnormals_and_ties(ec):
     from fractions import Fraction
     assert ec.f32_bits(Fraction(1, 2 ** 149)) == 0x00000001          # the smallest subnormal
