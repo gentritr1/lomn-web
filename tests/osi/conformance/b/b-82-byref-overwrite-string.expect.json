@@ -1,0 +1,48 @@
+{
+  "id": "b-82-byref-overwrite-string",
+  "rows": [
+    "0x82"
+  ],
+  "falsifier": "a 0x200 (by-ref) parameter gives the native the argument's own stack slot: its write overwrites the slot without disposing the old value, so the old 0x16 string is never freed",
+  "alternative": "native receives a copy of the slot: the write goes to the copy, the slot keeps the string, and the n pops with dispose free it: heap.live.s = 0 (instead of 1)",
+  "entry": "main",
+  "args": [],
+  "natives": [
+    {
+      "cls": "t",
+      "name": "byref",
+      "min": 1,
+      "max": 1,
+      "types": [
+        "byref"
+      ],
+      "returns": {
+        "type": "0x10",
+        "value": 8
+      },
+      "writes": [
+        {
+          "arg": 0,
+          "type": "0x10",
+          "value": 9
+        }
+      ]
+    }
+  ],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 8
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24,
+    "heap": {
+      "live": {"o": 0, "a": 0, "s": 1, "g": 0},
+      "allocs": {"o": 0, "a": 0, "s": 1, "g": 0}
+    }
+  },
+  "note": "Mutation C23 falsifier. 0xb0 turns int 5 into the dynamic string \"5\" (A s 1, %d). 0x82 with a declared 0x200 parameter: the slot gets a box and is not converted (row 0x82); the native receives the ADDRESS OF THE ARGUMENT'S STACK SLOT (row 0x82) and its write {0x10, 9} overwrites that slot without disposing the old value (conformance.md 6.14(d)), so string 1 is no longer referenced by any slot and is never freed. The n Pops WITH dispose (0x601c5f) dispose the int 9, which frees nothing. The native's int 8 is pushed and returned by 0x52 on the 0xff marker. heap: allocs s 1, live s 1 (a leak, the original's behaviour). The write uses an int because the format's `writes` entries are variants ({arg, type, value}, conformance.md 1); its loss is still observable through the OLD value's lifetime."
+}
