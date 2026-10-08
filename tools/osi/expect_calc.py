@@ -266,6 +266,33 @@ def atoi(text: bytes) -> dict:
     return int_result(max(-2**31, min(2**31 - 1, n)))
 
 
+def _strtold_overflow(s: str) -> tuple[bool, bool]:
+    """___strtold's range test on matched decimal text: (flag, exponent negative). Same digit model as
+    the research oracle's _strtold_overflow (0x65c2a0-0x65c3e0 digits, 0x65c539 raw exponent, 0x65c5c1-0x65c613 the
+    trailing-zero strip and the range test on exponent + adjustment): at most 20 stored digits, leading zeros skipped,
+    an integer digit past the 20th +1, a fraction digit -1 while fewer than 20 are stored, each stripped trailing zero +1."""
+    m = re.fullmatch(r"[+-]?([0-9]*)(?:\.([0-9]*))?(?:[eE]([+-]?)([0-9]+))?", s)
+    stored, adj, flag = "", 0, False
+    for c in m.group(1).lstrip("0"):
+        if len(stored) < 20:
+            stored += c
+        else:
+            adj += 1
+    for c in m.group(2) or "":
+        if len(stored) < 20:
+            if c != "0" or stored:
+                stored += c
+            adj -= 1
+    exp, exp_neg = 0, m.group(3) == "-"
+    for c in m.group(4) or "":
+        exp = (exp * 10 + int(c)) & 0xFFFFFFFF
+        if _s32(exp) > 0x7FFF:
+            flag = True
+    exp = _s32(-exp if exp_neg else exp)
+    adj += len(stored) - len(stored.rstrip("0"))
+    return flag or not -32768 <= exp + adj <= 32767, exp_neg
+
+
 def atof(text: bytes, inexact_ok: bool = False) -> dict:
     """atof then one f32 rounding (row 0xb1 on a string). Only decimal text is defined here; a value that is not
     exactly an f32 raises unless inexact_ok (the CRT's decimal->double step is UNVERIFIED; consult risk 3). The VM's
@@ -274,14 +301,14 @@ def atof(text: bytes, inexact_ok: bool = False) -> dict:
     if not m:
         return dict(float_result(0), pc_after=64)
     s = m.group(0).decode("ascii")
-    em = re.search(r"[eE]([+-]?[0-9]+)$", s)
-    if em and abs(int(em.group(1))) > 32767:
-        # ___strtold's exponent overflow flag (0x65c539 / 0x65c603-0x65c613): returns +-HUGE_VAL (0x7620dc) for a
-        # positive exponent and 0.0 (0x762538) for a negative one, without ___dec2num: the precision state is unchanged.
-        neg = s.startswith("-")
-        if int(em.group(1)) > 0:
-            return dict(float_result(0xFF800000 if neg else 0x7F800000), pc_after=None)
-        return dict(float_result(0), pc_after=None)
+    flag, exp_neg = _strtold_overflow(s)
+    if flag:
+        # ___strtold's overflow flag (0x65c539 raw exponent > 0x7fff; 0x65c603-0x65c613 ADJUSTED exponent outside
+        # [-32768, 32767]): +-HUGE_VAL (0x7620dc) for a positive exponent, +0.0 (0x762538) for a negative one, without
+        # ___dec2num: the precision state is unchanged.
+        if exp_neg:
+            return dict(float_result(0), pc_after=None)
+        return dict(float_result(0xFF800000 if s.startswith("-") else 0x7F800000), pc_after=None)
     exact = Fraction(s) if not s.endswith(".") else Fraction(s[:-1] or "0")
     b = f32_bits(exact)
     if Fraction(struct.unpack("<f", struct.pack("<I", b))[0]) != exact and not inexact_ok:

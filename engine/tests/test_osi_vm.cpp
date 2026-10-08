@@ -344,6 +344,22 @@ TEST_CASE("osi vm primitives: ConvertVariant arithmetic (0xb0-0xb2 rows, guards 
   CHECK(osi_atof_bits("1e99999", &sw) == 0x7f800000u);
   CHECK_FALSE(sw);  // ___strtold's exponent-overflow path skips ___dec2num
   CHECK(osi_atof_bits("0x10", &sw) == 0u);  // hex is not decimal text: "0" then stop
+  // I1: the flag is decided on the ADJUSTED exponent (0x65c5c1-0x65c613): "10" strips one zero, so 32767 + 1 overflows
+  CHECK(osi_atof_bits("10e32767", &sw) == 0x7f800000u);
+  CHECK_FALSE(sw);
+  CHECK(osi_atof_bits("-10e32767", &sw) == 0xff800000u);
+  CHECK_FALSE(sw);
+  CHECK(osi_atof_bits("1e32767", &sw) == 0x7f800000u);  // no strip, adjusted 32767: in range, ___dec2num runs
+  CHECK(sw);
+  // the pc stays 24 after the flagged conversion, so 16777217 + 1.0e-15f rounds once to f32
+  CHECK(x87_arith(Op::Add, Num::of_int(16777217), Num::of_float_bits(B(1.0e-15f)), 24) == 0x4b800001u);
+  // mirror: "0.01e-32767" has an in-range raw exponent; the two fraction digits give an adjustment of -2: -32769
+  CHECK(osi_atof_bits("0.01e-32767", &sw) == 0u);
+  CHECK_FALSE(sw);
+  CHECK(osi_atof_bits("-0.01e-32767", &sw) == 0u);  // +0.0 whatever the mantissa sign (0x65c626-0x65c635)
+  CHECK_FALSE(sw);
+  CHECK(osi_atof_bits("0.1e-32767", &sw) == 0u);    // adjusted -32768: still in range, ___dec2num runs
+  CHECK(sw);
 }
 
 TEST_CASE("osi vm primitives: Heap handles (D7), Duplicate/Dispose and the A/F records") {

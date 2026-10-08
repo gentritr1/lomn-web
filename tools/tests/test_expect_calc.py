@@ -215,6 +215,16 @@ def test_atof_exponent_overflow_skips_the_switch(ec):
     assert ec.atof(b"1e-99999") == {"type": "0x12", "bits": "00000000", "pc_after": None}
 
 
+def test_atof_overflow_flag_uses_the_adjusted_exponent(ec):
+    """I1: the flag is decided on exponent + adjustment (0x65c5c1-0x65c613), not the raw exponent: "10" strips one
+    zero (+1), "0.01" stores one digit after two fraction digits (-2). Same model as osi_vm._strtold_overflow."""
+    assert ec.atof(b"10e32767") == {"type": "0x12", "bits": "7f800000", "pc_after": None}
+    assert ec.atof(b"-10e32767") == {"type": "0x12", "bits": "ff800000", "pc_after": None}
+    assert ec.atof(b"0.01e-32767") == {"type": "0x12", "bits": "00000000", "pc_after": None}
+    assert ec.atof(b"-0.01e-32767") == {"type": "0x12", "bits": "00000000", "pc_after": None}   # +0.0 (0x65c626-0x65c635)
+    assert ec.atof(b"0.1e-32767", inexact_ok=True)["pc_after"] == 64      # adjusted -32768 is in range
+
+
 def test_percent_f_refuses_values_beyond_18_digits(ec):
     """m4: ___num2dec keeps 18 BCD digits (0x65fa25, 0x65fa57); %f of |x| >= 1e17 is not reproducible here."""
     assert ec.to_string(ec.Flt(1.0e16)) == b"10000000272564224.000000"

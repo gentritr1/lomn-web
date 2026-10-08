@@ -84,8 +84,8 @@ described in words, never as decompiled code.
     native argument given a 0x11/0x16 in 0x82/0x83/0x84). `_atof` → `_strtod` → `___strtold` → `___dec2num`
     (0x65f80a), which runs `fnstcw [ebp−0xe]; or word [ebp−0xe], 0x300; fldcw [ebp−0xe]` at 0x65f883–**0x65f886**–0x65f88c
     and returns at 0x65f8a8 without restoring. `___strtold` reaches it on every in-range parse (0x65c66d), so the
-    switch happens whenever `_atof` runs, even when the text parses to 0. Exception (INFERRED from the asm, not run): a
-    decimal exponent beyond ±32767 sets `___strtold`'s overflow flag (0x65c539, 0x65c603–0x65c613) and returns ±HUGE_VAL
+    switch happens whenever `_atof` runs, even when the text parses to 0. Exception (INFERRED from the asm, not run): the
+    adjusted decimal exponent (after the digit normalisation at 0x65c5c1–0x65c5fa) outside [-32768, 32767], or a raw exponent above 0x7fff, sets `___strtold`'s overflow flag (0x65c539, 0x65c603–0x65c613) and returns ±HUGE_VAL
     (0x7620dc) or 0.0 (0x762538) through 0x65c626–0x65c65f without calling `___dec2num`, so the mode does not switch;
     corpus strings stay in the normal range. The other paths into `___dec2num` are dead: `___strtold`'s other caller
     (0x662f70) is in a function with no callers (controller-checked), and `___wcstold`'s call (0x66637d) has no live

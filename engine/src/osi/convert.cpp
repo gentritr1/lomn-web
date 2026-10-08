@@ -290,6 +290,53 @@ int32_t osi_atoi(const std::string& text) {
   return static_cast<int32_t>(0u - static_cast<uint32_t>(v));
 }
 
+// ___strtold's range test on the matched decimal text [sign](digits[.digits])([eE][sign]digits)? (mirrors
+// tools/research/osi_vm.py _strtold_overflow): up to 20 digits are stored, leading integer zeros skipped, an integer digit
+// past the 20th adds 1 to the adjustment (0x65c355), a fraction digit subtracts 1 while fewer than 20 are stored and a
+// leading fraction zero is not stored (0x65c3c0-0x65c3e0). The raw exponent magnitude sets the flag once it exceeds 0x7fff
+// (0x65c539, 32-bit wrap); each stripped trailing stored zero adds 1 (0x65c5c1-0x65c5df); the ADJUSTED exponent must lie in
+// [-32768, 32767] (0x65c5fa-0x65c613).
+namespace {
+bool strtold_overflow(const std::string& m) {
+  size_t i = 0;
+  if (i < m.size() && (m[i] == '+' || m[i] == '-')) ++i;
+  size_t stored = 0, trailing = 0;  // stored digit count; run of zeros at the end of the stored digits
+  long long adj = 0;
+  bool flag = false, any = false;   // any: a stored digit exists (leading zeros are not stored)
+  auto store = [&](char c) {
+    ++stored;
+    trailing = c == '0' ? trailing + 1 : 0;
+  };
+  for (; i < m.size() && is_digit(m[i]); ++i) {
+    if (m[i] == '0' && !any) continue;
+    any = true;
+    if (stored < 20) store(m[i]); else ++adj;
+  }
+  if (i < m.size() && m[i] == '.') {
+    for (++i; i < m.size() && is_digit(m[i]); ++i) {
+      if (stored < 20) {
+        if (m[i] != '0' || stored) store(m[i]);
+        --adj;
+      }
+    }
+  }
+  uint32_t exp = 0;
+  bool eneg = false;
+  if (i < m.size() && (m[i] == 'e' || m[i] == 'E')) {
+    ++i;
+    if (i < m.size() && (m[i] == '+' || m[i] == '-')) eneg = m[i++] == '-';
+    for (; i < m.size() && is_digit(m[i]); ++i) {
+      exp = exp * 10u + static_cast<uint32_t>(m[i] - '0');
+      if (static_cast<int32_t>(exp) > 0x7fff) flag = true;
+    }
+  }
+  const long long e = eneg ? -static_cast<long long>(static_cast<int32_t>(exp)) : static_cast<int32_t>(exp);
+  adj += static_cast<long long>(trailing);
+  const long long sum = static_cast<long long>(static_cast<int32_t>(static_cast<uint32_t>(e))) + adj;
+  return flag || sum < -32768 || sum > 32767;
+}
+}  // namespace
+
 uint32_t osi_atof_bits(const std::string& text, bool* switches_pc) {
   // The decimal grammar only ([ws][sign](digits[.digits]|.digits)([eE][sign]digits)?): the 2001 CRT has no hex floats,
   // inf or nan text. The matched text goes through strtod (correctly rounded on both hosts), then one f32 rounding.
@@ -307,27 +354,21 @@ uint32_t osi_atof_bits(const std::string& text, bool* switches_pc) {
   if (switches_pc) *switches_pc = true;
   if (digits == 0) return 0;  // nothing parses: 0.0 (___dec2num still ran)
   size_t end = i;
+  bool eneg = false;
   if (i < s.size() && (s[i] == 'e' || s[i] == 'E')) {
     size_t j = i + 1;
-    bool eneg = false;
     if (j < s.size() && (s[j] == '+' || s[j] == '-')) eneg = s[j++] == '-';
     size_t ed = 0;
-    long long ev = 0;
-    while (j < s.size() && is_digit(s[j])) {
-      if (ev < 1000000) ev = ev * 10 + (s[j] - '0');
-      ++j, ++ed;
-    }
-    if (ed) {
-      end = j;
-      if (ev > 32767) {  // ___strtold's overflow flag: +-HUGE_VAL or 0.0, without ___dec2num (INFERRED, opcodes.md)
-        if (switches_pc) *switches_pc = false;
-        const bool mneg = s[start] == '-';
-        if (eneg) return mneg ? 0x80000000u : 0u;
-        return mneg ? 0xff800000u : 0x7f800000u;
-      }
-    }
+    while (j < s.size() && is_digit(s[j])) ++j, ++ed;
+    if (ed) end = j;
+    else eneg = false;
   }
   const std::string num = s.substr(start, end - start);
+  if (strtold_overflow(num)) {  // ___strtold's overflow flag: +-HUGE_VAL or +0.0, without ___dec2num (INFERRED, opcodes.md)
+    if (switches_pc) *switches_pc = false;
+    if (eneg) return 0u;  // +0.0 whatever the mantissa sign (0x65c626-0x65c635)
+    return s[start] == '-' ? 0xff800000u : 0x7f800000u;
+  }
   const double d = std::strtod(num.c_str(), nullptr);
   return canon_nan_bits(f32_bits(static_cast<float>(d)));
 }
