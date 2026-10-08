@@ -67,7 +67,7 @@ test-wasm: wasm test-native $(VENV)/.ok
 # M1b: + the data-free BYO/viewer test on a synthetic install (needs the native lomn_view for the fixture and the
 # reference renders) and the fingerprint/JS unit tests.
 test-web: site native
-	cd web && timeout 60 node --test tests/serve_test.mjs tests/network_check_test.mjs tests/a13_checks_test.mjs tests/unit_test.mjs tests/unit_r2_test.mjs
+	cd web && timeout 60 node --test tests/serve_test.mjs tests/network_check_test.mjs tests/lib_wait_test.mjs tests/a13_checks_test.mjs tests/unit_test.mjs tests/unit_r2_test.mjs
 	cd web && timeout 180 node tests/smoke.mjs ../build/site ../build/pw-profile
 	cd web && timeout 600 node tests/byo_synthetic.mjs ../build/wasm ../build/byo-syn ../build/native/lomn_view
 

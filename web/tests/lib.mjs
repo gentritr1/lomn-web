@@ -39,11 +39,16 @@ export function watch(page) {
   return w;
 }
 
-// Waits until window.__lomn.state is one of `states` (or 'error'); returns the state. Never a fixed sleep.
+// Waits until window.__lomn.state is one of `states`, or 'error' (final), or 'area-error' (recoverable: a failed area load, M1 close-out
+// C-N1); returns the state. Never a fixed sleep. A page that lands in 'area-error' when the caller did not ask for it is a failed wait:
+// it throws at once with the page's message (pre-fix the wait ran out its whole timeout, 60-120 s, and an unsectioned block then aborted
+// the run). Callers that expect 'area-error' (the C-N1 section) list it.
 export async function waitState(page, states, timeout = 60000) {
-  const want = [...states, 'error'];
+  const want = [...states, 'error', 'area-error'];
   await page.waitForFunction((w) => w.includes(window.__lomn?.state), want, { timeout });
-  return page.evaluate(() => ({ state: window.__lomn.state, message: window.__lomn.message, error: window.__lomn.error }));
+  const r = await page.evaluate(() => ({ state: window.__lomn.state, message: window.__lomn.message, error: window.__lomn.error }));
+  if (r.state === 'area-error' && !states.includes('area-error')) throw new Error(`waiting for ${states.join('|')}: the page is in area-error: ${r.message}`);
+  return r;
 }
 
 export async function waitFrames(page, n, timeout = 30000) {
