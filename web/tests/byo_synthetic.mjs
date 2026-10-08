@@ -18,7 +18,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { blkTablesFingerprint, sha256hex } from '../app/fingerprint.js';
 import { serve } from './serve.mjs';
-import { decodePng, diffRgb, launch, networkCheck, waitFrames, waitState, watch } from './lib.mjs';
+import { decodePng, diffRgb, importSpecifiers, launch, networkCheck, waitFrames, waitState, watch, workerSharedFiles } from './lib.mjs';
 import { dropSamplesVerdict } from './a13_checks.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -166,6 +166,14 @@ const assets = JSON.parse(fs.readFileSync(path.join(site, 'asset-manifest.json')
 const unhashed = assets.files.filter((f) => /\.(js|wasm|css)$/.test(f.path) && !/\.[0-9a-f]{10}\.(js|wasm|css)$/.test(f.path)).map((f) => f.path);
 check(unhashed.length === 0 && assets.files.some((f) => f.path === 'index.html') && assets.files.some((f) => /^lomn_web\.[0-9a-f]{10}\.wasm$/.test(f.path)),
       'hashed assets: JS and wasm published under content-hashed names, index.html unhashed', unhashed.join(', ') || assets.files.map((f) => f.path).join(' '));
+// M1 close-out C-N2: the files the network check tolerates twice (those the copy worker imports) are derived from the BUILT worker; by
+// source name they must be exactly the imports of web/app/opfs_worker.js (the hashed names are the build's rewrite of the same imports).
+{
+  const built = [...workerSharedFiles(site, assets)].map((p) => assets.files.find((f) => f.path === p)?.source).sort();
+  const srcImports = importSpecifiers(fs.readFileSync(path.join(here, '../app/opfs_worker.js'), 'utf8')).map((x) => path.posix.join('app', x)).sort();
+  check(built.length > 0 && JSON.stringify(built) === JSON.stringify(srcImports), 'C-N2: the shared list derived from the built worker == the source worker\'s imports',
+        `built ${JSON.stringify(built)}; source ${JSON.stringify(srcImports)}`);
+}
 // The build under test: the wasm this test built (build dir) must be the one the page instantiates.
 const builtWasmSha = crypto.createHash('sha256').update(fs.readFileSync(path.join(wasmDir, 'lomn_web.wasm'))).digest('hex');
 // Native references of the same install (default camera, 1280x720, steady state after 3 frames) and the access log.
@@ -245,7 +253,7 @@ const until = async (cond, ms = 10000) => {
 };
 const netOk = (p, label) => {
   const n = networkCheck(srv, site, p.w, p.r0, 0);
-  check(n.ok, `network discipline: ${label}`, `${n.responses} responses, ${n.bytes} of ${n.buildBytes} build bytes` +
+  check(n.ok, `network discipline: ${label}`, `${n.responses} responses, ${n.bytes} of ${n.ceiling} byte ceiling (build ${n.buildBytes}; worker-shared ${n.shared.length})` + (n.repeats.length ? ` repeated ${JSON.stringify(n.repeats)}` : '') +
         (n.foreignPaths.length ? ` foreign paths ${n.foreignPaths}` : '') + (n.foreignUrls.length ? ` foreign urls ${n.foreignUrls}` : ''));
 };
 // Pixel gate: tolerance = max per-channel delta accepted. Measured first (null = the same build twice on fresh pages:

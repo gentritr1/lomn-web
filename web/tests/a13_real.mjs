@@ -78,7 +78,7 @@ const open = async (url, init) => {
 };
 const netOk = (p, label) => {
   const n = networkCheck(srv, site, p.w, p.r0, 0);
-  check(n.ok, `network discipline: ${label}`, `${n.responses} responses, ${n.bytes} of ${n.buildBytes} build bytes` +
+  check(n.ok, `network discipline: ${label}`, `${n.responses} responses, ${n.bytes} of ${n.ceiling} byte ceiling (build ${n.buildBytes}; worker-shared ${n.shared.length})` + (n.repeats.length ? ` repeated ${JSON.stringify(n.repeats)}` : '') +
         (n.foreignPaths.length ? ` foreign ${n.foreignPaths}` : '') + (n.foreignUrls.length ? ` foreign urls ${n.foreignUrls}` : ''));
 };
 const shot = async (page, name) => {

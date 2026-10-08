@@ -10,7 +10,9 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
-import { networkCheck, watch } from './lib.mjs';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { importSpecifiers, networkCheck, watch, workerSharedFiles } from './lib.mjs';
 import { serve } from './serve.mjs';
 
 let tmp, site, srv;
@@ -104,4 +106,125 @@ test('a browser-side top-level request the test did not make is a finding as wel
   assert.equal(n.ok, false);
   assert.equal(n.navigations.length, 1);
   assert.equal(n.navigations[0].side, 'browser');
+});
+
+// ---- M1 close-out C-N2: per-path accounting -------------------------------------------------------------------------------
+// Each built file is fetched at most once by a page, except the files opfs_worker.js imports (the page and the copy worker are
+// separate module graphs, so both fetch them): at most twice. The byte ceiling is the built files' size plus the shared files' size
+// once more (asset-manifest.json is not fetched by the page, so it is no headroom). The shared list is DERIVED from the worker's
+// import statements; importSpecifiers() is cross-checked below against V8's own parser (vm.SourceTextModule).
+const here = path.dirname(fileURLToPath(import.meta.url));
+const mkSite = (dir) => {
+  const files = {
+    'index.html': '<!doctype html>ok',
+    'app/main.1111111111.js': "import './paths.2222222222.js';\nexport const main = 1;\n",
+    'app/opfs_worker.3333333333.js': "// the copy worker\nimport { checkRelPath } from './paths.2222222222.js';\nself.onmessage = () => checkRelPath('a');\n",
+    'app/paths.2222222222.js': 'export const checkRelPath = () => "";\n',
+    'app/other.4444444444.js': 'export const other = 1;\n',
+  };
+  fs.mkdirSync(path.join(dir, 'app'), { recursive: true });
+  const list = [];
+  for (const [p, text] of Object.entries(files)) {
+    fs.writeFileSync(path.join(dir, p), text);
+    list.push({ path: p, bytes: Buffer.byteLength(text) });
+  }
+  fs.writeFileSync(path.join(dir, 'asset-manifest.json'), JSON.stringify({ total_bytes: list.reduce((n, f) => n + f.bytes, 0), files: list }));
+  return { list, size: (p) => list.find((f) => f.path === p).bytes, total: list.reduce((n, f) => n + f.bytes, 0) };
+};
+const WORKER = 'app/opfs_worker.3333333333.js', SHARED = 'app/paths.2222222222.js', OTHER = 'app/other.4444444444.js';
+
+test('C-N2: the shared list is derived from the worker\'s import statements', () => {
+  const dir = fs.mkdtempSync(path.join(tmp, 'derive-'));
+  mkSite(dir);
+  assert.deepEqual([...workerSharedFiles(dir, JSON.parse(fs.readFileSync(path.join(dir, 'asset-manifest.json'), 'utf8')))].sort(), [SHARED]);
+});
+
+test('C-N2: a first visit (every file once, the worker\'s import twice) is clean and sits exactly at the byte ceiling', async () => {
+  const dir = fs.mkdtempSync(path.join(tmp, 'visit-'));
+  const m = mkSite(dir);
+  const s = await serve(dir);
+  try {
+    const get = (p) => new Promise((res, rej) => http.get(new URL(p, s.url), (r) => { r.resume(); r.on('end', res); }).on('error', rej));
+    const w = watch(fakePage());
+    for (const f of m.list) await get('/' + f.path);
+    await get('/' + SHARED);  // the second fetch, by the worker
+    const n = networkCheck(s, dir, w, 0, 0);
+    assert.equal(n.ok, true, JSON.stringify(n));
+    assert.equal(n.bytes, m.total + m.size(SHARED));
+    assert.equal(n.ceiling, m.total + m.size(SHARED));
+    assert.deepEqual(n.repeats, []);
+    // positive control 1: a third fetch of a shared file fails (and only by the per-path rule)
+    await get('/' + SHARED);
+    const third = networkCheck(s, dir, w, 0, 0);
+    assert.equal(third.ok, false);
+    assert.deepEqual(third.repeats.map((r) => [r.path, r.count, r.max]), [[SHARED, 3, 2]]);
+  } finally { s.close(); }
+});
+
+test('C-N2: positive controls: a second fetch of a non-shared file fails; the byte ceiling bites on its own', async () => {
+  const dir = fs.mkdtempSync(path.join(tmp, 'ctl-'));
+  const m = mkSite(dir);
+  const s = await serve(dir);
+  try {
+    const get = (p) => new Promise((res, rej) => http.get(new URL(p, s.url), (r) => { r.resume(); r.on('end', res); }).on('error', rej));
+    const w = watch(fakePage());
+    for (const f of m.list) await get('/' + f.path);
+    await get('/' + OTHER);  // a non-shared file twice
+    const dup = networkCheck(s, dir, w, 0, 0);
+    assert.equal(dup.ok, false);
+    assert.deepEqual(dup.repeats.map((r) => [r.path, r.count, r.max]), [[OTHER, 2, 1]]);
+    assert.ok(dup.bytes <= dup.ceiling, 'the byte ceiling alone would have let it through: the per-path rule is what fires');
+    // the byte ceiling: nothing repeated, but asset-manifest.json (not a built file the page fetches) pushes the total over
+    const r1 = s.responses.length;
+    const w2 = watch(fakePage());
+    for (const f of m.list) await get('/' + f.path);
+    const base = networkCheck(s, dir, w2, r1, 0);
+    assert.equal(base.ok, true, JSON.stringify(base));
+    await get('/asset-manifest.json');
+    const over = networkCheck(s, dir, w2, r1, 0);
+    assert.equal(over.ok, false);
+    assert.deepEqual(over.repeats, []);
+    assert.ok(over.bytes > over.ceiling);
+  } finally { s.close(); }
+});
+
+// importSpecifiers() against V8 (a child with --experimental-vm-modules): the static imports of one source text.
+const v8Specifiers = (src) => {
+  const r = spawnSync(process.execPath, ['--experimental-vm-modules', '--no-warnings', '-e',
+    'const vm = require("node:vm"); const m = new vm.SourceTextModule(require("node:fs").readFileSync(0, "utf8"));' +
+    'console.log(JSON.stringify((m.moduleRequests ? m.moduleRequests.map((x) => x.specifier) : m.dependencySpecifiers)));'], { input: src, encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+  return JSON.parse(r.stdout);
+};
+const FORMS = [
+  ["import a from './a.js';", ['./a.js']],
+  ["import {b, c as d} from \"./b.js\";", ['./b.js']],
+  ["import * as ns from './c.js'", ['./c.js']],
+  ["import './side.js';", ['./side.js']],
+  ["import x, { y } from './d.js';", ['./d.js']],
+  ["import {\n  e,\n  f,\n} from './e.js';", ['./e.js']],
+  ["export * from './f.js';", ['./f.js']],
+  ["export { g } from './g.js';", ['./g.js']],
+  ["export * as h from './h.js';", ['./h.js']],
+  ["// import z from './comment.js';\n/* import './block.js'; */\nconst s = \"import q from './string.js'\"; const t = `import './tmpl.js'`;", []],
+  ["export const from = 'nothing'; export function f() { return import.meta.url; }", []],
+  ["import a from './a.js'; import b from './a.js'; import './b.js';", ['./a.js', './b.js']],
+];
+test('C-N2: importSpecifiers: every static import form, comments and strings ignored; equal to V8\'s own list', () => {
+  for (const [src, want] of FORMS) {
+    assert.deepEqual([...new Set(importSpecifiers(src))].sort(), [...new Set(want)].sort(), src);
+    assert.deepEqual([...new Set(v8Specifiers(src))].sort(), [...new Set(want)].sort(), 'V8 disagrees with the table for: ' + src);
+  }
+});
+test('C-N2: importSpecifiers: a literal dynamic import counts; a computed one (or importScripts) cannot be derived and throws', () => {
+  assert.deepEqual(importSpecifiers("const m = await import('./dyn.js');"), ['./dyn.js']);
+  assert.throws(() => importSpecifiers('const m = await import(name);'), /cannot derive/);
+  assert.throws(() => importSpecifiers("importScripts('./x.js');"), /cannot derive/);
+  assert.throws(() => importSpecifiers('const t = `${await import("./t.js")}`;'), /cannot derive/);
+});
+test('C-N2: the real opfs_worker.js: its derived imports equal V8\'s list for it', () => {
+  const src = fs.readFileSync(path.join(here, '../app/opfs_worker.js'), 'utf8');
+  const got = importSpecifiers(src), v8 = v8Specifiers(src);
+  assert.ok(v8.length > 0, 'the worker imports something (checkRelPath): an empty list would make the shared list vacuous');
+  assert.deepEqual([...new Set(got)].sort(), [...new Set(v8)].sort());
 });
