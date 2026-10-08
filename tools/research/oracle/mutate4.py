@@ -78,7 +78,8 @@ M = [
     ("C2 page: the soft-accept warning is not shown", "web/app/main.js",
      "    $('warning').hidden = false;\n", "", ["browser"]),
     ("I1 webgpu: textures released but never destroyed (left to GC)", "engine/src/rhi/webgpu_device.cpp",
-     "    if (frame_open_) return deferred_textures_.push_back(t);\n    wgpuTextureDestroy(t);\n", "    if (frame_open_) return deferred_textures_.push_back(t);\n", ["browser"]),
+     # (anchor re-pointed after 4b4ad7b, T8 P5: the Destroy lives in gpu_destroy_and_release; "released, never destroyed" = Release only)
+     "    if (frame_open_) return deferred_textures_.push_back(t);\n    gpu_destroy_and_release(t);\n", "    if (frame_open_) return deferred_textures_.push_back(t);\n    wgpuTextureRelease(t);\n", ["browser"]),
     ("I1 webgpu: Destroy not deferred inside an open frame", "engine/src/rhi/webgpu_device.cpp",
      "    if (frame_open_) return deferred_textures_.push_back(t);\n", "", ["gpu"]),
     ("I2 main_web: expectation from the snapped p50 again (circular)", "engine/src/app/main_web.cpp",
