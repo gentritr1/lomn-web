@@ -148,3 +148,54 @@ test('dropSamplesVerdict (C-m3): a page above 1.05 x its measured rate is re-mea
   assert.equal(dropSamplesVerdict([...ok, high({ remeasure: high() })]).ok, false);  // still above 1.05
   assert.equal(dropSamplesVerdict([...ok, high({ remeasure: high() })]).wrong.length, 1);
 });
+
+// ---- M1 close-out C-m4: the re-measure-once logic a13_real.mjs and byo_synthetic.mjs share --------------------------------------
+import { fpsWithRemeasure } from './a13_checks.mjs';
+// A scripted page: read() returns the next scripted metrics.fps; the calls are recorded.
+const script = (readings) => {
+  const calls = [];
+  let i = 0;
+  return {
+    calls,
+    read: async () => { calls.push('read'); return { fps: readings[Math.min(i++, readings.length - 1)] }; },
+    freshWindow: async () => { calls.push('fresh'); },
+    remeasureDisplay: async () => { calls.push('display'); },
+  };
+};
+test('fpsWithRemeasure: a clean first reading is the result; nothing is re-measured', async () => {
+  const s = script([unspun()]);
+  const r = await fpsWithRemeasure(s);
+  assert.equal(r.v.ok, true);
+  assert.equal(r.remeasure, null);
+  assert.deepEqual(s.calls, ['read']);
+});
+test('fpsWithRemeasure: a load-flagged first reading gets exactly ONE fresh window and a second reading, which decides', async () => {
+  const s = script([spun(), unspun()]);
+  const r = await fpsWithRemeasure({ ...s, stamp: () => ({ loadavg: '21.0 18.0 15.0' }) });
+  assert.equal(r.v.ok, true);
+  assert.equal(r.remeasure.first.loadavg, '21.0 18.0 15.0');
+  assert.ok(r.remeasure.first.reasons.length > 0);
+  assert.equal(r.remeasure.first.ratio < 0.4, true);
+  assert.deepEqual(s.calls, ['read', 'fresh', 'read']);
+});
+test('fpsWithRemeasure: it bites - failing twice is a failure after exactly 2 reads (never "until it passes")', async () => {
+  const s = script([spun(), spun(), unspun(), unspun()]);  // a third reading would pass: the helper must not take it
+  const r = await fpsWithRemeasure(s);
+  assert.equal(r.v.ok, false);
+  assert.deepEqual(s.calls, ['read', 'fresh', 'read']);
+});
+test('fpsWithRemeasure: an under-measured display re-measures the DISPLAY first, then a fresh window; still above 1.05 fails', async () => {
+  const under = unspun({ dt_samples: 400, window_ms: 10000, display_hz: 30, expected_intervals: 300, fps: 40 });
+  const s = script([under, unspun()]);
+  const r = await fpsWithRemeasure(s);
+  assert.equal(r.v.ok, true);
+  assert.deepEqual(s.calls, ['read', 'display', 'fresh', 'read']);
+  const s2 = script([under, under]);
+  const r2 = await fpsWithRemeasure(s2);
+  assert.equal(r2.v.ok, false);
+  assert.deepEqual(s2.calls, ['read', 'display', 'fresh', 'read']);
+  // a plain low reading does not touch the display measurement
+  const s3 = script([spun(), unspun()]);
+  await fpsWithRemeasure(s3);
+  assert.ok(!s3.calls.includes('display'));
+});

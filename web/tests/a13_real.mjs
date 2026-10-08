@@ -19,7 +19,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { serve } from './serve.mjs';
 import { decodePng, diffRgb, launch, networkCheck, waitFrames, waitState, watch } from './lib.mjs';
-import { fpsVerdict, gpuLiveVerdict, overFetchVerdict, positiveControlVerdict } from './a13_checks.mjs';
+import { fpsVerdict, fpsWithRemeasure, gpuLiveVerdict, overFetchVerdict, positiveControlVerdict } from './a13_checks.mjs';
 
 const [siteArg, workArg, lomnView, wasmDir] = process.argv.slice(2);
 if (!siteArg || !workArg || !lomnView || !wasmDir) {
@@ -297,15 +297,17 @@ try {
     for (const a of AREAS) {
       if (a !== 'lev1/vllg') await show(p.page, a);
       const la = loadavg();
-      let m = await reading();
-      let v = fpsVerdict(m.fps);
-      let remeasure = null;
-      if (!v.ok) {
-        remeasure = { first: { fps: m.fps, ratio: v.ratio, reasons: v.reasons, loadavg: loadavg() } };
-        await show(p.page, a);  // a fresh window: showArea resets the frame counters
-        m = await reading();
-        v = fpsVerdict(m.fps);
-      }
+      // C-m4: the re-measure-once rule is fpsWithRemeasure (a13_checks.mjs, pinned by a13_checks_test.mjs).
+      const { m, v, remeasure } = await fpsWithRemeasure({
+        read: reading,
+        freshWindow: () => show(p.page, a),  // a fresh window: showArea resets the frame counters
+        remeasureDisplay: async () => {      // C-m3: the display rate was measured too low: measure it again first
+          const runs0 = (await metrics(p.page)).fps.display_runs;
+          await p.page.evaluate(() => window.__lomn.engine.M._lomn_debug_remeasure());
+          await p.page.waitForFunction((k) => window.__lomn.metrics.fps.display_runs >= k, runs0 + 1, { timeout: 90000 });
+        },
+        stamp: () => ({ loadavg: loadavg() }),
+      });
       const f = m.fps;
       nullRatios.push(v.ratio);
       nullHz.push(f.display_hz);

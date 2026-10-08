@@ -75,3 +75,23 @@ export function dropSamplesVerdict(samples, { min = 8, minRatio = FPS_MIN_RATIO 
   const remeasured = samples.filter((s) => s.remeasure);
   return { ok: samples.length >= min && wrong.length === 0 && incoh.length === 0, wrong, incoherent: incoh, remeasured };
 }
+
+// M1 close-out C-m4: the re-measure-once rule a13_real.mjs applies to the fps of each unspun area (and that byo_synthetic.mjs reuses, C-m7),
+// as a function with injectable page actions so tests/a13_checks_test.mjs can pin it without a browser: read() -> metrics ({fps}),
+// freshWindow() starts a new measurement window (the area shown again), remeasureDisplay() measures the display rate again (the engine's
+// own measurement), stamp() adds context (the load average) to the first reading's record. A failing first reading gets exactly ONE
+// fresh window (after a display re-measure when the display was under-measured, C-m3) and exactly one more reading, which decides:
+// never "until it passes". Returns {m, v, remeasure} with remeasure = null when the first reading passed.
+export async function fpsWithRemeasure({ read, freshWindow, remeasureDisplay, stamp = () => ({}), verdict = fpsVerdict }) {
+  let m = await read();
+  let v = verdict(m.fps);
+  let remeasure = null;
+  if (!v.ok) {
+    remeasure = { first: { fps: m.fps, ratio: v.ratio, reasons: v.reasons, underMeasured: v.underMeasured === true, ...stamp() } };
+    if (v.underMeasured) await remeasureDisplay();
+    await freshWindow();
+    m = await read();
+    v = verdict(m.fps);
+  }
+  return { m, v, remeasure };
+}
