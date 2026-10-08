@@ -797,3 +797,113 @@ def test_base_osi_setup_with_typed_stubs(lomn_data):
     assert r.ok, vm.last_error and vm.last_error.message
     assert (vm.instructions, vm.native_calls, vm.depth, vm.context_depth) == (48850, 980, 0, 0)
     assert vm.image == image
+
+
+# --------------------------------------------------------------------------------------------------- fix round 1
+PROC = """.globals n
+.function setup 0
+    PushConstant0
+    SetVariableValue global:n
+    PushNothing
+    Return
+.function process 3
+    GetVariableValue global:n
+    PushConstanti8 1
+    Add
+    Dup
+    SetVariableValue global:n
+    PushConstanti8 %d
+    GreaterThan
+    CompareAndBranchIfFalse @zero
+    PushNothing
+    Return
+zero:
+    PushConstant0
+    Return
+"""
+
+
+def _run_cli(tmp_path, asm, frames, capsys):
+    p = tmp_path / "s.osi"
+    p.write_bytes(osiasm.assemble(asm)[0])
+    t = tmp_path / "s.trace"
+    assert osi_vm.main(["--run", str(p), "--frames", str(frames), "--trace", str(t)]) == 0
+    out = capsys.readouterr().out
+    return [l for l in t.read_text().splitlines() if l.startswith("C Process") or l.startswith("K ")], out
+
+
+def test_run_reruns_process_on_int_zero(tmp_path, capsys):
+    """I1: ScSLOSIProcess::Process (0x43b33f-0x43b35f) is false only for an int 0 result; ScProcessManager::Process
+    re-runs it with the same time, dt and counter (0x4a9449-0x4a9584); the counter increments at frame end (0x4a95b6).
+    process returns 0 on its first two calls, then nothing: frame 0 runs 3 passes, frame 1 one."""
+    lines, out = _run_cli(tmp_path, PROC % 2, 2, capsys)
+    kinds = [l.split()[0] for l in lines]
+    assert kinds == ["K", "C", "C", "C", "K", "C"]
+    assert lines[1] == lines[2] == lines[3]                              # same time, dt and counter on a re-run
+    assert lines[5].split()[3:6] != lines[1].split()[3:6] and lines[5].split()[5] == "0010:00000001"
+    assert "process passes: total 4 over 2 frames, max 3, frames with re-runs 1 (first: 0:3)" in out
+
+
+def test_run_rerun_is_capped_at_ten_more(tmp_path, capsys):          # cmp [ebp-0xd4], 0xa; jb (0x4a957d)
+    lines, out = _run_cli(tmp_path, PROC % 100, 1, capsys)
+    assert sum(1 for l in lines if l.startswith("C ")) == 11
+    assert "max 11" in out
+
+
+def test_find_member_id_cache_poisoning():
+    """I2: FindMemberID (0x609ba0) caches a miss as {last symbol compared, 0xffff} (0x609c57-0x609cc8), so after a lookup
+    of a non-symbol, the LAST symbol of the table also resolves to 0xffff and 0x18 raises the absent-member error."""
+    asm = """.class Foo props(x, y)
+.function main2 0
+    CreateObject Foo
+    PushConstantString "y"
+    GetMemberValueFromString
+    Return
+.function main 0
+    CreateObject Foo
+    PushConstantString "nope"
+    GetMemberValueFromString
+    Return
+"""
+    vm, res, lines, _ = ok(asm, entry="main2")                         # control: "y" resolves in a fresh VM
+    assert res.result == NOTHING
+    vm, e, lines, _ = err(asm)
+    assert e.message == 'Reference to non-existant member property "nope"'
+    assert vm.script.member_cache == [(b"y", 0xFFFF)]
+    vm.reset_after_error()
+    r = vm.call("main2", [])
+    assert not r.ok and vm.last_error.message == 'Reference to non-existant member property "y"'
+
+
+def test_find_member_id_cache_overflow_is_undefined():               # M1: no bound in the original (+0x1d8)
+    names = ["m%d" % i for i in range(51)]
+    asm = ".symbols " + " ".join(names) + "\n.class Foo props(" + ", ".join(names) + ")\n.function main 0\n"
+    for nm in names:
+        asm += '    CreateObject Foo\n    PushConstantString "%s"\n    GetMemberValueFromString\n    Pop\n' % nm
+    asm += "    PushNothing\n    Return\n"
+    vm, e, lines, _ = err(asm)
+    assert e.message == "Undefined behaviour: FindMemberID cache overflow (51st miss)"
+    assert len(vm.script.member_cache) == 50
+
+
+@pytest.mark.parametrize("text,want", [
+    (b"-1e-40000", (0.0, False)),          # negative out-of-range exponent: +0.0 whatever the sign (0x65c626-0x65c635)
+    (b"0.01e-32767", (0.0, False)),        # adjusted exponent -32769 < -32768 (0x65c5fa-0x65c613)
+    (b"0.1e-32767", None),                 # adjusted -32768: in range, ___dec2num runs
+    (b"10e32767", (math_inf := float("inf"), False)),   # trailing zero stripped: adjusted 32768 -> +HUGE_VAL
+    (b"-5e40000", (-math_inf, False)),
+    (b"1e-32768", (0.0, False)),           # the magnitude 32768 > 0x7fff sets the flag during the parse (0x65c539)
+])
+def test_atof_overflow_range_and_sign(text, want):                  # M2
+    got = osi_vm.c_atof(text)
+    if want is None:
+        assert got[1] is True
+    else:
+        assert got == want and str(got[0]) == str(want[0])            # +0.0, not -0.0
+
+
+def test_reset_after_error_rescans_the_frame():                       # M4
+    vm, e, lines, _ = err(main_of("PushConstantf32 1.0\nCompareAndBranchIfFalse @z\nz:\nReturn"))
+    assert vm.snapshot().frame == 1
+    vm.reset_after_error()
+    assert vm.snapshot().frame == 0 and vm.depth == 0

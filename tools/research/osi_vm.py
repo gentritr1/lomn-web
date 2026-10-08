@@ -163,6 +163,10 @@ class VmError(Exception):
         self.top: Optional[Variant] = None
 
 
+class UndefinedBehaviour(Exception):
+    """Raised by table helpers outside the VM; the VM re-raises it as a VmError at the current instruction."""
+
+
 class ReplayDesync(Exception):
     """A replay-log mismatch (trace.md §6). Not an OSI error: it is never caught by 0x82's catch(...)."""
 
@@ -694,9 +698,14 @@ class Script:
 
     def find_member_id(self, text: bytes) -> int:
         """FindMemberID (0x609ba0): lower-case (A-Z) the query, check the cache, then strcmp each symbol text; a miss
-        returns 0xffff and caches {the last symbol compared, 0xffff} (0x609ca7-0x609cc8)."""
+        returns 0xffff and caches {the last symbol compared, 0xffff} (0x609ca7-0x609cc8), so a later lookup of that symbol
+        also returns 0xffff (cache poisoning). The cache (+0x48, 8-byte entries) has no bound: entry 50 lands on its own
+        count at +0x1d8, so the 51st insert is undefined behaviour (controller ruling M1, fix round 1). With no symbols a
+        miss caches a null pointer that the next cache scan would strcmp: also undefined."""
         q = _lower_az(cstr(text))
         for t, i in self.member_cache:
+            if t is None:
+                raise UndefinedBehaviour("Undefined behaviour: FindMemberID cache holds a null symbol pointer")
             if t == q:
                 return i
         found, last = 0xFFFF, None
@@ -705,8 +714,9 @@ class Script:
             if last == q:
                 found = i
                 break
-        if len(self.member_cache) < 50:
-            self.member_cache.append((last if last is not None else b"", found))
+        if len(self.member_cache) >= 50:
+            raise UndefinedBehaviour("Undefined behaviour: FindMemberID cache overflow (51st miss)")
+        self.member_cache.append((last, found))
         return found
 
 
@@ -763,18 +773,57 @@ def c_atoi(text: bytes) -> int:
     return (int(m.group(0)) & M32) if m else 0
 
 
+def _strtold_overflow(s: str) -> tuple[bool, bool, bool]:
+    """___strtold's range test on the matched decimal text: (overflow, exponent negative, mantissa negative).
+    - Up to 20 significant digits are stored; leading integer zeros are skipped (state 4, 0x65c2a0); an integer digit
+      past the 20th adds 1 to the adjustment (0x65c355); a fraction digit subtracts 1 while fewer than 20 are stored,
+      a leading fraction zero is not stored (0x65c3c0-0x65c3e0).
+    - The exponent magnitude sets the flag as soon as it exceeds 0x7fff (0x65c539), before its sign is applied.
+    - Trailing stored zeros are stripped, each adding 1 (0x65c5c1-0x65c5df); the ADJUSTED exponent (exponent +
+      adjustment) must lie in [-32768, 32767] (0x65c5fa-0x65c613)."""
+    m = re.fullmatch(r"([+-]?)([0-9]*)(?:\.([0-9]*))?(?:[eE]([+-]?)([0-9]+))?", s)
+    mant_neg = m.group(1) == "-"
+    stored, adj, flag = "", 0, False
+    for c in m.group(2).lstrip("0"):
+        if len(stored) < 20:
+            stored += c
+        else:
+            adj += 1
+    for c in m.group(3) or "":
+        if len(stored) < 20:
+            if c != "0" or stored:
+                stored += c
+            adj -= 1
+    exp, exp_neg = 0, m.group(4) == "-"
+    for c in m.group(5) or "":
+        exp = (exp * 10 + int(c)) & M32
+        if s32(exp) > 0x7FFF:
+            flag = True
+    exp = s32(-exp if exp_neg else exp)
+    while stored.endswith("0"):
+        stored = stored[:-1]
+        adj += 1
+    if not -32768 <= exp + adj <= 32767:
+        flag = True
+    return flag, exp_neg, mant_neg
+
+
 def c_atof(text: bytes) -> tuple[float, bool]:
-    """atof: (double value, whether ___dec2num ran, i.e. whether the precision switches to 64 (D8'))."""
+    """atof: (double value, whether ___dec2num ran, i.e. whether the precision switches to 64 (D8')).
+
+    SHARED BLIND SPOT (A6 risk, fix round 1 M3): the original rounds the decimal text into an MSL extended value, stores
+    it with `fstp qword` (0x65c672) and then `fstp dword` (0x60bd13); this oracle takes Python's correctly rounded
+    double and rounds that to f32. The two can differ for decimal text that is not exactly representable; the corpus
+    uses exact text only, and both implementations share the reading."""
     m = _ATOF.match(cstr(text).lstrip(_WS))
     if not m:
         return 0.0, True
     s = m.group(0).decode("ascii")
-    em = re.search(r"[eE]([+-]?[0-9]+)$", s)
-    if em and abs(int(em.group(1))) > 32767:     # ___strtold's overflow flag path skips ___dec2num (INFERRED)
-        neg = s.startswith("-")
-        if int(em.group(1)) > 0:
-            return (-math.inf if neg else math.inf), False
-        return (-0.0 if neg else 0.0), False
+    overflow, exp_neg, mant_neg = _strtold_overflow(s)
+    if overflow:                                   # ___strtold's overflow path skips ___dec2num: no precision switch
+        if exp_neg:
+            return 0.0, False                      # +0.0 (0x762538) whatever the mantissa sign (0x65c626-0x65c635)
+        return (-math.inf if mant_neg else math.inf), False   # +-HUGE_VAL (0x7620dc), 0x65c640-0x65c656
     return float(s if not s.endswith(".") else s[:-1] or "0"), True
 
 
@@ -985,6 +1034,7 @@ class Vm:
             self.pc = marker.value
         self.refcount = 0
         self.context_depth = 0
+        self.frame = self.scan_frame()          # "After an error": framePtr pointed into the failed frame (M4)
         self.last_error = None
 
     # ------------------------------------------------------------------ CallWithReturn (0x60b450)
@@ -1217,6 +1267,12 @@ class Vm:
         self.push(Variant(T_INT, self._find_method(rec, m)))
         return True
 
+    def _find_member_id(self, text: bytes) -> int:
+        try:
+            return self.script.find_member_id(text)
+        except UndefinedBehaviour as e:
+            raise self._err(str(e)) from None
+
     def _name_text(self, s: Variant) -> bytes:
         return self.script.string_text(s.value) if s.type == T_SID else self.heap.text(s.value)
 
@@ -1232,7 +1288,7 @@ class Vm:
             raise self._err(ERR["non_member"])
         text = self._name_text(s)
         rec = self._obj(o)
-        i = self._get_property_index(rec, self.script.find_member_id(text))
+        i = self._get_property_index(rec, self._find_member_id(text))
         if i is None:
             raise self._err(ERR["no_prop"] % cstr(text))
         self.push(self.heap.duplicate(rec[2][i]))
@@ -1249,7 +1305,7 @@ class Vm:
         if s.type not in (T_SID, T_STRING):
             raise self._err(b"Invalid method type for function call (must be a string)")
         rec = self._obj(o)
-        off = self._find_method(rec, self.script.find_member_id(self._name_text(s)))
+        off = self._find_method(rec, self._find_member_id(self._name_text(s)))
         self.push(Variant(T_INT, off))
         self.heap.dispose(o)
         self.heap.dispose(s)
@@ -1268,7 +1324,7 @@ class Vm:
         v = self.pop()
         text = self._name_text(s)
         rec = self._obj(o)
-        i = self._get_property_index(rec, self.script.find_member_id(text))
+        i = self._get_property_index(rec, self._find_member_id(text))
         if i is None:
             raise self._err(ERR["no_prop"] % cstr(text))
         self.heap.dispose(rec[2][i])
@@ -2442,6 +2498,7 @@ def run_base(a) -> int:
     vm.pcs_seen = set()
     stop = "none"
     per_frame = []
+    pass_counts: list[int] = []
     keys = key_calls(a.keys) if a.keys else {}
     dt = struct.unpack("<d", struct.pack("<Q", DT_BITS_DOUBLE))[0]
     time = 0.0
@@ -2464,10 +2521,20 @@ def run_base(a) -> int:
                     if not r.ok:
                         err = vm.last_error
                         break
-                if err is None:
+                passes = 0
+                while err is None:
+                    # ScSLOSIProcess::Process (0x43b33f-0x43b35f) returns false only for an int 0 result (nothing and
+                    # every other type -> true). ScProcessManager::Process re-runs the processes that returned false
+                    # with the same time, dt and counter, at most 10 more times (0x4a930d counter 0; 0x4a955b inc;
+                    # 0x4a957d cmp 0xa / jb); the counter PM+0x44 is incremented only at frame end (0x4a95b6).
                     r = vm.call("Process", [Variant(T_FLOAT, tb), Variant(T_FLOAT, db), Variant(T_INT, k)])
+                    passes += 1
                     if not r.ok:
                         err = vm.last_error
+                        break
+                    if not (r.result.type == T_INT and r.result.value == 0) or passes >= 11:
+                        break
+                pass_counts.append(passes)
                 per_frame.append((k, vm.instructions - i0, vm.native_calls - n0, len(vm.pcs_seen)))
                 if err is not None:
                     stop = 'error "%s" at frame %d pc %08x op %02x' % (err.message, k, err.pc, err.op)
@@ -2490,6 +2557,10 @@ def run_base(a) -> int:
     if frames:
         print("distinct_pcs_by_frame (first 5, last): %s ... %s"
               % (" ".join(str(p[3]) for p in frames[:5]), frames[-1][3]))
+    rerun = [(i, n) for i, n in enumerate(pass_counts) if n > 1]
+    print("process passes: total %d over %d frames, max %d, frames with re-runs %d%s"
+          % (sum(pass_counts), len(pass_counts), max(pass_counts, default=0), len(rerun),
+             (" (first: %s)" % " ".join("%d:%d" % x for x in rerun[:5])) if rerun else ""))
     print("stop: %s" % stop)
     print("script sha256 unchanged: %s" % (hashlib.sha256(vm.image).hexdigest() == hashlib.sha256(script).hexdigest()))
     return 0
