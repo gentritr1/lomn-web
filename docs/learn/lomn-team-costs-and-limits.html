@@ -52,8 +52,21 @@ pre.mermaid{background:var(--surface);border:1px solid var(--line);border-radius
 .steps li{counter-increment:s;display:grid;grid-template-columns:2rem 1fr;gap:8px}
 .steps li::before{content:counter(s);font:600 15px/1.6 var(--display);color:var(--accent)}
 footer{color:var(--muted);font-size:13px;border-top:1px solid var(--line);padding-top:12px}
+
+.lnav{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 4px;padding:0;list-style:none}
+.lnav a{display:flex;align-items:center;gap:6px;padding:6px 10px;border:1px solid var(--line);border-radius:999px;background:var(--surface);color:var(--ink);text-decoration:none;font-size:13px;min-height:32px}
+.lnav a:hover{border-color:var(--accent)}
+.lnav b{font:600 12px/1 var(--mono);color:var(--accent)}
+.lnav a[aria-current="page"]{background:var(--accent);border-color:var(--accent);color:var(--bg)}
+.lnav a[aria-current="page"] b{color:var(--bg)}
+.pn{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.pn a{display:grid;gap:2px;padding:10px 14px;border:1px solid var(--line);border-radius:8px;background:var(--surface);text-decoration:none;color:var(--ink);min-width:0;flex:1 1 14rem}
+.pn a:hover{border-color:var(--accent)}
+.pn a.next{text-align:right}
+.pn small{font:600 11px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--accent)}
 </style>
 <main>
+<nav aria-label="Lessons"><ul class="lnav"><li><a href="lomn-web-mission.html"><b>1</b>Mission</a></li><li><a href="lomn-reverse-engineering-101.html"><b>2</b>Reverse engineering</a></li><li><a href="inside-the-lomn-engine.html"><b>3</b>The engine</a></li><li><a href="proving-the-lomn-port.html"><b>4</b>Proving it</a></li><li><a href="lomn-team-costs-and-limits.html" aria-current="page"><b>5</b>Team and costs</a></li><li><a href="lomn-project-map.html"><b>Map</b>Project map</a></li></ul></nav>
 <header>
 <div class="series">LOMN Web field notes · 5 of 5</div>
 <h1>Team, Costs and Limits</h1>
@@ -138,5 +151,6 @@ footer{color:var(--muted);font-size:13px;border-top:1px solid var(--line);paddin
 <details><summary>What does the project need from you before M2 closes?</summary><p>Screenshots of the real main menu and Options screen, and approval for any push, merge to main or public release.</p></details>
 </section>
 
+<nav class="pn" aria-label="Previous and next"><a class="prev" href="proving-the-lomn-port.html"><small>← Previous</small>Proving the LOMN Port</a><a class="next" href="lomn-project-map.html"><small>Next →</small>LOMN Project Map</a></nav>
 <footer>See also: the Project Map page for where every file and repo lives.</footer>
 </main>
