@@ -53,10 +53,10 @@ bool SaverState::cheat_menu() const {
 }
 
 void SaverState::set_quest(uint8_t lev, uint8_t quest) {
-  // GcSaver::SetQuest 0x5d5e20: level <= 6 (cmp cl, 6 ; ja 0x5d5e29), quest 1..3 (0x5d5e33), [0x83b37f + level] |= 1 / 2 / 4
-  // (0x5d5e45 / 0x5d5e53 / 0x5d5e63)
-  if (lev > 6 || quest < 1 || quest > 3) return;
-  quests[lev] = static_cast<uint8_t>(quests[lev] | (1u << (quest - 1)));
+  // GcSaver::SetQuest 0x5d5e20: level 1..6 (cmp cl, 1 ; jb at 0x5d5e24-0x5d5e27, cmp cl, 6 ; ja at 0x5d5e29-0x5d5e2c), quest
+  // 1..3 (0x5d5e33), [0x83b37f + level] |= 1 / 2 / 4 (0x5d5e45 / 0x5d5e53 / 0x5d5e63). Level 0 is ignored.
+  if (lev < 1 || lev > 6 || quest < 1 || quest > 3) return;
+  quests.at(lev) = static_cast<uint8_t>(quests.at(lev) | (1u << (quest - 1)));  // .at: never past the array
 }
 
 bool BetterSaverState::get(uint16_t key) const {
@@ -98,15 +98,20 @@ bool header_opens(const fs::FileSystem* vfs, const std::string& path) {
 }
 
 // The {u32, n at +4, records at the pointer +8} tables of the character and hive loaders (LoadCharacters 0x53f543 /
-// 0x53f54c; LoadHives 0x626411 / 0x62641a), each record's id at +0. False on a table that does not fit its buffer.
-bool record_ids(const sage::Slb& slb, uint32_t stride, std::vector<uint32_t>& ids) {
+// 0x53f54c; LoadHives 0x626411 / 0x62641a), each record's id at +0. With `kind2c`, a record whose dword +0x2c is 0 is
+// dropped (LoadHives: cmp [edi+0x2c], 0 ; je at 0x62623c-0x626240 -> GcHive::GcHive 0x6239b0 at 0x6262fa, whose base
+// GcMoveableObj 0x5441d0 reaches no VM function). False on a table that does not fit its buffer.
+bool record_ids(const sage::Slb& slb, uint32_t stride, std::vector<uint32_t>& ids, bool kind2c = false) {
   uint32_t n = 0, base = 0;
   if (!slb.read_u32(4, n) || !slb.read_ptr(8, base)) return false;
   if (base > slb.data_end() || n > (slb.data_end() - base) / stride) return false;
   for (uint32_t i = 0; i < n; ++i) {
     uint32_t id = 0;
-    if (!slb.read_u32(static_cast<uint64_t>(base) + static_cast<uint64_t>(i) * stride, id)) return false;
-    ids.push_back(id);
+    const uint64_t at = static_cast<uint64_t>(base) + static_cast<uint64_t>(i) * stride;
+    if (!slb.read_u32(at, id)) return false;
+    uint32_t k = 1;
+    if (kind2c && !slb.read_u32(at + 0x2c, k)) return false;
+    if (k != 0) ids.push_back(id);
   }
   return true;
 }
@@ -164,10 +169,13 @@ void AreaDirector::load_header(int h, bool second) {
   put(second ? Source::Second : Source::Current, h);
 }
 
-// GcAreaDirector::RemoveArea 0x489560 (from SetCurrentLevel at 0x489add): the area loader's removal 0x5017d0 reaches
-// GcModelDirector::Remove -> Call 0x47f680 only for model-director objects the area created (its characters); the port does
-// not create an area's characters in M2a-2 (their loading is M3), so no call is made. Then [0x83b0b4] = null (0x4895a1) and
-// both block headers are closed (0x4895c4 / 0x4895ce).
+// GcAreaDirector::RemoveArea 0x489560 (from SetCurrentLevel at 0x489add), then [0x83b0b4] = null (0x4895a1) and both block
+// headers are closed (0x4895c4 / 0x4895ce).
+// KNOWN GAP (review I-2, deferred to the follow-up batch by controller ruling): RemoveArea -> GcAreaLoader::CleanUpArea
+// 0x5017d0 (0x489589) calls GcModelDirector::Remove 0x47f320 (0x501830) for every loader entry of type [0x83aa9c] (the
+// characters, 0x501813), and Remove makes Call("OnEvent") at 0x47f680 (guards 0x47f33c / 0x47f376). run_block(kCharacters)
+// treats _char.slb records as loaded characters, so the original would call OnEvent here for each of them; the port makes
+// no call yet.
 void AreaDirector::remove_area() {
   area_ = kNullId;
   close(1);
@@ -216,10 +224,18 @@ void AreaDirector::load_area(const std::string& name) {
 }
 
 // One swallowing block of LoadArea (natives.md §5.2). GetSLKFile 0x4032e0 on a missing file throws (SrThrow 0x4d91f0 at
-// 0x4033b2) inside the block's try: the pad catches it and nothing reaches the VM, so the block is skipped. Each moveable
-// the loader builds runs GcMotionSystem::SetupMoveable 0x574b80, which calls SetUnderWater 0x589050 (0x574efd) only when
-// the motion id [ms+0x14] equals MainCharacterID() (0x574ee5-0x574ef3; INFERRED: the motion id is the record id, passed
-// at 0x53fe36 / 0x5403d2 for objects, AddCharacter 0x47f040 for characters, the GcHive ctor 0x6236a0 for hives).
+// 0x4033b2) inside the block's try: the pad catches it and nothing reaches the VM, so the block is skipped.
+// GcMotionSystem::SetupMoveable 0x574b80 calls SetUnderWater 0x589050 (0x574efd) only when the motion id [ms+0x14] equals
+// MainCharacterID() (0x574ee5-0x574ef3). How each block gets there (review C-1):
+// - objects and hives build a GcMoveableObj 0x5432a0 (AddMoveableObj 0x489700 at 0x489937, GcNoLightDirector at 0x4842dc;
+//   GcHive::GcHive 0x6236a0 at 0x6236d4). The ctor stores its id at [this+0x80] (0x54332c), which becomes the motion id
+//   (0x543f44 -> GcMotionSystem 0x5742a0 -> [ms+0x14] 0x5748ec), and calls GcMoveableObj::SetupMoveable 0x545c00 (0x54408b)
+//   ONLY when [this+0x80] == [0x734f10] = 'lbld' (cmp at 0x544065, jne 0x5440d3). So these fire only for an id that is
+//   both 'lbld' and the main character's. The hive id is the record id (0x6236c1); the object id is AddMoveableObj's
+//   (0x489925): the record id, renamed (0x4898b0 / 0x4898c1) only while an area loader with that id exists (GetAreaLoader
+//   0x48a810 on the map 0x783a88), which the port does not track (INFERRED: no area is named 'lbld').
+// - characters: AddCharacter 0x47f040 -> GcCharacter::SetupMoveable 0x418850 -> 0x574b80, no 'lbld' guard (INFERRED: the
+//   motion id is the record id).
 // SetUnderWater makes Call("OnEvent" 0x73df20, byte 0x36, int b) with b = ([0x73c5a8] != 0) on both of its branches
 // (0x589154 / 0x589249). An error inside it unwinds out of the loader to the block's pads: the block's remaining records
 // are not loaded, and LoadArea goes on with the next block (D16).
@@ -240,14 +256,15 @@ void AreaDirector::run_block(Block b, const std::string& file) {
     if (!sage::parse_obj(slb, recs, &err)) return;
     for (const sage::ObjRecord& r : recs)
       if (r.flags & 0x20) ids.push_back(r.id);
-  } else if (!record_ids(slb, b == kCharacters ? 0x34 : 0x3c, ids)) {  // strides 0x53f53c / 0x626408
+  } else if (!record_ids(slb, b == kCharacters ? 0x34 : 0x3c, ids, b == kHives)) {  // strides 0x53f53c / 0x626408
     return;
   }
   LoadBlockStats& st = stats_[b];
   ++st.runs;
   GameGlobals& g = ctx_.subsystem<GameGlobals>();
   for (uint32_t id : ids) {
-    if (id != g.main_character_id) continue;  // MainCharacterID 0x43af90, read per moveable
+    if (b != kCharacters && id != kLbld) continue;  // GcMoveableObj ctor: cmp [0x734f10], [this+0x80] (0x544065)
+    if (id != g.main_character_id) continue;        // MainCharacterID 0x43af90, read per moveable (0x574eeb-0x574ef3)
     ++st.nested_calls;
     bool swallowed = false;
     ctx_.engine_call_swallowing("OnEvent", {make_int(0x36), make_int(g.global_under_water ? 1 : 0)}, &swallowed);
@@ -428,8 +445,9 @@ Variant n_playcinematic(NativeCall& c, void* user) {
   CinematicState& cs = ctx.subsystem<CinematicState>();
   cs.last = name;
   cs.playing = true;
-  // --skip-video is the original's [0x70a3b0] = 0 route (0x47b86e: nothing loads); with it off the original loads and plays
-  // (0x47b8ca / 0x47b8fa), which M2a-2 does not render (M2a-3). Either way KillCinematic (0x47b8fd) ends it before the return.
+  // --skip-video is the original's [0x70a3b0] = 0 route: je 0x47b902 at 0x47b86e skips the load, the play AND the
+  // KillCinematic call; nothing was started, so nothing is in flight. With it off the original loads and plays (0x47b8ca /
+  // 0x47b8fa), which M2a-2 does not render (M2a-3), and KillCinematic (0x47b8fd) ends it before the return.
   if (ctx.flags().skip_video) ++cs.skipped;
   cs.playing = false;
   ++cs.completed;

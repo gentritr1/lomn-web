@@ -4,6 +4,7 @@
 // The bytes below were read with `objdump -d --x86-asm-syntax=intel` of LEGOBionicle.exe and BetterSaver.dll on
 // 2026-10-09; each pin names its instruction address.
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -262,8 +263,9 @@ Bytes obj_slb(const std::vector<std::pair<const char*, uint32_t>>& recs) {
   }
   return slb(d, {0x0c});
 }
-// <area>_char.slb / <area>_hive.slb: {u32, n, ptr = 0xc} + records of `stride` bytes {id, ...}
-Bytes id_slb(const std::vector<const char*>& ids, size_t stride) {
+// <area>_char.slb / <area>_hive.slb: {u32, n, ptr = 0xc} + records of `stride` bytes {id, ..., dword +0x2c (hives: 0 takes
+// the GcHive ctor 0x6239b0 that never reaches the VM)}
+Bytes id_slb(const std::vector<const char*>& ids, size_t stride, uint32_t at2c = 1) {
   Bytes d;
   put32(d, 0);
   put32(d, static_cast<uint32_t>(ids.size()));
@@ -271,6 +273,7 @@ Bytes id_slb(const std::vector<const char*>& ids, size_t stride) {
   for (const char* id : ids) {
     Bytes rec(stride, 0);
     set32(rec, 0, id4(id));
+    if (stride > 0x2c + 4) set32(rec, 0x2c, at2c);
     d.insert(d.end(), rec.begin(), rec.end());
   }
   return slb(d, {0x08});
@@ -638,22 +641,53 @@ TEST_CASE("osi directors setcurrentarea: the A9 shape (frnt: no 0x20 object, no 
   CHECK(r.call("ex_lev").result == make_int(1));  // the second slot after a current-slot miss
 }
 
-TEST_CASE("osi directors setcurrentarea: a moveable record with the main character's id calls OnEvent(0x36, 0) in the block") {
+namespace {
+void main_is(ScriptHost& h, const char* id) { h.context().subsystem<GameGlobals>().main_character_id = id4(id); }
+}  // namespace
+
+TEST_CASE("osi directors setcurrentarea asm pin: the GcMoveableObj 'lbld' guard and the hive +0x2c branch (review C-1)") {
+  const Pe* im = exe();
+  SKIP_WITHOUT(im);
+  CHECK(im->u32(0x734f10) == id4("lbld"));  // .data bytes 64 6c 62 6c
+  CHECK(kLbld == id4("lbld"));
+  PIN(im, 0x54332a, "8b 16 89 93 80 00 00 00");  // the ctor stores its id at [this+0x80] ...
+  PIN(im, 0x54405f, "8b 92 80 00 00 00");        // ... and compares it with [0x734f10] ...
+  PIN(im, 0x544065, "39 15 10 4f 73 00 75 66");  // ... jne 0x5440d3 past ...
+  PIN(im, 0x54408b, "e8 70 1b 00 00");           // ... GcMoveableObj::SetupMoveable 0x545c00
+  PIN(im, 0x489937, "e8 64 99 0b 00");           // AddMoveableObj -> the ctor 0x5432a0
+  PIN(im, 0x6236d4, "e8 c7 fb f1 ff");           // GcHive::GcHive 0x6236a0 -> the ctor 0x5432a0 ...
+  PIN(im, 0x6236bf, "8b 10 89 55 d0");           // ... with the record id
+  PIN(im, 0x62623c, "83 7f 2c 00 74 7e");        // LoadHives: [rec+0x2c] == 0 ...
+  PIN(im, 0x6262fa, "e8 b1 d6 ff ff");           // ... -> GcHive::GcHive 0x6239b0 (no VM)
+  PIN(im, 0x501830, "e8 eb da f7 ff");           // (I-2, deferred) CleanUpArea -> GcModelDirector::Remove 0x47f320
+}
+
+TEST_CASE("osi directors setcurrentarea: objects reach OnEvent(0x36, b) only for an 'lbld' record when 'lbld' is the main character") {
   for (uint32_t flags : {0x30u, 0x20u}) {  // AddMoveableObj (0x10 set) and GcNoLightDirector's (0x10 clear)
     fs::MemoryFileSystem mem;
-    mount_area(mem, {{"frnt_obj.slb", obj_slb({{"sky1", 0x110}, {"cnt1", flags}, {"cnt2", 0x30}})}});
+    mount_area(mem, {{"frnt_obj.slb", obj_slb({{"sky1", 0x110}, {"lbld", flags}, {"cnt2", 0x30}})}});
     Asm a;
     area_script(a);
-    Run r(a, &mem);
+    Run r(a, &mem, HostFlags{}, [](ScriptHost& h) { main_is(h, "lbld"); });
     REQUIRE(r.res.ok);
     CHECK(r.log_has(std::string("C 00000001 ") + kOnEvent36_0));  // setcurrentarea is native seq 1
     CHECK(r.log_count("C ") == 1);
     CHECK(r.ctx().subsystem<AreaDirector>().block_stats(AreaDirector::kObjects).nested_calls == 1);
-    CHECK(r.trace_has("C 00000000 onevent") == false);  // (the trace's C line format is trace.md's, not checked here)
   }
   {
-    fs::MemoryFileSystem mem;  // 0x10 or 0x08 without 0x20: not a moveable, no SetupMoveable
-    mount_area(mem, {{"frnt_obj.slb", obj_slb({{"cnt1", 0x10}, {"cnt1", 0x108}})}});
+    fs::MemoryFileSystem mem;  // the main character 'cnt1' as a 0x20 object: the ctor's 'lbld' test fails, no call
+    mount_area(mem, {{"frnt_obj.slb", obj_slb({{"cnt1", 0x20}, {"cnt1", 0x30}})}, {"frnt_hive.slb", id_slb({"cnt1"}, 0x3c)}});
+    Asm a;
+    area_script(a);
+    Run r(a, &mem);
+    REQUIRE(r.res.ok);
+    CHECK(r.log_count("C ") == 0);
+    CHECK(r.ctx().subsystem<AreaDirector>().block_stats(AreaDirector::kObjects).runs == 1);
+    CHECK(r.ctx().subsystem<AreaDirector>().block_stats(AreaDirector::kHives).runs == 1);
+  }
+  {
+    fs::MemoryFileSystem mem;  // 'lbld' records while the main character is 'cnt1': the 0x574ef1 guard fails
+    mount_area(mem, {{"frnt_obj.slb", obj_slb({{"lbld", 0x20}})}, {"frnt_hive.slb", id_slb({"lbld"}, 0x3c)}});
     Asm a;
     area_script(a);
     Run r(a, &mem);
@@ -661,35 +695,90 @@ TEST_CASE("osi directors setcurrentarea: a moveable record with the main charact
     CHECK(r.log_count("C ") == 0);
   }
   {
-    fs::MemoryFileSystem mem;  // the flag byte [0x73c5a8] set: the other branch, (0x36, 1)
-    mount_area(mem, {{"frnt_obj.slb", obj_slb({{"cnt1", 0x20}})}});
+    fs::MemoryFileSystem mem;  // 0x10 or 0x08 without 0x20: not a moveable
+    mount_area(mem, {{"frnt_obj.slb", obj_slb({{"lbld", 0x10}, {"lbld", 0x108}})}});
     Asm a;
     area_script(a);
-    Run r(a, &mem, HostFlags{}, [](ScriptHost& h) { h.context().subsystem<GameGlobals>().global_under_water = true; });
+    Run r(a, &mem, HostFlags{}, [](ScriptHost& h) { main_is(h, "lbld"); });
+    REQUIRE(r.res.ok);
+    CHECK(r.log_count("C ") == 0);
+  }
+  {
+    fs::MemoryFileSystem mem;  // the flag byte [0x73c5a8] set: the other branch, (0x36, 1)
+    mount_area(mem, {{"frnt_obj.slb", obj_slb({{"lbld", 0x20}})}});
+    Asm a;
+    area_script(a);
+    Run r(a, &mem, HostFlags{}, [](ScriptHost& h) {
+      main_is(h, "lbld");
+      h.context().subsystem<GameGlobals>().global_under_water = true;
+    });
     REQUIRE(r.res.ok);
     CHECK(r.log_has("C 00000001 OnEvent 0010:00000036 0010:00000001 "));
   }
+}
+
+TEST_CASE("osi directors setcurrentarea: characters fire for the main character id; hives need +0x2c != 0") {
   {
-    fs::MemoryFileSystem mem;  // another main character id (the model-director group sets it after AddToa)
-    mount_area(mem, {{"frnt_obj.slb", obj_slb({{"cnt1", 0x20}, {"onua", 0x20}})}});
+    fs::MemoryFileSystem mem;  // characters have no 'lbld' guard: 'cnt1' fires, 'tahu' does not
+    mount_area(mem, {{"frnt_char.slb", id_slb({"tahu", "cnt1"}, 0x34)}});
     Asm a;
     area_script(a);
-    Run r(a, &mem, HostFlags{}, [](ScriptHost& h) { h.context().subsystem<GameGlobals>().main_character_id = id4("onua"); });
+    Run r(a, &mem);
+    REQUIRE(r.res.ok);
+    CHECK(r.log_count("C 00000001 OnEvent") == 1);
+    CHECK(r.ctx().subsystem<AreaDirector>().block_stats(AreaDirector::kCharacters).nested_calls == 1);
+  }
+  {
+    fs::MemoryFileSystem mem;  // another main character id (the model-director group sets it after AddToa)
+    mount_area(mem, {{"frnt_char.slb", id_slb({"cnt1", "onua"}, 0x34)}});
+    Asm a;
+    area_script(a);
+    Run r(a, &mem, HostFlags{}, [](ScriptHost& h) { main_is(h, "onua"); });
     REQUIRE(r.res.ok);
     CHECK(r.log_count("C ") == 1);
   }
+  for (uint32_t at2c : {0u, 1u}) {  // an 'lbld' hive while 'lbld' is the main character: only +0x2c != 0 fires
+    fs::MemoryFileSystem mem;
+    mount_area(mem, {{"frnt_hive.slb", id_slb({"lbld"}, 0x3c, at2c)}});
+    Asm a;
+    area_script(a);
+    Run r(a, &mem, HostFlags{}, [](ScriptHost& h) { main_is(h, "lbld"); });
+    REQUIRE(r.res.ok);
+    CHECK(r.log_count("C ") == (at2c ? 1u : 0u));
+  }
 }
 
-TEST_CASE("osi directors setcurrentarea: characters and hives blocks; the order objects -> characters -> hives") {
+TEST_CASE("osi directors setcurrentarea: the order objects -> characters -> hives") {
   fs::MemoryFileSystem mem;
-  mount_area(mem, {{"frnt_obj.slb", obj_slb({{"cnt1", 0x20}})},
-                   {"frnt_char.slb", id_slb({"tahu", "cnt1"}, 0x34)},
-                   {"frnt_hive.slb", id_slb({"cnt1", "hive"}, 0x3c)}});
+  mount_area(mem, {{"frnt_obj.slb", obj_slb({{"lbld", 0x20}})},
+                   {"frnt_char.slb", id_slb({"tahu", "lbld"}, 0x34)},
+                   {"frnt_hive.slb", id_slb({"lbld", "hive"}, 0x3c)}});
   Asm a;
-  area_script(a);
-  Run r(a, &mem);
+  a.fn("setup", 0).s("lev0").call("gcareadirector", "setcurrentlevel", 1).pop();
+  a.s("frnt").call("gcareadirector", "setcurrentarea", 1).ret();
+  a.fn("onevent", 10).call("gcsaver", "getammo", 0).pop().nothing().ret();  // the probe below runs inside each OnEvent
+  std::vector<int> order;
+  Run r(a, &mem, HostFlags{}, [&](ScriptHost& h) {
+    main_is(h, "lbld");
+    static std::vector<int>* out = nullptr;
+    static HostContext* ctx = nullptr;
+    static std::array<uint64_t, 3> seen{};
+    out = &order;
+    ctx = &h.context();
+    seen = {};
+    h.registry().bind("gcsaver.getammo", [](NativeCall&, void*) {
+      AreaDirector& ad = ctx->subsystem<AreaDirector>();
+      for (int b = 0; b < 3; ++b) {
+        const uint64_t n = ad.block_stats(static_cast<AreaDirector::Block>(b)).nested_calls;
+        if (n != seen[static_cast<size_t>(b)]) out->push_back(b);
+        seen[static_cast<size_t>(b)] = n;
+      }
+      return make_int(0);
+    }, &h.context(), Tier::Implemented);
+  });
   REQUIRE(r.res.ok);
   CHECK(r.log_count("C 00000001 OnEvent") == 3);
+  CHECK(order == std::vector<int>{AreaDirector::kObjects, AreaDirector::kCharacters, AreaDirector::kHives});
   AreaDirector& ad = r.ctx().subsystem<AreaDirector>();
   for (auto b : {AreaDirector::kObjects, AreaDirector::kCharacters, AreaDirector::kHives}) {
     CHECK(ad.block_stats(b).runs == 1);
@@ -700,19 +789,20 @@ TEST_CASE("osi directors setcurrentarea: characters and hives blocks; the order 
 
 TEST_CASE("osi directors setcurrentarea D16: a raising OnEvent is swallowed in its block (X, E); the block stops, the next runs") {
   fs::MemoryFileSystem mem;
-  mount_area(mem, {{"frnt_obj.slb", obj_slb({{"cnt1", 0x20}, {"cnt1", 0x20}})},
-                   {"frnt_char.slb", id_slb({"cnt1"}, 0x34)}});
+  mount_area(mem, {{"frnt_obj.slb", obj_slb({{"lbld", 0x20}, {"lbld", 0x20}})},
+                   {"frnt_char.slb", id_slb({"lbld", "lbld"}, 0x34)}});
   Asm a;
   area_script(a, "frnt", /*raise=*/true);
-  Run r(a, &mem);
+  Run r(a, &mem, HostFlags{}, [](ScriptHost& h) { main_is(h, "lbld"); });
   // the swallowed error leaves the VM as at the throw (D16 rule 1); the outermost call continues at the error PC and ends
   // with that inner function's value, so Setup still returns ok
   REQUIRE(r.res.ok);
-  CHECK(r.log_count("X 00000001") == 2);  // one per block: objects (its second record never runs) and characters
+  CHECK(r.log_count("X 00000001") == 2);  // one per block: each block's second record never runs
   CHECK(r.log_count("C 00000001 OnEvent") == 2);
   AreaDirector& ad = r.ctx().subsystem<AreaDirector>();
   CHECK(ad.block_stats(AreaDirector::kObjects).nested_calls == 1);
   CHECK(ad.block_stats(AreaDirector::kObjects).errors == 1);
+  CHECK(ad.block_stats(AreaDirector::kCharacters).nested_calls == 1);
   CHECK(ad.block_stats(AreaDirector::kCharacters).errors == 1);
   CHECK(r.trace_has("E "));
 }
@@ -807,7 +897,9 @@ TEST_CASE("osi directors getscriptfluffstring: hits, the XXX fallbacks, the shar
                                                                        {fend, 2, {"second fend"}},
                                                                        {fend, 1, {"shadowed"}},
                                                                        {id4("shar"), 1, {}, 1},
-                                                                       {id4("long"), 1, {long254, long255}}})}})));
+                                                                       {id4("long"), 1, {long254, long255}},
+                                                                       {0, 1, {"zero key0"}},
+                                                                       {fend, 0, {"zero key1"}}})}})));
   auto get = [&](uint32_t k0, uint32_t k1, uint32_t idx) {
     Asm a;
     a.fn("setup", 0).i32(static_cast<int32_t>(k0)).i32(static_cast<int32_t>(k1)).i32(static_cast<int32_t>(idx));
@@ -824,8 +916,8 @@ TEST_CASE("osi directors getscriptfluffstring: hits, the XXX fallbacks, the shar
   CHECK(get(fend, 1, 0xffffffffu) == "XXX");  // unsigned compare: -1 is past n - 1
   CHECK(get(fend, 2, 0) == "second fend");
   CHECK(get(door, 3, 0) == "XXX");         // no entry
-  CHECK(get(0, 1, 0) == "XXX");            // w0 == 0 (0x48ad36)
-  CHECK(get(fend, 0, 0) == "XXX");         // w1 == 0 (0x48ad32)
+  CHECK(get(0, 1, 0) == "XXX");            // w0 == 0 (0x48ad36), although an entry {0, 1} holds "zero key0"
+  CHECK(get(fend, 0, 0) == "XXX");         // w1 == 0 (0x48ad32), although an entry {fend, 0} holds "zero key1"
   CHECK(get(id4("long"), 1, 0) == long254);
   // the entry "shar" reuses door's pointer array: InitStrings advances those slots twice: one step past the length prefix, one into the text ("door text" -> "oor text"), for both keys
   CHECK(get(id4("shar"), 1, 0) == "oor text");
@@ -1050,7 +1142,8 @@ TEST_CASE("osi directors bettersaver asm pin: the u16 key, (al != 0), set's eras
   CHECK(bs->import_name(0x10008064) == "KERNEL32.dll!OutputDebugStringW");
   const Pe* im = exe();
   REQUIRE(im);
-  PIN(im, 0x5d5e29, "80 f9 06 77 3c");         // SetQuest: level <= 6 ...
+  PIN(im, 0x5d5e24, "80 f9 01 72 41");         // SetQuest: level >= 1 ...
+  PIN(im, 0x5d5e29, "80 f9 06 77 3c");         // ... and <= 6 ...
   PIN(im, 0x5d5e33, "83 ea 01 83 fa 02 77 2f");  // ... quest 1..3 ...
   PIN(im, 0x5d5e45, "80 8a 7f b3 83 00 01");   // ... |= 1 / 2 / 4 into [0x83b37f + level]
   PIN(im, 0x5d5e53, "80 8a 7f b3 83 00 02");
@@ -1070,7 +1163,8 @@ TEST_CASE("osi directors bettersaver: empty map -> 0; set -> get; u16 keys; 0 er
   auto get = [&](int32_t k) { return r.host->vm().call("get", {make_int(k)}).result; };
   set(100, 7);
   CHECK(get(100) == make_int(1));
-  CHECK(get(0x10064) == make_int(1));   // the key is u16
+  CHECK(get(0x10064) == make_int(1));   // the key is u16 ...
+  CHECK(get(0x164) == make_int(0));     // ... not u8 (0x164 != 0x64)
   set(0x20064, 0);
   CHECK(get(100) == make_int(0));
   CHECK(r.ctx().subsystem<BetterSaverState>().values().count(100) == 0);  // erased, not stored as false
@@ -1085,6 +1179,17 @@ TEST_CASE("osi directors bettersaver: empty map -> 0; set -> get; u16 keys; 0 er
   CHECK(sv.condition == 0x80000000u);
   set(32, 1);                            // >= 32: no legacy bit
   CHECK(sv.condition == 0x80000000u);
+  sv.level = 0;                          // SetQuest ignores level 0 (cmp cl, 1 ; jb at 0x5d5e24)
+  set(14, 1);
+  set(16, 1);
+  set(18, 1);
+  for (int l = 0; l < 7; ++l) CHECK(sv.quests[static_cast<size_t>(l)] == 0);
+  sv.level = 4;                          // each key's own quest bit: 0xe -> 1, 0x10 -> 2, 0x12 -> 4
+  set(16, 1);
+  CHECK(sv.quests[4] == 2);
+  sv.level = 5;
+  set(18, 1);
+  CHECK(sv.quests[5] == 4);
   sv.level = 2;
   set(14, 1);
   CHECK(sv.quests[2] == 1);
@@ -1093,9 +1198,14 @@ TEST_CASE("osi directors bettersaver: empty map -> 0; set -> get; u16 keys; 0 er
   CHECK(sv.quests[2] == 7);
   set(14, 0);                            // clearing does not touch the quests
   CHECK(sv.quests[2] == 7);
-  sv.level = 7;                          // SetQuest ignores a level above 6
+  sv.level = 7;                          // SetQuest ignores a level above 6 (and never writes past the array)
   set(16, 1);
-  for (int l = 0; l < 7; ++l) CHECK(sv.quests[static_cast<size_t>(l)] == (l == 2 ? 7 : 0));
+  sv.level = 0xff;
+  set(16, 1);
+  sv.level = 6;
+  set(14, 1);
+  for (int l = 0; l < 7; ++l)
+    CHECK(sv.quests[static_cast<size_t>(l)] == (l == 2 ? 7 : l == 4 ? 2 : l == 5 ? 4 : l == 6 ? 1 : 0));
   const auto before = r.ctx().subsystem<BetterSaverState>().values();
   CHECK(r.call("save").result == nothing());
   CHECK(r.ctx().subsystem<BetterSaverState>().values() == before);

@@ -20,6 +20,8 @@ namespace lomn::osi {
 // The null ScIdentifier '????' (.data 0x70b3bc / 0x70b3c0; the static init stores it into [0x83902c] at 0x48db4b and
 // into [0x83b0b4] at 0x48db5f, GcAreaDirector::Init again at 0x48771e).
 constexpr uint32_t kNullId = 0x3f3f3f3fu;
+// 'lbld', the dword [0x734f10] (.data bytes 64 6c 62 6c) the GcMoveableObj ctor compares its id with (0x544065).
+constexpr uint32_t kLbld = 0x6c626c64u;
 
 // ---- the engine-owned singletons (natives.md §2.4: each is held by one engine holder at the call, G 1) ----
 class GcViewPort;
