@@ -300,7 +300,15 @@ void AreaDirector::run_block(Block b, const std::string& file) {
           return;  // the pads 0x5002f3 / 0x500312 / 0x500332: this record's entry is never pushed, nor the rest
         }
       }
-      if (loading_ && ctx_.subsystem<ModelDirector>().get(id)) loading_->push_back(id);  // 0x53f4c5-0x53f514
+      // Get(id) (0x53f4c5) non-null (the new character, or the one that refused it: the Toa for 'cnt1'): SetPosition, the entry
+      // push (0x53f514), then GcModelDirector::Show(id, area) (0x53f535) while the show byte [ebp+0x18] (0x53f519) is set: the
+      // byte is SetCurrentArea's `push 1` (0x48a585), forwarded by LoadArea 0x489351 / 0x4fedd0 to LoadCharacters (0x5002cf,
+      // never rewritten in between: no store to [ebp+0x10] in 0x4fedd0-0x500fe4). Show reaches no Call (closure: 241 functions).
+      GcCharacter* got = ctx_.subsystem<ModelDirector>().get(id);
+      if (got) {
+        if (loading_) loading_->push_back(id);
+        show_character(ctx_, id, got);
+      }
       continue;
     }
     if (id != kLbld) continue;                          // GcMoveableObj ctor: cmp [0x734f10], [this+0x80] (0x544065)
@@ -484,6 +492,24 @@ Variant n_setammo(NativeCall& c, void* user) {
   return nothing();
 }
 
+// body 0x5d36b0, method 0x5d36b0 <GcSaver::GetToa (inline)>; asm pin: 0x5d36b3 mov eax, [0x74749c] (0x3f3f3f3f in .data), 0x5d36bd
+// CreateVariant 0x407960 (the dword as an int). The word AddToa writes (0x47e221): the one saver store (SaverState::save_toa).
+Variant n_saver_gettoa(NativeCall&, void* user) {
+  return make_int(static_cast<int32_t>(host(user).subsystem<SaverState>().save_toa));
+}
+
+// body 0x486fe0, method 0x486fe0 <GcAreaDirector::SetNearestMax (inline)>; asm pin: 0x486fe5 lea edx, [esp+0x10] (argument 0),
+// 0x486fe9 mov dl, [edx] (its low byte), 0x486feb mov [0x70b37c], dl; returns {0x0f, 0} (0x486ff1). Render-side readers only
+// besides getnearestmax: GetNearest 0x487e90 (0x488160), GcCinemaEngine::Play / Stop.
+Variant n_setnearestmax(NativeCall& c, void* user) {
+  host(user).subsystem<AreaDirector>().nearest_max = static_cast<uint8_t>(c.args.at(0)->value);
+  return nothing();
+}
+
+// body 0x487010, method 0x487010 <GcAreaDirector::GetNearestMax (inline)>; asm pin: 0x487013 mov al, [0x70b37c] (4 in .data),
+// 0x48701d CreateVariant 0x47d250 (movzx byte, 0x47d25a: an int). Not called by Base.osi (natives.json).
+Variant n_getnearestmax(NativeCall&, void* user) { return make_int(host(user).subsystem<AreaDirector>().nearest_max); }
+
 // body 0x47b100, method 0x47b820 <GcHudDirector::PlayCinematic> -> 0x47b920 <GcHudDirector::KillCinematic>; asm pin:
 // 0x47b867 cmp byte [0x70a3b0], 0 (the video switch), 0x47b8fd KillCinematic before the return. D1: the cinematic is
 // complete when the native returns; PlayCinematic reaches no Call (its calls.jsonl closure, 71 functions), so no OnEvent.
@@ -541,6 +567,9 @@ void bind_directors_group(NativeRegistry& reg, HostContext& ctx) {
       {"gcsaver", "cheatmenu", n_cheatmenu},
       {"gcsaver", "getammo", n_getammo},
       {"gcsaver", "setammo", n_setammo},
+      {"gcsaver", "gettoa", n_saver_gettoa},
+      {"gcareadirector", "setnearestmax", n_setnearestmax},
+      {"gcareadirector", "getnearestmax", n_getnearestmax},
       {"gchuddirector", "playcinematic", n_playcinematic},
       {"bettersaver", "getbooleanvalue", n_getbooleanvalue},
       {"bettersaver", "setbooleanvalue", n_setbooleanvalue},
