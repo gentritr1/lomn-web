@@ -148,15 +148,28 @@ def pin(disasm, start, stop, expect, exe=None):
         "%#x: %r vs %r" % (a, e, g) for a, (e, g) in sorted(bad.items()))
 
 
+def raw_refs(image, addr):
+    """Every 4-byte little-endian occurrence of `addr` in .text (0x401000-0x665fff), as the VA of the operand. A raw scan,
+    because a linear disassembly sweep of the whole section loses sync at data between functions (F7b: it hid 0x5d36b4)."""
+    pat = struct.pack("<I", addr)
+    buf = image.read(0x401000, 0x666000 - 0x401000)
+    out, i = [], buf.find(pat)
+    while i >= 0:
+        out.append(0x401000 + i)
+        i = buf.find(pat, i + 1)
+    return out
+
+
 # ===============================================================================================================
 # 0. registration, citations and the overrides rows
 # ===============================================================================================================
 TIER1_KEYS = sorted(["gcgame.getmainview", "gcgame.getkeymapper", "gcgame.getmp3player", "gcviewport.getcamera",
                      "gcareadirector.getcurrentlevel", "gcareadirector.setcurrentlevel", "gcareadirector.setcurrentarea",
-                     "gcareadirector.getscriptfluffstring", "gcsaver.cheatmenu", "gcsaver.getammo", "gcsaver.setammo",
+                     "gcareadirector.getscriptfluffstring", "gcareadirector.getnearestmax", "gcareadirector.setnearestmax",
+                     "gcsaver.cheatmenu", "gcsaver.getammo", "gcsaver.gettoa", "gcsaver.setammo",
                      "bettersaver.getbooleanvalue", "bettersaver.setbooleanvalue",
                      "bettersaver.save", "gchuddirector.playcinematic"])
-TIER2_KEYS = ["gckeymapper.setusecontext", "gcmp3player.play", "gcmp3player.setupforplay", "gcmp3player.stop",
+TIER2_KEYS = ["gcareadirector.setfog", "gckeymapper.setusecontext", "gcmp3player.play", "gcmp3player.setupforplay", "gcmp3player.stop",
               "gcsaver.setenergy", "gcsaver.sethealth", "gcsaver.setmask"]
 MOD_KEYS = ["bettersaver.getbooleanvalue", "bettersaver.save", "bettersaver.setbooleanvalue"]
 
@@ -1385,14 +1398,15 @@ def test_setammo_asm_pins_and_every_reference_to_the_two_fields(disasm, image):
         0x5d3840: "push ebx", 0x5d3841: "mov ebx, dword ptr [esp + 0x8]", 0x5d3845: "lea edx, [esp + 0x10]",
         0x5d3849: "mov dx, word ptr [edx]", 0x5d384c: "mov word ptr [0x7474c8], dx",
         0x5d3853: "mov word ptr [ebx], 0xf", 0x5d3858: "mov dword ptr [ebx + 0x4], 0x0"})
-    # the .text census of both fields (EXECUTED objdump, F7b): the writers and readers; the pushes at 0x5d3c32.. are the
-    # save/load routines (M4). No other script native touches them.
-    rows = disasm(0x401000, 0x6ff000)
-    refs = {a: t for a, t in rows.items() if "0x7474c8" in t or "0x74749c" in t}
-    writes = sorted(a for a, t in refs.items() if t.startswith("mov word ptr [0x7474c8]") or t.startswith("mov dword ptr [0x74749c]"))
-    assert writes == [0x47e221, 0x56898b, 0x56b225, 0x56b4b6, 0x56b824, 0x5d384c]
-    readers = sorted(a for a, t in refs.items() if a not in writes and t.startswith("mov") )
-    assert readers == [0x56b211, 0x56b49a, 0x56b814, 0x56e520, 0x5d19ca, 0x5d3913, 0x62d4b8]
+    # the .text census of both fields (EXECUTED raw scan, F7b): operand addresses of every reference. [0x7474c8]: the Toa
+    # ctor 0x56898b, AddAmmo-class code 0x56b2xx-0x56b8xx / 0x56e520 / 0x5d19ca, setammo 0x5d384c, getammo 0x5d3913, the
+    # save/load pushes 0x5d3fed / 0x5d459e, 0x62d4b8 (HUD). [0x74749c]: AddToa 0x47e221, gcsaver.gettoa 0x5d36b3, save/load.
+    assert raw_refs(image, 0x7474C8) == [0x56898E, 0x56B214, 0x56B228, 0x56B49D, 0x56B4B9, 0x56B816, 0x56B827, 0x56E522,
+                                         0x5D19CC, 0x5D384F, 0x5D3915, 0x5D3FEE, 0x5D459F, 0x62D4BB]
+    assert raw_refs(image, 0x74749C) == [0x47E223, 0x5D36B4, 0x5D3C33, 0x5D40F3]
+    pin(disasm, 0x47e221, 0x47e227, {0x47e221: "mov dword ptr [0x74749c], edx"})
+    pin(disasm, 0x5d36b0, 0x5d36cb, {0x5d36b3: "mov eax, dword ptr [0x74749c]", 0x5d36bd: "call 0x407960"})
+    pin(disasm, 0x407960, 0x407975, {0x407965: "mov word ptr [ebx], 0x10", 0x40796a: "mov edx, dword ptr [esp + 0xc]"})
     assert image.u32(0x74749c) == 0x3F3F3F3F                                       # .data: the saver toa id is the null id
 
 
@@ -1426,3 +1440,65 @@ def test_addtoa_and_setammo_and_getammo_share_the_saver_store():
            'CallGameFunction gcsaver.getammo 0\nReturn\n') + ONEV
     r, *_ = run_main(src, groups=("objects",))
     assert r == Variant(0x10, 250)                                                # the ctor store overwrites it
+
+
+# ===============================================================================================================
+# F7 item 3: gcareadirector.setfog (body 0x487090) and setnearestmax (body 0x486fe0), the last two A9 stubs
+# ===============================================================================================================
+def test_setfog_and_setnearestmax_asm_pins_and_readers(disasm, image):
+    pin(disasm, 0x486fe0, 0x487001, {
+        0x486fe5: "lea edx, [esp + 0x10]", 0x486fe9: "mov dl, byte ptr [edx]", 0x486feb: "mov byte ptr [0x70b37c], dl",
+        0x486ff1: "mov word ptr [ebx], 0xf"})
+    pin(disasm, 0x487010, 0x48702b, {0x487013: "mov al, byte ptr [0x70b37c]", 0x48701d: "call 0x47d250"})
+    pin(disasm, 0x47d250, 0x47d266, {0x47d255: "mov word ptr [ebx], 0x10", 0x47d25a: "movzx edx, byte ptr [esp + 0xc]"})
+    assert image.read(0x70b37c, 1) == b"\x04"                                       # .data: 4 until a script or Cinema writes it
+    # setfog: four argument reads, one call to the method 0x48a7a0, which negates arguments 1 and 2 (the constant-true
+    # branch 0x48a7a7 mov al,1) and stores through 0x5e5450 into 0x74a344 / 0x74a338 / 0x74a33c / 0x74a340
+    pin(disasm, 0x487090, 0x4870cc, {
+        0x487099: "lea esi, [ebp + 0x10]", 0x48709c: "lea ebx, [ebp + 0x14]", 0x48709f: "lea ecx, [ebp + 0x18]",
+        0x4870a2: "lea edx, [ebp + 0x1c]", 0x4870ae: "call 0x48a7a0", 0x4870b6: "mov word ptr [edi], 0xf"})
+    pin(disasm, 0x48a7a0, 0x48a7df, {0x48a7a7: "mov al, 0x1", 0x48a7b6: "fchs", 0x48a7bf: "fchs",
+                                     0x48a7d1: "call 0x5e5450", 0x48a7de: "ret"})
+    pin(disasm, 0x5e5450, 0x5e5479, {0x5e5454: "mov dword ptr [0x74a344], edx", 0x5e545e: "fstp dword ptr [0x74a338]",
+                                     0x5e5468: "fstp dword ptr [0x74a33c]", 0x5e5472: "fstp dword ptr [0x74a340]",
+                                     0x5e5478: "ret"})
+    # the readers: the fog fields are read only by GcGraphicsOptions::SetFog 0x5e5090 (render state); no VM call in 0x5e5450
+    assert [a for f in (0x74A338, 0x74A33C, 0x74A340, 0x74A344) for a in raw_refs(image, f)] == [
+        0x5E5120, 0x5E51BD, 0x5E5460, 0x5E5138, 0x5E51D5, 0x5E546A, 0x5E5150, 0x5E51ED, 0x5E5474,
+        0x5E5110, 0x5E51AD, 0x5E5456]                        # the store 0x5e5450 and the two reads of GcGraphicsOptions::SetFog
+    assert raw_refs(image, 0x70B37C) == [0x486FED, 0x487014, 0x488162, 0x593D4A, 0x593D5C, 0x5941CF]
+    # set 0x486feb, getnearestmax 0x487013, GcAreaDirector::GetNearest 0x488160 (the camera's Process), GcCinemaEngine Play
+    # 0x593d48 / 0x593d5a (save, then 0x32) and Stop 0x5941cd (restore)
+
+
+def test_setnearestmax_stores_a_byte_that_getnearestmax_reads_back():
+    d = dr()
+    r, vm, ctx, tr, log = call0("gcareadirector.getnearestmax")
+    assert r == Variant(0x10, 4)                                                       # the .data byte [0x70b37c]
+    src = ".function main 0\nPushConstanti32 %d\nCallGameFunction gcareadirector.setnearestmax 1\nCallGameFunction gcareadirector.getnearestmax 0\nReturn\n"
+    for v, want in ((50, 50), (0x1FF, 0xFF), (0, 0), (-1, 0xFF)):
+        r, vm, ctx, tr, log = run_main(src % v)
+        assert r == Variant(0x10, want), v                                             # a byte (0x486fe9 / 0x47d25a)
+        assert ctx.subsystem(d.AreaDirector).nearest_max == want
+    r, *_ = run_main(".function main 0\nPushConstanti32 7\nCallGameFunction gcareadirector.setnearestmax 1\nReturn\n")
+    assert r == NOTHING                                                                # {0xf, 0} (0x486ff1)
+
+
+def test_setfog_is_tier2_no_bound_native_reads_it_and_it_makes_no_engine_call():
+    rows = {r["key"]: r for r in json.loads(OVERRIDES.read_text())}
+    row = rows["gcareadirector.setfog"]
+    assert row["tier"] == "tier2" and "default" not in row
+    assert "0x487090" in row["cite"] and "0x48a7a0" in row["cite"] and "0x74a344" in row["cite"]
+    assert "gcareadirector.setfog" not in dr().CITES
+    assert rows["gcareadirector.setnearestmax"]["tier"] == "tier1" and rows["gcareadirector.getnearestmax"]["tier"] == "tier1"
+
+
+def test_gcsaver_gettoa_reads_the_one_saver_toa_id_that_addtoa_writes():     # F7 item 1: "any reader of [0x74749c]"
+    ONEV = ".function OnEvent 2\nPushConstanti8 1\nReturn\n"
+    r, vm, ctx, tr, log = call0("gcsaver.gettoa")
+    assert r == Variant(0x10, 0x3F3F3F3F)                                          # .data, a dword (0x5d36b3, 0x407960)
+    src = ('.function main 0\nPushConstantString "%s"\nCallGameFunction gcmodeldirector.addtoa 1\nPop\n'
+           'CallGameFunction gcsaver.gettoa 0\nReturn\n') + ONEV
+    for name, want in (("onua", 0x6F6E7561), ("tahu", 0x74616875)):
+        r, *_ = run_main(src % name, groups=("objects",))
+        assert r == Variant(0x10, want), name

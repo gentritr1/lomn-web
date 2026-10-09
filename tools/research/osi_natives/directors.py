@@ -79,6 +79,16 @@ CITES = {
     "gcsaver.getammo":
         "// body 0x5d3910, method 0x5d3910 <GcSaver::GetAmmo>; asm pin: 0x5d3913 mov ax,[0x7474c8] (a word, .data 0), "
         "u16 variant 0x4183f0 (0x4183fa movzx edx,word)",
+    "gcsaver.gettoa":
+        "// body 0x5d36b0, method 0x5d36b0 <GcSaver::GetToa>; asm pin: 0x5d36b3 mov eax,[0x74749c] (a dword, .data "
+        "0x3f3f3f3f; written by AddToa 0x47e221), int variant 0x407960 (0x407965 type 0x10, the dword)",
+    "gcareadirector.setnearestmax":
+        "// body 0x486fe0, method 0x486fe0 <GcAreaDirector::SetNearestMax (inline)>; asm pin: 0x486fe9 mov dl,[edx] (the "
+        "low byte of argument 0), 0x486feb mov [0x70b37c],dl, 0x486ff1 {0xf, 0} (returns nothing); read by getnearestmax "
+        "0x487013, GcAreaDirector::GetNearest 0x488160, GcCinemaEngine::Play 0x593d48 / Stop 0x5941cd",
+    "gcareadirector.getnearestmax":
+        "// body 0x487010, method 0x487010 <GcAreaDirector::GetNearestMax (inline)>; asm pin: 0x487013 mov al,[0x70b37c] "
+        "(a byte, .data 4), CreateVariant 0x47d250 (0x47d255 type 0x10, 0x47d25a movzx byte)",
     "gcsaver.setammo":
         "// body 0x5d3840, method 0x5d3840 <GcSaver::SetAmmo>; asm pin: 0x5d3845 lea edx,[esp+0x10] (argument 0), 0x5d3849 "
         "mov dx,[edx], 0x5d384c mov [0x7474c8],dx (a word; the field getammo reads at 0x5d3913), 0x5d3853 {0xf, 0} "
@@ -103,6 +113,10 @@ CITES = {
 
 # The tier2 rows (taint-safe on the A9 path; no model): body addresses per natives.md §7.1.
 TIER2 = {
+    # GcAreaDirector::SetFog: 0x487090 -> 0x48a7a0 -> 0x5e5450 stores [0x74a344] (the mode dword) and [0x74a338] / [0x74a33c]
+    # (arguments 1 and 2 negated, the constant-true branch 0x48a7a7) / [0x74a340]; read only by the render-state function
+    # GcGraphicsOptions::SetFog 0x5e5090 (0x5e510f-0x5e51eb); no native reads it, no VM call: render state -> M2a-3
+    "gcareadirector.setfog": 0x487090,
     "gckeymapper.setusecontext": 0x5ceed0,
     "gcmp3player.setupforplay": 0x5dc840,
     "gcmp3player.play": 0x5dc970,
@@ -269,6 +283,10 @@ def _set_ammo(ctx):
         ctx.subsystem(Saver).ammo = call.arg(0).value & 0xFFFF                  # mov dx,[edx]; mov [0x7474c8],dx (0x5d3849/0x5d384c)
         return NOTHING                                                         # {0xf, 0} (0x5d3853-0x5d3858)
     return fn
+
+
+def _get_toa(ctx):
+    return lambda call: Variant(T_INT, ctx.subsystem(Saver).toa_id & M32)      # mov eax,[0x74749c] 0x5d36b3; 0x407960 (dword)
 
 
 def _get_ammo(ctx):
@@ -448,6 +466,7 @@ class AreaDirector:
         self.under_water = 0                                # the byte [0x73c5a8]: 0 in .data, written only by 0x589264
         self.main_character_id = 0x636E7431                 # [0x7796f4] ('cnt1', static init 0x43c193); [0x7032b8] is 0 until AddToa
         self.set_under_water_calls = 0
+        self.nearest_max = 4                                # the byte [0x70b37c]: 4 in .data (setnearestmax 0x486feb, getnearestmax 0x487013)
 
     # --- GcGame::MainCharacterID 0x43af90 (no Toa: [0x7796f4])
     def main_character(self) -> int:
@@ -551,6 +570,17 @@ class AreaDirector:
         self.set_under_water_calls += 1
         b = 1 if (flag & 0xFF) else 0
         return ctx.engine_call("OnEvent", [Variant(T_INT, 0x36), Variant(T_INT, b)], swallow=swallow)
+
+
+def _set_nearest_max(ctx):
+    def fn(call):
+        ctx.subsystem(AreaDirector).nearest_max = call.arg(0).value & 0xFF     # mov dl,[edx]; mov [0x70b37c],dl (0x486fe9/0x486feb)
+        return NOTHING                                                         # {0xf, 0} (0x486ff1-0x486ff6)
+    return fn
+
+
+def _get_nearest_max(ctx):
+    return lambda call: Variant(T_INT, ctx.subsystem(AreaDirector).nearest_max & 0xFF)   # mov al,[0x70b37c] 0x487013; 0x47d250 movzx byte
 
 
 def _get_current_level(ctx):
@@ -733,6 +763,9 @@ def bind(reg, ctx) -> None:
     reg.bind("gcsaver.cheatmenu", _cheat_menu(ctx))
     reg.bind("gcsaver.getammo", _get_ammo(ctx))
     reg.bind("gcsaver.setammo", _set_ammo(ctx))
+    reg.bind("gcsaver.gettoa", _get_toa(ctx))
+    reg.bind("gcareadirector.setnearestmax", _set_nearest_max(ctx))
+    reg.bind("gcareadirector.getnearestmax", _get_nearest_max(ctx))
     reg.bind("bettersaver.getbooleanvalue", _get_boolean_value(ctx))
     reg.bind("bettersaver.setbooleanvalue", _set_boolean_value(ctx))
     reg.bind("bettersaver.save", _bs_save(ctx))
