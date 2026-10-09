@@ -3039,7 +3039,8 @@ def run_base(a) -> int:
                 if err is not None:
                     stop = 'error "%s" at frame %d pc %08x op %02x' % (err.message, k, err.pc, err.op)
                     break
-        reg.replay_finish()                       # a replay must consume the whole log (no-op without --replay)
+        if stop == "none":                        # only check log consumption on a normal completion
+            reg.replay_finish()                   # a replay must consume the whole log (no-op without --replay)
     except ReplayDesync as e:
         stop = "replay desync: %s" % e
     finally:

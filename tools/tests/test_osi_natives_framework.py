@@ -724,6 +724,41 @@ def test_run_base_replay_with_trailing_records_fails(tmp_path):      # m3 throug
     assert "stop: replay desync: replay desync at the end of the run: 1 records not consumed, first K      6" in c.stdout
 
 
+def test_run_base_replay_keeps_VM_error_when_log_unconsumed(tmp_path):  # m3b: VM error must be preserved, not masked
+    """When a run stops on a VM error before consuming the replay log, the stop line must report the VM error,
+    not mask it with a 'not consumed' replay desync."""
+    # Create a simple script that will error in Setup (divide by zero)
+    asm = """.function main 0
+    Return
+.function Setup 0
+    PushConstanti8 1
+    PushConstant0
+    Divide
+    Return
+"""
+    osi = tmp_path / "error.osi"
+    osi.write_bytes(osiasm.assemble(asm)[0])
+
+    # Create a replay log with one unconsumed native record
+    log = tmp_path / "natives.log"
+    log.write_text("00000001 test.call 0 -> 0010:00000000\n")
+
+    # Run without replay first to confirm the divide-by-zero error
+    py = [sys.executable, str(REPO / "tools" / "research" / "osi_vm.py"), "--run", str(osi), "--frames", "1"]
+    a = subprocess.run(py, capture_output=True, text=True, timeout=110)
+    assert a.returncode == 0, a.stderr
+    assert 'error "Divide by 0" in Setup' in a.stdout
+
+    # Now run with replay that has unconsumed records
+    c = subprocess.run(py + ["--replay", str(log)], capture_output=True, text=True, timeout=110)
+    # The VM error should be reported before replay_finish() is called, so the stop line must show the VM error
+    # (not the replay desync that would have masked it before the fix)
+    assert c.returncode == 0, c.stderr
+    assert 'error "Divide by 0" in Setup' in c.stdout
+    # Verify the VM error is reported, not the replay desync
+    assert "replay desync:" not in c.stdout
+
+
 def test_calls_depth_reads_context_depth_after_a_swallow():         # m4 (controller ruling: conformance.md literal)
     """After the swallow, onevent continues with context_depth 2 (main + the swallowed call's leftover) while only
     one engine call is in flight. depth 2 therefore makes NO nested call: g stays 0."""
