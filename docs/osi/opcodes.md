@@ -250,22 +250,40 @@ A port raises the error and need not model getters or setters.
 The `.exc` section (0x6ef000) is an index of `{function start, info pointer}` pairs. A function's info record (for
 0x6015a0 it is at 0x6dafe4) is `u8 flags, u32 action-table pointer, u16 n`, then `n × {u32 call-instruction address,
 u32 action-chain pointer}`. A call that is not listed has no actions, so an exception there leaves the function
-directly. An action chain is a list of records that ends at the first record whose flags have bit 0x8000:
+directly. An action chain is a list of records that ends at the first record whose flags have bit 0x8000. The kind
+is `flags & 0xff`, as the runtime reads it (0x656893, 0x656d99). The sizes below are the runtime's own: the unwinder
+FUN_00656d60 (jump table 0x761dc4) and the walker FUN_006568a0 (table 0x761d64) advance by the same amount per kind
+(M2a-2 T2a, R2; `tools/osi/exc.py` decodes all of them):
 
-- kind 0x10, a catch: `{u16 flags, u32 type-name pointer or 0 for catch(...), u32 landing pad, i32 frame offset}`;
-- kind 0x01, a destructor: `{u16 flags, i32 frame offset, u32 destructor}`;
-- kind 0x13, an exception specification: `{u16 flags, u16 count, u32 unexpected-handler pc, i32 frame offset,
-  count × u32 type-name pointer}`;
-- kind 0x11, the end of a specification scope: `{u16 flags, i32 frame offset}`;
-- kind 0x0a: 10 bytes (a partially-constructed-object cleanup; it contains no catch).
-- kind 0x0c: 14 bytes, `{u16 flags, i32 frame offset, u32 destructor, u32 0}` (another destructor action; no catch).
-  Chains elsewhere also hold kinds this decoder does not know (0x07 and 0x0b are common in constructors). None of them
-  occurs in a chain cited in this file.
+| kind | action | layout after `u16 flags` | bytes |
+|---|---|---|---|
+| 0x01 | destroy a local | i32 frame, u32 destructor | 10 |
+| 0x02 | destroy a local if a flag is set | i32 frame, i32 flag frame, u32 destructor | 14 |
+| 0x04 | destroy a local through a pointer | i32 frame, u32 destructor | 10 |
+| 0x05 | destroy a local array | i32 frame, u32 destructor, u32 count, u32 element size | 18 |
+| 0x06 | destroy an array described by locals | 4 × i32 frame | 18 |
+| 0x07 | destroy a member | i32 frame, u32 destructor, u32 member offset | 14 |
+| 0x08 | destroy a member if a flag is set | i32 frame, i32 flag frame, u32 destructor, u32 member offset | 18 |
+| 0x09 | destroy a member array | i32 frame, u32 destructor, u32 member offset, u32 count, u32 element size | 22 |
+| 0x0a | delete a pointer | i32 frame, u32 operator delete | 10 |
+| 0x0b | delete a pointer if a flag is set | i32 frame, u32 operator delete, i32 flag frame | 14 |
+| 0x0c | destroy a base | i32 frame, u32 destructor, u32 base offset | 14 |
+| 0x10 | **catch** | u32 type-name pointer or 0 for catch(...), u32 landing pad, i32 frame | 14 |
+| 0x11 | end of an active catch | i32 frame | 6 |
+| 0x12 | terminate (`std::terminate`; only as a final record, 2 in the runtime's own functions) | — | 2 |
+| 0x13 | exception specification | u16 count, u32 unexpected-handler pc, i32 frame, count × u32 type-name pointer | 12 + 4 count |
 
-An info record whose flags byte has **bit 0 set** is only 4 bytes long and has no call-site table: nothing in that
-frame is destroyed or caught. 4,605 of the 7,002 index entries that have an info record (the index holds 7,003 `{function, info}` pairs; one has a null info pointer) are of this form (e.g. `Run` 0x60b850, flags 0x09). The
-`{flags, action-table pointer, n}` layout above holds only when bit 0 is clear. A decoder that ignores the bit misreads
-the next function's action chains as call sites.
+**Only kind 0x10 catches.** The catch search FUN_00657080 dispatches on the kind (table 0x761e50): 0x10 goes to
+`___throw_catch_compare` (call 0x65716f), 0x13 to the specification check (0x65718b), kinds 0x03, 0x0d–0x0f and 0x12
+to `std::terminate`, and every other kind is skipped. With these sizes all 7,002 indexed functions decode with no
+unknown record (28,221 call sites, 15,060 distinct chains; `tools/tests/test_osi_exc.py`).
+
+An info record is only 4 bytes long, and has no call-site table, when its flags byte has **bit 0 set** or its bytes
+1–3 are zero: nothing in that frame is destroyed or caught. Of the 7,002 index entries that have an info record (the
+index holds 7,003 `{function, info}` pairs; one has a null info pointer), **4,966** are short: 4,605 by bit 0 (e.g.
+`Run` 0x60b850, flags 0x09) and 361 with bit 0 clear but bytes 1–3 zero (flags 0x00, 0x08, 0x48, 0xc8 and similar;
+measured in M2a-2 Task 1). The `{flags, action-table pointer, n}` layout holds in the other 2,036. A decoder that
+ignores either rule misreads the next function's action chains as call sites.
 
 The landing pads decoded this way match the catch blocks in the asm. Each of them stores the caught ScError, or
 `_kMSLError` / `_kUndefinedError` for `!exception!` / `...`, and continues to the code after the try. The catch-type

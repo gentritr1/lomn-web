@@ -8,15 +8,23 @@ Written from docs/osi/opcodes.md "Exception tables". Layout:
   canonical exe (the first correction to the document): 361 more index entries have bit 0 clear and are 4 bytes too.
   In every short record bytes 1..3 are zero, so a null action-table pointer is also "short". Without this a decoder
   reads the next record's bytes as call sites.
-- An action chain runs to the first record whose flags have bit 0x8000. The kind is `flags & 0x7fff`:
-  0x10 catch {flags, type-name ptr or 0, landing pad, i32 frame offset} (14 bytes);
-  0x01 destructor {flags, i32 frame offset, destructor} (10); 0x13 exception specification {flags, u16 count,
-  unexpected-handler pc, i32 frame offset, count x type-name ptr} (12 + 4 count); 0x11 end of a specification scope
-  {flags, i32 frame offset} (6); 0x0a partially-constructed-object cleanup (10, no catch); 0x0c destructor
-  {flags, i32 frame offset, destructor, 0} (14).
-- 0x07 is not in the document. Measured here: it is 14 bytes {flags, i32 frame offset, destructor, u32}: the record
-  that follows is a valid kind after 3,017 of 3,017 non-final occurrences. Every other kind (0x05 0x06 0x09 0x0b 0x12)
-  is reported as `unknown`, the chain is not decoded further, and the function line says `truncated`.
+- An action chain runs to the first record whose flags have bit 0x8000. The kind is `flags & 0xff`, as the runtime
+  reads it (FUN_00656880 at 0x656893, FUN_00656d60 at 0x656d99); no record in the canonical exe sets bits 0x7f00.
+- Record sizes are the runtime's own (M2a-2 T2a, R2): the unwinder FUN_00656d60 (jump table 0x761dc4) and the walker
+  FUN_006568a0 (table 0x761d64) advance by the same amount per kind:
+  0x01 local dtor {i32 frame, dtor} 10; 0x02 conditional local dtor {i32 frame, i32 flag frame, dtor} 14;
+  0x04 local-pointer dtor {i32 frame, dtor} 10; 0x05 local array {i32 frame, dtor, u32 count, u32 size} 18;
+  0x06 local array via pointers {i32 x4} 18; 0x07 member dtor {i32 frame, dtor, u32 offset} 14;
+  0x08 conditional member dtor {i32 frame, i32 flag frame, dtor, u32 offset} 18;
+  0x09 member array {i32 frame, dtor, u32 offset, u32 count, u32 size} 22; 0x0a delete {i32 frame, operator delete} 10;
+  0x0b conditional delete {i32 frame, operator delete, i32 flag frame} 14; 0x0c base dtor {i32 frame, dtor, u32
+  offset} 14; 0x10 catch {type-name ptr or 0, landing pad, i32 frame} 14; 0x11 end of an active catch {i32 frame} 6;
+  0x12 terminate (std::terminate, 0x656ef1; only as a final record, 2 in the runtime's own functions) 2;
+  0x13 exception specification {u16 count, unexpected-handler pc, i32 frame, count x type-name ptr} 12 + 4 count.
+- **Only kind 0x10 catches**: the catch search FUN_00657080 sends kind 0x10 to ___throw_catch_compare (table 0x761e50,
+  call 0x65716f), 0x13 to the specification check (0x65718b), kinds 0x03, 0x0d-0x0f and 0x12 to std::terminate, and
+  skips every other kind. A kind outside the table (0x00, 0x03, 0x0d-0x0f, > 0x13) cannot be sized: it is reported as
+  `unknown`, the chain is not decoded further, and the function line says `truncated`.
 
 Usage:
   exc.py --func ADDR [--exe EXE]          one function (ADDR hex, or a name from gen/decomp/functions.jsonl)
@@ -36,9 +44,11 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 
 END_BIT = 0x8000
-SIZES = {0x10: 14, 0x01: 10, 0x11: 6, 0x0A: 10, 0x0C: 14, 0x07: 14}
-KIND_NAMES = {0x10: "catch", 0x01: "dtor", 0x13: "spec", 0x11: "endspec", 0x0A: "cleanup10", 0x0C: "dtor2",
-              0x07: "dtor-array"}
+SIZES = {0x01: 10, 0x02: 14, 0x04: 10, 0x05: 18, 0x06: 18, 0x07: 14, 0x08: 18, 0x09: 22, 0x0A: 10, 0x0B: 14,
+         0x0C: 14, 0x10: 14, 0x11: 6, 0x12: 2}
+KIND_NAMES = {0x01: "dtor", 0x02: "dtor-cond", 0x04: "dtor-ptr", 0x05: "dtor-array", 0x06: "dtor-array-ptr",
+              0x07: "dtor-member", 0x08: "dtor-member-cond", 0x09: "dtor-member-array", 0x0A: "delete",
+              0x0B: "delete-cond", 0x0C: "dtor-base", 0x10: "catch", 0x11: "endcatch", 0x12: "terminate", 0x13: "spec"}
 
 
 class Image:
@@ -127,7 +137,7 @@ def decode_chain(img: Image, ptr: int, limit: int = 400) -> list[dict]:
             recs.append({"addr": p, "kind": -1, "unknown": True, "end": False, "raw": ""})
             break
         flags = img.u16(p)
-        kind = flags & 0x7FFF
+        kind = flags & 0xFF
         end = bool(flags & END_BIT)
         rec = {"addr": p, "flags": flags, "kind": kind, "end": end}
         if kind == 0x13:
@@ -141,14 +151,26 @@ def decode_chain(img: Image, ptr: int, limit: int = 400) -> list[dict]:
             if kind == 0x10:
                 tp = img.u32(p + 2)
                 rec.update(type_ptr=tp, type=img.cstr(tp) if tp else "", pad=img.u32(p + 6), frame=img.i32(p + 10))
-            elif kind in (0x01, 0x0C, 0x07):
+            elif kind in (0x01, 0x04, 0x0A):
                 rec.update(frame=img.i32(p + 2), dtor=img.u32(p + 6))
-                if kind == 0x07:
-                    rec["count"] = img.u32(p + 10)
+            elif kind in (0x07, 0x0C):
+                rec.update(frame=img.i32(p + 2), dtor=img.u32(p + 6), offset=img.u32(p + 10))
+            elif kind == 0x02:
+                rec.update(frame=img.i32(p + 2), cond=img.i32(p + 6), dtor=img.u32(p + 10))
+            elif kind == 0x05:
+                rec.update(frame=img.i32(p + 2), dtor=img.u32(p + 6), count=img.u32(p + 10), elem=img.u32(p + 14))
+            elif kind == 0x06:
+                rec.update(frame=img.i32(p + 2), raw=img.read(p + 6, 12).hex())
+            elif kind == 0x08:
+                rec.update(frame=img.i32(p + 2), cond=img.i32(p + 6), dtor=img.u32(p + 10), offset=img.u32(p + 14))
+            elif kind == 0x09:
+                rec.update(frame=img.i32(p + 2), dtor=img.u32(p + 6), offset=img.u32(p + 10), count=img.u32(p + 14),
+                           elem=img.u32(p + 18))
+            elif kind == 0x0B:
+                rec.update(frame=img.i32(p + 2), dtor=img.u32(p + 6), cond=img.i32(p + 10))
             elif kind == 0x11:
                 rec.update(frame=img.i32(p + 2))
-            else:                                   # 0x0a: contents not decoded
-                rec.update(raw=img.read(p + 2, size - 2).hex())
+            # 0x12 (terminate) has no fields
         else:
             n = 16 if img.has(p, 16) else 2
             rec.update(unknown=True, raw=img.read(p, n).hex())
@@ -228,15 +250,29 @@ def format_record(r: dict) -> str:
     if k == 0x10:
         ty = ' type "%s"' % r["type"] if r["type_ptr"] else " type ..."
         return "%s%s pad 0x%08x frame %s%s" % (head, ty, r["pad"], _s(r["frame"]), end)
-    if k in (0x01, 0x0C):
+    if k in (0x01, 0x04, 0x0A):
         return "%s fn 0x%08x frame %s%s" % (head, r["dtor"], _s(r["frame"]), end)
-    if k == 0x07:
-        return "%s fn 0x%08x frame %s count %d%s" % (head, r["dtor"], _s(r["frame"]), r["count"], end)
+    if k in (0x07, 0x0C):
+        return "%s fn 0x%08x frame %s offset %d%s" % (head, r["dtor"], _s(r["frame"]), r["offset"], end)
+    if k in (0x02, 0x0B):
+        return "%s fn 0x%08x frame %s cond %s%s" % (head, r["dtor"], _s(r["frame"]), _s(r["cond"]), end)
+    if k == 0x05:
+        return "%s fn 0x%08x frame %s count %d size %d%s" % (head, r["dtor"], _s(r["frame"]), r["count"], r["elem"], end)
+    if k == 0x08:
+        return "%s fn 0x%08x frame %s cond %s offset %d%s" % (head, r["dtor"], _s(r["frame"]), _s(r["cond"]),
+                                                              r["offset"], end)
+    if k == 0x09:
+        return "%s fn 0x%08x frame %s offset %d count %d size %d%s" % (head, r["dtor"], _s(r["frame"]), r["offset"],
+                                                                        r["count"], r["elem"], end)
     if k == 0x11:
         return "%s frame %s%s" % (head, _s(r["frame"]), end)
+    if k == 0x12:
+        return "%s%s" % (head, end)
     if k == 0x13:
         return "%s unexpected 0x%08x frame %s types %s%s" % (head, r["unexpected"], _s(r["frame"]),
                                                               ",".join('"%s"' % t for t in r["types"]) or "-", end)
+    if k == 0x06:
+        return "%s frame %s raw %s%s" % (head, _s(r["frame"]), r["raw"], end)
     return "%s raw %s%s" % (head, r["raw"], end)
 
 

@@ -76,14 +76,30 @@ def synth():
     info_b = put(b"\x09\0\0\0" + struct.pack("<HII", 1, 0x400210, chain_a))
     # function 0x400300: bit 0 clear, null table pointer -> 4 bytes
     info_c = put(b"\x00\0\0\0" + struct.pack("<HII", 1, 0x400310, chain_a))
-    # function 0x400400: a catch, then an unknown kind 0x0b (size unknown), then a catch that must NOT be reported
-    chain_d = put(catch(msg, 0x400480, -8) + struct.pack("<H", 0x0B) + b"\x00" * 12 + catch(msg, 0x4004F0, -8, True))
+    # function 0x400400: a catch, then kind 0x03 (no size: the runtime calls std::terminate for it, 0x656ef1), then a
+    # catch that must NOT be reported
+    chain_d = put(catch(msg, 0x400480, -8) + struct.pack("<H", 0x03) + b"\x00" * 12 + catch(msg, 0x4004F0, -8, True))
     info_d = put(full_info(0x1000, [(0x400410, chain_d)]))
     # function 0x400500: 0x0a (10) + 0x0c (14) + 0x13 with 2 types (20) + 0x11 (6) + catch(...) with the end bit
     chain_e = put(cleanup_0a() + dtor_0c(0x500020, -4) + spec_13([msg, 0], 0x400590, -12)
                   + struct.pack("<Hi", 0x11, -12) + catch(0, 0x4005A0, -12, True))
     info_e = put(full_info(0x1000, [(0x400510, chain_e)]))
-    idx = [(0x400100, info_a), (0x400200, info_b), (0x400300, info_c), (0x400400, info_d), (0x400500, info_e)]
+    # function 0x400600 (M2a-2 T2a, R2): every kind the runtime's action walkers size (FUN_00656d60 / FUN_006568a0,
+    # jump tables 0x761dc4 / 0x761d64) and exc.py did not, then a catch(...) with the end bit
+    chain_f = put(struct.pack("<HiiI", 0x02, -4, -8, 0x500030)                  # 0x02: 14
+                  + struct.pack("<HiI", 0x04, -12, 0x500040)                    # 0x04: 10
+                  + struct.pack("<HiIII", 0x05, -16, 0x500050, 3, 8)            # 0x05: 18
+                  + struct.pack("<Hiiii", 0x06, -20, -24, -28, -32)             # 0x06: 18
+                  + struct.pack("<HiiIi", 0x08, -36, -40, 0x500060, 0x10)       # 0x08: 18
+                  + struct.pack("<HiIiII", 0x09, -44, 0x500070, 0x20, 4, 12)    # 0x09: 22
+                  + struct.pack("<HiIi", 0x0B, -48, 0x500080, -52)              # 0x0b: 14
+                  + catch(0, 0x4006A0, -56, True))
+    info_f = put(full_info(0x1000, [(0x400610, chain_f)]))
+    # function 0x400700: a lone terminate record (0x12 with the end bit): the runtime's two own functions hold one each
+    chain_g = put(struct.pack("<H", 0x12 | 0x8000))
+    info_g = put(full_info(0x1000, [(0x400710, chain_g)]))
+    idx = [(0x400100, info_a), (0x400200, info_b), (0x400300, info_c), (0x400400, info_d), (0x400500, info_e),
+           (0x400600, info_f), (0x400700, info_g)]
     body = b"".join(struct.pack("<II", f, i) for f, i in idx) + struct.pack("<I", 0xFFFFFFFF)
     mem[INDEX:INDEX + len(body)] = body
     return exc.Image([(0, bytes(mem))])
@@ -96,7 +112,7 @@ def img():
 
 def test_index_stops_at_terminator(img):
     idx = exc.load_index(img, INDEX)
-    assert sorted(idx) == [0x400100, 0x400200, 0x400300, 0x400400, 0x400500]
+    assert sorted(idx) == [0x400100, 0x400200, 0x400300, 0x400400, 0x400500, 0x400600, 0x400700]
 
 
 def test_full_record_sites_and_catches(img):
@@ -125,7 +141,7 @@ def test_unknown_kind_truncates_the_chain_and_is_reported(img):
     assert [r["pad"] for r in d["catches"]] == [0x400480]          # the catch behind the 0x0b is not reached
     assert d["truncated"] == 1
     lines = exc.format_function(d)
-    assert any("unknown kind 0x0b" in ln for ln in lines) and lines[-1].endswith("truncated 1")
+    assert any("unknown kind 0x03" in ln for ln in lines) and lines[-1].endswith("truncated 1")
 
 
 def test_record_sizes_of_every_known_kind(img):
@@ -137,6 +153,29 @@ def test_record_sizes_of_every_known_kind(img):
     assert recs[2]["types"] == ["!ScCatchMessage!", ""]
     assert recs[-1]["end"] is True
     assert [r["pad"] for r in d["catches"]] == [0x4005A0]
+
+
+def test_record_sizes_of_the_runtime_kinds(img):
+    """R2: 0x02 = 14, 0x04 = 10, 0x05 = 18, 0x06 = 18, 0x08 = 18, 0x09 = 22, 0x0b = 14, as the runtime's walkers advance
+    (`add [ebx+8], n` at 0x656dce, 0x656de7, 0x656df9, 0x656e0b, 0x656e4c, 0x656e5e, 0x656e87). None is a catch: the
+    catch search FUN_00657080 sends only kind 0x10 to ___throw_catch_compare (table 0x761e50)."""
+    d = exc.decode_function(img, 0x400600, exc.load_index(img, INDEX))
+    recs = d["sites"][0]["records"]
+    assert [r["kind"] for r in recs] == [0x02, 0x04, 0x05, 0x06, 0x08, 0x09, 0x0B, 0x10]
+    assert [r["size"] for r in recs] == [14, 10, 18, 18, 18, 22, 14, 14]
+    assert d["truncated"] == 0 and [r["pad"] for r in d["catches"]] == [0x4006A0]
+    assert recs[5]["dtor"] == 0x500070 and recs[5]["count"] == 4 and recs[6]["dtor"] == 0x500080
+    lines = exc.format_function(d)
+    assert lines[-1] == "catches 1 pads 0x004006a0"
+    assert not any("unknown" in ln for ln in lines)
+
+
+def test_terminate_record_is_decoded_not_truncated(img):
+    d = exc.decode_function(img, 0x400700, exc.load_index(img, INDEX))
+    recs = d["sites"][0]["records"]
+    assert [r["kind"] for r in recs] == [0x12] and recs[0]["end"] is True
+    assert d["truncated"] == 0 and d["catches"] == []
+    assert any("terminate" in ln for ln in exc.format_function(d))
 
 
 def test_missing_function(img):
@@ -209,6 +248,43 @@ def test_real_run_has_no_catches(real):
     image, idx = real
     d = exc.decode_function(image, 0x60B850, idx)
     assert d["short"] is True and d["flags"] == 0x09 and d["catches"] == []
+
+
+def test_real_every_chain_decodes_with_no_truncation(real):
+    """R2 (M2a-2 T2a): with the runtime's sizes, all 7,002 indexed functions decode with `truncated 0`. Measured with
+    the T2a scratch census: 28,221 call sites, 15,060 distinct chains; kinds per distinct chain 0x05 1, 0x06 2,
+    0x09 126, 0x0b 31, 0x12 2 (both in the runtime's own FUN_00656d60 / FUN_00657010)."""
+    image, idx = real
+    trunc = [f for f in idx if exc.decode_function(image, f, idx)["truncated"]]
+    assert trunc == []
+    seen = {}
+    for f in idx:
+        for s in exc.decode_function(image, f, idx)["sites"]:
+            seen.setdefault(s["chain"], [r["kind"] for r in s["records"]])
+    count = lambda k: sum(ks.count(k) for ks in seen.values())
+    assert len(seen) == 15060
+    assert (count(0x05), count(0x06), count(0x09), count(0x0B), count(0x12)) == (1, 2, 126, 31, 2)
+
+
+def test_real_formerly_truncated_chain_functions(real):
+    """The 8 functions on the VM re-entry closure that T1's decoder truncated now decode fully; the AI-controller
+    ctor keeps its three catch pads."""
+    image, idx = real
+    for f in (0x519C60, 0x542C80, 0x5432A0, 0x569970, 0x63A350, 0x63E420, 0x648290, 0x64C140):
+        assert exc.decode_function(image, f, idx)["truncated"] == 0, hex(f)
+    assert pads(real, 0x519C60) == [0x51A2D4, 0x51A2E7, 0x51A300]
+
+
+def test_real_loadarea_swallow_sites(real):
+    """Decision 10 (b): GcAreaLoader::LoadArea 0x4fedd0 wraps LoadObjects (call 0x4ff93e) and LoadCharacters
+    (call 0x5002ec) in catch(ScCatchMessage) / catch(exception) / catch(...)."""
+    image, idx = real
+    d = exc.decode_function(image, 0x4FEDD0, idx)
+    by = {s["call"]: s for s in d["sites"]}
+    for call, want in ((0x4FF93E, [0x4FF945, 0x4FF964, 0x4FF984]), (0x5002EC, [0x5002F3, 0x500312, 0x500332])):
+        recs = [r for r in by[call]["records"] if r["kind"] == 0x10]
+        assert [r["pad"] for r in recs] == want
+        assert [r["type"] for r in recs] == ["!ScCatchMessage!", "!exception!", ""]
 
 
 def test_cli_func_prints_the_three_pads(canonical_exe):
