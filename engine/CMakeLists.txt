@@ -32,6 +32,11 @@ target_compile_options(lomn_sage PRIVATE -Wall -Wextra)
 # wasm EH, near-zero cost; runs under node 20) is PUBLIC so every target linking lomn_osi compiles and links with it.
 # Fix round 1 (M3): kept PUBLIC for now; to be revisited in M2a-2, when natives living in other libraries call vm.call
 # and their frames must unwind too (those libraries would then need the flag as well).
+# M2a-2 T6, Decision 12 (docs/osi/natives.md §1.1): stays PUBLIC. lomn_view (the wasm32 node tool) inherits the flag
+# (and the 512 KiB stack) now that it links lomn_osi for --script; the natives live in lomn_osi itself, so no other
+# library needs it. lomn_web does not link lomn_osi until M2b, which revisits the scope with a size and perf entry. The
+# lomn_view.wasm size before/after is in docs/knowledge/measurements.md; datacheck-wasm keeps M1's null logs
+# native == wasm32.
 add_library(lomn_osi STATIC src/osi/heap.cpp src/osi/convert.cpp src/osi/registry.cpp src/osi/trace.cpp src/osi/vm.cpp
             src/osi/vm_handlers.cpp src/osi/natives/framework.cpp src/osi/natives/groups.cpp src/osi/natives/selftest.cpp
             src/osi/host.cpp)  # M2a-2 T3: the native framework (groups: the explicit list, fix 1 I-1), ScriptHost
@@ -111,9 +116,9 @@ if(EMSCRIPTEN)
   # M1a-3: lomn_view and lomn_datacheck under Node read a real install through the disk file system (NODERAWFS), so
   # real-area null logs and the datacheck run natively AND as wasm32 (M1a-1 carry-over R1).
   add_executable(lomn_view tools/lomn_view.cpp src/fs/disk_fs.cpp)
-  target_link_libraries(lomn_view PRIVATE lomn_area)
+  target_link_libraries(lomn_view PRIVATE lomn_area lomn_osi)  # M2a-2 T6: --script 1 (lomn::osi::ScriptHost)
   target_include_directories(lomn_view PRIVATE src/app)
-  target_compile_definitions(lomn_view PRIVATE LOMN_NODE_DISK_FS=1)
+  target_compile_definitions(lomn_view PRIVATE LOMN_NODE_DISK_FS=1 "LOMN_OSI_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/../data/osi\"")
   target_link_options(lomn_view PRIVATE -sNODERAWFS=1 -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=2GB)
   add_executable(lomn_datacheck tools/lomn_datacheck.cpp src/fs/disk_fs.cpp)
   target_link_libraries(lomn_datacheck PRIVATE lomn_sage)
@@ -143,8 +148,9 @@ else()
   target_compile_options(lomn_datacheck PRIVATE -Wall -Wextra)
   # M1a-2: lomn_view renders an area to PNG (webgpu) or a call log (null); --synthetic 1 is the A7 scene.
   add_executable(lomn_view tools/lomn_view.cpp)
-  target_link_libraries(lomn_view PRIVATE lomn_area $<$<BOOL:${LOMN_WEBGPU}>:lomn_webgpu>)
+  target_link_libraries(lomn_view PRIVATE lomn_area lomn_osi $<$<BOOL:${LOMN_WEBGPU}>:lomn_webgpu>)  # M2a-2 T6: --script 1
   target_include_directories(lomn_view PRIVATE src/app "${LOMN_TOOLCHAIN_DIR}/include")
+  target_compile_definitions(lomn_view PRIVATE "LOMN_OSI_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/../data/osi\"")
   target_compile_options(lomn_view PRIVATE -Wall -Wextra)
   # REF3 revision 2: the CPU reference of the D3D8 fixed-function formulas (the GPU probe's expectation) against an
   # independent Python implementation from the D3D8 documentation, on gpu_ffp's cases + 4000 seeded random samples.
@@ -402,6 +408,19 @@ foreach(mode digest window rerun)
            -DOSIASM=${CMAKE_CURRENT_SOURCE_DIR}/../tools/osi/osiasm.py -DASM=${CMAKE_CURRENT_SOURCE_DIR}/tests/data/osi_a6_rerun.asm
            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/osi_a6.cmake)
   set_tests_properties(osi_a6_${mode} PROPERTIES SKIP_REGULAR_EXPRESSION "SKIPPED \\(no LOMN_DATA\\)" TIMEOUT 600)
+endforeach()
+# M2a-2 T6 (A8/A9): lomn_view --script 1, natively and under node. osi_a9_smoke (no game data): the synthetic script
+# tests/data/osi_a9_smoke.asm through lomn_view --natives stub == lomn_osi_run (digest, natives.log, trace window), the
+# coverage report == tools/osi/coverage.py --log, the hand-computed report, exit codes 2/3. osi_a9_real (LOMN_DATA): the
+# A6 path (600 frames + the A6 keys) with --natives stub == lomn_osi_run's digest D lines and natives.log, the coverage
+# report == coverage.py, and the A8 run (--frames 1). `make osi-a9` adds native == wasm32 and the Python legs.
+foreach(mode smoke real)
+  add_test(NAME osi_a9_${mode} COMMAND ${CMAKE_COMMAND} "-DRUNNER=${CMAKE_CROSSCOMPILING_EMULATOR}" -DEXE=$<TARGET_FILE:lomn_view>
+           -DOSIRUN=$<TARGET_FILE:lomn_osi_run> -DMODE=${mode} -DFRAMES=600 "-DKEYSPEC=${LOMN_OSI_A6_KEYS}" -DPY=python3
+           -DOSIASM=${CMAKE_CURRENT_SOURCE_DIR}/../tools/osi/osiasm.py -DCOVERAGE=${CMAKE_CURRENT_SOURCE_DIR}/../tools/osi/coverage.py
+           -DASM=${CMAKE_CURRENT_SOURCE_DIR}/tests/data/osi_a9_smoke.asm -DOUT=${CMAKE_CURRENT_BINARY_DIR}/osi_a9_${mode}
+           -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/osi_a9.cmake)
+  set_tests_properties(osi_a9_${mode} PROPERTIES SKIP_REGULAR_EXPRESSION "SKIPPED \\(no LOMN_DATA\\)" TIMEOUT 600)
 endforeach()
 # REF3 revision 2: crafted-input time/memory probes of the OSI reader, natively and as wasm32 (2 GB linear memory).
 add_executable(lomn_osi_probe tests/probe_osi.cpp)

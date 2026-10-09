@@ -5,7 +5,7 @@ export LOMN_DATA LOMN_CACHE
 VENV := .venv
 PY := $(VENV)/bin/python
 EMSDK_ENV := source .toolchain/emsdk/emsdk_env.sh >/dev/null 2>&1
-.PHONY: setup check-data decomp worklist native wasm site test-tools test-native test-wasm test-web check perf perf-areas datacheck datacheck-wasm fuzz-osi fuzz-osi-vm fuzz-formats fuzz-formats-help a9-sweep a13-real manifest osi-tables osi-diff osi-coverage conform-trace-cmp
+.PHONY: setup check-data decomp worklist native wasm site test-tools test-native test-wasm test-web check perf perf-areas datacheck datacheck-wasm fuzz-osi fuzz-osi-vm fuzz-formats fuzz-formats-help a9-sweep a13-real manifest osi-tables osi-diff osi-a9 osi-coverage conform-trace-cmp
 
 setup: $(VENV)/.ok
 	timeout 3600 tools/toolchain.sh
@@ -212,6 +212,51 @@ osi-diff: native wasm $(VENV)/.ok
 	  echo "cmp 4/4 full trace Setup + frames 0-2 native == Python == wasm32: OK ($$(wc -l < $(OSI_DIFF)/native.window) lines)"
 	@echo "summary (native):"; cat $(OSI_DIFF)/native.summary
 	@if [ -n "$(OSI_PERF)" ]; then cat $(OSI_DIFF)/osi-a6.jsonl >> perf/osi-a6.jsonl && echo "appended to perf/osi-a6.jsonl"; fi
+
+# M2a-2 T6 (A8/A9/A10): the game's own script through `lomn_view --install DIR --script 1` (lomn::osi::ScriptHost),
+# Setup + OSI_FRAMES Process frames + OSI_KEYS, natives OSI_A9_NATIVES (real = the bound native groups, the A9 run;
+# stub = typed stubs, the A6 run). Legs: (1) native lomn_view (digest, natives.log v2, trace window -1:2); (2) wasm32
+# lomn_view under node (the same three files); (3) the Python oracle with its OWN native models (`--real-natives
+# --install`; with stub: its own stubs); (4) the Python oracle replaying the native natives.log; (5) the coverage report
+# (coverage.py --log == lomn_view's) and, once tools/research/osi_taint.py exists (Task 5), the taint report. Digest
+# guards compare D lines only (C1: the header carries the natives= table hash). Prints cmp 1/4 .. 4/4. Controller-only
+# (heavy: native + wasm builds). Until a game-native group is bound, `real` fails closed on both engines (no run).
+OSI_A9 := build/osi-a9
+OSI_A9_NATIVES ?= real
+OSI_A9_PY_NATIVES = $(if $(filter real,$(OSI_A9_NATIVES)),--real-natives --install "$(LOMN_DATA)/install",)
+osi-a9: native wasm $(VENV)/.ok
+	@if [ -z "$(LOMN_DATA)" ]; then echo "osi-a9: LOMN_DATA is not set"; exit 2; fi
+	@if [ "$(OSI_A9_NATIVES)" != real ] && [ "$(OSI_A9_NATIVES)" != stub ]; then echo "osi-a9: OSI_A9_NATIVES must be real or stub"; exit 2; fi
+	rm -rf $(OSI_A9) && mkdir -p $(OSI_A9)
+	set -o pipefail; timeout 300 build/native/lomn_view --install "$(LOMN_DATA)/install" --script 1 --natives $(OSI_A9_NATIVES) \
+	  --frames $(OSI_FRAMES) --keys "$(OSI_KEYS)" --digest $(OSI_A9)/native.digest --natives-log $(OSI_A9)/native.natives.log \
+	  --trace $(OSI_A9)/native.window --trace-frames -1:2 --out $(OSI_A9)/native.json | tee $(OSI_A9)/native.summary
+	set -o pipefail; $(EMSDK_ENV) && timeout 600 node build/wasm/lomn_view.js --install "$(LOMN_DATA)/install" --script 1 \
+	  --natives $(OSI_A9_NATIVES) --frames $(OSI_FRAMES) --keys "$(OSI_KEYS)" --digest $(OSI_A9)/wasm.digest \
+	  --natives-log $(OSI_A9)/wasm.natives.log --trace $(OSI_A9)/wasm.window --trace-frames -1:2 --out $(OSI_A9)/wasm.json \
+	  | tee $(OSI_A9)/wasm.summary
+	set -o pipefail; timeout 600 $(PY) tools/research/osi_vm.py --run "$(LOMN_DATA)/install/data/Base.osi" $(OSI_TABLES) \
+	  $(OSI_A9_PY_NATIVES) --frames $(OSI_FRAMES) --keys "$(OSI_KEYS)" \
+	  --digest $(OSI_A9)/python.digest --log-out $(OSI_A9)/python.natives.log | tee $(OSI_A9)/python.summary
+	timeout 600 $(PY) tools/research/osi_vm.py --run "$(LOMN_DATA)/install/data/Base.osi" $(OSI_TABLES) \
+	  --frames $(OSI_FRAMES) --keys "$(OSI_KEYS)" \
+	  --replay $(OSI_A9)/native.natives.log --digest $(OSI_A9)/python_replay.digest > $(OSI_A9)/python_replay.summary
+	timeout 60 $(PY) tools/osi/coverage.py --log $(OSI_A9)/native.natives.log > $(OSI_A9)/coverage.txt
+	@if [ -f tools/research/osi_taint.py ]; then \
+	  timeout 300 $(PY) tools/research/osi_taint.py --osi "$(LOMN_DATA)/install/data/Base.osi" $(OSI_A9_PY_NATIVES) \
+	    --frames $(OSI_FRAMES) --keys "$(OSI_KEYS)" --overrides data/osi/native_overrides.json > $(OSI_A9)/taint.txt || exit 1; \
+	  echo "taint report:"; cat $(OSI_A9)/taint.txt; \
+	else echo "taint report: SKIPPED (tools/research/osi_taint.py is not merged yet)"; fi
+	@for s in native wasm python python_replay; do grep '^D ' $(OSI_A9)/$$s.digest > $(OSI_A9)/$$s.D || { echo "osi-a9: no D lines in $$s.digest"; exit 1; }; done
+	@cmp $(OSI_A9)/native.D $(OSI_A9)/wasm.D && cmp $(OSI_A9)/native.natives.log $(OSI_A9)/wasm.natives.log && \
+	  cmp $(OSI_A9)/native.window $(OSI_A9)/wasm.window && cmp $(OSI_A9)/native.summary $(OSI_A9)/wasm.summary && \
+	  echo "cmp 1/4 D lines native == wasm32 ($$(wc -l < $(OSI_A9)/native.D) lines; natives.log, window -1:2 and stdout byte-identical): OK"
+	@cmp $(OSI_A9)/native.D $(OSI_A9)/python_replay.D && echo "cmp 2/4 D lines native == Python (replaying the native natives.log): OK"
+	@cmp $(OSI_A9)/native.D $(OSI_A9)/python.D && echo "cmp 3/4 D lines native == Python (its own $(OSI_A9_NATIVES) natives): OK"
+	@grep -E '^(coverage: |native )' $(OSI_A9)/native.summary | cmp - $(OSI_A9)/coverage.txt && \
+	  cmp $(OSI_A9)/native.natives.log $(OSI_A9)/python.natives.log && \
+	  echo "cmp 4/4 coverage report lomn_view == coverage.py --log, natives.log native == Python (own $(OSI_A9_NATIVES) natives): OK"
+	@echo "summary (native):"; cat $(OSI_A9)/native.summary
 
 # M2a-2 T1 (A8): the coverage report of a typed-stub run of the real Base.osi in the Python oracle: which natives were hit,
 # by tier (tools/osi/coverage.py; tiers come from data/osi/native_overrides.json once it exists, else every exe row is a

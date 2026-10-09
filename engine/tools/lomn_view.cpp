@@ -4,6 +4,24 @@
 //   lomn_view --install <dir> --survey 1 --out <file.json>  CPU-load every area (no GPU), per-area counts + maxima
 //   lomn_view --install <dir> --manifest 1 --out <file.json>  M1b: every area's reads at (path, offset, length)
 //                           granularity + the boot set (format: docs/knowledge/web-porting-playbook.md "Prefetch manifest")
+//   lomn_view --install <dir> --script 1 [--frames N] [--keys "down@100 ..."] [--trace F [--trace-frames a:b]]
+//             [--digest F] [--natives-log F] [--natives real|stub] [--deterministic on|off] [--skip-video on|off]
+//             [--out F.json]   M2a-2: run Base.osi (Root/Data/base.osi) Setup + N Process frames headless; prints
+//                              the A8 coverage report, nesting and stack high-water, and the run summary.
+//   --script 1 (M2a-2 T6; natives.md Decision 2): lomn::osi::ScriptHost over the install's VFS (fs::open_disk), the
+//   frame loop of lomn_osi_run. Always headless; it takes only the options above (any other option, --script other than
+//   1, a missing --install, or a script option without --script is exit 2). --frames 1..100000 (default 1: Setup + one
+//   Process frame, the A8 run; there is no Setup-only run). --keys is ScriptHost's KEYSPEC (expand_keys, Task 3).
+//   --trace-frames a:b keeps the header and frames a..b, -1 <= a <= b (frame -1 = Setup); it needs --trace. --natives
+//   real (default; A9) binds every registered native group and fails closed (exit 4, no report) while none binds;
+//   stub = all typed stubs (D11) + the mod rows, the A6 run. --deterministic and --skip-video (default on: D1, D3) reach
+//   the natives as HostFlags and are reported in the JSON. --out F.json writes the run metrics to F.json itself (no
+//   second .json suffix); without --out no JSON is written. The tables are data/osi (natives.json, natives_beta150.json,
+//   types.json, native_overrides.json). stdout, in order: the A8 coverage report (tools/osi/coverage.py's grammar, byte
+//   for byte), `nesting high-water %d`, `stack high-water %d`, then lomn_osi_run's summary lines without wall-clock
+//   fields (so native and wasm32 stdout are byte-identical; the timings are in the JSON). Exit codes: 0 ok, 2 bad
+//   arguments, 3 install / Base.osi / tables unreadable, 4 the host cannot start, a VM error stopped the run, or a write
+//   failed.
 // Options (every option takes a value):
 //   --backend webgpu|null   webgpu (default) writes <out> as PNG; null writes the rhi call log to <out>
 //   --width 1280 --height 720 --frames 1
@@ -51,7 +69,12 @@
 
 #include "json_escape.h"
 #include "lomn/fs.h"
+#include "lomn/osi/host.h"
+#include "lomn/osi/json.h"
+#include "lomn/osi/registry.h"
+#include "lomn/osi/trace.h"
 #include "lomn/rhi.h"
+#include "lomn/sage/osi.h"
 #include "lomn/view/area.h"
 #include "lomn/view/prefetch.h"
 #include "lomn/view/synthetic.h"
@@ -145,7 +168,10 @@ int usage(const char* why) {
                "                 [--fov DEG --near N --far F --eye x,y,z --yaw DEG --pitch DEG --eye-height H] [--frames N]\n"
                "                 [--vertex-colors on|off] [--routes main,trans,back,moveable,nolight] [--state-log FILE]\n"
                "                 [--lighting faithful|forced] [--fog on|off] [--texture-cache on|off]\n"
-               "       lomn_view --synthetic 1 --out FILE [...]   |   lomn_view --install DIR --survey 1 --out FILE.json\n");
+               "       lomn_view --synthetic 1 --out FILE [...]   |   lomn_view --install DIR --survey 1 --out FILE.json\n"
+               "       lomn_view --install DIR --script 1 [--frames N] [--keys SPEC] [--trace F [--trace-frames a:b]]\n"
+               "                 [--digest F] [--natives-log F] [--natives real|stub] [--deterministic on|off]\n"
+               "                 [--skip-video on|off] [--out F.json]\n");
   return 2;
 }
 
@@ -598,6 +624,334 @@ int manifest(const std::string& install, const std::string& out_path) {
 }
 #endif
 
+// ---- M2a-2 T6: --script 1, the game's own script headless (lomn::osi::ScriptHost) ----
+#ifndef LOMN_OSI_DATA_DIR
+#define LOMN_OSI_DATA_DIR "data/osi"
+#endif
+
+bool slurp(const std::string& p, std::string& out) {
+  std::ifstream f(p, std::ios::binary);
+  if (!f) return false;
+  std::stringstream ss;
+  ss << f.rdbuf();
+  out = ss.str();
+  return !f.bad();
+}
+
+// The trace sinks of lomn_osi_run (same shapes): a tee, the frame window, and per-block counts from the records.
+struct Tee : osi::TraceSink {
+  std::vector<osi::TraceSink*> outs;
+  void line(std::string_view s) override {
+    for (auto* o : outs) o->line(s);
+  }
+};
+struct Window : osi::TraceSink {  // header + frames [a, b]
+  osi::TraceSink* out = nullptr;
+  long a = -1, b = 0, frame = -1;
+  void line(std::string_view s) override {
+    if (!s.empty() && s[0] == '#') return out->line(s);
+    if (!s.empty() && s[0] == 'K') frame = std::strtol(std::string(s.substr(1)).c_str(), nullptr, 10);
+    if (frame >= a && frame <= b) out->line(s);
+  }
+};
+struct ScriptStats : osi::TraceSink {
+  uint64_t natives = 0, unregistered = 0;  // N records; E records of an unregistered game function (coverage.py --trace)
+  std::set<uint32_t> pcs;
+  void line(std::string_view s) override {
+    if (s.size() > 10 && s[0] == 'I') pcs.insert(static_cast<uint32_t>(std::strtoul(std::string(s.substr(2, 8)).c_str(), nullptr, 16)));
+    else if (!s.empty() && s[0] == 'N') ++natives;
+    else if (s.size() > 2 && s[0] == 'E' && s[1] == ' ' && s.find("Call to unregistered Game Function") != std::string_view::npos)
+      ++unregistered;
+  }
+};
+
+uint64_t pct_u(std::vector<uint64_t> v, double p) {  // nearest rank (lomn_osi_run's)
+  if (v.empty()) return 0;
+  std::sort(v.begin(), v.end());
+  size_t r = static_cast<size_t>(std::ceil(p * v.size()));
+  if (r < 1) r = 1;
+  return v[r - 1];
+}
+double pct_d(std::vector<double> v, double p) {
+  if (v.empty()) return 0;
+  std::sort(v.begin(), v.end());
+  size_t r = static_cast<size_t>(std::ceil(p * v.size()));
+  if (r < 1) r = 1;
+  return v[r - 1];
+}
+
+// The `body` column of the coverage report, built the way tools/osi/coverage.py builds its registry: natives.json rows
+// (winners only) first, then the mod rows; the first registration of a key wins; a row without `body` reports "-".
+bool native_bodies(std::string_view natives_json, std::string_view mods_json, std::map<std::string, std::string>& out,
+                   std::string* err) {
+  for (std::string_view text : {natives_json, mods_json}) {
+    osi::Json j;
+    if (!osi::parse_json(text, j, err)) return false;
+    if (j.type != osi::Json::Array) return *err = "a native table is not a list", false;
+    for (const osi::Json& r : j.arr) {
+      const osi::Json* w = r.get("winner");
+      if (w && w->type == osi::Json::Bool && !w->b) continue;
+      std::string key;
+      if (const osi::Json* k = r.get("key"); k && k->type == osi::Json::String && !k->str.empty()) {
+        key = k->str;
+      } else {
+        const osi::Json* c = r.get("cls");
+        const osi::Json* n = r.get("name");
+        if (!c || !n || c->type != osi::Json::String || n->type != osi::Json::String) return *err = "a native row without key", false;
+        key = c->str + "." + n->str;
+        std::transform(key.begin(), key.end(), key.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+      }
+      const osi::Json* b = r.get("body");
+      out.emplace(key, !b ? "-" : b->type == osi::Json::String ? b->str : b->type == osi::Json::Null ? "None" : "-");
+    }
+  }
+  return true;
+}
+
+// The A8 coverage report (tools/osi/coverage.py's grammar, byte for byte): one row per distinct registered native hit,
+// sorted by (first-hit frame, first-hit sequence). `calls` counts every native call, `unregistered` the calls to a name
+// the registry does not have. From ScriptHost's own hit table (the VM's native observer), not from the natives.log.
+std::vector<std::string> coverage_report(const osi::HostStats& hs, const std::map<std::string, std::string>& bodies,
+                                         uint64_t unregistered) {
+  std::vector<std::pair<std::string, osi::NativeHit>> hits(hs.hits.begin(), hs.hits.end());
+  std::sort(hits.begin(), hits.end(), [](const auto& x, const auto& y) {
+    return x.second.first_frame != y.second.first_frame ? x.second.first_frame < y.second.first_frame
+                                                        : x.second.first_seq < y.second.first_seq;
+  });
+  std::map<std::string, size_t> tiers;
+  for (const auto& h : hits) ++tiers[osi::tier_name(h.second.tier)];
+  std::vector<std::string> out;
+  char b[512];
+  std::snprintf(b, sizeof b, "coverage: natives distinct %zu (tier1 %zu, tier2 %zu, stub %zu, mod %zu, tier3 %zu), calls %llu, unregistered %llu",
+                hits.size(), tiers["tier1"], tiers["tier2"], tiers["stub"], tiers["mod"], tiers["tier3"],
+                static_cast<unsigned long long>(hs.natives), static_cast<unsigned long long>(unregistered));
+  out.push_back(b);
+  for (const auto& h : hits) {
+    const auto it = bodies.find(h.first);
+    std::snprintf(b, sizeof b, "native %-48s tier %-5s first %6ld calls %6llu body %s", h.first.c_str(), osi::tier_name(h.second.tier),
+                  h.second.first_frame, static_cast<unsigned long long>(h.second.calls), it == bodies.end() ? "-" : it->second.c_str());
+    out.push_back(b);
+  }
+  return out;
+}
+
+// --trace-frames bound: -1 (Setup) or a frame number 0..100000.
+bool parse_frame_bound(const std::string& s, long& out) {
+  if (s == "-1") return out = -1, true;
+  uint32_t v = 0;
+  if (!parse_u32(s, 0, 100000, v)) return false;
+  out = static_cast<long>(v);
+  return true;
+}
+
+int script_mode(std::map<std::string, std::string>& a) {
+  auto has = [&](const char* k) { return a.count(k) != 0; };
+  static const char* const allowed[] = {"--install", "--script", "--frames", "--keys", "--trace", "--trace-frames", "--digest",
+                                        "--natives-log", "--natives", "--deterministic", "--skip-video", "--out"};
+  for (const auto& kv : a)
+    if (std::find_if(std::begin(allowed), std::end(allowed), [&](const char* x) { return kv.first == x; }) == std::end(allowed))
+      return usage(("--script cannot be combined with " + kv.first + " (the script mode is headless)").c_str());
+  if (a["--script"] != "1") return usage("--script takes exactly 1");
+  if (!has("--install") || a["--install"].empty()) return usage("--script needs --install");
+  uint32_t frames = 1;
+  if (has("--frames") && !parse_u32(a["--frames"], 1, 100000, frames)) return usage("bad --frames (1..100000; 1 = Setup + one frame)");
+  const std::string keys = has("--keys") ? a["--keys"] : "";
+  {
+    std::vector<osi::KeyCall> kc;
+    std::string kerr;
+    if (!osi::expand_keys(keys, kc, &kerr)) return usage(("bad --keys: " + kerr).c_str());
+  }
+  long wa = -1, wb = 1L << 30;
+  if (has("--trace-frames")) {
+    if (!has("--trace")) return usage("--trace-frames needs --trace");
+    const std::string& w = a["--trace-frames"];
+    const size_t c = w.find(':');
+    if (c == std::string::npos || !parse_frame_bound(w.substr(0, c), wa) || !parse_frame_bound(w.substr(c + 1), wb) || wa > wb)
+      return usage("bad --trace-frames (a:b, -1 <= a <= b <= 100000)");
+  }
+  const std::string natives = has("--natives") ? a["--natives"] : "real";
+  if (natives != "real" && natives != "stub") return usage("bad --natives (real|stub)");
+  osi::HostFlags flags;
+  for (const char* k : {"--deterministic", "--skip-video"})
+    if (has(k) && a[k] != "on" && a[k] != "off") return usage((std::string("bad ") + k + " (on|off)").c_str());
+  flags.deterministic = !has("--deterministic") || a["--deterministic"] == "on";
+  flags.skip_video = !has("--skip-video") || a["--skip-video"] == "on";
+  std::vector<std::pair<std::string, std::string>> outs;  // (option, path)
+  for (const char* k : {"--trace", "--digest", "--natives-log", "--out"})
+    if (has(k)) {
+      if (a[k].empty()) return usage((std::string("bad ") + k + " (a file)").c_str());
+      outs.push_back({k, a[k]});
+    }
+  for (size_t i = 0; i < outs.size(); ++i)
+    for (size_t j = i + 1; j < outs.size(); ++j)
+      if (same_file(outs[i].second, outs[j].second))
+        return usage((outs[i].first + " and " + outs[j].first + " name the same file").c_str());
+
+  // Arguments are valid: only now drop whatever an earlier run left (a usage error leaves existing outputs untouched).
+  for (const auto& o : outs)
+    if (!remove_stale(o.second)) return std::fprintf(stderr, "cannot remove stale output %s: %s\n", o.second.c_str(), std::strerror(errno)), 4;
+#if defined(__EMSCRIPTEN__) && !defined(LOMN_NODE_DISK_FS)
+  return usage("--script needs the disk file system (native, or wasm32 under node)");
+#else
+  // Decision 2: Base.osi through the VFS at Root/Data/base.osi, the literal GcGame::SetUpScripting passes to CreateVM.
+  const std::string install = a["--install"];
+  std::unique_ptr<fs::FileSystem> fsp = fs::open_disk(install, disk_user_dir());
+  if (!fsp) return std::fprintf(stderr, "cannot open install %s\n", install.c_str()), 3;
+  std::vector<uint8_t> image;
+  if (fsp->read("Root/Data/base.osi", image) != fs::Error::None)
+    return std::fprintf(stderr, "cannot read Root/Data/base.osi in %s\n", install.c_str()), 3;
+  const std::string data_dir = LOMN_OSI_DATA_DIR;
+  std::string tj, nj, mj, ov;
+  if (!slurp(data_dir + "/types.json", tj) || !slurp(data_dir + "/natives.json", nj) || !slurp(data_dir + "/natives_beta150.json", mj))
+    return std::fprintf(stderr, "cannot read the OSI tables in %s\n", data_dir.c_str()), 3;
+  slurp(data_dir + "/native_overrides.json", ov);  // optional (natives.md §7.2), as in lomn_osi_run
+  auto sha = [](const std::string& s) { return osi::sha256_hex(reinterpret_cast<const uint8_t*>(s.data()), s.size()); };
+  const std::string sha_before = osi::sha256_hex(image.data(), image.size());
+  sage::OsiFile file;
+  std::string err;
+  if (!file.parse(image, &err)) return std::fprintf(stderr, "Root/Data/base.osi: %s\n", err.c_str()), 3;
+  std::map<std::string, std::string> bodies;
+  if (!native_bodies(nj, mj, bodies, &err)) return std::fprintf(stderr, "native tables: %s\n", err.c_str()), 4;
+
+  // Sinks and header exactly as lomn_osi_run writes them (so the digest equals its digest on the same script and tables).
+  std::string keys_field = keys;
+  std::replace(keys_field.begin(), keys_field.end(), ' ', ',');
+  std::string header = osi::header_line(sha_before, sha(nj), sha(mj), sha(tj));
+  if (!keys.empty()) header += " keys=" + keys_field;
+  Tee tee;
+  ScriptStats stats;
+  tee.outs.push_back(&stats);
+  std::unique_ptr<osi::FileTrace> trace_file, digest_file, log_file;
+  std::unique_ptr<Window> window;
+  std::unique_ptr<osi::DigestTrace> digest;
+  auto drop_outputs = [&] {  // the host never started: no partial output stays behind
+    trace_file.reset();
+    digest_file.reset();
+    log_file.reset();
+    for (const auto& o : outs) remove_stale(o.second);
+  };
+  if (has("--trace")) {
+    trace_file = std::make_unique<osi::FileTrace>(a["--trace"]);
+    if (!trace_file->ok()) return drop_outputs(), std::fprintf(stderr, "cannot write %s\n", a["--trace"].c_str()), 4;
+    window = std::make_unique<Window>();
+    window->out = trace_file.get();
+    window->a = wa;
+    window->b = wb;
+    tee.outs.push_back(window.get());
+  }
+  if (has("--digest")) {
+    digest_file = std::make_unique<osi::FileTrace>(a["--digest"]);
+    if (!digest_file->ok()) return drop_outputs(), std::fprintf(stderr, "cannot write %s\n", a["--digest"].c_str()), 4;
+    digest = std::make_unique<osi::DigestTrace>(digest_file.get());
+    tee.outs.push_back(digest.get());
+  }
+  if (has("--natives-log")) {
+    log_file = std::make_unique<osi::FileTrace>(a["--natives-log"]);
+    if (!log_file->ok()) return drop_outputs(), std::fprintf(stderr, "cannot write %s\n", a["--natives-log"].c_str()), 4;
+  }
+  tee.line(header);
+  osi::ScriptHost::Options opt;
+  opt.flags = flags;
+  opt.keys = keys;
+  opt.real_natives = natives == "real";
+  std::unique_ptr<osi::ScriptHost> host;
+  try {
+    host = std::make_unique<osi::ScriptHost>(file, nj, mj, tj, ov, fsp.get(), &tee, log_file.get(), opt);
+  } catch (const std::exception& e) {
+    drop_outputs();
+    return std::fprintf(stderr, "lomn_view --script: %s\n", e.what()), 4;
+  }
+  osi::Vm& vm = host->vm();
+
+  // The run: lomn_osi_run's loop and statistics.
+  auto t0 = Clock::now();
+  host->setup();
+  const double setup_ms = ms_since(t0);
+  const uint64_t setup_insns = vm.instructions(), setup_natives = stats.natives, setup_pcs = stats.pcs.size();
+  std::vector<uint64_t> insns_per_frame, natives_per_frame, pcs_per_frame;
+  std::vector<double> ms_per_frame;
+  std::set<uint32_t> seen = stats.pcs;
+  long flatten = -1;
+  for (long k = 0; k < static_cast<long>(frames) && host->stats().stop == "none"; ++k) {
+    stats.pcs.clear();
+    const uint64_t i0 = vm.instructions(), n0 = stats.natives;
+    const auto f0 = Clock::now();
+    host->frame();
+    ms_per_frame.push_back(ms_since(f0));
+    insns_per_frame.push_back(vm.instructions() - i0);
+    natives_per_frame.push_back(stats.natives - n0);
+    pcs_per_frame.push_back(stats.pcs.size());
+    for (uint32_t pc : stats.pcs)
+      if (seen.insert(pc).second) flatten = k;
+  }
+  const osi::HostStats& hs = host->stats();
+  if (digest) digest->finish();
+  trace_file.reset();
+  digest_file.reset();
+  const long done = static_cast<long>(insns_per_frame.size());
+  const bool unchanged = osi::sha256_hex(file.bytes().data(), file.bytes().size()) == sha_before;
+
+  std::string o;
+  for (const std::string& l : coverage_report(hs, bodies, stats.unregistered)) o += l + "\n";
+  char b[512];
+  auto add = [&](const char* fmt, auto... v) {
+    std::snprintf(b, sizeof b, fmt, v...);
+    o += b;
+  };
+  add("nesting high-water %d\n", hs.max_nesting);
+  add("stack high-water %u\n", hs.stack_high_water);
+  add("setup: instructions %llu, natives %llu, distinct_pcs %llu\n", (unsigned long long)setup_insns, (unsigned long long)setup_natives,
+      (unsigned long long)setup_pcs);
+  add("frames %ld (of %ld requested), instructions %llu, natives %llu, insns/frame p50 %llu p95 %llu (n=%ld)\n", done,
+      static_cast<long>(frames), (unsigned long long)vm.instructions(), (unsigned long long)stats.natives,
+      (unsigned long long)pct_u(insns_per_frame, 0.5), (unsigned long long)pct_u(insns_per_frame, 0.95), done);
+  o += "distinct_pcs_by_frame (first 5, last):";
+  for (long i = 0; i < std::min<long>(5, done); ++i) add(" %llu", (unsigned long long)pcs_per_frame[i]);
+  if (done > 5) add(" ... %llu", (unsigned long long)pcs_per_frame.back());
+  o += "\n";
+  add("process passes: total %llu over %ld frames, max %llu, frames with re-runs %llu", (unsigned long long)hs.passes_total, done,
+      (unsigned long long)hs.max_passes, (unsigned long long)hs.frames_rerun);
+  if (!hs.first_reruns.empty()) {
+    o += " (first:";
+    for (const auto& s : hs.first_reruns) o += " " + s;
+    o += ")";
+  }
+  add(", frames skipped %llu", (unsigned long long)hs.frames_skipped);
+  if (!hs.first_skips.empty()) {
+    o += " (first:";
+    for (const auto& s : hs.first_skips) o += " " + s;
+    o += ")";
+  }
+  o += "\n";
+  o += "stop: " + hs.stop + "\n";
+  o += std::string("script sha256 unchanged: ") + (unchanged ? "True" : "False") + "\n";
+  add("flattening: the last frame that executed a new PC is %ld; distinct PCs overall %zu; natives/frame p50 %llu p95 %llu\n",
+      flatten, seen.size(), (unsigned long long)pct_u(natives_per_frame, 0.5), (unsigned long long)pct_u(natives_per_frame, 0.95));
+  std::fwrite(o.data(), 1, o.size(), stdout);
+  std::fflush(stdout);
+
+  if (has("--out")) {  // D1: the --skip-video and --deterministic states are reported in the metrics
+    std::ofstream m(a["--out"]);
+    m << "{\n\"tool\":\"lomn_view\",\"mode\":\"script\",\"script\":\"Root/Data/base.osi\",\"script_sha256\":" << js(sha_before)
+      << ",\"natives\":" << js(natives) << ",\n\"skip_video\":" << (flags.skip_video ? "true" : "false")
+      << ",\"deterministic\":" << (flags.deterministic ? "true" : "false") << ",\"keys\":" << js(keys) << ",\n\"frames\":" << frames
+      << ",\"frames_run\":" << done << ",\"stop\":" << js(hs.stop) << ",\"script_unchanged\":" << (unchanged ? "true" : "false")
+      << ",\n\"setup_instructions\":" << setup_insns << ",\"instructions\":" << vm.instructions() << ",\"natives_calls\":" << hs.natives
+      << ",\"natives_distinct\":" << hs.hits.size() << ",\"unregistered\":" << stats.unregistered
+      << ",\n\"nesting_high_water\":" << hs.max_nesting << ",\"stack_high_water\":" << hs.stack_high_water
+      << ",\"passes_total\":" << hs.passes_total << ",\"frames_rerun\":" << hs.frames_rerun << ",\"frames_skipped\":" << hs.frames_skipped
+      << ",\"flattening_frame\":" << flatten << ",\n\"insns_per_frame_p50\":" << pct_u(insns_per_frame, 0.5)
+      << ",\"insns_per_frame_p95\":" << pct_u(insns_per_frame, 0.95) << ",\"insns_samples\":" << insns_per_frame.size()
+      << ",\"natives_per_frame_p50\":" << pct_u(natives_per_frame, 0.5) << ",\"natives_per_frame_p95\":" << pct_u(natives_per_frame, 0.95)
+      << ",\n\"script_ms_per_frame_p50\":" << num(pct_d(ms_per_frame, 0.5)) << ",\"script_ms_per_frame_p95\":" << num(pct_d(ms_per_frame, 0.95))
+      << ",\"setup_ms\":" << num(setup_ms) << ",\"rss_peak_bytes\":" << rss_peak() << "\n}\n";
+    m.close();
+    if (m.fail()) return std::fprintf(stderr, "cannot write %s\n", a["--out"].c_str()), 4;
+  }
+  return hs.stop == "none" && unchanged ? 0 : 4;
+#endif
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -606,7 +960,10 @@ int main(int argc, char** argv) {
   static const char* known[] = {"--install", "--level", "--area", "--out", "--backend", "--width", "--height", "--frames", "--fov", "--near",
                                 "--far", "--eye", "--yaw", "--pitch", "--eye-height", "--vertex-colors", "--routes",
                                 "--synthetic", "--survey", "--keep-cpu", "--state-log", "--lighting", "--fog", "--write-install",
-                                "--texture-cache", "--manifest"};
+                                "--texture-cache", "--manifest",
+                                // M2a-2 T6 (I10): the --script mode's options
+                                "--script", "--keys", "--trace", "--trace-frames", "--digest", "--natives-log", "--natives",
+                                "--deterministic", "--skip-video"};
   for (int i = 1; i + 1 < argc; i += 2) {
     std::string k = argv[i];
     if (std::find_if(std::begin(known), std::end(known), [&](const char* x) { return k == x; }) == std::end(known))
@@ -614,6 +971,9 @@ int main(int argc, char** argv) {
     a[k] = argv[i + 1];
   }
   auto has = [&](const char* k) { return a.count(k) != 0; };
+  if (has("--script")) return script_mode(a);  // exempt from --out (written only when given) and from the area options
+  for (const char* k : {"--keys", "--trace", "--trace-frames", "--digest", "--natives-log", "--natives", "--deterministic", "--skip-video"})
+    if (has(k)) return usage((std::string(k) + " needs --script 1").c_str());
   const std::string out = has("--out") ? a["--out"] : "";
   if (out.empty()) return usage("--out is required");
   if (has("--synthetic") && a["--synthetic"] != "1" && a["--synthetic"] != "2") return usage("--synthetic takes 1 (A7 scene) or 2 (A9 state scene)");
