@@ -17,7 +17,7 @@ Decompiled code is never quoted. The decomp (`gen/decomp`) only supplied names.
 
 ### 2.1 `CreateVariant` overloads
 
-Each of the 45 distinct `ret_class` values over the 57 game rows maps to its own overload: 45 classes, 45 addresses. That includes `gchudsprite.create` 0x5366d0, which is not the winner. EXECUTED: the `call` to a `CreateVariant` in each row's body was followed. Each overload works the same way:
+Each of the 45 distinct `ret_class` values over the 57 game rows (56 winning registrations plus `gchudsprite.create` 0x5366d0, which is not the winner) maps to its own overload: 45 classes, 45 addresses. That includes `gchudsprite.create` 0x5366d0, which is not the winner. EXECUTED: the `call` to a `CreateVariant` in each row's body was followed. Each overload works the same way:
 - **non-null:** `inc dword ptr [edi+4]` (the AddRef; the count sits at **+4**), then `{type, ptr}`. The type id is registered lazily through `ScOSISystem::RegisterType` 0x5fae00, under the class's own name. All 45 names equal the class.
 - **null:** `{0x0f, 0}`, which is nothing.
 - **Exception, GcLegoGepetto 0x407bb0:** it has no null test. The AddRef at 0x407bbf runs before any check, so the original faults on a null `GcLegoGepetto*`. The two natives that use it (`gccharacter.getgepetto`, `gctoa.getgepetto`) are not on the A9 path.
@@ -139,43 +139,61 @@ Release counts: `Call` adds a reference to the VM (0x60b338) and releases it (0x
 
 ## §5 Errors inside nested engine calls (Decision 10 → (b)), and D16
 
-### 5.1 The catch census (EXECUTED; `tools/osi/exc.py` after R2)
+### 5.1 The catch census (EXECUTED; `tools/osi/exc.py` after R2; recounted with true function extents in fix round 1)
 
 **Coverage.**
 - `exc.py` decodes every `.exc` action kind with the runtime's own sizes (`docs/osi/opcodes.md` "Exception tables").
 - All 7,002 indexed functions decode with `truncated 0`.
-- The VM re-entry closure covers both entry routes: the 35 direct chains and the 49 indirect entries (R6). It holds 226 functions.
+- The VM re-entry closure is the reverse closure of `Call` 0x60b320 / `CallWithReturn` 0x60b450 over `gen/decomp/calls.jsonl`: **225 functions**. It covers both entry routes: the 35 direct chains and the 49 indirect entries (R6).
 
-**Direct call sites that reach the VM.** There are 438 inside those functions; 226 are listed in a call-site table, and **4 are inside a catch**:
+**Function extents (fix round 1, C-1).** A census must never take a function's end from the decomp's `size`.
+- `GcAreaLoader::LoadArea` 0x4fedd0 has a decomp `size` of 7,431 bytes, which ends at 0x500ad7. The function really runs to `ret 0xc` at **0x500fe4**, and the next function starts at 0x500ff0.
+- 358 functions have a direct `call` past their decomp `size`. EXECUTED: the objdump listing, with each instruction owned by the preceding function start in the union of the decomp and `.exc` starts.
+- The round-2 census assigned call sites by decomp bounds, and so it missed LoadArea's third block.
+- `exc.caught_calls` (fix round 1) takes each site's owner from the `.exc` table that lists it, so no size is involved. `calls.jsonl` itself does hold the LoadArea → LoadHives edge.
+
+**Direct call sites that reach the VM.** There are 450 inside the closure (objdump listing). **5 are inside a catch**; the whole `.exc` index has no other caught `E8` site whose target reaches the VM (`exc.caught_calls`, pinned by `test_real_vm_reaching_catch_sites`):
 - `_WinMain` 0x401078 and `SetUpScripting` 0x43925a. These are host roots: there the error ends the game (opcodes.md "After an error").
-- `GcAreaLoader::LoadArea` **0x4ff93e** (`LoadObjects`) and **0x5002ec** (`LoadCharacters`). Each has `catch(!ScCatchMessage!)`, `catch(!exception!)` and `catch(...)`, with pads 0x4ff945/964/984 and 0x5002f3/312/332.
+- `GcAreaLoader::LoadArea` **0x4ff93e** (`GcObjectLoader::LoadObjects` 0x53fc60), **0x5002ec** (`GcCharacterLoader::LoadCharacters` 0x53f3f0) and **0x500c0b** (`GcHiveLoader::LoadHives` 0x6261c0). Each has `catch(!ScCatchMessage!)`, `catch(!exception!)` and `catch(...)`, with pads 0x4ff945/964/984, 0x5002f3/312/332 and 0x500c12/31/51 (chain 0x69cd2e for the third, frame −244).
 
-**Indirect calls inside chain functions.** There are 391 indirect (`call [reg+n]`) sites, and 39 are inside a catch.
-- All 39 are `dec [x+4]; jg; call [vtable+4]` releases.
-- 37 of them release SLK-file or sound-table results: in `InitializeCollisionPhysics`, `DoSetUp`, `AddToa`, `AddBoss`, `AddCharacter`, `SetCurrentLevel`, `LoadArea` ×20 and the `GcCharacterAIController` ctor.
-- The other 2 are in `SetUpScripting`.
-- None of these releases reaches the VM. INFERRED: the only deleting destructors among the indirect entries are `GcHive`'s and `GcCinemaEngine`'s.
+**Indirect calls inside chain functions.** There are 418 indirect (`call [reg+n]`) sites in the closure (objdump listing), and **43** are inside a catch (`exc.caught_calls`).
+- All 43 are `dec [x+4]; jg; call [esi+4]` releases (the bytes `ff 56 04` at each site).
+- 41 of them release SLK-file or sound-table results: `LoadArea` ×22 (2 of them the hive SLK, 0x500bbf / 0x500be2), `SetCurrentLevel` ×6, `DoSetUp` ×3, and ×2 each in `InitializeCollisionPhysics`, `AddToa`, `AddBoss`, `AddCharacter` and the `GcCharacterAIController` ctor.
+- The other 2 are in `SetUpScripting` (after `CreateVM` and after `AddProcess`).
+- None of these releases reaches the VM. INFERRED: the only deleting destructors among the indirect entries are `GcHive`'s and `GcCinemaEngine`'s, and the released object types are taken from the preceding call.
+
+**The round-2 counts were bounds artefacts.** Round 2 gave 438 direct sites (4 caught) and 391 indirect sites (39 caught), all inside decomp bounds. The corrected counts are above. The objdump listing is a linear sweep, which desynchronises at `GcSaver::SwitchArea` 0x5d5520; so the listing's own closure has 224 functions, and 450 / 418 are floors. The caught counts (5 / 43) do not depend on the listing.
 
 **No catch in the VM itself.** `Call` 0x60b320 and `CallWithReturn` 0x60b450 have only cleanup records, all with 0x413ec0 (`~ScOSIVariant` = `mov eax, ecx; ret`). `Run` 0x60b850 has a short record. None catches.
 
 ### 5.2 `LoadArea` swallows (CITED)
 
+Three blocks of `GcAreaLoader::LoadArea` 0x4fedd0 reach the VM. Each is a try with the same three catches and the same shape:
+
+| Block | Guard (SLK result non-null) | Call | Pads | Rejoin | `esp` restored | Rethrow / retry flags (written only with 0) | Flag tests | Continues with |
+|---|---|---|---|---|---|---|---|---|
+| objects | — | 0x4ff93e `LoadObjects` | 0x4ff945 / 964 / 984 | 0x4ff996 | 0x4ff9b3 | `[ebp-0x980]` 0x4ff843 / `[ebp-0x984]` 0x4ff86d | 0x4ff9e0 / 0x4ffa2a | `ShowLoadingBar` 0x4ffa45 |
+| characters | 0x5002ad | 0x5002ec `LoadCharacters` | 0x5002f3 / 312 / 332 | 0x500344 | 0x500361 | `[ebp-0x958]` 0x5001fe / `[ebp-0x95c]` 0x500228 | 0x50038e / 0x5003d8 | `ShowLoadingBar` 0x5003f3 |
+| hives | 0x500be5 / 0x500bec | 0x500c0b `LoadHives` | 0x500c12 / 31 / 51 | 0x500c63 | 0x500c80 | `[ebp-0x930]` 0x500b48 / `[ebp-0x934]` 0x500b72 | 0x500cad / 0x500cf7 | `ShowLoadingBar` 0x500d12 |
+
 **What the pads do.**
-- They store `{error, qualifier}`: `kUndefinedError` 0x8391f8 for `...`, and 0x839230 for `!exception!`.
-- They rejoin at 0x4ff996 / 0x500344, and `esp` is restored at 0x4ff9b3 / 0x500361.
+- They store `{error, qualifier}` in `LoadArea`'s own locals: `kUndefinedError` 0x8391f8 for `...`, and 0x839230 for `!exception!` (hive block: 0x500c51 / 0x500c3d into `[ebp-0xfc]`). Nothing reads that pair again except the dead rethrow test.
 
 **Why nothing is rethrown.**
-- The rethrow flags `[ebp-0x980]` / `[ebp-0x958]` and the retry flags `[ebp-0x984]` / `[ebp-0x95c]` are written only with 0 (0x4ff843, 0x4ff86d, 0x5001fe, 0x500228), and their address is never taken.
-- So the tests at 0x4ff9e0 / 0x4ffa2a and 0x50038e / 0x5003d8 fall through, and loading continues with `ShowLoadingBar` (0x4ffa45 / 0x5003f3).
+- Over the full extent 0x4fedd0–0x500fe4, each rethrow or retry flag is written only with 0, at the addresses in the table, and no instruction takes its address. EXECUTED: grep of the listing for the six frame offsets.
+- So each rethrow test falls through past its `___throw` 0x657260 (hive block: 0x500cef), each retry test falls through, and loading continues with `ShowLoadingBar` 0x4fea80.
+
+**The hive block's path to the VM** (direct calls, each site CITED): `LoadHives` 0x6261c0 → `GcHive::GcHive` 0x6236a0 (0x6262b5) → `GcMoveableObj::GcMoveableObj` 0x5432a0 (0x6236d4) → `GcMoveableObj::SetupMoveable` 0x545c00 (0x54408b, past that ctor's decomp `size`) → `GcMotionSystem::SetupMoveable` 0x574b80 (0x545c20) → `SetUnderWater` 0x589050 (0x574efd, under the `MainCharacterID` guard of §4) → `Call` (0x589154 / 0x589249). The hive SLK is `GcHiveLoader::GetSLKFile` 0x500ff0 (call 0x500b8a) on the name built from `%.4s_hive.slb` (format 0x729a88, at 0x4ff606).
 
 ### 5.3 The swallow does not fire on the A9 path
 
 **`frnt` data (CITED from the data).**
 - `LoadArea` builds its file names as `Root/Data/Levels/%.4s/%.4s/%.4s_<kind>.slb` (format strings 0x4ff52b–0x4ff611).
-- `levels/lev0/frnt.blk` (listed with `tools/research/blk.py`, EXECUTED) holds `FRNT_CAM`, `FRNT_LIGHT`, `FRNT_OBJ` and `FRNT_POS` `.slb` files, ten `.x` files and two `.bcl` files.
+- `levels/lev0/frnt.blk` (listed with `V=-v tools/research/blk.py $LOMN_DATA/install/data/levels/lev0/frnt.blk`, EXECUTED; re-run in fix round 1) holds 16 entries: `FRNT_CAM`, `FRNT_LIGHT`, `FRNT_OBJ` and `FRNT_POS` `.slb` files, ten `.x` files and two `.bcl` files.
 - That this path maps to `lev0/frnt.blk` is INFERRED from the M1 VFS layout.
 - **No `frnt_char.slb`.** `GetSLKFile` returns null, and the `LoadCharacters` block is skipped (0x5002ad).
-- **No hive, instance, vine, emit or spot files** either.
+- **No hive file:** the listing's 16 entries hold no `FRNT_HIVE.slb`. So `GcHiveLoader::GetSLKFile` returns null (INFERRED, as for the character file), and the hive block is skipped by its guard (`cmp [ebp-0x2ec], 0; je 0x500c86` at 0x500be5 / 0x500bec).
+- **No instance, vine, emit or spot files** either.
 - **`FRNT_OBJ.slb`** (396 bytes, read with `tools/research/slb.py`) holds 6 records of 0x3c bytes (stride: `add [ebp-0x230], 0x3c` at 0x5406fd).
   - The ids are `sky1`, `tre1`, `plnt`, `main`, `watr` and `lava`.
   - The flags (+0x38) are 0x110, 0x08, 0x08, 0x10, 0x110 and 0x10.
@@ -184,13 +202,18 @@ Release counts: `Call` adds a reference to the VM (0x60b338) and releases it (0x
 
 **Oracle check (EXECUTED).** `OnEvent(0x36, 0)`, made as a nested call while Setup is inside `gcareadirector.setcurrentarea`, runs without error in 310 instructions, and Setup completes.
 
-**Runtime confirmation.** Task 10's `swallow_count` probe counts the nested calls and the caught errors in the modelled `LoadArea` blocks with real natives: `swallow nested-calls k errors m` in the coverage report.
+**Runtime confirmation.** Task 10's `swallow_count` probe counts the nested calls and the caught errors in **all three** modelled `LoadArea` blocks (objects, characters, hives) with real natives: `swallow nested-calls k errors m` in the coverage report.
 
 ### 5.4 D16, the swallowed nested error (rule)
 
 > **D16. The swallowed nested error.**
 >
-> **Scope.** The natives `gcareadirector.setcurrentarea`, `gcareadirector.switchcurrentarea` and `gcareadirector.switchareas` (and the host entries `GcCollisionPhysicsGroup::Process` / `GcBAGroup::Process`) swallow nested errors raised from engine calls made inside `GcAreaLoader::LoadArea` 0x4fedd0's `LoadObjects` (0x4ff93e) and `LoadCharacters` (0x5002ec) blocks. No other VM-reaching call site sits inside a catch (§5.1).
+> **Scope.** Errors raised by engine calls made inside the three swallowing blocks of `GcAreaLoader::LoadArea` 0x4fedd0 are swallowed: `LoadObjects` (0x4ff93e), `LoadCharacters` (0x5002ec) and `LoadHives` (0x500c0b; it lies past the decomp's `size`, LoadArea really ends at 0x500fe4) (`docs/osi/natives.md` §5.2). `LoadArea` is reached from:
+> - the natives `gcareadirector.setcurrentarea` (`SetCurrentArea` 0x48a540 → `GcAreaDirector::LoadArea` 0x4892f0 at 0x48a588 → 0x4fedd0 at 0x48935a), `gcareadirector.switchcurrentarea` and `gcareadirector.switchareas`;
+> - the host process `GcCollisionPhysicsGroup::Process` 0x475fc0 → `SwitchCurrentArea` 0x48a5a0 (0x4763d7) → `GcAreaDirector::LoadArea` (0x48a727);
+> - the host process `GcBAGroup::Process` 0x54ab00 → `GcBAGroup::CheckForNew` 0x54b380 (0x54b071, in the tail past the decomp's `size`) → `GcAreaDirector::SwitchAreas` 0x48a760 (0x54b4d1) → `GcCollisionPhysicsGroup::SwitchAreas` 0x476cf0 (0x48a78d) → `SwitchCurrentArea` (0x476d08). `CheckForNew` makes that call only while byte `[0x735aec]` = 1 (0x54b4a1). Only `GcBAGroup::SetSwitchAreas` writes 1 there (0x54b24e), and it is 0 in `.data`.
+>
+> No other VM-reaching call site sits inside a catch. The true-extent census (natives.md §5.1) finds 5 caught sites: these 3 and the 2 host roots.
 >
 > 1. **At the throw.** A nested `Vm::call` that raises leaves the VM state exactly as the throw found it:
 >    - the stack, including the inner `{0xff, PC_ret}` marker (0x60b484), the argc arguments pushed by `SetPCAndArgs`, and the partial frame;
@@ -198,35 +221,56 @@ Release counts: `Call` adds a reference to the VM (0x60b338) and releases it (0x
 >    - `pc` = the failing handler's PC at the throw, as **the error-PC table in opcodes.md (T2a-pc)** gives it;
 >    - `frame_ptr` as the failing frame set it.
 >
->    No reset runs. The error's `E` line is written at the throw, and `fpu_pc` becomes 64 (the catch pad's `fninit`, 0x657245). The swallowing native catches the error inside its body and returns its normal result. The VM's own reference count (+2, from 0x60b338 / 0x60b46b) is not modelled.
-> 2. **The calling handler** (0x82, 0x83, 0x84), after a swallowing native returns:
->    - pops n slots with dispose **from the current top** (0x601c50–0x601c6b);
->    - pushes the result (0x601c8d);
->    - self-patches the **outer** instruction, through the start pointer it saved at entry (0x6015b8; written at 0x601e2b–0x601eaa), for 0x82 only;
->    - **does not change `pc`**: 0x82 never writes VM+0x1f58 after the native call.
+>    No reset runs. `Call`, `CallWithReturn` and `Run` hold only no-op destructor records (0x413ec0, `mov eax, ecx; ret`), so unwinding through the VM changes no VM state. `fpu_pc` becomes 64 (the catch pad's `fninit`, 0x657245). The swallowing native catches the error inside its body and returns its normal result. The VM's own reference count (+2, from 0x60b338 / 0x60b46b) is not modelled.
+> 2. **The `E` line of a swallowed error (port rule; the `E` line is a trace artifact).**
+>    - The original records nothing that can be seen. Each pad stores `{error, qualifier}` in `LoadArea`'s own locals, and nothing reads that pair again (natives.md §5.2).
+>    - The port writes the swallowed error's `E` line **at the swallow point**, in the swallowing host's catch (the conformance runner for a `swallow` test native; the modelled `LoadArea` block for the real natives). The line is built from the VM state as at the throw: `pc` and `op` are the failing instruction's own address and byte (as for every `E` line), and `depth` is the stack depth at the throw. A `P <pc> 64` line follows it if `fpu_pc` was 24.
+>    - Unwinding runs no VM code, so this `E` line directly follows the failing instruction's `I` line.
+>    - The swallowing catch does **not** set the outermost call's `last_error`, does **not** run `reset_after_error()` and ends no engine call. The outermost `Vm::call` returns `ok = true` unless another error escapes it.
+>    - This amends D10's "the outermost `Vm::call` writes the `E` line" for swallowed errors only. A nested error that is **not** swallowed is still recorded exactly once, by the outermost `Vm::call` (one `E` line, `ok = false`). The nested calls it passes through record nothing.
+> 3. **The calling handler** (0x82, 0x83, 0x84), after a swallowing native returns:
+>    - **By-reference writes land in the native's original argument slots, by address.** For a parameter declared 0x200, the handler gives the native the **address** of the argument's stack slot. That address is computed before the native call from the top pointer VM+0x1f50: slot = top − (n − i), at 0x601804–0x601819. The handler boxes it as `{0x200, address}` (0x60185d / 0x601862) and passes the address itself, `*(box+4)` (0x60198c–0x601abc; opcodes.md rows 0x82, 0x83 and 0x84). After a swallow those slots lie **under** the leftovers, below the inner marker. A by-ref write therefore goes to the slot the handler addressed before the nested call, never to top − (n − i) recomputed after it. As conformance rule 14(d) says, a write overwrites the slot without disposing the old value.
+>    - Then the handler pops n slots with dispose **from the current top** (0x601c50–0x601c6b). After a swallow these are n inner leftovers, never the written slots. The written values stay where they are, in the leftover region.
+>    - It pushes the result (0x601c8d).
+>    - For 0x82 only, it self-patches the **outer** instruction through the start pointer it saved at entry (0x6015b8; written at 0x601e2b–0x601eaa).
+>    - It **does not change `pc`**: 0x82 never writes VM+0x1f58 after the native call.
 >
 >    `Run` re-reads `pc` every step (0x60b856), so dispatch continues inside the inner function at the error PC.
-> 3. **A later `0x52`** that meets an `0xff` marker stops the running `Run` loop (0x600d54–0x600d87). The engine call that owns that loop then:
+> 4. **A later `0x52`** that meets an `0xff` marker stops the running `Run` loop (0x600d54–0x600d87). The engine call that owns that loop then:
 >    - pops the result (0x60b505);
 >    - pops with dispose to the first `0xff` marker (0x60b53e–0x60b560), which is the inner one;
->    - decrements `context_depth`, and rescans `frame_ptr` if it is not 0 (0x60b569–0x60b59b);
+>    - decrements `context_depth` (0x60b562), and rescans `frame_ptr` if `context_depth` is then not 0 (`cmp word [edi+0x1f4c], 0` at 0x60b569, `je` 0x60b571; the scan runs to 0x60b59b);
 >    - sets `pc` from that marker (0x60b5a2);
 >    - returns the inner function's value.
 >
 >    The rest of the outer function never runs in that engine call.
-> 4. **Nothing else resets.** Leftover slots stay under the top until something pops them, and `context_depth` stays raised for the rest of the run.
+> 5. **Nothing else resets.** Leftover slots stay under the top until something pops them, and `context_depth` stays raised for the rest of the run.
+> 6. **`reset_after_error()` after a later error (port rule; host behaviour, visible in traces through its `F` lines).**
+>    - In the original, an error that reaches a host root ends the game (opcodes.md "After an error"), so there is no original reset to cite.
+>    - In the port, when an error escapes the outermost `Vm::call` (D10), `reset_after_error()` pops with dispose from the top **down to and including that outermost call's own marker**. That marker is the slot at the stack depth the call recorded at its entry, before it pushed the marker. The reset emits the `F` lines of the heap values it frees.
+>    - It does **not** stop at the first `0xff` it meets. Inner markers left by a swallow (as in `n-swallow-reerror`) are popped like any other slot.
+>    - It then restores `context_depth`, `frame_ptr` and `pc` to their values at that call's entry.
+>    - Leftovers below that entry depth, left by an **earlier** successful call, are not touched.
+>    - Conformance rule 14(c)'s "the call's outer marker" means this marker.
 >
 > **Test-native field `"swallow": true`.**
-> - The native makes its `calls` nested call. If that call raises, the runner applies rule 1 inside the native.
-> - The native then returns its `returns` normally and applies its `writes`, and the handler applies rule 2.
-> - The expectations record the outer `Vm::call` result and the post-call snapshot: `depth`, `top`, `pc`, `context_depth`.
+> - The native makes its `calls` nested call. If that call raises, the runner applies rule 1 inside the native and writes the `E` line there (rule 2).
+> - Then the native applies its `writes` to its original argument slots, by address (rule 3), and returns its `returns` normally. The handler applies rule 3.
+> - The expectations record the outer `Vm::call` result and the post-call snapshot: `depth`, `top`, `pc` and `context_depth`. `pc` is compared under conformance rule 15 as amended by T2a-pc.
 >
-> **Corpus programs:**
+> **Corpus programs** (Task 2b writes the files):
 > - **`n-swallow-continue`.**
 >   - Setup: `main` makes a game-variable write W1, calls T (`swallow`, n = 0, `calls` `onevent`, `returns` 5), then makes a write W2 and returns 1. `onevent` executes `0x02` (which advances PC by 1 before its error, 0x6038a6), then pushes 7 and returns.
->   - Expect: `main`'s result is **7**; W1 is written and W2 is not; `context_depth` after the call is 1. A second `call("main2")` succeeds above the leftovers.
-> - **`n-swallow-reerror`.** `onevent` executes 0x85 (`BCLUnused`, which does not advance, 0x60be60). It re-executes after the swallow and errors again inside `main`'s `Run`. Expect two `E` lines with the same pc and `ok = false`.
+>   - Expect: `main`'s result is **7**; W1 is written and W2 is not; `context_depth` after the call is 1; exactly one `E` line, written inside T. A second `call("main2")` succeeds above the leftovers.
+> - **`n-swallow-reerror`.**
+>   - `onevent` executes 0x85 (`BCLUnused`, which does not advance, 0x60be60). It re-executes after the swallow and errors again inside `main`'s `Run`.
+>   - Expect two `E` lines with the same pc: the first written inside T (rule 2), the second by the outermost call. The result is `ok = false`.
+>   - `reset_after_error()` then returns the stack to the outermost call's entry depth: through the inner leftover marker, down to and including the outer one (rule 6).
 > - **`n-swallow-pops`.** T has n = 2. `onevent` (argc 2) holds 2 locals when its `0x02` fails. The 2 pops remove those locals, not T's arguments. `onevent` then returns T's result. T's arguments stay at the bottom of the leftover region.
+> - **`n-swallow-writes`.**
+>   - Setup: T has n = 1 and one parameter declared 0x200 (by reference). `main` pushes int 3 as T's argument and calls T (`swallow`, `calls` `onevent` with the argument int 4, `writes` argument 0 ← int 9, `returns` 5). `onevent` (argc 1) executes `0x02`, which fails with its argument int 4 on top, then pushes 7 and returns.
+>   - Expect: `main`'s result is **7**. The handler's single pop disposes `onevent`'s leftover int 4. After the call the top is **int 9**, in T's argument slot, and `context_depth` is 1.
+>   - A write addressed from the top after the nested call would land on the int 4. The pop would then remove the 9, and the top would be int 3, so the program tells the two readings apart.
 
 ## §6 The headless frame
 
@@ -238,7 +282,7 @@ Release counts: `Call` adds a reference to the VM (0x60b338) and releases it (0x
 4. It re-runs the queue up to 10 more rounds (`cmp [ebp-0xd4], 0xa` at 0x4a957d).
 5. It applies queued adds (0x4a95c5–0x4a9635; +1 reference each, 0x4a95da), then removes (0x4a963a onward).
 
-The map's key order between processes, set by the priority byte from `AddProcess` 0x4a8f60, is **not resolved**.
+The map's key order between processes, set by the priority byte that `ScProcessManager::AddProcess` 0x4a8f50 reads (`movzx edx, byte [ebp+0xc]` at 0x4a8f60), is **not resolved**.
 
 ### 6.2 Engine-to-VM sources on the front end, within 600 frames
 
@@ -266,22 +310,48 @@ The map's key order between processes, set by the priority byte from `AddProcess
 - `GcToa::Process` 0x56959f needs `[toa+0x3b4]` to be non-null. Its only writers are the ctor (0x567ede, null), the reset after the call (0x5695aa) and `GcToa::LiftObject` (0x56ca53).
 - `CheckForNewAnim` 0x5094fd needs the animation-done list at 0x83aaac to be non-empty. It is filled only by native `checkanimdone` 0x5082c0 (not in the 69) and by boss ctors.
 
-**The probe (EXECUTED; `tools/osi/event_probe.py`, commit `9bd3107`).**
-- Each site's event tuple, built as the asm builds it, is injected into the oracle's A9 run. Computed arguments use 'cnt1' / 0 / 1 and 0.0 / 1.0.
-- That gives 47 tuples at frames {0, 1, 10, 100, 599}: **235 injections, 229 SAME, 6 CHANGED, 0 ERROR** (116.6 s; stub natives, A9 keys).
-- **The 6 CHANGED** are `OnEvent(0x28, 10000.0, 'hell' | 'crsh' | 'impc')` injected at frames 0 and 1 (−2391 / −2083 instructions).
-  - That is the fatal-damage event of `GcMotionSystem::PostProcess` 0x576862, `DoObjectFall` 0x5804d0, `CheckCrushed1` 0x586408, `CheckWallCloseness` 0x58738b / 0x587628 and `HellCheck` 0x589f17 (after `GcToa::ToaMustDie` 0x589e50).
-  - The float 10000.0 is at 0x73caa0, 0x73d5f4, 0x73db90, 0x73dc30, 0x73dc48 and 0x73de5c. The ids are immediates.
-- **The effect:** in frames 0–4 the script skips `sctextobject.setstring` and its `gchuddirector.hide`/`show` calls. From frame 5 on the run is identical.
-- The same tuples at frames 10, 100 and 599, and every other tuple at every frame, are SAME.
+**The probe (EXECUTED; `tools/osi/event_probe.py`, commit `9bd3107`; repeat mode added and re-run in fix round 1).**
+- Each site's event tuple, built as the asm builds it, is injected into the oracle's A9 run (stub natives, A9 keys, 600 frames). Computed arguments use 'cnt1' / 0 / 1 and 0.0 / 1.0, which gives 47 tuples.
+- `tools/osi/event_probe.py --verify-sites EXE` checks the 42 sites against the exe as data: 42 / 42 hold.
+- **Single shot** (the default): one run per tuple and frame, with the tuple injected once at that frame.
+- **Repeat** (`--repeat`): one run per tuple, with the tuple injected at **every** frame of `--at`. This covers an event the Toa fires every frame, or N times toward a threshold.
 
-**Ruling.** The Toa process path is **out of scope for A9 in M2a-2** and is implemented in M3.
-- The CHANGED event needs lethal damage, in frames 0–1, to a Toa standing at rest on the front end. That is INFERRED to be physically implausible.
+| Mode | `--at` | Runs | SAME | CHANGED | ERROR | Time |
+|---|---|---|---|---|---|---|
+| single shot | 0,1,10,100,599 | 235 | 229 | 6 | 0 | 116.7 s (round 3: 116.6 s, identical lines) |
+| repeat | 0,1,10,100,599 | 47 | 43 | 4 | 0 | 23.8 s |
+| repeat | 2-599 | 47 | 43 | 4 | 0 | 36.7 s |
+| repeat | all (0-599) | 47 | 43 | 4 | 0 | 36.4 s |
+
+**The fatal tuple, at frames 0–2.**
+- These are `OnEvent(0x28, 10000.0, 'hell' | 'crsh' | 'impc')`: the fatal-damage event of `GcMotionSystem::PostProcess` 0x576862, `DoObjectFall` 0x5804d0, `CheckCrushed1` 0x586408, `CheckWallCloseness` 0x58738b / 0x587628 and `HellCheck` 0x589f17 (after `GcToa::ToaMustDie` 0x589e50).
+- The float 10000.0 is at 0x73caa0, 0x73d5f4, 0x73db90, 0x73dc30, 0x73dc48 and 0x73de5c. The ids are immediates.
+- **Single shot at frame 0 or 1** (−2391 / −2083 instructions): the script skips `sctextobject.setstring` and its `gchuddirector.hide` / `show` calls in frames 0–4.
+- **Single shot at frame 2** (found in fix round 1; round 3 never sampled frames 2–9): the same calls are skipped in frames 2–4 (−308, −308, −1159).
+- **Single shot at frame 5, 9, 10, 100 or 599:** SAME.
+- **Repeat:** at 0,1,10,100,599 and at every frame the result is −2391, first divergence frame 0. At 2-599 it is −1775, first divergence frame 2.
+
+**The non-lethal threshold: `(0x28, int 2, 'impc')`, from `CheckWallCloseness` 0x587240** (new in fix round 1).
+- A single shot at any frame is SAME.
+- **Two or more injections in frames 0–1** (repeat at 0,1,10,100,599) change frame 4 by −32 instructions, with the same natives.
+- **Injection at every frame from frame 2** (repeat at 2-599, or all) skips **3 `gchuddirector.hide` calls in frame 4** (−1159).
+
+**Where it re-converges.** Every change stays inside frames 0–4, the script's HUD set-up frames. From frame 5 on, every run is identical to the baseline in its PC sequence and its native calls, including the runs that inject at every frame through 599. No injection gives ERROR. Every other tuple is SAME in every mode.
+
+**Ruling (controller, round 3; confirmed in fix round 1).** The Toa process path is **out of scope for A9 in M2a-2** and is implemented in M3. It stays a documented host-source gap.
+- The A9 differential compares script paths, and the path re-converges from frame 5 in every mode.
+- The fatal tuples need lethal damage, in frames 0–2, to a Toa standing at rest on the front end. That is INFERRED to be physically implausible.
 - The injection position, after the key calls and before each frame's `Process`, is INFERRED: the process-map order is not resolved.
-- **Re-checks:**
-  - Task 10 re-runs `event_probe.py --natives-impl real` with the real natives;
-  - M2a-3's menu screenshot comparison would show any HUD difference;
-  - M3 models the physics.
+
+**M2a-3 risk: the wall-closeness event.**
+- `(0x28, int 2, 'impc')` from `CheckWallCloseness` 0x587240 is **non-lethal**. It is **plausible** for a Toa standing on the front end.
+- If it fires twice in frames 0–1, or every frame from frame 2, the script skips 3 `gchuddirector.hide` calls in frame 4. The script path re-converges, but the skipped hide calls change **engine HUD state**, so persistent HUD visibility may differ from the original.
+- **M2a-3 must either** model `CheckWallCloseness` for the front-end Toa, **or** settle the question against the owner's menu screenshots.
+
+**Re-checks:**
+- Task 10 re-runs `event_probe.py --repeat --at all --natives-impl real` with the real natives;
+- M2a-3 settles the risk above;
+- M3 models the physics.
 
 ### 6.4 The 69 / 71 / 144 counts (EXECUTED: grep of the full objdump listing)
 
@@ -341,7 +411,7 @@ D11's "copy of argument 0" stub is **wrong** for all three. If the path ever hit
 | `gcsaver.getammo` / `setammo` | 0x5d3910 / 0x5d3840 | u16 `[0x7474c8]`, returned through 0x4183f0. Written by the GcToa ctor (0x56898b, = 250) and by `AddAmmo`, `LaunchElementalPower`, `ToaIsAlive` and `setammo` | 0. Setup calls `getammo` (native #419) before `addtoa` (#438), so it returns **0** |
 
 **What the init functions touch.**
-- `GcSaver::ResetData` 0x5d5490 writes only `[0x74748c]`, `[0x747490]`, `[0x747494]` and `[0x747498]`, the six counters `[0x83b3fa..0x83b50f]` and the conversation vector (0x5d5493–0x5d54ec). It does not touch the fields above.
+- `GcSaver::ResetData` 0x5d5490 writes only `[0x74748c]`, `[0x747490]`, `[0x747494]` and `[0x747498]`, the six counters `[0x83b3fa..0x83b50f]`, the conversation vector (call 0x5d54e7 on 0x838b90) and `[0x8391a0]` = 0 (0x5d54ec); 0x5d5493–0x5d54ec. It does not touch the fields above.
 - `GcSaver::InitData` 0x5d4700 builds the save path and calls `ResetData`.
 - `GcSaver::LoadIni` 0x5d4890 reads only `[GraphicsOptions]` (ResolutionW/H, Windowed, BitDepth, SvpOther, SvpRad, Fog, ParticleDetail, ShadowDetail, Gamma) and `[Misc]` (Language, ControlOption, SoundVolume). If the INI is missing it writes one (0x5d4a3c–0x5d4a57).
 - So the defaults above are the `.data` bytes.

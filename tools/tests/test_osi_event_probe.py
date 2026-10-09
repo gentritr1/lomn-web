@@ -117,6 +117,76 @@ def test_site_table_matches_the_asm_scan(ep):
                                                     0x2A, 0x2D, 0x2E, 0x2F, 0x36]
 
 
+# OnEvent(0x2a) counts; Process runs 2 extra instructions per frame while the count is exactly 2. One injection never
+# reaches the threshold; two do (fix round 1, m-5: an event the Toa fires repeatedly).
+ASM_COUNT = """
+.globals count
+.function Setup 0
+    PushConstant0
+    SetVariableValue global:count
+    PushConstant0
+    Return
+.function Process 3
+    GetVariableValue global:count
+    PushConstanti8 2
+    EqualTo
+    CompareAndBranchIfFalse @no
+    PushConstanti8 7
+    Pop
+no:
+    PushConstanti8 1
+    Return
+.function OnEvent 10
+    GetVariableValue 0
+    PushConstanti8 0x2a
+    EqualTo
+    CompareAndBranchIfFalse @fine
+    GetVariableValue global:count
+    PushConstanti8 1
+    Add
+    SetVariableValue global:count
+fine:
+    PushConstant0
+    Return
+"""
+
+
+def test_repeated_injection_reaches_a_threshold(ep, tmp_path):
+    """Hand-derived. Single shots at frame 3 or 5 leave the count at 1: SAME. With repeat=True one run injects at
+    frames 3 AND 5: the count is 2 from frame 5, so frames 5..9 run +2 each = +10, first divergence frame 5."""
+    sys.path[:0] = [str(REPO / "tools" / "osi")]
+    import osiasm
+    img, _ = osiasm.assemble(ASM_COUNT)
+    once = ep.probe(img, _rows(tmp_path), None, DATA / "types.json", frames=10, inject_frames=[3, 5],
+                    tuples=[(0x2A, ())], keys="")
+    assert [(r.verdict, r.frame, r.delta) for r in once] == [("SAME", 3, 0), ("SAME", 5, 0)]
+    rep = ep.probe(img, _rows(tmp_path), None, DATA / "types.json", frames=10, inject_frames=[3, 5],
+                   tuples=[(0x2A, ())], keys="", repeat=True)
+    assert [(r.verdict, r.frame, r.delta, r.divergence) for r in rep] == [("CHANGED", (3, 5), 10, "frame 5")]
+    assert ep.format_line(rep[0]).startswith("CHANGED 0x2a () 3,5 +10 frame 5")
+
+
+def test_at_parsing(ep):
+    """--at takes a list, ranges A-B, or `all` (every frame of the run); ranges print compressed."""
+    assert ep.parse_at("0,1,10,100,599", 600) == [0, 1, 10, 100, 599]
+    assert ep.parse_at("2-5", 600) == [2, 3, 4, 5]
+    assert ep.parse_at("all", 600) == list(range(600))
+    assert ep.fmt_frames(tuple(range(2, 600))) == "2-599"
+    assert ep.fmt_frames((0, 1, 10, 100, 599)) == "0,1,10,100,599"
+    assert ep.fmt_frames(7) == "7"
+
+
+def test_site_table_against_the_exe(ep, canonical_exe):
+    """m-4 (fix round 1): each SITES.call is `E8` to Call 0x60b320 (raw bytes), the last string pushed before it is
+    "OnEvent" (0x73b964 / 0x73df20), and the event id is the last immediate pushed before the first CreateVariant
+    0x413ed0 after the previous Call in the same function (function starts from the .exc index; objdump as data)."""
+    import shutil
+    if not shutil.which("objdump"):
+        pytest.skip("SKIPPED (no objdump)")
+    problems = ep.verify_sites(canonical_exe)
+    assert problems == []
+
+
 def test_representative_values_for_computed_arguments(ep):
     """A computed id takes 'cnt1' (0x636e7431, the Toa's key [0x782884]), 0 and 1; a computed int 0 and 1; a computed
     float 0.0 and 1.0. Vector k takes the k-th value of each list (the last one when a list is shorter)."""

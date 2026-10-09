@@ -1,8 +1,9 @@
 """M2a-2 T2a: the host-OnEvent injection probe. Does an engine -> script `OnEvent` from the Toa's process path change
 what the script does on the front-end?
 
-  event_probe.py --osi BASE.OSI [--frames 600] [--at 0,1,10,100,599] [--keys KEYSPEC] [--deadline SECONDS]
-                 [--natives-impl stub|real]
+  event_probe.py --osi BASE.OSI [--frames 600] [--at 0,1,10,100,599|A-B|all] [--repeat] [--keys KEYSPEC]
+                 [--deadline SECONDS] [--natives-impl stub|real]
+  event_probe.py --verify-sites EXE       check SITES against the exe (objdump, as data)
 
 Why (task-2a report, Decision 8): the Toa is a registered process (GcToa ctor, AddProcess 0x568262) and its
 PreProcess runs from the GcBAGroup process (0x54acca), every frame on the front-end, gated only by state Setup sets.
@@ -21,16 +22,21 @@ Method:
      (key and argument values; heap handles compared by type only), the injected call's own instructions excluded.
      SAME: identical. CHANGED: different. ERROR: the injected call, or any later call, raised (a host-originated
      OnEvent error ends the original game: opcodes.md "After an error").
+  4. --repeat (fix round 1, m-5): one run per tuple, injected at EVERY --at frame of that run, for an event the Toa
+     would fire every frame or N times toward a threshold. Without it each run injects the tuple once.
+Limits: computed arguments take representative values only (REPS); one tuple per run (no mixes of different events).
 
 Output (stdout), one line per injection, then a summary on stderr:
-  SAME|CHANGED|ERROR <id> (<args>) <frame> <delta instructions, %+d> <first divergence>
+  SAME|CHANGED|ERROR <id> (<args>) <frame(s)> <delta instructions, %+d> <first divergence>
 `<first divergence>` is `-`, `frame N` (the first frame whose PC or native sequence differs), or for ERROR
 `error "<message>" at pc %08x op %02x` (where the run stopped).
 """
 from __future__ import annotations
 
 import argparse
+import re
 import struct
+import subprocess
 import sys
 import time
 from fractions import Fraction
@@ -205,7 +211,8 @@ class Outcome(NamedTuple):
 
 
 def run(script, natives, mods, types, frames, keys, deadline, inject=None, natives_impl="stub") -> Outcome:
-    """inject = (frame, event, args) or None."""
+    """inject = (frame, event, args) or None; `frame` is one frame, or a tuple of frames (repeat mode: the same tuple
+    is injected at each of them, in one run)."""
     tt = osi_vm.TypeTable.load(types)
     if natives_impl == "real":
         raise SystemExit("event_probe.py: --natives-impl real needs tools/research/osi_natives (M2a-2 Task 4)")
@@ -217,6 +224,7 @@ def run(script, natives, mods, types, frames, keys, deadline, inject=None, nativ
     vm.pcs_seen = rec
     kc = osi_vm.key_calls(keys) if keys else {}
     stop, inject_error = "none", ""
+    at = set() if inject is None else ({inject[0]} if isinstance(inject[0], int) else set(inject[0]))
     dt = struct.unpack("<d", struct.pack("<Q", osi_vm.DT_BITS_DOUBLE))[0]
     t = 0.0
     pm_flag, proc_byte = 0, 1
@@ -238,7 +246,7 @@ def run(script, natives, mods, types, frames, keys, deadline, inject=None, nativ
                 if not r.ok:
                     err = vm.last_error
                     break
-            if err is None and inject is not None and inject[0] == k:
+            if err is None and inject is not None and k in at:
                 ev, args = inject[1], inject[2]
                 vs = [Variant(T_INT, ev)] + [_variant(a) for a in args]
                 vs += [NOTHING] * (10 - len(vs))
@@ -305,28 +313,132 @@ def compare(base: Outcome, inj: Outcome, event, args, frame) -> Result:
 
 
 def probe(script, natives, mods, types, frames=600, inject_frames=(0, 1, 10, 100, 599), tuples=None,
-          keys=A9_KEYS, deadline=60.0, natives_impl="stub") -> list:
+          keys=A9_KEYS, deadline=60.0, natives_impl="stub", repeat=False) -> list:
+    """Single-shot mode (default): one run per (tuple, frame), the tuple injected once, at that frame. Repeat mode: one
+    run per tuple, injected at EVERY frame of `inject_frames` in that run (an event the Toa fires every frame, or N
+    times toward a threshold); the result's `frame` is the tuple of frames."""
     base = run(script, natives, mods, types, frames, keys, deadline, None, natives_impl)
     if base.stop != "none":
         raise RuntimeError("the baseline run does not finish cleanly: %s" % base.stop)
     tuples = all_tuples() if tuples is None else tuples
     out = []
     for ev, args in tuples:
+        if repeat:
+            at = tuple(inject_frames)
+            r = run(script, natives, mods, types, frames, keys, deadline, (at, ev, args), natives_impl)
+            out.append(compare(base, r, ev, args, at))
+            continue
         for f in inject_frames:
             r = run(script, natives, mods, types, frames, keys, deadline, (f, ev, args), natives_impl)
             out.append(compare(base, r, ev, args, f))
     return out
 
 
+def parse_at(spec: str, frames: int) -> list:
+    """`--at`: comma-separated frames or ranges A-B (inclusive), or `all` (0 .. frames-1)."""
+    if spec == "all":
+        return list(range(frames))
+    out = []
+    for part in spec.split(","):
+        if "-" in part:
+            a, b = part.split("-")
+            out.extend(range(int(a), int(b) + 1))
+        else:
+            out.append(int(part))
+    return out
+
+
+def fmt_frames(f) -> str:
+    """One frame, or a tuple of frames with runs of 3 or more printed as A-B."""
+    if isinstance(f, int):
+        return str(f)
+    parts, i, f = [], 0, list(f)
+    while i < len(f):
+        j = i
+        while j + 1 < len(f) and f[j + 1] == f[j] + 1:
+            j += 1
+        if j - i >= 2:
+            parts.append("%d-%d" % (f[i], f[j]))
+        else:
+            parts.extend(str(x) for x in f[i:j + 1])
+        i = j + 1
+    return ",".join(parts)
+
+
 def format_line(r: Result) -> str:
-    return "%s 0x%02x %s %d %+d %s" % (r.verdict, r.event, fmt_args(r.args), r.frame, r.delta, r.divergence)
+    return "%s 0x%02x %s %s %+d %s" % (r.verdict, r.event, fmt_args(r.args), fmt_frames(r.frame), r.delta,
+                                       r.divergence)
+
+
+CREATE_VARIANT_BYTE = 0x413ED0      # CreateVariant(byte) -> {0x10, v}: the event id's overload
+VM_CALL = 0x60B320                  # ScOSIVirtualMachine::Call
+_INS = re.compile(r"^\s*([0-9a-f]+):\s+((?:[0-9a-f]{2} )+)\s*(\S+)\s*(.*)$")
+
+
+def verify_sites(exe, sites=None, objdump="objdump") -> list:
+    """Check SITES against the exe, read as data (fix round 1, m-4). For each site: the bytes at `call` are E8 to
+    Call 0x60b320; the last immediate pushed before it names "OnEvent"; and `event` is the last immediate pushed before
+    the first CreateVariant 0x413ed0 call after the previous Call in the same function. Function starts come from the
+    `.exc` index (never from a decompiler size); objdump decodes each function from its start. Returns the problems
+    (empty = all sites hold)."""
+    import bisect
+    import collections
+    import exc as excmod
+    sites = SITES if sites is None else sites
+    img = excmod.Image.from_file(exe)
+    starts = sorted(excmod.load_index(img))
+    groups = collections.defaultdict(list)
+    for s in sites:
+        groups[starts[bisect.bisect_right(starts, s.call) - 1]].append(s)
+    problems = []
+
+    def imm(ops):
+        m = re.match(r"^\$?(0x[0-9a-f]+|\d+)$", ops.strip())
+        return int(m.group(1), 0) if m else None
+
+    def target(ops):
+        m = re.match(r"^\*?(0x[0-9a-f]+)", ops.strip())
+        return int(m.group(1), 16) if m else None
+
+    for f, group in sorted(groups.items()):
+        stop = max(s.call for s in group) + 5
+        out = subprocess.run([objdump, "-d", "--start-address=%#x" % f, "--stop-address=%#x" % stop, str(exe)],
+                             capture_output=True, text=True, timeout=60, check=True).stdout
+        ins = []
+        for ln in out.splitlines():
+            m = _INS.match(ln)
+            if m:
+                ins.append((int(m.group(1), 16), m.group(3), m.group(4).split("<")[0].split("#")[0].strip()))
+        for s in group:
+            raw = img.read(s.call, 5)
+            if raw[0] != 0xE8 or (s.call + 5 + struct.unpack("<i", raw[1:])[0]) & 0xFFFFFFFF != VM_CALL:
+                problems.append("%#x: not E8 -> Call 0x60b320" % s.call)
+                continue
+            prev = [a for a, mn, ops in ins if a < s.call and mn.startswith("call") and target(ops) == VM_CALL]
+            lo = max(prev) if prev else f - 1
+            region = [(a, mn, ops) for a, mn, ops in ins if lo < a < s.call]
+            pushes = [imm(ops) for a, mn, ops in region if mn.startswith("push") and imm(ops) is not None]
+            if not pushes or img.cstr(pushes[-1]) != "OnEvent":
+                problems.append("%#x: the last pushed immediate is not \"OnEvent\"" % s.call)
+            cv = [a for a, mn, ops in region if mn.startswith("call") and target(ops) == CREATE_VARIANT_BYTE]
+            if not cv:
+                problems.append("%#x: no CreateVariant 0x413ed0 after the previous Call" % s.call)
+                continue
+            ev = [imm(ops) for a, mn, ops in region if a < cv[0] and mn.startswith("push") and imm(ops) is not None]
+            if not ev or ev[-1] != s.event:
+                problems.append("%#x: event %s in the exe, %#x in SITES" % (s.call, hex(ev[-1]) if ev else "none",
+                                                                           s.event))
+    return problems
 
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--osi", required=True)
+    ap.add_argument("--osi")
     ap.add_argument("--frames", type=int, default=600)
-    ap.add_argument("--at", default="0,1,10,100,599")
+    ap.add_argument("--at", default="0,1,10,100,599", help="frames: a list, ranges A-B, or all")
+    ap.add_argument("--repeat", action="store_true",
+                    help="inject each tuple at every --at frame in ONE run (default: one run per tuple and frame)")
+    ap.add_argument("--verify-sites", metavar="EXE", help="check SITES against the exe (objdump, as data) and exit")
     ap.add_argument("--keys", default=A9_KEYS)
     ap.add_argument("--deadline", type=float, default=60.0, help="seconds per run")
     ap.add_argument("--natives-impl", choices=("stub", "real"), default="stub")
@@ -334,17 +446,24 @@ def main(argv=None) -> int:
     ap.add_argument("--mods", default=str(DATA / "natives_beta150.json"))
     ap.add_argument("--types", default=str(DATA / "types.json"))
     a = ap.parse_args(argv)
+    if a.verify_sites:
+        problems = verify_sites(a.verify_sites)
+        print("\n".join(problems) or "verify-sites: %d sites hold" % len(SITES))
+        return 1 if problems else 0
+    if not a.osi:
+        ap.error("--osi is required (except with --verify-sites)")
     t0 = time.monotonic()
     res = probe(Path(a.osi).read_bytes(), a.natives, a.mods, a.types, a.frames,
-                [int(x) for x in a.at.split(",")], None, a.keys, a.deadline, a.natives_impl)
+                parse_at(a.at, a.frames), None, a.keys, a.deadline, a.natives_impl, a.repeat)
     for r in res:
         print(format_line(r))
     counts = {}
     for r in res:
         counts[r.verdict] = counts.get(r.verdict, 0) + 1
-    print("event_probe: %d sites, %d tuples, %d injections, %s, frames %d, %.1f s" % (
-        len(SITES), len(all_tuples()), len(res), ", ".join("%s %d" % (k, counts[k]) for k in sorted(counts)),
-        a.frames, time.monotonic() - t0), file=sys.stderr)
+    print("event_probe: %d sites, %d tuples, %d %s, %s, frames %d, at %s, %.1f s" % (
+        len(SITES), len(all_tuples()), len(res), "repeated runs" if a.repeat else "injections",
+        ", ".join("%s %d" % (k, counts[k]) for k in sorted(counts)), a.frames,
+        fmt_frames(tuple(parse_at(a.at, a.frames))), time.monotonic() - t0), file=sys.stderr)
     return 0
 
 

@@ -214,6 +214,32 @@ def decode_function(img: Image, func: int, index: dict[int, int] | None = None) 
     return out
 
 
+def caught_calls(img: Image, index: dict[int, int] | None = None) -> list[dict]:
+    """Every call site inside a catch, over the whole `.exc` index: the sites whose action chain holds a kind-0x10
+    record, each owned by the function whose table lists it (M2a-2 T2a fix round 1). No function size is used, so a
+    census built on this cannot drop a site that a decompiler's short `size` leaves outside its function (C-1:
+    GcAreaLoader::LoadArea's third block at 0x500c0b lies past the decomp's 7,431 bytes). Each entry is
+    {'func', 'call', 'kind', 'target'}: kind 'direct' (E8 rel32; target = the callee), 'indirect' (FF /2; target None)
+    or 'other' (any other bytes). Sorted by call address."""
+    index = index if index is not None else load_index(img)
+    out = []
+    for f in index:
+        d = decode_function(img, f, index)
+        if d["info"] is None or d["short"]:
+            continue
+        for s in d["sites"]:
+            if not any(r.get("kind") == 0x10 and not r.get("unknown") for r in s["records"]):
+                continue
+            a = s["call"]
+            kind, target = "other", None
+            if img.has(a, 5) and img.read(a, 1) == b"\xe8":
+                kind, target = "direct", (a + 5 + img.i32(a + 1)) & 0xFFFFFFFF
+            elif img.has(a, 2) and img.read(a, 1) == b"\xff" and (img.read(a + 1, 1)[0] >> 3) & 7 == 2:
+                kind = "indirect"
+            out.append({"func": f, "call": a, "kind": kind, "target": target})
+    return sorted(out, key=lambda c: c["call"])
+
+
 def _s(n: int) -> str:
     return "%d" % n
 

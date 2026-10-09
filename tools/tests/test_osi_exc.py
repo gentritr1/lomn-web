@@ -276,15 +276,95 @@ def test_real_formerly_truncated_chain_functions(real):
 
 
 def test_real_loadarea_swallow_sites(real):
-    """Decision 10 (b): GcAreaLoader::LoadArea 0x4fedd0 wraps LoadObjects (call 0x4ff93e) and LoadCharacters
-    (call 0x5002ec) in catch(ScCatchMessage) / catch(exception) / catch(...)."""
+    """Decision 10 (b): GcAreaLoader::LoadArea 0x4fedd0 wraps LoadObjects (call 0x4ff93e), LoadCharacters
+    (call 0x5002ec) and, past the decomp's `size` (fix round 1, C-1), GcHiveLoader::LoadHives (call 0x500c0b) in
+    catch(ScCatchMessage) / catch(exception) / catch(...). The function really runs to `ret 0xc` at 0x500fe4."""
     image, idx = real
     d = exc.decode_function(image, 0x4FEDD0, idx)
     by = {s["call"]: s for s in d["sites"]}
-    for call, want in ((0x4FF93E, [0x4FF945, 0x4FF964, 0x4FF984]), (0x5002EC, [0x5002F3, 0x500312, 0x500332])):
+    for call, want in ((0x4FF93E, [0x4FF945, 0x4FF964, 0x4FF984]), (0x5002EC, [0x5002F3, 0x500312, 0x500332]),
+                       (0x500C0B, [0x500C12, 0x500C31, 0x500C51])):
         recs = [r for r in by[call]["records"] if r["kind"] == 0x10]
         assert [r["pad"] for r in recs] == want
         assert [r["type"] for r in recs] == ["!ScCatchMessage!", "!exception!", ""]
+    assert by[0x500C0B]["chain"] == 0x69CD2E
+
+
+# ----------------------------------------------------------------------------------------------- caught call sites (fix round 1, C-1)
+
+CODE = 0x400000
+
+
+def code_image():
+    """synth() plus code bytes at the call sites: 0x400110 `call 0x400800` (caught), 0x400120 `call 0x400900` (dtor
+    only), 0x400410 `call [esi+4]` (caught), 0x400510 `call 0x400900` (caught), 0x400610 `call [0x401000]` (caught),
+    0x400710 `call 0x400800` (terminate only, not caught)."""
+    base = synth()
+    code = bytearray(0x1000)
+
+    def e8(at, to):
+        code[at - CODE:at - CODE + 5] = b"\xe8" + struct.pack("<i", to - (at + 5))
+
+    e8(0x400110, 0x400800)
+    e8(0x400120, 0x400900)
+    code[0x410:0x413] = b"\xff\x56\x04"
+    e8(0x400510, 0x400900)
+    code[0x610:0x616] = b"\xff\x15" + struct.pack("<I", 0x401000)
+    e8(0x400710, 0x400800)
+    return exc.Image(base.regions + [(CODE, bytes(code))])
+
+
+def test_caught_calls_owner_comes_from_the_exc_table_not_from_a_size():
+    """Every call site whose chain holds a kind-0x10 record, owned by the function whose `.exc` table lists it: no
+    function size is used anywhere. E8 -> its target; FF /2 -> indirect."""
+    image = code_image()
+    got = exc.caught_calls(image, exc.load_index(image, INDEX))
+    assert [(c["func"], c["call"], c["kind"], c["target"]) for c in got] == [
+        (0x400100, 0x400110, "direct", 0x400800), (0x400400, 0x400410, "indirect", None),
+        (0x400500, 0x400510, "direct", 0x400900), (0x400600, 0x400610, "indirect", None)]
+
+
+def _vm_closure(gen_decomp):
+    """The reverse closure of Call 0x60b320 / CallWithReturn 0x60b450 over gen/decomp/calls.jsonl (direct edges;
+    external targets skipped). calls.jsonl holds the LoadArea -> LoadHives edge; only the decomp `size` is short."""
+    import collections
+    import json
+    rev = collections.defaultdict(set)
+    for ln in (gen_decomp / "calls.jsonl").read_text().splitlines():
+        r = json.loads(ln)
+        for t in r["to"]:
+            if t.startswith("0x") and "EXTERNAL" not in t:
+                rev[int(t, 16)].add(int(r["from"], 16))
+    seen, todo = set(), [0x60B320, 0x60B450]
+    while todo:
+        for f in rev[todo.pop()]:
+            if f not in seen:
+                seen.add(f)
+                todo.append(f)
+    return seen
+
+
+def test_real_vm_reaching_catch_sites(real, gen_decomp):
+    """Fix round 1 (C-1): the true-extent census. 5 direct call sites inside a catch reach the VM: the two host roots
+    and the three LoadArea blocks. 43 indirect sites inside a catch sit in VM-reaching functions; all are the
+    `call [esi+4]` release. Measured with the fix-round scratch census (objdump listing, owner = preceding function
+    start), which gives the same 5 / 43 over its own 224-function closure."""
+    image, idx = real
+    closure = _vm_closure(gen_decomp)
+    assert len(closure) == 225
+    caught = exc.caught_calls(image, idx)
+    direct = [(c["func"], c["call"], c["target"]) for c in caught
+              if c["kind"] == "direct" and c["target"] in closure | {0x60B320, 0x60B450}]
+    assert direct == [(0x401020, 0x401078, 0x5381F0), (0x4390D0, 0x43925A, 0x60B320),
+                      (0x4FEDD0, 0x4FF93E, 0x53FC60), (0x4FEDD0, 0x5002EC, 0x53F3F0),
+                      (0x4FEDD0, 0x500C0B, 0x6261C0)]
+    indirect = [c for c in caught if c["kind"] == "indirect" and c["func"] in closure]
+    assert len(indirect) == 43
+    assert all(image.read(c["call"], 3) == b"\xff\x56\x04" for c in indirect)
+    per = {}
+    for c in indirect:
+        per[c["func"]] = per.get(c["func"], 0) + 1
+    assert per[0x4FEDD0] == 22 and per[0x489A60] == 6
 
 
 def test_cli_func_prints_the_three_pads(canonical_exe):

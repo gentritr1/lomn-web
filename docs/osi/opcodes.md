@@ -252,8 +252,8 @@ The `.exc` section (0x6ef000) is an index of `{function start, info pointer}` pa
 u32 action-chain pointer}`. A call that is not listed has no actions, so an exception there leaves the function
 directly. An action chain is a list of records that ends at the first record whose flags have bit 0x8000. The kind
 is `flags & 0xff`, as the runtime reads it (0x656893, 0x656d99). The sizes below are the runtime's own: the unwinder
-FUN_00656d60 (jump table 0x761dc4) and the walker FUN_006568a0 (table 0x761d64) advance by the same amount per kind
-(M2a-2 T2a, R2; `tools/osi/exc.py` decodes all of them):
+FUN_00656d60 (jump table 0x761dc4) and the walker FUN_006568a0 (table 0x761d64) advance by the same amount per kind,
+except 0x12, which they never advance past (M2a-2 T2a, R2; `tools/osi/exc.py` decodes all of them):
 
 | kind | action | layout after `u16 flags` | bytes |
 |---|---|---|---|
@@ -270,7 +270,7 @@ FUN_00656d60 (jump table 0x761dc4) and the walker FUN_006568a0 (table 0x761d64) 
 | 0x0c | destroy a base | i32 frame, u32 destructor, u32 base offset | 14 |
 | 0x10 | **catch** | u32 type-name pointer or 0 for catch(...), u32 landing pad, i32 frame | 14 |
 | 0x11 | end of an active catch | i32 frame | 6 |
-| 0x12 | terminate (`std::terminate`; only as a final record, 2 in the runtime's own functions) | — | 2 |
+| 0x12 | terminate (`std::terminate`; only as a final record, 2 in the runtime's own functions) | — | none: the runtime never advances past it (both tables send it to `call 0x65f580`, i.e. terminate: 0x761dc4[0x11] → 0x656ef1, 0x761d64[0x11] → 0x656977). `exc.py` counts 2 bytes by convention; both records carry the end bit (0x6ed3f8, 0x6ed4d4) |
 | 0x13 | exception specification | u16 count, u32 unexpected-handler pc, i32 frame, count × u32 type-name pointer | 12 + 4 count |
 
 **Only kind 0x10 catches.** The catch search FUN_00657080 dispatches on the kind (table 0x761e50): 0x10 goes to
@@ -279,8 +279,10 @@ to `std::terminate`, and every other kind is skipped. With these sizes all 7,002
 unknown record (28,221 call sites, 15,060 distinct chains; `tools/tests/test_osi_exc.py`).
 
 An info record is only 4 bytes long, and has no call-site table, when its flags byte has **bit 0 set** or its bytes
-1–3 are zero: nothing in that frame is destroyed or caught. Of the 7,002 index entries that have an info record (the
-index holds 7,003 `{function, info}` pairs; one has a null info pointer), **4,966** are short: 4,605 by bit 0 (e.g.
+1–3 are zero: nothing in that frame is destroyed or caught. Of the 7,002 index entries (the index holds 7,002
+`{function, info}` pairs, then the 4-byte terminator 0xffffffff: the section's virtual size 0xdad4 = 7,002 × 8 + 4.
+Read as an 8-byte pair with the zero padding after it, the terminator looks like `{0xffffffff, 0}`; an earlier count
+took it for a 7,003rd pair with a null info pointer), **4,966** are short: 4,605 by bit 0 (e.g.
 `Run` 0x60b850, flags 0x09) and 361 with bit 0 clear but bytes 1–3 zero (flags 0x00, 0x08, 0x48, 0xc8 and similar;
 measured in M2a-2 Task 1). The `{flags, action-table pointer, n}` layout holds in the other 2,036. A decoder that
 ignores either rule misreads the next function's action chains as call sites.

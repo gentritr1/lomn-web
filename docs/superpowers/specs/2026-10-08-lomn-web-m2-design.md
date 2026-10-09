@@ -65,7 +65,7 @@ From the consult and probe 1: 47 of 391 `.CRT` initializers are in the corpus; t
   - `Dispose` → −1; at 0 → `F g`, and the host object is deleted (the original's virtual delete).
   - The same live object always maps to the same handle.
   - Each class's initial engine count is cited by Task 2a from its constructor.
-  - "45 overloads" means the 45 distinct `ret_class` values over 56 game rows. Task 2a maps each class to its overload address; some classes may share one (minor m2).
+  - "45 overloads" means the 45 distinct `ret_class` values over the 57 game rows: 56 winning registrations plus `gchudsprite.create` 0x5366d0, which is not the winner. Task 2a mapped each class to its own overload address: 45 classes, 45 addresses (`docs/osi/natives.md` §2.1).
   - **Amended (M2a-2 T2a, controller ruling, round 3):** identity is per object. One handle per live object, whatever the static type; the variant's type tag follows the native's declared return (the same Toa is returned as `GcToa` and as `GcCharacter`). `GcBAGroup::SetCharacter` adds an engine reference (0x54b344). Initial counts and holders: `docs/osi/natives.md` §2.
 - **D14 (proposed), natives.log v2,** an amendment to `trace.md` §6; the trace format itself does not change.
   - **New records:**
@@ -85,7 +85,12 @@ From the consult and probe 1: 47 of 391 `.CRT` initializers are in the corpus; t
   - `STACK_SIZE` ≥ 4.5 × cap × the bytes per level, measured on a **real** re-entrant chain. 4.5× is the M2a-1 margin.
 - **D16. The swallowed nested error.**
 
-  **Scope.** The natives `gcareadirector.setcurrentarea`, `gcareadirector.switchcurrentarea` and `gcareadirector.switchareas` (and the host entries `GcCollisionPhysicsGroup::Process` / `GcBAGroup::Process`) swallow nested errors raised from engine calls made inside `GcAreaLoader::LoadArea` 0x4fedd0's `LoadObjects` (0x4ff93e) and `LoadCharacters` (0x5002ec) blocks. No other VM-reaching call site sits inside a catch (`docs/osi/natives.md` §5.1).
+  **Scope.** Errors raised by engine calls made inside the three swallowing blocks of `GcAreaLoader::LoadArea` 0x4fedd0 are swallowed: `LoadObjects` (0x4ff93e), `LoadCharacters` (0x5002ec) and `LoadHives` (0x500c0b; it lies past the decomp's `size`, LoadArea really ends at 0x500fe4) (`docs/osi/natives.md` §5.2). `LoadArea` is reached from:
+  - the natives `gcareadirector.setcurrentarea` (`SetCurrentArea` 0x48a540 → `GcAreaDirector::LoadArea` 0x4892f0 at 0x48a588 → 0x4fedd0 at 0x48935a), `gcareadirector.switchcurrentarea` and `gcareadirector.switchareas`;
+  - the host process `GcCollisionPhysicsGroup::Process` 0x475fc0 → `SwitchCurrentArea` 0x48a5a0 (0x4763d7) → `GcAreaDirector::LoadArea` (0x48a727);
+  - the host process `GcBAGroup::Process` 0x54ab00 → `GcBAGroup::CheckForNew` 0x54b380 (0x54b071, in the tail past the decomp's `size`) → `GcAreaDirector::SwitchAreas` 0x48a760 (0x54b4d1) → `GcCollisionPhysicsGroup::SwitchAreas` 0x476cf0 (0x48a78d) → `SwitchCurrentArea` (0x476d08). `CheckForNew` makes that call only while byte `[0x735aec]` = 1 (0x54b4a1). Only `GcBAGroup::SetSwitchAreas` writes 1 there (0x54b24e), and it is 0 in `.data`.
+
+  No other VM-reaching call site sits inside a catch. The true-extent census (natives.md §5.1) finds 5 caught sites: these 3 and the 2 host roots.
 
   1. **At the throw.** A nested `Vm::call` that raises leaves the VM state exactly as the throw found it:
      - the stack, including the inner `{0xff, PC_ret}` marker (0x60b484), the argc arguments pushed by `SetPCAndArgs`, and the partial frame;
@@ -93,35 +98,56 @@ From the consult and probe 1: 47 of 391 `.CRT` initializers are in the corpus; t
      - `pc` = the failing handler's PC at the throw, as **the error-PC table in opcodes.md (T2a-pc)** gives it;
      - `frame_ptr` as the failing frame set it.
 
-     No reset runs. The error's `E` line is written at the throw, and `fpu_pc` becomes 64 (the catch pad's `fninit`, 0x657245). The swallowing native catches the error inside its body and returns its normal result. The VM's own reference count (+2, from 0x60b338 / 0x60b46b) is not modelled.
-  2. **The calling handler** (0x82, 0x83, 0x84), after a swallowing native returns:
-     - pops n slots with dispose **from the current top** (0x601c50–0x601c6b);
-     - pushes the result (0x601c8d);
-     - self-patches the **outer** instruction, through the start pointer it saved at entry (0x6015b8; written at 0x601e2b–0x601eaa), for 0x82 only;
-     - **does not change `pc`**: 0x82 never writes VM+0x1f58 after the native call.
+     No reset runs. `Call`, `CallWithReturn` and `Run` hold only no-op destructor records (0x413ec0, `mov eax, ecx; ret`), so unwinding through the VM changes no VM state. `fpu_pc` becomes 64 (the catch pad's `fninit`, 0x657245). The swallowing native catches the error inside its body and returns its normal result. The VM's own reference count (+2, from 0x60b338 / 0x60b46b) is not modelled.
+  2. **The `E` line of a swallowed error (port rule; the `E` line is a trace artifact).**
+     - The original records nothing that can be seen. Each pad stores `{error, qualifier}` in `LoadArea`'s own locals, and nothing reads that pair again (natives.md §5.2).
+     - The port writes the swallowed error's `E` line **at the swallow point**, in the swallowing host's catch (the conformance runner for a `swallow` test native; the modelled `LoadArea` block for the real natives). The line is built from the VM state as at the throw: `pc` and `op` are the failing instruction's own address and byte (as for every `E` line), and `depth` is the stack depth at the throw. A `P <pc> 64` line follows it if `fpu_pc` was 24.
+     - Unwinding runs no VM code, so this `E` line directly follows the failing instruction's `I` line.
+     - The swallowing catch does **not** set the outermost call's `last_error`, does **not** run `reset_after_error()` and ends no engine call. The outermost `Vm::call` returns `ok = true` unless another error escapes it.
+     - This amends D10's "the outermost `Vm::call` writes the `E` line" for swallowed errors only. A nested error that is **not** swallowed is still recorded exactly once, by the outermost `Vm::call` (one `E` line, `ok = false`). The nested calls it passes through record nothing.
+  3. **The calling handler** (0x82, 0x83, 0x84), after a swallowing native returns:
+     - **By-reference writes land in the native's original argument slots, by address.** For a parameter declared 0x200, the handler gives the native the **address** of the argument's stack slot. That address is computed before the native call from the top pointer VM+0x1f50: slot = top − (n − i), at 0x601804–0x601819. The handler boxes it as `{0x200, address}` (0x60185d / 0x601862) and passes the address itself, `*(box+4)` (0x60198c–0x601abc; opcodes.md rows 0x82, 0x83 and 0x84). After a swallow those slots lie **under** the leftovers, below the inner marker. A by-ref write therefore goes to the slot the handler addressed before the nested call, never to top − (n − i) recomputed after it. As conformance rule 14(d) says, a write overwrites the slot without disposing the old value.
+     - Then the handler pops n slots with dispose **from the current top** (0x601c50–0x601c6b). After a swallow these are n inner leftovers, never the written slots. The written values stay where they are, in the leftover region.
+     - It pushes the result (0x601c8d).
+     - For 0x82 only, it self-patches the **outer** instruction through the start pointer it saved at entry (0x6015b8; written at 0x601e2b–0x601eaa).
+     - It **does not change `pc`**: 0x82 never writes VM+0x1f58 after the native call.
 
      `Run` re-reads `pc` every step (0x60b856), so dispatch continues inside the inner function at the error PC.
-  3. **A later `0x52`** that meets an `0xff` marker stops the running `Run` loop (0x600d54–0x600d87). The engine call that owns that loop then:
+  4. **A later `0x52`** that meets an `0xff` marker stops the running `Run` loop (0x600d54–0x600d87). The engine call that owns that loop then:
      - pops the result (0x60b505);
      - pops with dispose to the first `0xff` marker (0x60b53e–0x60b560), which is the inner one;
-     - decrements `context_depth`, and rescans `frame_ptr` if it is not 0 (0x60b569–0x60b59b);
+     - decrements `context_depth` (0x60b562), and rescans `frame_ptr` if `context_depth` is then not 0 (`cmp word [edi+0x1f4c], 0` at 0x60b569, `je` 0x60b571; the scan runs to 0x60b59b);
      - sets `pc` from that marker (0x60b5a2);
      - returns the inner function's value.
 
      The rest of the outer function never runs in that engine call.
-  4. **Nothing else resets.** Leftover slots stay under the top until something pops them, and `context_depth` stays raised for the rest of the run.
+  5. **Nothing else resets.** Leftover slots stay under the top until something pops them, and `context_depth` stays raised for the rest of the run.
+  6. **`reset_after_error()` after a later error (port rule; host behaviour, visible in traces through its `F` lines).**
+     - In the original, an error that reaches a host root ends the game (opcodes.md "After an error"), so there is no original reset to cite.
+     - In the port, when an error escapes the outermost `Vm::call` (D10), `reset_after_error()` pops with dispose from the top **down to and including that outermost call's own marker**. That marker is the slot at the stack depth the call recorded at its entry, before it pushed the marker. The reset emits the `F` lines of the heap values it frees.
+     - It does **not** stop at the first `0xff` it meets. Inner markers left by a swallow (as in `n-swallow-reerror`) are popped like any other slot.
+     - It then restores `context_depth`, `frame_ptr` and `pc` to their values at that call's entry.
+     - Leftovers below that entry depth, left by an **earlier** successful call, are not touched.
+     - Conformance rule 14(c)'s "the call's outer marker" means this marker.
 
   **Test-native field `"swallow": true`.**
-  - The native makes its `calls` nested call. If that call raises, the runner applies rule 1 inside the native.
-  - The native then returns its `returns` normally and applies its `writes`, and the handler applies rule 2.
-  - The expectations record the outer `Vm::call` result and the post-call snapshot: `depth`, `top`, `pc`, `context_depth`.
+  - The native makes its `calls` nested call. If that call raises, the runner applies rule 1 inside the native and writes the `E` line there (rule 2).
+  - Then the native applies its `writes` to its original argument slots, by address (rule 3), and returns its `returns` normally. The handler applies rule 3.
+  - The expectations record the outer `Vm::call` result and the post-call snapshot: `depth`, `top`, `pc` and `context_depth`. `pc` is compared under conformance rule 15 as amended by T2a-pc.
 
-  **Corpus programs:**
+  **Corpus programs** (Task 2b writes the files):
   - **`n-swallow-continue`.**
     - Setup: `main` makes a game-variable write W1, calls T (`swallow`, n = 0, `calls` `onevent`, `returns` 5), then makes a write W2 and returns 1. `onevent` executes `0x02` (which advances PC by 1 before its error, 0x6038a6), then pushes 7 and returns.
-    - Expect: `main`'s result is **7**; W1 is written and W2 is not; `context_depth` after the call is 1. A second `call("main2")` succeeds above the leftovers.
-  - **`n-swallow-reerror`.** `onevent` executes 0x85 (`BCLUnused`, which does not advance, 0x60be60). It re-executes after the swallow and errors again inside `main`'s `Run`. Expect two `E` lines with the same pc and `ok = false`.
+    - Expect: `main`'s result is **7**; W1 is written and W2 is not; `context_depth` after the call is 1; exactly one `E` line, written inside T. A second `call("main2")` succeeds above the leftovers.
+  - **`n-swallow-reerror`.**
+    - `onevent` executes 0x85 (`BCLUnused`, which does not advance, 0x60be60). It re-executes after the swallow and errors again inside `main`'s `Run`.
+    - Expect two `E` lines with the same pc: the first written inside T (rule 2), the second by the outermost call. The result is `ok = false`.
+    - `reset_after_error()` then returns the stack to the outermost call's entry depth: through the inner leftover marker, down to and including the outer one (rule 6).
   - **`n-swallow-pops`.** T has n = 2. `onevent` (argc 2) holds 2 locals when its `0x02` fails. The 2 pops remove those locals, not T's arguments. `onevent` then returns T's result. T's arguments stay at the bottom of the leftover region.
+  - **`n-swallow-writes`.**
+    - Setup: T has n = 1 and one parameter declared 0x200 (by reference). `main` pushes int 3 as T's argument and calls T (`swallow`, `calls` `onevent` with the argument int 4, `writes` argument 0 ← int 9, `returns` 5). `onevent` (argc 1) executes `0x02`, which fails with its argument int 4 on top, then pushes 7 and returns.
+    - Expect: `main`'s result is **7**. The handler's single pop disposes `onevent`'s leftover int 4. After the call the top is **int 9**, in T's argument slot, and `context_depth` is 1.
+    - A write addressed from the top after the nested call would land on the int 4. The pop would then remove the 9, and the top would be int 3, so the program tells the two readings apart.
 
 ## 5. Oracle
 
