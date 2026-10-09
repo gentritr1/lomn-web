@@ -22,7 +22,8 @@
 // M2a-2 T3 (conformance.md §1 "Native-framework fields", rules 15 and 17-19), through the native framework
 // (lomn/osi/natives.h): `returns.engine_refs` k (a host GameObject held k times, minted by HostContext::create_variant),
 // `returns.object` (one host object per name while it is live: the same handle, no new A g), `calls.depth` d (the
-// nested call only while the VM's context_depth < d), `swallow` (D16: HostContext::engine_call_swallowing). Compared
+// nested call only while the VM's context_depth < d: conformance.md's literal meaning, which a D16 swallow leaves above
+// the engine calls in flight; controller ruling, fix 1), `swallow` (D16: HostContext::engine_call_swallowing). Compared
 // after the call: `pc_after` (snapshot().pc, "@L+k" allowed), `expect.top`, `swallowed` (exactly the swallowed errors;
 // no key = none), and `then` (a second call on the same VM; after an error the runner resets first, rule 19).
 #include <algorithm>
@@ -247,7 +248,7 @@ Variant test_native(NativeCall& c, void* user) {
   std::string err;
   const Json* k = tn.spec->get("calls");  // one nested call: {"entry", "args", "depth"}
   const Json* d = k ? k->get("depth") : nullptr;
-  if (k && (!d || c.vm.snapshot().context_depth < num_u32(*d))) {  // calls.depth: only below d engine calls in flight
+  if (k && (!d || c.vm.snapshot().context_depth < num_u32(*d))) {  // calls.depth: only while context_depth < d
     std::vector<Variant> args;
     if (const Json* a = k->get("args"))
       for (const Json& x : a->arr) {
@@ -601,7 +602,10 @@ struct Runner {
       check_pc(ok->get("pc_after"), st.pc, "pc_after");
       check_swallowed(ok->get("swallowed"), swallowed, "swallowed");
       check_state(*ok);
-      if (then) run_then(*then);  // no reset: the second call runs above whatever the first left (D16 rule 5)
+      if (then) {  // rule 19: reset first if the first call raised; otherwise run above its leftovers (D16 rule 5)
+        if (e) vm.reset_after_error();
+        run_then(*then);
+      }
     } else {
       fail_msg("expect.json", "neither expect nor expect_error");
     }

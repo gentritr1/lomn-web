@@ -489,6 +489,11 @@ Three blocks of `GcAreaLoader::LoadArea` 0x4fedd0 reach the VM. Each is a try wi
 - *The `E` line of a swallowed re-raise* is now part of rule 2 above (controller ruling, M2a-2 T2b: spec §4 D16 rule 2 carries the same text). `n-reenter-nested-error-swallowed` pins it.
 - *The `N` line after a swallow* prints the arguments as converted before the native ran. The `F` lines of the n pops
   are the inner leftovers' (conformance.md rule 17(d)).
+- *What a swallow catches (M2a-2 T3 fix 1, review M-3).* The three `LoadArea` pads catch `!ScCatchMessage!`,
+  `!exception!` and `...` (§5.2). The port's swallowing call catches the VM's own errors only (C++ `VmError`). Every
+  error the original can raise is one of those. The one non-OSI exception the port can see is its own
+  "Undefined: host exception" (a `std::exception` thrown by host code), which has no original counterpart and is never
+  compared (conformance.md rule 15(d)); it is not swallowed and propagates like any native error.
 - *More programs than the four above:* group `n` also holds `n-reenter-nested-error-swallowed` and
   `n-reenter-nested-error-propagates` (plan Review focus 4). The README lists them all with their status.
 
