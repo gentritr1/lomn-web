@@ -189,17 +189,7 @@ Variant n_md_show(NativeCall& c, void* user) {
   const uint32_t id = w(c, 0);
   GcCharacter* ch = md.get(id);
   if (!ch) null_this("GcModelDirector::Show (the id is not in the model-director map, 0x47f99b)");
-  std::set<uint32_t>& node = id == kIdCnt1 ? md.toa_node : md.mainguy_node;
-  if (node.count(ch->node_id())) return nothing();  // FindChild found it (0x47f9bb / 0x47fa53)
-  ctx.add_ref(ch);   // the temporary ScAutoRefPtr
-  node.insert(ch->node_id());
-  ctx.add_ref(ch);   // the node's copy
-  ctx.release(ch);   // the temporary released
-  if (id == kIdCnt1 && md.ba_character != ch) {  // GcBAGroup::SetCharacter 0x54b330
-    ctx.add_ref(ch);
-    if (md.ba_character) ctx.release(md.ba_character);
-    md.ba_character = ch;
-  }
+  show_character(ctx, id, ch);
   return nothing();  // 0x47cd9b
 }
 
@@ -221,6 +211,50 @@ Variant n_setupmoveable(NativeCall& c, void* user) {
 }  // namespace
 
 // ---- characters an area loads and removes (natives.md §4, F7a) ----
+
+// The body of GcModelDirector::Show 0x47f830 for a non-vine character (its comment at n_md_show above has the addresses).
+void show_character(HostContext& ctx, uint32_t id, GcCharacter* ch) {
+  ModelDirector& md = ctx.subsystem<ModelDirector>();
+  std::set<uint32_t>& node = id == kIdCnt1 ? md.toa_node : md.mainguy_node;
+  if (node.count(ch->node_id())) return;  // FindChild found it (0x47f9bb / 0x47fa53)
+  ctx.add_ref(ch);   // the temporary ScAutoRefPtr
+  node.insert(ch->node_id());
+  ctx.add_ref(ch);   // the node's copy
+  ctx.release(ch);   // the temporary released
+  if (id == kIdCnt1 && md.ba_character != ch) {  // GcBAGroup::SetCharacter 0x54b330
+    ctx.add_ref(ch);
+    if (md.ba_character) ctx.release(md.ba_character);
+    md.ba_character = ch;
+  }
+}
+
+// GcModelDirector::Hide 0x47fb50 (non-vine: the vine test 0x47fbc5 jumps to 0x47fca0), called by Remove at 0x47f4e5 with the
+// character Get(id) found (0x47fcb9; the area argument is unused on this path).
+// - id == 'cnt1' (0x47fcf9-0x47fd06): GcBAGroup::SetCharacter(0) (0x47fce9): the old character -1 (0x54b356), the slot
+//   nulled (0x54b364). Then the Toa node [0x8390a8]: FindChild(id) (0x47fd2a, virtual slot 0x40) not found -> return
+//   (0x47fd2f); found -> the temporary +1 (0x47fd51), the search, the temporary -1 (0x47fd77-0x47fd82), SetParentNode(0)
+//   (0x47fda0) and the child's erase (0x4197c0 at 0x47fdab: the shifted siblings' copies, then the last slot's -1).
+// - another id: the same on the main-guy node [0x83aa4c] (0x47fdc6-0x47fe4f), then the id's entry is dropped from the list
+//   [0x83a9c0] (0x47fe54-0x47fe76, ids only: no reference), then the node [0x838778] (0x47fe9f), which Show never fills
+//   (no reference to it in Show 0x47f830-0x47fb4f): its FindChild finds nothing (INFERRED: the char is not in it).
+// Not modelled: 0x418d00 (0x47ff29), 0x4745f0 (0x47fcd2) and 0x516050 (0x47ff3a), reached on this path with the character or
+// its id: INFERRED reference-free (no Call in their closures; they take no ScAutoRefPtr). A child erase that shifts
+// siblings (0x419813-0x419847: +1 on the moved copy, -1 on the overwritten one) writes H lines for a sibling a script
+// holds: INFERRED unreachable in the tests of this port (one handle-holding child at a time); node order is not kept.
+void hide_character(HostContext& ctx, uint32_t id, GcCharacter* ch) {
+  ModelDirector& md = ctx.subsystem<ModelDirector>();
+  if (id == kIdCnt1 && md.ba_character) {
+    GcCharacter* old = md.ba_character;
+    md.ba_character = nullptr;
+    ctx.release(old);
+  }
+  std::set<uint32_t>& node = id == kIdCnt1 ? md.toa_node : md.mainguy_node;
+  if (node.count(ch->node_id()) == 0) return;
+  ctx.add_ref(ch);  // the temporary (0x47fd51 / 0x47fdf3)
+  ctx.release(ch);  // the temporary released (0x47fd77 / 0x47fe1f)
+  node.erase(ch->node_id());
+  ctx.release(ch);  // the erase destroys the child's copy
+}
 
 GcCharacter* add_area_character(HostContext& ctx, uint32_t record_id, bool* modelled) {
   ModelDirector& md = ctx.subsystem<ModelDirector>();
@@ -255,9 +289,11 @@ void remove_area_character(HostContext& ctx, uint32_t id) {
   } else {
     md.s_toa = nullptr;                            // UnitializeAnimationEvents 0x480aa0, then sToa = 0 (0x47f4b0)
   }
-  // Hide 0x47fb50 (0x47f4e5) and RemoveAnimationTriggers 0x4177c0 (0x47f4ee): their node and GcBAGroup reference drops
-  // apply only to a character a script showed; not modelled (INFERRED off-path: Base.osi shows only the Toa, and no area
-  // on the A9 path loads a character).
+  // CleanUp, the virtual call [esi+0x50] at 0x47f4be (GcCharacter::CleanUp 0x40e740 via the vtable 0x700908 set at 0x40b54b;
+  // GcToa::CleanUp 0x56b5a0 via 0x73c464): no Call in either direct closure (102 / 146 functions); a virtual call inside them is
+  // INFERRED not to reach the VM. Then Hide 0x47fb50 (0x47f4e5; the loader's Show 0x53f535 gave the character its node
+  // child) and RemoveAnimationTriggers 0x4177c0 (0x47f4ee; INFERRED reference-free).
+  hide_character(ctx, id, ch);
   md.map.erase(id);                                // the map erase 0x47f5a9, before the Call
   ctx.release(ch);                                 // the map's reference
   if (id == kIdCnt1) return;                       // [0x782884] (0x47f5b3, je 0x47f685): no Call for the Toa's key

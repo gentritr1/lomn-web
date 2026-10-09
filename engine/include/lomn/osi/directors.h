@@ -134,6 +134,9 @@ class AreaDirector {
   // GcAreaDirector::GetScriptFluffString 0x48acc0 -> GcStringTableLoader::GetString 0x5e86e0 on [0x8391c0]
   std::string script_fluff_string(uint32_t key0, uint32_t key1, uint32_t index);
   const LoadBlockStats& block_stats(Block b) const { return stats_[b]; }
+  // byte [0x70b37c] (4 in .data): gcareadirector.setnearestmax 0x486fe0 (0x486feb) stores it, getnearestmax 0x487010 (0x487013)
+  // reads it; GcAreaDirector::GetNearest 0x487e90 (0x488160) and GcCinemaEngine::Play/Stop (0x593d48 / 0x5941cd) are render-side
+  uint8_t nearest_max = 4;
 
   // The block headers 0x839238 (the level's) and 0x83aedc (the area's): loaded or not, and the path they were opened
   // from. A slot may point at a header that is closed or failed to open: it is then set but empty (Find gives -1).

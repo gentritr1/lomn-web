@@ -145,6 +145,12 @@ uint32_t main_character_id(HostContext& ctx);
 // already holds: GetUniqueIDForType then builds a numbered id (0x480362-0x480490), which the port does not model.
 GcCharacter* add_area_character(HostContext& ctx, uint32_t record_id, bool* modelled);
 
+// GcModelDirector::Show 0x47f830 on a character the map holds (non-vine): the node child, the lasting references and, for
+// 'cnt1', GcBAGroup::SetCharacter. Shared by gcmodeldirector.show and LoadCharacters' own Show (0x53f535).
+void show_character(HostContext& ctx, uint32_t id, GcCharacter* ch);
+// GcModelDirector::Hide 0x47fb50 (Remove, 0x47f4e5): the undo of show_character.
+void hide_character(HostContext& ctx, uint32_t id, GcCharacter* ch);
+
 // GcModelDirector::Remove 0x47f320 for one loader entry (CleanUpArea 0x5017d0, call 0x501830). An error in its OnEvent
 // propagates (no catch on the chain).
 void remove_area_character(HostContext& ctx, uint32_t id);

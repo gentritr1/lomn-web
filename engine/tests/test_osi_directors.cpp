@@ -157,8 +157,12 @@ const char* const kRows = R"([
  {"cls": "GcSaver", "name": "CheatMenu", "min": 0, "max": 0, "types": [], "ret": "int", "winner": true},
  {"cls": "GcSaver", "name": "GetAmmo", "min": 0, "max": 0, "types": [], "ret": "int", "winner": true},
  {"cls": "GcSaver", "name": "SetAmmo", "min": 1, "max": 1, "types": ["int"], "ret": "none", "winner": true},
+ {"cls": "GcSaver", "name": "GetToa", "min": 0, "max": 0, "types": [], "ret": "int", "winner": true},
+ {"cls": "GcAreaDirector", "name": "SetNearestMax", "min": 1, "max": 1, "types": ["int"], "ret": "none", "winner": true},
+ {"cls": "GcAreaDirector", "name": "GetNearestMax", "min": 0, "max": 0, "types": [], "ret": "int", "winner": true},
  {"cls": "GcModelDirector", "name": "AddToa", "min": 1, "max": 1, "types": ["string"], "ret": "int", "winner": true},
  {"cls": "GcModelDirector", "name": "GetToa", "min": 0, "max": 0, "types": [], "ret": "game", "ret_class": "GcToa", "winner": true},
+ {"cls": "GcModelDirector", "name": "Show", "min": 2, "max": 2, "types": ["int", "int"], "ret": "none", "winner": true},
  {"cls": "GcModelDirector", "name": "GetCharacter", "min": 1, "max": 2, "types": ["int", "int"], "ret": "game", "ret_class": "GcCharacter", "winner": true},
  {"cls": "GcHudDirector", "name": "PlayCinematic", "min": 2, "max": 2, "types": ["string", "int"], "ret": "none", "winner": true},
  {"cls": "ScSLOSIFileIO", "name": "DoesFileExist", "min": 1, "max": 1, "types": ["string"], "ret": "int", "winner": true}
@@ -204,6 +208,12 @@ struct Run {
     size_t n = 0;
     for (const auto& l : log.lines) n += l.rfind(prefix, 0) == 0 ? 1 : 0;
     return n;
+  }
+  std::vector<std::string> h_lines() const {
+    std::vector<std::string> v;
+    for (const auto& l : log.lines)
+      if (l.rfind("H ", 0) == 0) v.push_back(l);
+    return v;
   }
   bool trace_has(const std::string& p) const {
     for (const auto& l : tr.lines)
@@ -353,6 +363,7 @@ TEST_CASE("osi directors: the group is in the explicit list and binds every tier
   for (const char* k : {"gcgame.getmainview", "gcgame.getkeymapper", "gcgame.getmp3player", "gcviewport.getcamera",
                         "gcareadirector.getcurrentlevel", "gcareadirector.setcurrentlevel", "gcareadirector.setcurrentarea",
                         "gcareadirector.getscriptfluffstring", "gcsaver.cheatmenu", "gcsaver.getammo", "gcsaver.setammo",
+                        "gcareadirector.getnearestmax", "gcareadirector.setnearestmax", "gcsaver.gettoa",
                         "gchuddirector.playcinematic", "bettersaver.getbooleanvalue", "bettersaver.setbooleanvalue",
                         "bettersaver.save"}) {
     const std::string key(k);
@@ -1113,7 +1124,7 @@ TEST_CASE("osi directors getammo: 0 at Setup; reads back what the saver holds, a
   CHECK(r.call("get").result == make_int(65535));
 }
 
-// ============================== F7a: setammo, one saver store; setfog / setnearestmax (tier2) ==============================
+// ============================== F7a: setammo, one saver store; setfog (tier2); setnearestmax moved to tier1 by fix 1 ==============================
 
 TEST_CASE("osi directors gcsaver.setammo asm pin: the low word of argument 0 into [0x7474c8]; setfog / setnearestmax are stores") {
   const Pe* im = exe();
@@ -1123,8 +1134,8 @@ TEST_CASE("osi directors gcsaver.setammo asm pin: the low word of argument 0 int
   PIN(im, 0x5d384c, "66 89 15 c8 74 74 00");   // ... stored where getammo reads it (0x5d3913)
   PIN(im, 0x5d3853, "66 c7 03 0f 00");         // returns nothing
   PIN(im, 0x47e221, "89 15 9c 74 74 00");      // AddToa: sSaveToa [0x74749c] (the saver's word)
-  // setnearestmax: the low byte into [0x70b37c] (read only by GcAreaDirector::GetNearest 0x487e90 at 0x488160, and saved /
-  // restored by GcCinemaEngine::Play / Stop 0x593d48 / 0x5941cd); no Call is reachable
+  // setnearestmax: the low byte into [0x70b37c] (tier1 since fix 1: getnearestmax reads it back, 0x487013; render readers
+  // GcAreaDirector::GetNearest 0x487e90 at 0x488160 and GcCinemaEngine::Play / Stop 0x593d48 / 0x5941cd); no Call is reachable
   PIN(im, 0x486fe9, "8a 12");
   PIN(im, 0x486feb, "88 15 7c b3 70 00");
   // setfog: GcAreaDirector::SetFog 0x48a7a0 (al = 1 always, 0x48a7a7: the first two floats negated) -> SetFogValue 0x5e5450,
@@ -1276,6 +1287,162 @@ TEST_CASE("osi directors setcurrentarea: a character record whose id is taken (t
   CHECK(md.s_toa == nullptr);              // 0x47f4b0
   CHECK(md.get(kIdCnt1) == nullptr);
   CHECK(r.call("toa").result == nothing());
+}
+
+// ============================== F7a fix 1: the loader shows what it loads (I-1); nearestmax / gettoa (controller ruling) ==============================
+
+TEST_CASE("osi directors LoadCharacters asm pin: the show flag reaches GcModelDirector::Show (0x53f535); Hide on removal (0x47f4e5)") {
+  const Pe* im = exe();
+  SKIP_WITHOUT(im);
+  PIN(im, 0x48a585, "6a 01");                          // SetCurrentArea: LoadArea(name, 1) ...
+  PIN(im, 0x489351, "8b 45 0c");                       // ... GcAreaDirector::LoadArea forwards [ebp+0xc] ...
+  PIN(im, 0x5002cf, "8a 45 10");                       // ... GcAreaLoader::LoadArea's characters block pushes the byte ...
+  PIN(im, 0x53f519, "80 7d 18 00");                    // ... LoadCharacters: cmp byte [ebp+0x18], 0 ...
+  PIN(im, 0x53f535, "e8 f6 02 f4 ff");                 // ... -> GcModelDirector::Show 0x47f830, after the entry push 0x53f514
+  PIN(im, 0x47f4e5, "e8 66 06 00 00");                 // Remove -> GcModelDirector::Hide 0x47fb50
+  PIN(im, 0x47fce9, "e8 42 b6 0c 00");                 // Hide('cnt1'): GcBAGroup::SetCharacter(0) ...
+  PIN(im, 0x47fd1d, "8b 0d a8 90 83 00");              // ... then the Toa node [0x8390a8] child removal
+  PIN(im, 0x47fdc6, "8b 0d 4c aa 83 00");              // another id: the main-guy node [0x83aa4c] child removal
+  PIN(im, 0x47fdab, "e8 10 9a f9 ff");                 // the erase of the child (0x4197c0: its last slot's -1)
+}
+
+namespace {
+// the character `id` held by the script's global "h"
+void hold(Asm& a, const char* fn, const char* id) {
+  a.fn(fn, 0).i32(static_cast<int32_t>(id4(id))).call("gcmodeldirector", "getcharacter", 1);
+  a.op(0x22).u16(a.glob("h")).nothing().ret();
+}
+std::vector<std::string> h_signs(const Run& r, size_t from) {
+  std::vector<std::string> v;
+  size_t i = 0;
+  for (const auto& l : r.log.lines)
+    if (l.rfind("H ", 0) == 0 && i++ >= from) v.push_back(l.substr(l.find(' ', 2) + 1));
+  return v;
+}
+}  // namespace
+
+TEST_CASE("osi directors setcurrentarea: the loader Shows each character (main-guy node +1): getcharacter G 2; show finds it; Hide on removal") {
+  fs::MemoryFileSystem mem;
+  mount_area(mem, {{"frnt_char.slb", id_slb({"tahu", "onua"}, 0x34)}});
+  Asm a;
+  area_script(a);
+  hold(a, "hold", "tahu");
+  a.fn("show", 0).i32(static_cast<int32_t>(id4("tahu"))).i8(0).call("gcmodeldirector", "show", 2).ret();
+  a.fn("lev1", 0).s("lev1").call("gcareadirector", "setcurrentlevel", 1).ret();
+  Run r(a, &mem);
+  REQUIRE(r.res.ok);
+  ModelDirector& md = r.ctx().subsystem<ModelDirector>();
+  CHECK(md.mainguy_node.count(id4("tahu")) == 1);  // 0x53f535 -> Show: the node's copy (0x419b12)
+  CHECK(md.mainguy_node.count(id4("onua")) == 1);
+  CHECK(md.ba_character == nullptr);                 // no SetCharacter for another id
+  CHECK(r.h_lines().empty());                        // no handle yet: the temporaries write no H line
+  REQUIRE(r.call("hold").ok);                        // seq 1
+  CHECK(md.get(id4("tahu"))->engine_refs() == 2);    // the map + the node: G 2
+  REQUIRE(r.call("show").ok);                        // the child is found (0x47fa53): nothing changes
+  CHECK(r.h_lines().empty());
+  REQUIRE(r.call("lev1").ok);
+  // Remove('tahu'): Hide (0x47f4e5): the temporary +1 (0x47fdf3), -1 (0x47fe1f), the child's erase -1 (0x4197c0); then the map
+  // erase -1 (0x47f5a9): the script's global keeps the object alive
+  CHECK(h_signs(r, 0) == std::vector<std::string>{"+1", "-1", "-1", "-1"});
+  CHECK(md.get(id4("tahu")) == nullptr);
+  CHECK(md.mainguy_node.count(id4("tahu")) == 0);
+  CHECK(r.ctx().check_engine_refs().empty());
+}
+
+TEST_CASE("osi directors setcurrentarea: a refused 'cnt1' record is still Shown (the Toa: +1 +1 -1 +1); removal Hides it") {
+  fs::MemoryFileSystem mem;
+  mount_area(mem, {{"frnt_char.slb", id_slb({"cnt1"}, 0x34)}});
+  Asm a;
+  a.fn("setup", 0).s("onua").call("gcmodeldirector", "addtoa", 1).pop();
+  a.call("gcmodeldirector", "gettoa", 0).op(0x22).u16(a.glob("h"));
+  a.s("lev0").call("gcareadirector", "setcurrentlevel", 1).pop();
+  a.s("frnt").call("gcareadirector", "setcurrentarea", 1).ret();
+  a.fn("lev1", 0).s("lev1").call("gcareadirector", "setcurrentlevel", 1).ret();
+  a.fn("get", 0).i32(static_cast<int32_t>(kIdCnt1)).call("gcmodeldirector", "getcharacter", 1).ret();
+  add_onevent(a);
+  Run r(a, &mem);
+  REQUIRE_MESSAGE(r.res.ok, (r.host->vm().last_error() ? r.host->vm().last_error()->message : std::string("?")));
+  ModelDirector& md = r.ctx().subsystem<ModelDirector>();
+  // Get('cnt1') (0x53f4c5) is the Toa, so the entry is pushed and Show runs: the temporary, the node's copy, the temporary's
+  // release, GcBAGroup::SetCharacter
+  CHECK(h_signs(r, 0) == std::vector<std::string>{"+1", "+1", "-1", "+1"});
+  CHECK(md.toa_node.count(kIdCnt1) == 1);
+  CHECK(md.ba_character == md.get(kIdCnt1));
+  const size_t before = r.h_lines().size();
+  REQUIRE(r.call("lev1").ok);
+  // Remove('cnt1'): Hide: SetCharacter(0) -1 (0x54b356), the Toa node's child: +1 -1 -1; the map erase -1; no OnEvent
+  CHECK(h_signs(r, before) == std::vector<std::string>{"-1", "+1", "-1", "-1", "-1"});
+  CHECK(md.ba_character == nullptr);
+  CHECK(md.toa_node.count(kIdCnt1) == 0);
+  CHECK(md.s_toa == nullptr);
+  CHECK(r.ctx().check_engine_refs().empty());
+}
+
+TEST_CASE("osi directors setcurrentlevel: removing the main Toa clears [0x7032b8]: MainCharacterID falls back to [0x7796f4]") {
+  fs::MemoryFileSystem mem;
+  mount_area(mem, {{"frnt_char.slb", id_slb({"cnt1"}, 0x34)}});
+  Asm a;
+  a.fn("setup", 0).s("onua").call("gcmodeldirector", "addtoa", 1).pop();
+  a.s("lev0").call("gcareadirector", "setcurrentlevel", 1).pop();
+  a.s("frnt").call("gcareadirector", "setcurrentarea", 1).ret();
+  a.fn("lev1", 0).s("lev1").call("gcareadirector", "setcurrentlevel", 1).ret();
+  add_onevent(a);
+  Run r(a, &mem);
+  REQUIRE(r.res.ok);
+  ModelDirector& md = r.ctx().subsystem<ModelDirector>();
+  GcCharacter* holder = r.ctx().make<GcCharacter>(md.character_type, id4("hold"), id4("hold"));
+  r.ctx().add_ref(holder);
+  md.map[id4("hold")] = holder;
+  md.s_toa->holder = holder;  // what gccharacter.setholder writes (0x410764)
+  CHECK(main_character_id(r.ctx()) == id4("hold"));  // the Toa branch (0x43afcb)
+  REQUIRE(r.call("lev1").ok);
+  CHECK(md.s_toa == nullptr);  // Remove('cnt1'): mov [0x7032b8], 0 (0x47f4b0)
+  r.ctx().subsystem<GameGlobals>().main_character_default = 0x61626364u;
+  CHECK(main_character_id(r.ctx()) == 0x61626364u);  // back to [0x7796f4] (0x43af9e)
+}
+
+TEST_CASE("osi directors gcareadirector.setnearestmax / getnearestmax: tier1, one byte [0x70b37c] (4 in .data)") {
+  const Pe* im = exe();
+  if (im) {
+    PIN(im, 0x486feb, "88 15 7c b3 70 00");  // setnearestmax: the low byte of argument 0
+    PIN(im, 0x487013, "a0 7c b3 70 00");     // getnearestmax: mov al, [0x70b37c] ...
+    PIN(im, 0x48701d, "e8 2e 62 ff ff");     // ... CreateVariant 0x47d250 ...
+    PIN(im, 0x47d25a, "0f b6 54 24 0c");     // ... movzx byte -> int
+    CHECK(im->u32(0x70b37c) % 256 == 4);
+  }
+  Asm a;
+  a.fn("setup", 0).call("gcareadirector", "getnearestmax", 0).ret();
+  a.fn("set", 0).i32(0x1ff).call("gcareadirector", "setnearestmax", 1).pop().call("gcareadirector", "getnearestmax", 0).ret();
+  Run r(a);
+  CHECK(r.value() == make_int(4));
+  CHECK(r.call("set").result == make_int(0xff));  // the low byte, read back zero-extended
+  CHECK(r.log_has("gcareadirector.setnearestmax 1 -> 000f:00000000"));
+  for (const char* k : {"gcareadirector.getnearestmax", "gcareadirector.setnearestmax"}) {
+    const std::string key(k);
+    const NativeEntry* e = r.host->registry().find(key.substr(0, 14), key.substr(15));
+    REQUIRE_MESSAGE(e, key);
+    CHECK_MESSAGE(e->tier == Tier::Implemented, key);
+    CHECK_MESSAGE(e->fn != nullptr, key);
+  }
+}
+
+TEST_CASE("osi directors gcsaver.gettoa: tier1, the one saver store [0x74749c] (0x3f3f3f3f in .data; AddToa writes it)") {
+  const Pe* im = exe();
+  if (im) {
+    PIN(im, 0x5d36b3, "a1 9c 74 74 00");  // mov eax, [0x74749c]
+    PIN(im, 0x5d36bd, "e8 9e 42 e3 ff");  // CreateVariant 0x407960: the dword as an int
+    CHECK(im->u32(0x74749c) == 0x3f3f3f3fu);
+  }
+  Asm a;
+  a.fn("setup", 0).call("gcsaver", "gettoa", 0).ret();
+  a.fn("add", 0).s("onua").call("gcmodeldirector", "addtoa", 1).pop().call("gcsaver", "gettoa", 0).ret();
+  add_onevent(a);
+  Run r(a);
+  CHECK(r.value() == make_int(0x3f3f3f3f));
+  CHECK(r.call("add").result == make_int(static_cast<int32_t>(id4("onua"))));
+  const NativeEntry* e = r.host->registry().find("gcsaver", "gettoa");
+  REQUIRE(e);
+  CHECK(e->tier == Tier::Implemented);
 }
 
 // ============================== bettersaver.getbooleanvalue / setbooleanvalue / save ==============================
@@ -1465,7 +1632,8 @@ TEST_CASE("osi directors overrides rows: pure ASCII; each key once with its exac
       {"gcareadirector.setcurrentarea", "tier1", {"0x486ef0", "0x48a540", "0x4fedd0"}},
       {"gcareadirector.setcurrentlevel", "tier1", {"0x486c10", "0x489a60", "0x489af6", "0x489560", "0x5017d0", "0x47f320"}},
       {"gcareadirector.setfog", "tier2", {"0x487090", "0x48a7a0", "0x5e5450", "0x74a344"}},
-      {"gcareadirector.setnearestmax", "tier2", {"0x486fe0", "0x70b37c", "0x487e90"}},
+      {"gcareadirector.getnearestmax", "tier1", {"0x487010", "0x70b37c", "0x487013", "0x47d250"}},
+      {"gcareadirector.setnearestmax", "tier1", {"0x486fe0", "0x70b37c", "0x486feb", "0x487013", "0x487e90"}},
       {"gcgame.getkeymapper", "tier1", {"0x4367f0", "0x43ae90", "0x83aa98"}},
       {"gcgame.getmainview", "tier1", {"0x4366e0", "0x43ae20", "0x49d3c0"}},
       {"gcgame.getmp3player", "tier1", {"0x436940", "0x43aea0", "0x436960", "0x83879c"}},
@@ -1476,6 +1644,7 @@ TEST_CASE("osi directors overrides rows: pure ASCII; each key once with its exac
       {"gcmp3player.stop", "tier2", {"0x5dc9f0"}},
       {"gcsaver.cheatmenu", "tier1", {"0x5d35b0", "0x5d4fc0", "0x74761d", "0x747679", "0x74764b", "0x74765f", "0x771424"}},
       {"gcsaver.getammo", "tier1", {"0x5d3910", "0x7474c8"}},
+      {"gcsaver.gettoa", "tier1", {"0x5d36b0", "0x74749c", "0x5d36b3", "0x407960", "0x47e221"}},
       {"gcsaver.setammo", "tier1", {"0x5d3840", "0x7474c8", "0x5d384c"}},
       {"gcsaver.setenergy", "tier2", {"0x5d3680", "0x7474ac"}},
       {"gcsaver.sethealth", "tier2", {"0x5d3650", "0x7474a8"}},
@@ -1522,6 +1691,7 @@ TEST_CASE("osi directors real tables: the group's tier1 overrides are bound; the
   for (const char* k : {"gcgame.getmainview", "gcgame.getkeymapper", "gcgame.getmp3player", "gcviewport.getcamera",
                         "gcareadirector.getcurrentlevel", "gcareadirector.setcurrentlevel", "gcareadirector.setcurrentarea",
                         "gcareadirector.getscriptfluffstring", "gcsaver.cheatmenu", "gcsaver.getammo", "gcsaver.setammo",
+                        "gcareadirector.getnearestmax", "gcareadirector.setnearestmax", "gcsaver.gettoa",
                         "gchuddirector.playcinematic", "bettersaver.getbooleanvalue", "bettersaver.setbooleanvalue",
                         "bettersaver.save"}) {
     const std::string key(k);
@@ -1532,7 +1702,7 @@ TEST_CASE("osi directors real tables: the group's tier1 overrides are bound; the
     CHECK_MESSAGE(e->fn != nullptr, key);
   }
   for (const char* k : {"gcsaver.setmask", "gcsaver.sethealth", "gcsaver.setenergy", "gckeymapper.setusecontext",
-                        "gcareadirector.setfog", "gcareadirector.setnearestmax",
+                        "gcareadirector.setfog",
                         "gcmp3player.stop", "gcmp3player.setupforplay", "gcmp3player.play"}) {
     const std::string key(k);
     const size_t dot = key.find('.');
