@@ -503,13 +503,28 @@ TEST_CASE("osi services doesfileexist asm pin: SrBlockFileExists 0x54ddc0 and th
   CHECK(ij->cstr(0x1001e5bc) == "User/");
   PIN(ij, 0x100015b2, "3b fb");               // cmp edi, ebx : "Root/" found at the start of the path
   PIN(ij, 0x100015cc, "3b cb");               // cmp ecx, ebx : "User/" found at the start
+  // C-1: the NEITHER branch (0x10001608) shows a message box and FALLS THROUGH to the common tail: the path is appended
+  // unchanged (strcat_s 0x1000163e-0x10001641), so GetFileAttributesA reads a path relative to the current directory
+  PIN(ij, 0x100015ce, "75 38");               // jne 0x10001608 : not at the start either
+  PIN(ij, 0x10001608, "53 68 c8 e5 01 10");   // push ebx (the path, no +4) ; push the "Fatal: ..." format
+  CHECK(ij->cstr(0x1001e5c8).rfind("Fatal: We disallow", 0) == 0);
+  CHECK(ij->cstr(0x1001e624) == "OSI Script Security Abort");
+  PIN(ij, 0x10001628, "6a 10 68 24 e6 01 10"); // MB_ICONERROR, the title
+  PIN(ij, 0x10001632, "ff 15 00 e1 01 10");   // call [MessageBoxA]
+  PIN(ij, 0x10001638, "8b b5 68 fe ff ff");   // mov esi, [out] : no exit, no return: execution goes on
+  PIN(ij, 0x1000163e, "53 57 56 ff 15 f0 e1 01 10");  // strcat_s(out, size, path) : the shared tail
+  PIN(ij, 0x100015c1, "ff 15 1c e0 01 10");  // the Root/ branch: GetCurrentDirectoryA(size, out) ...
+  PIN(ij, 0x100015c7, "83 c3 04");            // ... then the path from after "Root" is appended
+  PIN(ij, 0x10001662, "8a 1c 16");            // the '/' -> '\\' loop of the tail (0x10001662-0x1000167d)
+  PIN(bs, 0x10001deb, "8d 85 f8 fe ff ff 50 ff 15 6c 80 00 10");  // GetFileAttributesA(buf): the resolved buffer IS read
 }
 
 TEST_CASE("osi services doesfileexist: Art.blk first (basename, case folded), then a loose file; the hook for \"User/\"") {
   fs::MemoryFileSystem mem;
-  REQUIRE(mem.mount("Root/Data/Art/Art.blk", make_blk({"alpha.tga", "Beta.TGA", "zeta.x"})));
+  REQUIRE(mem.mount("Root/Data/Art/Art.blk", make_blk({"alpha.tga", "Beta.TGA", "userfile.dat", "zeta.x"})));
   REQUIRE(mem.mount("Root/Data/loose.txt", {'x'}));
   REQUIRE(mem.mount("Root/Data/User/alpha.tga", {'x'}));
+  REQUIRE(mem.mount("Root/Data/Neither/User/x.txt", {'x'}));
   const uint8_t one = 1;
   REQUIRE(mem.write("User/data/player0.sav", &one, 1) == fs::Error::None);
   auto exists = [&](const std::string& n) { return call_str("scslosifileio", "doesfileexist", n, &mem); };
@@ -524,7 +539,16 @@ TEST_CASE("osi services doesfileexist: Art.blk first (basename, case folded), th
   CHECK(exists("Root/Data/User/beta.tga") == make_int(0));    // in Art.blk by basename, but the hook goes to disk
   CHECK(exists("User/data/player0.sav") == make_int(1));
   CHECK(exists("User/data/player1.sav") == make_int(0));
-  CHECK(exists("elsewhere/User/data/player0.sav") == make_int(0));  // neither prefix: ResolveGamePath aborts (INFERRED 0)
+  // C-1: a path that holds "User/" but starts with neither "Root/" nor "User/": the original shows a message box and goes on
+  // (0x10001632 -> 0x1000163e), and GetFileAttributesA reads the path relative to the current directory = the Root/ mapping
+  CHECK(exists("Data/Neither/User/x.txt") == make_int(1));         // = exists("Root/Data/Neither/User/x.txt")
+  CHECK(exists("Data\\Neither\\User/x.txt") == make_int(1));       // the tail turns '/' into '\\'; the VFS folds both
+  CHECK(exists("Data/Neither/User/none.txt") == make_int(0));
+  CHECK(exists("elsewhere/User/data/player0.sav") == make_int(0));  // no file at Root/elsewhere/...
+  CHECK(exists("Data/Neither/User/alpha.tga") == make_int(0));      // not the Art.blk basename route, not the user dir
+  // m-3: strstr is case sensitive: "user/" does not enter the hook, it takes SrBlockFileExists (Art.blk by basename)
+  CHECK(exists("root/Data/user/userfile.dat") == make_int(1));
+  CHECK(exists("root/Data/user/nothere.dat") == make_int(0));
   CHECK(exists("") == make_int(0));
   // does_file_exist works on the C string the native hands it (osi_cstring cut at the first NUL, 0x615ef6)
   Asm a;
@@ -553,6 +577,36 @@ TEST_CASE("osi services doesfileexist: with a current block file set the loose f
   CHECK(bf.exists("x/insec.txt"));          // [0x73612c] after the current one missed
   CHECK(bf.exists("Root/Data/Art/art.tga"));  // Art.blk first
   CHECK_FALSE(bf.exists("Root/Data/loose.txt"));  // [0x736128] != 0: no FileExists
+}
+
+TEST_CASE("osi services block chain: one BlockChain per host context, shared by every native (m-7)") {
+  fs::MemoryFileSystem mem;
+  REQUIRE(mem.mount("Root/Data/Art/Art.blk", make_blk({"art.tga"})));
+  REQUIRE(mem.mount("Root/Data/cur.blk", make_blk({"incur.txt"})));
+  REQUIRE(mem.mount("Root/Data/loose.txt", {'x'}));
+  Asm a;
+  a.fn("setup", 0).nothing().ret();
+  a.fn("probe_cur", 0).s("x/incur.txt").call("scslosifileio", "doesfileexist", 1).ret();
+  a.fn("probe_loose", 0).s("Root/Data/loose.txt").call("scslosifileio", "doesfileexist", 1).ret();
+  Svc s(a, &mem);
+  HostContext& ctx = s.host->context();
+  sage::BlockChain* chain = ctx.block_chain();  // what the 8a/9a natives that set the current block file use
+  REQUIRE(chain);
+  CHECK(chain == ctx.block_chain());
+  CHECK(chain == ctx.subsystem<BlockFiles>().chain());
+  CHECK(chain->blockfile(sage::Source::Art) != nullptr);  // Art.blk is loaded before Setup (LoadArtBlockHeader 0x43b030)
+  CHECK(s.host->vm().call("probe_cur", {}).result == make_int(0));
+  CHECK(s.host->vm().call("probe_loose", {}).result == make_int(1));
+  std::string err;
+  REQUIRE(chain->open_current("Root/Data/cur.blk", &err));  // [0x736128] set by another native
+  CHECK(s.host->vm().call("probe_cur", {}).result == make_int(1));    // doesfileexist sees it through the script
+  CHECK(s.host->vm().call("probe_loose", {}).result == make_int(0));  // and the FileExists fallback is suppressed
+  chain->clear_current();
+  CHECK(s.host->vm().call("probe_loose", {}).result == make_int(1));
+  Asm b;
+  b.fn("setup", 0).nothing().ret();
+  Svc none(b, nullptr);
+  CHECK(none.host->context().block_chain() == nullptr);  // no VFS, no chain
 }
 
 TEST_CASE("osi services doesfileexist: no VFS gives 0, never a crash") {
@@ -622,7 +676,11 @@ TEST_CASE("osi services gctimer.create asm pin: GcTimer::GcTimer 0x445840 and St
   PIN(im, 0x4459ca, "75 29");
   PIN(im, 0x4459e9, "e8 52 ca 07 00");        // call AddTrigger 0x4c2440
   PIN(im, 0x4459f1, "c6 46 78 01");           // mov byte [esi+0x78], 1
-  PIN(im, 0x4c25e5, "ff 41 04");              // AddTrigger: inc [this+4] : the trigger list's reference on the timer
+  PIN(im, 0x4c25e5, "ff 41 04");              // AddTrigger: inc [this+4] : a TEMPORARY reference ...
+  PIN(im, 0x4c2619, "ff 48 04");              // ... released here (dec [eax+4])
+  PIN(im, 0x4c25f3, "e8 98 09 00 00");        // the list insert 0x4c2f90 ...
+  PIN(im, 0x4c302b, "e8 50 02 00 00");        // ... copy-constructs the element (0x4c3280) ...
+  PIN(im, 0x4c32ae, "ff 47 04");              // ... whose `inc [edi+4]` is the list's lasting reference
   PIN(im, 0x445580, "ff 47 04");              // CreateVariant(GcTimer*): inc [edi+4] (the variant's reference)
   PIN(im, 0x445563, "66 c7 06 0f 00");        // null -> {0x0f, 0}
   CHECK(im->u64(0x7047b0) == 0);              // Start compares the duration with 0.0 ...
@@ -659,7 +717,7 @@ TEST_CASE("osi services gctimer.create: a started timer is held by the trigger l
     CHECK(g_probe.id == 7);
     CHECK(g_probe.duration == 2.5);
     CHECK(g_probe.started);
-    CHECK(g_probe.engine_refs == 1);  // AddTrigger's inc [this+4] (0x4c25e5), INFERRED to be the list's copy
+    CHECK(g_probe.engine_refs == 1);  // the list element's copy constructor (inc at 0x4c32ae; the temporary at 0x4c25e5 is released at 0x4c2619)
     CHECK(s.log_has("gctimer.create 3 -> 0027:00000001 G 1"));
   }
   {
@@ -765,19 +823,34 @@ TEST_CASE("osi services userealdeltatime: a logged no-op under --deterministic (
   CHECK(s.trace_has(want));
 }
 
-TEST_CASE("osi services userealdeltatime: non-deterministic, the byte switches the smoothing on and off (0x4a9200-0x4a92f2)") {
+namespace {
+// the K record of frame f: {t bits, dt bits} as printed ("K %6ld %08x %08x %08x")
+bool k_fields(const Svc& s, long f, unsigned& t, unsigned& dt) {
+  char head[16];
+  std::snprintf(head, sizeof head, "K %6ld ", f);
+  for (const auto& l : s.tr.lines)
+    if (l.rfind(head, 0) == 0) return std::sscanf(l.c_str() + std::strlen(head), "%x %x", &t, &dt) == 2;
+  return false;
+}
+}  // namespace
+
+TEST_CASE("osi services userealdeltatime: non-deterministic, the smoothing runs EVERY frame; the byte (0x4a92a5) only selects dt and time") {
+  // Process 0x4a9170 calls GetTime(1) (0x4a9200) and does the whole blend and clamp (0x4a920c-0x4a929f) on every pass; only
+  // the choice of dt / process time reads [0x712d78] (0x4a92a5). So a flag enabled at frame 3 meets the history of frames 0-2.
   Asm a;
-  a.fn("setup", 0).i8(1).call("scprocessmanager", "userealdeltatime", 1).ret();
+  a.fn("setup", 0).nothing().ret();
   a.fn("process", 3).i8(1).ret();
+  a.fn("enable", 0).i8(1).call("scprocessmanager", "userealdeltatime", 1).ret();
+  a.fn("disable", 0).i8(0).call("scprocessmanager", "userealdeltatime", 1).ret();
   HostFlags nd;
   nd.deterministic = false;
-  std::vector<double> clock_values = {10.0, 10.02, 10.5, 11.5, 11.52};
+  const std::vector<double> clock_values = {10.0, 10.02, 10.5, 11.5, 11.52, 11.7};
   size_t ci = 0;
   Svc s(a, nullptr, nd, [&] { return clock_values[ci++]; });
   REQUIRE(s.res.ok);
   RealDeltaTime& rt = s.host->context().subsystem<RealDeltaTime>();
-  CHECK(rt.effective);
-  // the constants, read the way the pin test reads them (the same data); expectations follow the asm order
+  CHECK_FALSE(rt.effective);
+  // the constants as the pin test reads them from the exe; the expectations follow the asm order
   const double k_init = 0.016666000708937645, k_blend = 0.07000000029802322, k_keep = 0.9300000071525574,
                k_cap = 0.06599999964237213;
   double smoothed = 0, last = 0;
@@ -795,25 +868,46 @@ TEST_CASE("osi services userealdeltatime: non-deterministic, the byte switches t
     last = now;
     return nv;
   };
-  for (size_t f = 0; f < 4; ++f) {
+  const unsigned fake_dt = f32_bits(static_cast<float>(0.006666666828095913));
+  unsigned t = 0, dt = 0;
+  for (long f = 0; f < 3; ++f) {  // the flag is off: the fake dt, but the clock is read and the state advances
     REQUIRE(s.host->frame());
-    const double dt = expect(clock_values[f]);
-    char want[64];
-    std::snprintf(want, sizeof want, "K %6zu %08x %08x %08x", f, f32_bits(static_cast<float>(clock_values[f])),
-                  f32_bits(static_cast<float>(dt)), static_cast<unsigned>(f));
-    CHECK_MESSAGE(s.trace_has(want), want);
+    expect(clock_values[static_cast<size_t>(f)]);
+    REQUIRE(k_fields(s, f, t, dt));
+    CHECK(dt == fake_dt);
   }
-  // 10.5 - 10.02 = 0.48 <= 0.5 blends; 11.5 - 10.5 = 1.0 > 0.5 resets to 0.016666
-  // and a request of 0 turns the flag off: the fake path returns
-  Asm b;
-  b.fn("setup", 0).i8(1).call("scprocessmanager", "userealdeltatime", 1).pop().i8(0).call("scprocessmanager", "userealdeltatime", 1).ret();
-  b.fn("process", 3).i8(1).ret();
+  CHECK(ci == 3);  // GetTime(1) ran on every frame, flag or not
+  CHECK(rt.count == 3);
+  REQUIRE(s.host->vm().call("enable", {}).ok);
+  CHECK(rt.effective);
+  for (long f = 3; f < 5; ++f) {  // enabled at frame 3 > 0: dt is the smoothed value CARRIED OVER, the process time is `now`
+    REQUIRE(s.host->frame());
+    const double want = expect(clock_values[static_cast<size_t>(f)]);
+    REQUIRE(k_fields(s, f, t, dt));
+    CHECK(dt == f32_bits(static_cast<float>(want)));
+    CHECK(t == f32_bits(static_cast<float>(clock_values[static_cast<size_t>(f)])));
+  }
+  // frame 3: 11.5 - 10.5 = 1.0 > 0.5 resets; frame 4: 0.02 blends with the reset value (not with a cold start)
+  CHECK(rt.count == 5);
+  CHECK(rt.smoothed == smoothed);
+  REQUIRE(s.host->vm().call("disable", {}).ok);
+  CHECK_FALSE(rt.effective);
+  REQUIRE(s.host->frame());
+  expect(clock_values[5]);
+  REQUIRE(k_fields(s, 5, t, dt));
+  CHECK(dt == fake_dt);  // back on the fake path; the smoothing went on
+  CHECK(ci == 6);
+  CHECK(rt.count == 6);
+  CHECK(rt.smoothed == smoothed);
+  // deterministic: the clock is never read and the state never moves (D3)
   size_t cj = 0;
-  Svc s2(b, nullptr, nd, [&] { return 1.0 * ++cj; });
-  REQUIRE(s2.res.ok);
-  CHECK_FALSE(s2.host->context().subsystem<RealDeltaTime>().effective);
+  Svc s2(a, nullptr, HostFlags{}, [&] { return 1.0 * ++cj; });
   REQUIRE(s2.host->frame());
-  CHECK(cj == 0);  // the clock is not read on the fake path
+  REQUIRE(s2.host->vm().call("enable", {}).ok);
+  REQUIRE(s2.host->frame());
+  CHECK(cj == 0);
+  CHECK_FALSE(s2.host->context().subsystem<RealDeltaTime>().effective);
+  CHECK(s2.host->context().subsystem<RealDeltaTime>().count == 0);
   // only the low byte counts (0x4a8aca)
   Asm c;
   c.fn("setup", 0).i32(256).call("scprocessmanager", "userealdeltatime", 1).ret();
@@ -902,6 +996,11 @@ TEST_CASE("osi services debug.print asm pin: returns nothing; the string argumen
   PIN(im, 0x61d5ef, "e8 0c 79 fb ff");        // call 0x5d4f00 (the cheat-menu test)
   PIN(im, 0x61d614, "e8 67 86 ed ff");        // append "\n" (0x756948) to the argument string in place
   CHECK(im->cstr(0x756948) == "\n");
+  PIN(im, 0x61d63e, "66 c7 07 0f 00");        // m-1: the result {0x0f, 0} IS written here ...
+  PIN(im, 0x61d643, "c7 47 04 00 00 00 00");
+  PIN(im, 0x61d639, "ff 56 08");              // ... after the virtual call that prints
+  PIN(im, 0x4f5c96, "39 d3");                 // append: len (ebx) vs capacity - n (edx) ...
+  PIN(im, 0x4f5c98, "0f 93 c0");              // ... setae : len >= 255 - 1 throws kLenTooLong (0x83aa20) : a 254-byte argument errors
 }
 
 // ============================== the tables: overrides <-> bound bodies ==============================

@@ -52,6 +52,18 @@ void HostContext::log_line(const std::string& s) {
   if (log_) log_->line(s);
 }
 
+sage::BlockChain* HostContext::block_chain() {
+  if (!blocks_tried_) {
+    blocks_tried_ = true;
+    if (vfs_) {
+      blocks_ = std::make_unique<sage::BlockChain>(*vfs_);
+      std::string err;
+      blocks_->open_art("Root/Data/Art/Art.blk", &err);  // path 0x703523; a missing Art.blk leaves it closed
+    }
+  }
+  return blocks_.get();
+}
+
 GameObject* HostContext::object(uint32_t handle) const {
   auto it = by_handle_.find(handle);
   return it == by_handle_.end() ? nullptr : it->second;

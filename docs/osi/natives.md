@@ -666,12 +666,21 @@ D11's "copy of argument 0" stub is **wrong** for all three. If the path ever hit
 
 ### 8.2 `scslosifileio.doesfileexist` and the block-file slots (I2)
 
-**Chain.** Body 0x615950 → `ScSLOSIFileIO::DoesFileExist` 0x615ef0. With the Beta 1.5.0 mods, that is BetterSaver's hook 0x10001da0 (§9.3). The hook passes any path not containing `User/` to the original, which calls `SrBlockFileExists` 0x54ddc0 (0x615ef9).
+**Chain.** Body 0x615950 → `ScSLOSIFileIO::DoesFileExist` 0x615ef0. With the Beta 1.5.0 mods, that is BetterSaver's hook 0x10001da0 (§9.3). The hook passes any path not containing `User/` (a case-sensitive `strstr`: `user/` does not match) to the original, which calls `SrBlockFileExists` 0x54ddc0 (0x615ef9). A path that does contain `User/` never reaches `SrBlockFileExists` (§9.3).
 
 **`SrBlockFileExists` order (CITED). This corrects the plan's Decision 9.**
 1. **The block file object 0x83b0b8** (0x54ddc7–0x54dde4). This is **`Root/Data/Art/Art.blk`** (`GcGame::LoadArtBlockHeader` 0x43b030, path 0x703523), **not** `Main.blk`. It is checked when its header is loaded.
 2. **If `[0x736128]` (the current block file) is non-null:** `Find` in it, then `Find` in `[0x73612c]` (the second block file) if that is non-null. Then false.
 3. **If `[0x736128]` is null:** `FileExists` 0x54de70 (0x54de41), which opens the name through `ScFileManager::Open` (the mounted volumes and, INFERRED, loose files).
+
+**`Find` 0x60fec0 compares the base name only (CITED, re-derived in T7a fix 1).**
+- The request's base name is the text after the LAST `\` (0x60fef6) or `/` (0x60fefc): the loop at 0x60fef0-0x60ff0c moves `esi` to just past each separator and runs to the terminating NUL. `esi` is what the comparisons get (pushes at 0x60ff1d and 0x60ff57). The directory part never takes part, so `Root/Data/Art/x.tga` and `Whatever/x.tga` find the same entry.
+- The search is a binary search over the entry table (stride 0x38, `imul` at 0x60ff16; the count is `[this+8]`, and a count of 0 or less gives -1 at 0x60fee1). Equality is 0x60fd30 and less-than is 0x60fd10, both through the byte comparison 0x60fd70, which folds only `A`..`Z` (`cmp 0x41`, `cmp 0x5a`, `or 0x60`: 0x60fdb3-0x60fdd5), compares whole strings and treats the NUL as the smallest byte. The table must therefore be sorted under that fold; `Art.blk` is (2,608 entries, EXECUTED: `tools/research/blk.py`).
+
+**A set `[0x736128]` slot suppresses the `FileExists` fallback (CITED, re-derived in T7a fix 1).**
+- `cmp [0x736128], 0` at 0x54ddf0 and `je 0x54de40` at 0x54ddf7: `FileExists` (0x54de41) is reached only from that `je`, that is only when the current slot is null.
+- With the current slot set, a miss in it goes to `[0x73612c]` (0x54de11, `je 0x54de32` when that is null), and a miss there ends at `xor al, al` (0x54de32): false, even when the name exists as a loose file.
+- `Art.blk` (step 1) is tried before the slots in every case, and a hit there returns true whatever the slots hold.
 
 **The slots at Setup.**
 - Both are 0 in `.data`.
@@ -773,7 +782,22 @@ Each entry is (target ← replacement; trampoline slot):
 | **`ScSLOSIFileIO::DoesFileExist` 0x615ef0** | **0x10001da0** | 0x1000a7b8 |
 
 **The two that touch the A9 path:**
-- **`DoesFileExist`:** a path containing `User/` (`strstr`, 0x10001dbe) is resolved on disk with `LOMNHook::ResolveGamePath` and tested with `GetFileAttributesA` (a file, not a directory). Any other path goes to the original (0x10001e24). `Root/Data/AreaViewer.txt` takes the original route.
+- **`DoesFileExist`:** a path containing `User/` (`strstr`, 0x10001dbe, case sensitive) is resolved on disk with `LOMNHook::ResolveGamePath` and tested with `GetFileAttributesA` (a file, not a directory). Any other path goes to the original (0x10001e24). `Root/Data/AreaViewer.txt` takes the original route.
+
+**The hook's three branches (CITED: `BetterSaver.dll` 0x10001da0 and `ijl15.dll` `?ResolveGamePath@LOMNHook@@` 0x10001570; T7a fix 1 corrects the first version of this section).** The hook calls `ResolveGamePath(path, buf, 0x104, false)` (0x10001de2) and then `GetFileAttributesA(buf)` (0x10001df2): -1 gives false (0x10001df8), a directory gives false (`test al, 0x10`, 0x10001dfd), anything else true (0x10001e01). `ResolveGamePath` first finds `Root/` (needle 0x1001e5b4) and `User/` (0x1001e5bc) with `strstr` (0x1001e128 is VCRUNTIME140 `strstr`) and compares each hit with the path start:
+1. **`Root/` at the start** (`cmp edi, ebx` 0x100015b2): `GetCurrentDirectoryA(size, buf)` (0x100015c1), then the path from after `Root` (`add ebx, 4`, 0x100015c7) is appended: the game directory. Port: `vfs->exists(path)` on the `root/` mount.
+2. **`User/` at the start** (`cmp ecx, ebx` 0x100015cc): `SHGetFolderPathA(0, CSIDL_APPDATA 0x1a, 0, 0, buf)` (0x100015df), `\`, the game edition (0x100015f2), then the path from after `User`. Port: `vfs->exists(path)` on the `user/` mount (the per-run User directory).
+3. **Neither** (0x10001608): the code `sprintf`s the "Fatal: We disallow writing to filenames that do not start with Root or User" text (format 0x1001e5c8) and calls `MessageBoxA(0, text, "OSI Script Security Abort", MB_ICONERROR)` (0x10001632; title 0x1001e624). It then **falls through** (0x10001638 reloads the buffer pointer; there is no exit and no return): the common tail at 0x1000163e appends the path UNCHANGED with `strcat_s(buf, size, path)` (0x10001641) and turns `/` into `\` (0x10001662-0x1000167d). `GetFileAttributesA` then resolves that relative path against the process's current directory, which is the directory branch 1 maps through `GetCurrentDirectoryA`. **The answer is `exists("Root/" + path)`.** (The first version of both engines returned false here: a shared misreading, found by review.)
+- **The message box is a host UI side effect.** It is not modelled and not written to natives.log; a UI milestone decides what the browser shows (deferred to the UI milestones).
+- **Divergences that stay (hostile `User/` paths):** (a) `User/../x`: Win32 resolves `..` against `%APPDATA%\<edition>` in the original, so it can leave the user directory; the VFS normalises `..` inside its mount (`fs::normalize`) and never escapes, so the port answers false. That is deliberate (safe in the browser). (b) A path too long for the 0x104-byte buffer makes `strcat_s` call the CRT invalid-parameter handler in the original (INFERRED: the process ends); a script string is at most 254 bytes, `strcat_s` appends to a prefix, so only `User/` paths near the limit are affected, and the port answers by file lookup.
 - **`CleanupLoad`:** the replacement walks BetterSaver's token vector and the exe's lists at 0x8384a0 and 0x7f79f0 against the current area, calling `GcAreaLoader::RemoveObject`. On the path all of them are empty (§4).
 
 **`OSIProject.DebugServer.dll`:** its `lsdebugger.*` natives are not on the path and were not read further.
+
+### 9.4 Other notes on the services group (T7a fix 1)
+
+- **`debug.print` (tier2) in a 254-byte case.** The body appends `"\n"` (0x756948) to its argument string in place (0x61d614 -> `ScFixedString::append` 0x4f5c80). `append` throws `kLenTooLong` (error 0x83aa20) when `len >= capacity - n` (0x4f5c96-0x4f5c98, `setae`), here `len >= 254`. So a 254-byte argument is a VM error in the original ("Script is calling debug.print"), while the tier2 stub returns nothing. A script string is at most 254 bytes, so only that one length differs; Base.osi's longest string-table entry is 145 bytes (§8.3). The result `{0x0f, 0}` is written at 0x61d63e/0x61d643, after the virtual call that prints (0x61d639, behind the cheat-menu gate 0x5d4f00); output is not modelled.
+- **`gctimer.create` and `Start`.** A started timer is held by the trigger list: `AddTrigger` 0x4c2440 takes a temporary reference (`inc [this+4]`, 0x4c25e5) and releases it (0x4c2619); the lasting reference is the list element's copy constructor 0x4c3280 (`inc [edi+4]`, 0x4c32ae), reached from the insert 0x4c2f90 at 0x4c302b. Engine references: unstarted G 0, started G 1.
+- **`UseRealDeltaTime` outside `--deterministic`.** `ScProcessManager::Process` calls `GetTime(1)` (0x4a91fe-0x4a9200; `timeGetTime() * 0.001`, 0x4fa475-0x4fa48d) and runs the whole blend and clamp (0x4a920c-0x4a929f) on EVERY pass. The flag byte `[0x712d78]` is read once, at 0x4a92a5, and only selects which dt and process time are used: the smoothed dt and `now` (0x4a92ae-0x4a92c0), or the fake step 0x712d68 added to the time (0x4a92c8-0x4a92e3). `[pm+0x10]` receives `now` in both cases (0x4a92ec-0x4a92f2). The port steps the smoothing every frame when not deterministic and selects by the flag. Under `--deterministic` nothing of this runs (D3).
+- **`identifiertostring`** is a pure byte swap with no table and no unknown-id text (0x6178c0-0x617993), cut at the first NUL.
+- **Block-file state in the port.** One `sage::BlockChain` per host context (`HostContext::block_chain()`, Art.blk opened on first use) stands for the process-global Art block file and the two slots; a native that sets, saves or restores the current block file must use it.

@@ -257,12 +257,19 @@ bool ScriptHost::frame() {
   current_frame_ = k;
   static const double C = time_step();
   double dt_d = C;
-  if (!opt_.flags.deterministic && ctx_->subsystem<RealDeltaTime>().effective) {
-    // UseRealDeltaTime(1) outside --deterministic (D3): the real-time branch of ScProcessManager::Process (0x4a9200-0x4a92f2).
-    // GetTime(1) is the real clock; the process time becomes that clock (fstp [pm+8], 0x4a92c0-0x4a92e3) and dt the smoothed value.
+  if (!opt_.flags.deterministic) {
+    // Outside --deterministic (D3) ScProcessManager::Process runs GetTime(1) and the blend and clamp on EVERY pass
+    // (0x4a91fe-0x4a929f); the byte [0x712d78] that UseRealDeltaTime sets is read once, at 0x4a92a5, and only selects which dt
+    // and process time are used (0x4a92ae-0x4a92e3): the smoothed dt and `now` (fstp [pm+8]), or the fake step.
+    RealDeltaTime& rt = ctx_->subsystem<RealDeltaTime>();
     const double now = opt_.clock ? opt_.clock() : steady_seconds();
-    dt_d = ctx_->subsystem<RealDeltaTime>().step(now);
-    time_ = now;
+    const double smoothed = rt.step(now);
+    if (rt.effective) {
+      dt_d = smoothed;
+      time_ = now;
+    } else {
+      time_ = fadd_pc(time_, C, vm_->fpu_pc());  // the original's fake-time path: time += 0.0066667 (0x4a92c8-0x4a92e3)
+    }
   } else {
     time_ = fadd_pc(time_, C, vm_->fpu_pc());  // the original's fake-time path: time += 0.0066667 (0x4a92c8-0x4a92e3)
   }

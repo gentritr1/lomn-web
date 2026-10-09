@@ -4,7 +4,6 @@
 // cited by instruction address; INFERRED marks a reading that was not run to a conclusion.
 #include "lomn/osi/services.h"
 
-#include <chrono>
 #include <cstring>
 
 #include "lomn/fs.h"
@@ -85,30 +84,32 @@ double RealDeltaTime::step(double now) {
 
 // ---- block files ----
 
-BlockFiles::BlockFiles(HostContext& c) {
-  if (c.vfs()) chain_ = std::make_unique<sage::BlockChain>(*c.vfs());
-}
-
 bool BlockFiles::exists(const std::string& name) {
-  if (!chain_) return false;  // no volumes mounted: FileExists finds nothing (its no-volume error is caught, 0x54df60)
-  if (!art_tried_) {
-    art_tried_ = true;
-    std::string err;
-    chain_->open_art("Root/Data/Art/Art.blk", &err);  // path 0x703523, GcGame::LoadArtBlockHeader 0x43b030
-  }
-  return chain_->exists(name);
+  sage::BlockChain* chain = ctx_.block_chain();  // Art.blk opened there (path 0x703523, LoadArtBlockHeader 0x43b030)
+  if (!chain) return false;  // no volumes mounted: FileExists finds nothing (its no-volume error is caught, 0x54df60)
+  return chain->exists(name);
 }
 
 bool does_file_exist(HostContext& ctx, const std::string& name) {
-  // BetterSaver's hook 0x10001da0: strstr(path, "User/") (0x10001dbe, needle 0x1000833c). A hit never reaches
-  // SrBlockFileExists: ResolveGamePath (ijl15.dll 0x10001570) maps a path that STARTS with "Root/" or "User/" (the strstr
-  // needles 0x1001e5b4 / 0x1001e5bc compared with the path start, 0x100015b2 / 0x100015cc) onto the game or the user
-  // directory, and GetFileAttributesA must find a file that is not a directory (0x10001df8-0x10001e01). Any other
-  // prefix aborts with a message box in the original; modelled as "does not exist" (INFERRED: the abort path's buffer
-  // is a relative path that is not read back).
+  // BetterSaver's hook 0x10001da0: strstr(path, "User/") (0x10001dbe, needle 0x1000833c; case sensitive). A hit never reaches
+  // SrBlockFileExists: ResolveGamePath(path, buf, 0x104, false) (ijl15.dll 0x10001570) fills buf, and GetFileAttributesA(buf)
+  // (0x10001df2) must find a file that is not a directory (0x10001df8-0x10001e01).
+  //  - "Root/" at the start of the path (strstr == path, 0x100015b2): GetCurrentDirectoryA, then the path from after "Root"
+  //    appended: the game directory = the VFS's root/ mount.
+  //  - "User/" at the start (0x100015cc): SHGetFolderPathA(APPDATA) + the edition + the path from after "User": the user
+  //    directory = the VFS's user/ mount.
+  //  - NEITHER (0x10001608): sprintf of the "Fatal: We disallow ..." text and MessageBoxA(0, text, "OSI Script Security
+  //    Abort", MB_ICONERROR) (0x10001632); there is no exit, execution falls through to the common tail (0x1000163e):
+  //    strcat_s(buf, size, path) with the path UNCHANGED, '/' -> '\', ret. buf holds the relative path, GetFileAttributesA
+  //    resolves it against the current directory, which is the directory the Root/ branch maps through GetCurrentDirectoryA.
+  //    So the answer is exists("Root/" + path). The message box is a host UI effect: not modelled, not logged (natives.md 9.3).
+  // Win32 resolution of ".." and the 0x104-byte buffer are not modelled (natives.md 9.3): the VFS normalises ".." inside its
+  // mount and never escapes it.
   if (name.find("User/") != std::string::npos) {
-    const bool prefixed = name.compare(0, 5, "Root/") == 0 || name.compare(0, 5, "User/") == 0;
-    return prefixed && ctx.vfs() && ctx.vfs()->exists(name);
+    const fs::FileSystem* vfs = ctx.vfs();
+    if (!vfs) return false;
+    if (name.compare(0, 5, "Root/") == 0 || name.compare(0, 5, "User/") == 0) return vfs->exists(name);
+    return vfs->exists("Root/" + name);
   }
   return ctx.subsystem<BlockFiles>().exists(name);  // the original: 0x615ef0 -> SrBlockFileExists 0x54ddc0
 }

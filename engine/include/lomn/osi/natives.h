@@ -17,6 +17,7 @@
 #include "lomn/osi/registry.h"
 #include "lomn/osi/variant.h"
 #include "lomn/osi/vm.h"
+#include "lomn/sage/blockchain.h"
 
 namespace lomn::fs {
 class FileSystem;
@@ -122,6 +123,13 @@ class HostContext {
     return *static_cast<T*>(subsystems_[id].get());
   }
 
+  // The host's block-file state (M2a-2 T7a fix 1, m-7): the original keeps the current/second block-file slots
+  // ([0x736128] / [0x73612c]) and the Art block file (0x83b0b8) in process-global objects, so there is ONE sage::BlockChain per
+  // context. Every native that saves, sets or restores the current block file (character/level/boss loads, ScTileFont,
+  // LoadHudSprite) must use this chain, or scslosifileio.doesfileexist would not see its state. Built on first use over
+  // the VFS, with Art.blk ("Root/Data/Art/Art.blk", GcGame::LoadArtBlockHeader 0x43b030) opened; nullptr without a VFS.
+  sage::BlockChain* block_chain();
+
   const HostFlags& flags() const { return flags_; }
   const fs::FileSystem* vfs() const { return vfs_; }
   Vm& vm() { return vm_; }
@@ -147,6 +155,8 @@ class HostContext {
   std::unordered_map<GameObject*, std::unique_ptr<GameObject>> owned_;
   std::unordered_map<uint32_t, GameObject*> by_handle_;
   std::vector<std::shared_ptr<void>> subsystems_;
+  std::unique_ptr<sage::BlockChain> blocks_;
+  bool blocks_tried_ = false;
 };
 
 // Native groups (Tasks 7a/8a/9a). Fix 1 of Task 3 (review I-1): there is NO static-initialisation registration, because

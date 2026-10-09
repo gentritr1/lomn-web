@@ -12,11 +12,12 @@
 
 namespace lomn::osi {
 
-// The C string a native's `string` argument is read as. The original passes the dynamic string's data pointer to
-// ScFixedString::assign(p, npos) (0x401850; npos = [0x726a44] = 0xffffffff), whose npos branch is strlen (0x401881 ->
-// 0x6573c0): the bytes up to the first NUL. It throws kOutOfRange when that length is >= the capacity 255 (cmp/setae
-// 0x401894-0x401897, SrThrow call 0x4018a8). A legal 0x16 string is at most 254 bytes, so the throw is unreachable from
-// a script; the model keeps it.
+// The C string a native's `string` argument is read as: the bytes up to the first NUL. Exact for the natives whose wrapper
+// copies the string with ScFixedString::assign(p, npos) (StringToIdentifier 0x617810, via 0x401850: npos = [0x726a44] =
+// 0xffffffff selects strlen, 0x401881 -> 0x6573c0, and n >= the capacity 255 throws kOutOfRange, cmp/setae 0x401894-0x401897,
+// SrThrow call 0x4018a8). DoesFileExist does NOT assign: its chain passes the raw data pointer (0x615ef6 -> 0x54ddc0), a C
+// string with no 255 test of its own. A legal 0x16 string is at most 254 bytes, so the throw is unreachable from a script
+// and the two readings agree; the model applies this one function to both.
 std::string osi_cstring(const std::string& text);
 
 // ScOSISystem::ConvertStringToID 0x5fb060: a string of exactly 4 bytes packs first byte in the high byte; any other
@@ -37,7 +38,7 @@ class GcTimer : public GameObject {
   GcTimer(uint16_t type, int32_t id, bool start, double duration);
   int32_t id() const { return id_; }                 // [timer+0xc], the GcEventTrigger event id
   double duration() const { return duration_; }      // [timer+0x68], a double
-  bool started() const { return trigger_added_; }    // [timer+0x78], set by Start's AddTrigger call (0x4459f1)
+  bool started() const { return trigger_added_; }    // [timer+0x78], set after Start's AddTrigger call (0x4459f1)
 
  private:
   int32_t id_;
@@ -46,8 +47,10 @@ class GcTimer : public GameObject {
 };
 
 // ScProcessManager::UseRealDeltaTime 0x4a90e0 stores its byte argument in [0x712d78]. Under --deterministic the native
-// leaves that byte at 0 (D3: the fake-time path stays on) and only records the request. The smoothing is the real-time
-// branch of ScProcessManager::Process 0x4a9170 (0x4a9200-0x4a92f2) with the constants at 0x712db0-0x712de0.
+// leaves that byte at 0 (D3: the fake-time path stays on) and only records the request. ScProcessManager::Process 0x4a9170
+// reads the real clock (GetTime(1), 0x4a91fe-0x4a9200) and runs the blend and clamp (0x4a920c-0x4a929f, constants at
+// 0x712db0-0x712de0) on EVERY pass; the byte is read once, at 0x4a92a5, and only chooses which dt and process time are used
+// (0x4a92ae-0x4a92e3). So outside --deterministic step() runs every frame and `effective` selects.
 struct RealDeltaTime {
   explicit RealDeltaTime(HostContext&) {}
   bool requested = false;  // the last argument's low byte != 0, recorded even when deterministic
@@ -72,20 +75,23 @@ struct DisplayState {
 
 // SrBlockFileExists 0x54ddc0 over the VFS: Art.blk (0x83b0b8, "Root/Data/Art/Art.blk") first, then the current/second
 // block files (the slots [0x736128] / [0x73612c]; both 0 at every call on the Base.osi path), then FileExists 0x54de70
-// on the mounted volumes only while no current block file is set. Reuses sage::BlockChain::find_exists. Art.blk is
-// opened on first use (GcGame::LoadArtBlockHeader 0x43b030 has run before Setup).
+// on the mounted volumes only while no current block file is set. Reuses sage::BlockChain::find_exists over the host's
+// ONE chain, HostContext::block_chain() (shared with every native that sets the current block file, m-7).
 class BlockFiles {
  public:
-  explicit BlockFiles(HostContext& c);
+  explicit BlockFiles(HostContext& c) : ctx_(c) {}
   bool exists(const std::string& name);
-  sage::BlockChain* chain() { return chain_.get(); }  // null without a VFS
+  sage::BlockChain* chain() { return ctx_.block_chain(); }  // null without a VFS
 
  private:
-  std::unique_ptr<sage::BlockChain> chain_;
-  bool art_tried_ = false;
+  HostContext& ctx_;
 };
 
-// ScSLOSIFileIO::DoesFileExist as BetterSaver hooks it (0x10001da0; natives.md §9.3), on the C string `name`.
+// ScSLOSIFileIO::DoesFileExist as BetterSaver hooks it (0x10001da0; natives.md §9.3), on the C string `name`. A path that
+// holds "User/" (strstr, case sensitive) is resolved by ijl15.dll's ResolveGamePath and tested with GetFileAttributesA: from
+// "Root/" or "User/" at its start onto the game or the user directory; from anything else RELATIVE TO THE CURRENT
+// DIRECTORY, i.e. the Root/ mapping, after a modal "OSI Script Security Abort" box (a host UI effect, not modelled and not
+// logged: deferred to the UI milestones). Every other path goes to SrBlockFileExists.
 bool does_file_exist(HostContext& ctx, const std::string& name);
 
 }  // namespace lomn::osi
