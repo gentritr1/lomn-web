@@ -218,8 +218,10 @@ The acceptance is the output of `tools/osi/conformance_report.py DIR [--group a|
 `.expect.json` metadata:
 
 ```
-handlers ≥2: x/96, row×message pairs: y/111, falsifiers: k/31, argc violations: z/20, programs: N
+handlers ≥2: x/96, row×message pairs: y/111, falsifiers: k/31, argc violations: z/20, programs: N, pending: P
 ```
+
+`programs` excludes the pending programs (amendment 17), which are counted in `pending` and cover nothing.
 
 - The denominators are measured from the tables by the script (2026-10-08, empty corpus):
   - 96 handlers;
@@ -352,3 +354,18 @@ Both runners (`lomn_osi_conform`, `osi_vm.py --conform`) implement these. They c
 20. **Pending programs.** A program with a `pending` list (§1) needs runner features that Tasks 3/4 add. Its
     expectations are hand-derived like every other's. They are not adjusted to whatever a runner does, and they are not
     a gate until the list is empty.
+21. **Pending programs** (2026-10-09, M2a-2; runner behaviour for the `pending` field of §1 and rule 20). A program for behaviour the engines do not implement yet carries a top-level
+    `"pending": "<task id>"` (for example `"T3"`) in its `.expect.json`. Only a non-empty string counts; any other value
+    leaves the program ordinary, so a typo runs it and can fail, and nothing is skipped silently.
+    - Neither runner runs it. Each prints `PENDING <group>/<id> (<task>)` on its own line, where a PASS/FAIL line would
+      be. The program needs no `.asm` that assembles (`tools/osi/conform_assemble.py` skips it) and writes no trace.
+    - The summary is `conformance: X/Y pass, P pending`. Y excludes the pending programs. The prefix `conformance: X/Y` is
+      unchanged, so a consumer matching it still works.
+    - The exit status is 0 when every non-pending program passes, whatever P is. A corpus with only pending programs exits
+      0; a corpus with no program at all is still not a pass (C++ 77, oracle 1).
+    - `make conform-trace-cmp` takes no trace from either side for a pending program, requires the two PENDING lists to be
+      identical and trace-free, and prints `conform-trace-cmp: P pending (no trace on either side)`.
+    - `tools/osi/conformance_report.py` counts them as `pending: P` and excludes them from `programs` and from every
+      coverage number.
+    - Unknown keys: neither runner rejects any key it does not read. This is how the group-n fields (`returns.object`,
+      `expect.top`, `pc_after`, `swallowed`, `then`) are accepted. Removing `pending` is how a program is promoted.

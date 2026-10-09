@@ -365,6 +365,13 @@ add_test(NAME osi_conform COMMAND sh -c
          ${CMAKE_CURRENT_SOURCE_DIR}/../tests/osi/conformance ${CMAKE_CURRENT_BINARY_DIR}/osi_conformance
          "${CMAKE_CROSSCOMPILING_EMULATOR}")
 set_tests_properties(osi_conform PROPERTIES SKIP_RETURN_CODE 77)
+# M2a-2: the "pending" marker (PENDING line, `pass, P pending` summary, never run, never a trace, never a failure) on a
+# temporary corpus built by the script; natively and under node.
+add_test(NAME osi_conform_pending COMMAND ${CMAKE_COMMAND} "-DRUNNER=${CMAKE_CROSSCOMPILING_EMULATOR}"
+         -DEXE=$<TARGET_FILE:lomn_osi_conform> -DPYTHON=python3
+         -DASSEMBLE=${CMAKE_CURRENT_SOURCE_DIR}/../tools/osi/conform_assemble.py
+         -DOUT=${CMAKE_CURRENT_BINARY_DIR}/osi_conform_pending
+         -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/osi_conform_pending.cmake)
 # M2a-1 T4 (A6): the differential run of the real Base.osi (Setup + 600 Process frames + the key taps, typed stubs)
 # against the independent Python oracle, natively and under node (NODERAWFS reads LOMN_DATA and data/osi). ctest
 # osi_a6_digest: C++ digest == oracle digest (own stubs) == oracle digest replaying the C++ natives.log, natives.log

@@ -5,8 +5,13 @@
 // Every `<id>.expect.json` under CORPUS_DIR (recursively, sorted by path) is one program. Its image `<id>.osi` and label
 // table `<id>.labels` come from --osi-dir (the same relative directory; written at build time by
 // tools/osi/conform_assemble.py from `<id>.asm`), or from next to the expectation. Prints one `FAIL <path>: <field>: ...`
-// line per differing field and `conformance: N/M pass`; exit 0 when all pass, 1 on any failure, 77 when there is no
-// program (ctest's skip code: an empty corpus is not a pass).
+// line per differing field and `conformance: N/M pass, P pending`; exit 0 when all pass, 1 on any failure, 77 when there is
+// no program (ctest's skip code: an empty corpus is not a pass).
+//
+// Pending programs: an expectation with a top-level non-empty string `"pending": "<task id>"` (any other value is ignored,
+// so the program runs) is not run. The runner prints `PENDING <group>/<id> (<task>)` in the place of its PASS/FAIL line, reads
+// no .osi, writes no trace, and counts it only in P (M excludes it). It never fails the run. An all-pending corpus exits 0.
+// Unknown keys in an expectation are ignored (every field is read by name), so the new group-n fields need no allowance.
 //
 // Test natives are declarative (conformance.md §1, §6.1): types in the registry vocabulary; `returns` (a variant,
 // {"game": C}, {"text": t}, {"hex": h}, {"arg": i}); `writes` (by-ref slots overwritten WITHOUT dispose, §6.14d);
@@ -212,6 +217,29 @@ struct Runner {
     if (!want) return;
     const uint32_t w = num_u32(*want);
     if (w != got) fail(field, std::to_string(w), std::to_string(got));
+  }
+
+  enum class Outcome { Pass, Fail, Pending };
+
+  // The task id when the expectation is pending (a non-empty string `pending`), else empty.
+  static std::string pending_task(const Json& ex) {
+    const Json* p = ex.get("pending");
+    return p && p->type == Json::String ? p->str : std::string();
+  }
+
+  Outcome run_program(const fs::path& expect_path) {
+    cur = fs::relative(expect_path, corpus).generic_string();
+    std::string text, err;
+    Json ex;
+    if (slurp(expect_path, text) && parse_json(text, ex, &err)) {
+      const std::string task = pending_task(ex);
+      if (!task.empty()) {
+        std::string id = cur.substr(0, cur.size() - std::string(".expect.json").size());
+        std::printf("PENDING %s (%s)\n", id.c_str(), task.c_str());
+        return Outcome::Pending;
+      }
+    }
+    return run_one(expect_path) ? Outcome::Pass : Outcome::Fail;
   }
 
   bool run_one(const fs::path& expect_path) {
@@ -434,9 +462,14 @@ int main(int argc, char** argv) {
     if (n.size() > 12 && n.compare(n.size() - 12, 12, ".expect.json") == 0) progs.push_back(it->path());
   }
   std::sort(progs.begin(), progs.end());
-  int pass = 0;
-  for (const auto& p : progs) pass += rn.run_one(p) ? 1 : 0;
-  std::printf("conformance: %d/%d pass\n", pass, static_cast<int>(progs.size()));
+  int pass = 0, pending = 0;
+  for (const auto& p : progs) {
+    const Runner::Outcome o = rn.run_program(p);
+    pass += o == Runner::Outcome::Pass ? 1 : 0;
+    pending += o == Runner::Outcome::Pending ? 1 : 0;
+  }
+  const int total = static_cast<int>(progs.size()) - pending;
+  std::printf("conformance: %d/%d pass, %d pending\n", pass, total, pending);
   if (progs.empty()) return 77;
-  return pass == static_cast<int>(progs.size()) ? 0 : 1;
+  return pass == total ? 0 : 1;
 }

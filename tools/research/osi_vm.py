@@ -18,7 +18,8 @@ Readings settled from the asm where a table cell was unclear (each one is listed
   the object checks, 0x15 checks before popping); multi-operand disposes follow the asm order (a then b; o then s).
 
 CLI:
-  osi_vm.py --conform DIR [--trace-dir D]     every <id>.asm/<id>.expect.json under DIR; "conformance: N/N pass"
+  osi_vm.py --conform DIR [--trace-dir D]     every <id>.asm/<id>.expect.json under DIR; "conformance: N/N pass, P pending"
+                                              (a program with "pending": "<task>" prints PENDING and is not run)
   osi_vm.py --run BASE.osi --natives N --mods M --types T --frames 600 --keys KEYSPEC [--replay natives.log]
             [--trace out.trace] [--digest out.digest]
 """
@@ -2442,20 +2443,31 @@ def _cmp_state(vm: Vm, ex: dict, snap: VmState, fails: list, error: bool = False
 
 
 def conform(directory, trace_dir=None) -> int:
+    """Runs every program under DIR. A program whose expect.json has a non-empty string "pending" (the task id) is not run:
+    it prints `PENDING <group>/<id> (<task>)` and is counted apart; it needs no .asm, writes no trace and never fails."""
+    from conform_pending import pending_task
     d = Path(directory)
-    progs = sorted(p for p in d.rglob("*.asm") if p.with_name(p.name[:-4] + ".expect.json").exists())
-    passed = 0
-    for p in progs:
+    passed, pending, total = 0, 0, 0
+    for exp in sorted(d.rglob("*.expect.json")):
+        asm = exp.with_name(exp.name[:-len(".expect.json")] + ".asm")
+        task = pending_task(exp)
+        if task is not None:
+            pending += 1
+            print("PENDING %s (%s)" % (asm.relative_to(d).with_suffix("").as_posix(), task))
+            continue
+        if not asm.exists():
+            continue
+        total += 1
         td = None
         if trace_dir is not None:
-            td = Path(trace_dir) / p.parent.relative_to(d)
-        fails = run_program(p, td)
+            td = Path(trace_dir) / asm.parent.relative_to(d)
+        fails = run_program(asm, td)
         if fails:
-            print("FAIL %s: %s" % (p.relative_to(d), "; ".join(fails)))
+            print("FAIL %s: %s" % (asm.relative_to(d), "; ".join(fails)))
         else:
             passed += 1
-    print("conformance: %d/%d pass" % (passed, len(progs)))
-    return 0 if passed == len(progs) and progs else 1
+    print("conformance: %d/%d pass, %d pending" % (passed, total, pending))
+    return 0 if passed == total and (total or pending) else 1
 
 
 # ---------------------------------------------------------------------------------------------------------------

@@ -11,7 +11,9 @@
                    covers one by naming it in "falsifier_id" (a string or a list of strings);
   argc violations  docs/osi/types.md "Argument-count violations" rows expanded per site ("key/argc#i", i = 1..sites);
                    a program covers one by naming it in "argc_violation";
-  programs         the number of .expect.json files.
+  programs         the number of .expect.json files that are not pending;
+  pending          the number of .expect.json files with a non-empty string "pending" (a task id, tools/osi/conform_pending.py).
+                   They are not run, so they cover nothing: the four coverage numbers above ignore them.
 --list (M2a-2 T2b) adds one line per program, sorted by id: `program <id> active`, or `program <id> pending <task>`
 from the program's `pending` key (docs/osi/conformance.md §1: the runners skip it until that task lands).
 
@@ -24,6 +26,9 @@ import json
 import re
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from conform_pending import pending_of  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
 GROUPS = {   # consult §1.4 / plan Tasks 4-5: the families of each corpus half
@@ -109,7 +114,9 @@ def in_group(op: int, group: str | None) -> bool:
 
 def report(d: Path, opcodes_md: Path, types_md: Path, group: str | None = None) -> dict:
     rows = table_rows(opcodes_md)
-    progs = [json.loads(p.read_text()) for p in sorted(Path(d).rglob("*.expect.json"))]
+    docs = [json.loads(p.read_text()) for p in sorted(Path(d).rglob("*.expect.json"))]
+    progs = [p for p in docs if pending_of(p) is None]
+    pending = len(docs) - len(progs)
     cites: dict[int, int] = {}
     for p in progs:
         for r in set(p.get("rows", [])):
@@ -129,7 +136,7 @@ def report(d: Path, opcodes_md: Path, types_md: Path, group: str | None = None) 
     argc_cov = {p.get("argc_violation") for p in progs} & set(argc)
     return {"handlers": (sum(1 for op in handlers if cites.get(op, 0) >= 2), len(handlers)),
             "pairs": (len(covered), len(pairs)), "falsifiers": (len(fal_cov), len(fals)),
-            "argc": (len(argc_cov), len(argc)), "programs": len(progs),
+            "argc": (len(argc_cov), len(argc)), "programs": len(progs), "pending": pending,
             "missing_handlers": ["%#04x" % op for op in handlers if cites.get(op, 0) < 2],
             "missing_pairs": sorted(set(pairs) - covered), "missing_falsifiers": sorted(set(fals) - fal_cov),
             "missing_argc": sorted(set(argc) - argc_cov)}
@@ -145,8 +152,8 @@ def main(argv=None) -> int:
     ap.add_argument("--list", action="store_true", help="also list every program with its status (active / pending)")
     a = ap.parse_args(argv)
     r = report(Path(a.dir), Path(a.opcodes), Path(a.types), a.group)
-    print("handlers ≥2: %d/%d, row×message pairs: %d/%d, falsifiers: %d/%d, argc violations: %d/%d, programs: %d"
-          % (r["handlers"] + r["pairs"] + r["falsifiers"] + r["argc"] + (r["programs"],)))
+    print("handlers ≥2: %d/%d, row×message pairs: %d/%d, falsifiers: %d/%d, argc violations: %d/%d, programs: %d, pending: %d"
+          % (r["handlers"] + r["pairs"] + r["falsifiers"] + r["argc"] + (r["programs"], r["pending"])))
     if a.missing:
         for k in ("missing_handlers", "missing_pairs", "missing_falsifiers", "missing_argc"):
             for x in r[k]:

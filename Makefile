@@ -225,14 +225,24 @@ osi-coverage: $(VENV)/.ok
 	timeout 60 $(PY) tools/osi/coverage.py --trace build/osi-coverage/python.trace
 
 # M2a-1 T4: the conformance corpus traces of the C++ runner and the Python oracle, compared file by file with cmp.
+# M2a-2: a program with "pending": "<task>" is not run by either runner (each prints `PENDING <group>/<id> (<task>)` and writes
+# no trace), so the cmp loop never sees it; this target additionally requires the two PENDING lists to be identical, requires
+# that neither side left a trace for a pending program, and prints the pending count. CONFORM_CORPUS / CONFORM_TRACE_DIR let
+# tools/tests/test_osi_conform_pending.py run it over a temporary corpus.
+CONFORM_CORPUS ?= tests/osi/conformance
+CONFORM_TRACE_DIR ?= build/conform-trace
 conform-trace-cmp: native $(VENV)/.ok
-	rm -rf build/conform-trace && mkdir -p build/conform-trace
-	timeout 120 $(PY) tools/osi/conform_assemble.py tests/osi/conformance build/conform-trace/osi
-	timeout 300 build/native/lomn_osi_conform tests/osi/conformance --osi-dir build/conform-trace/osi --trace-dir build/conform-trace/cpp
-	timeout 300 $(PY) tools/research/osi_vm.py --conform tests/osi/conformance --trace-dir build/conform-trace/py
-	@n=0; bad=0; for f in $$( (cd build/conform-trace/cpp && find . -name '*.trace'; cd ../py && find . -name '*.trace') | sort -u); do \
-	  n=$$((n+1)); cmp -s "build/conform-trace/cpp/$$f" "build/conform-trace/py/$$f" || { bad=$$((bad+1)); echo "DIFF $$f"; }; done; \
-	  echo "conform-trace-cmp: $$((n-bad))/$$n traces byte-identical (C++ vs Python)"; [ $$bad -eq 0 ]
+	rm -rf $(CONFORM_TRACE_DIR) && mkdir -p $(CONFORM_TRACE_DIR)
+	timeout 120 $(PY) tools/osi/conform_assemble.py $(CONFORM_CORPUS) $(CONFORM_TRACE_DIR)/osi
+	set -o pipefail; timeout 300 build/native/lomn_osi_conform $(CONFORM_CORPUS) --osi-dir $(CONFORM_TRACE_DIR)/osi --trace-dir $(CONFORM_TRACE_DIR)/cpp | tee $(CONFORM_TRACE_DIR)/cpp.out
+	set -o pipefail; timeout 300 $(PY) tools/research/osi_vm.py --conform $(CONFORM_CORPUS) --trace-dir $(CONFORM_TRACE_DIR)/py | tee $(CONFORM_TRACE_DIR)/py.out
+	@d=$(CONFORM_TRACE_DIR); mkdir -p $$d/cpp $$d/py; n=0; bad=0; for f in $$( (cd $$d/cpp && find . -name '*.trace'; cd ../py && find . -name '*.trace') | sort -u); do \
+	  n=$$((n+1)); cmp -s "$$d/cpp/$$f" "$$d/py/$$f" || { bad=$$((bad+1)); echo "DIFF $$f"; }; done; \
+	  echo "conform-trace-cmp: $$((n-bad))/$$n traces byte-identical (C++ vs Python)"; \
+	  { grep '^PENDING ' $$d/cpp.out || true; } | sort > $$d/cpp.pending; { grep '^PENDING ' $$d/py.out || true; } | sort > $$d/py.pending; \
+	  pbad=0; cmp -s $$d/cpp.pending $$d/py.pending || { pbad=1; echo "PENDING-DIFF the runners disagree on the pending programs:"; diff $$d/cpp.pending $$d/py.pending; }; \
+	  while read -r _ prog _; do for side in cpp py; do [ ! -e "$$d/$$side/$$prog.trace" ] || { pbad=1; echo "PENDING-TRACE $$side/$$prog.trace"; }; done; done < $$d/cpp.pending; \
+	  echo "conform-trace-cmp: $$(wc -l < $$d/cpp.pending | tr -d ' ') pending (no trace on either side)"; [ $$bad -eq 0 ] && [ $$pbad -eq 0 ]
 
 check: test-tools test-native test-wasm test-web
 	@if [ -n "$(LOMN_DATA)" ]; then $(MAKE) datacheck datacheck-wasm a13-real; else echo "datacheck, a13-real SKIPPED (no LOMN_DATA)"; fi
