@@ -2,7 +2,9 @@
 // ScriptHost. Expected values are taken from natives.md (the §3.4 worked example byte for byte), the corpus notes of
 // tests/osi/conformance/n/ (hand-derived from the asm by Task 2b) and integer arithmetic stated next to them.
 #include <cstdint>
+#include <initializer_list>
 #include <limits>
+#include <stdexcept>
 #include <memory>
 #include <string>
 #include <vector>
@@ -547,45 +549,198 @@ TEST_CASE("osi natives T3: the registry reads each row's merged tier (natives.md
   CHECK(threw);
 }
 
-// ============================== bind_natives ==============================
+// ============================== bind_natives: the explicit group list (fix 1, review I-1) ==============================
 
 namespace {
-Variant grp_getmask(NativeCall&, void*) { return make_int(0x3f3f3f3f); }
-void bind_test_group(NativeRegistry& reg, HostContext& ctx) { reg.bind("gcsaver.getmask", grp_getmask, &ctx, Tier::Stub); }
-const bool g_registered = (register_native_group("t3-test", bind_test_group), true);
+// natives/selftest.cpp's row: present only in a test registry, so the selftest group binds nothing in a real run
+const char* const kSelftestRow =
+    R"({"cls": "T3SelfTest", "name": "Ping", "min": 0, "max": 0, "types": [], "ret": "int", "winner": true})";
+std::string rows(std::initializer_list<const char*> r) {
+  std::string s = "[";
+  for (const char* x : r) s += std::string(s.size() > 1 ? "," : "") + x;
+  return s + "]";
+}
 }  // namespace
 
-TEST_CASE("osi natives T3: register_native_group / bind_natives run every group and mark the rows they bind tier1") {
-  CHECK(g_registered);
-  CHECK(native_group_count() >= 1);
+TEST_CASE("osi natives T3 fix1 I-1: the explicit group list reaches the link through the lomn_osi archive") {
+  // lomn_tests links lomn_osi as the STATIC library target (wasm: the same target under emscripten); natives/selftest.cpp
+  // is one of its object files, referenced only through natives/groups.cpp's list
+  bool found = false;
+  for (const NativeGroup& g : native_groups())
+    if (std::string(g.name) == "selftest") found = g.selftest && g.bind != nullptr;
+  CHECK(found);
+  CHECK(native_group_count() == native_groups().size() - 1);
+  Asm a;
+  a.fn("setup", 0).call("t3selftest", "ping", 0).ret();
+  sage::OsiFile file;
+  std::string err;
+  REQUIRE_MESSAGE(file.parse(a.build(), &err), err);
+  StringTrace tr;
+  ScriptHost::Options real;
+  real.real_natives = true;
+  ScriptHost host(file, rows({kSelftestRow}), "", R"({"types": []})", "", nullptr, &tr, nullptr, real);
+  const NativeEntry* e = host.registry().find("t3selftest", "ping");
+  REQUIRE(e);
+  CHECK(e->fn != nullptr);
+  CHECK(e->user == &host.context());
+  CHECK(e->tier == Tier::Implemented);
+  CallResult r = host.setup();
+  REQUIRE(r.ok);
+  CHECK(r.result == make_int(0x5e1f7e57));  // the selftest body's value (natives/selftest.cpp)
+  REQUIRE(host.stats().hits.count("t3selftest.ping"));
+  CHECK(host.stats().hits.at("t3selftest.ping").bound);
+}
+
+TEST_CASE("osi natives T3 fix1 I-1: real_natives fails closed (no group binds a body; a tier1 row without a body)") {
   Asm a;
   a.fn("setup", 0).call("gcsaver", "getmask", 0).ret();
   sage::OsiFile file;
   std::string err;
   REQUIRE_MESSAGE(file.parse(a.build(), &err), err);
-  const char* nat = R"([{"cls": "GcSaver", "name": "GetMask", "min": 0, "max": 0, "types": [], "ret": "int", "winner": true}])";
+  const char* mask = R"({"cls": "GcSaver", "name": "GetMask", "min": 0, "max": 0, "types": [], "ret": "int", "winner": true})";
+  const char* mask1 =
+      R"({"cls": "GcSaver", "name": "GetMask", "min": 0, "max": 0, "types": [], "ret": "int", "winner": true, "tier": "tier1"})";
   StringTrace tr;
-  ScriptHost::Options stub_opt;
-  ScriptHost stubs(file, nat, "", R"({"types": []})", "", nullptr, &tr, nullptr, stub_opt);
-  CHECK(stubs.setup().ok);
-  CHECK(stubs.registry().find("gcsaver", "getmask")->tier == Tier::Stub);
   ScriptHost::Options real;
   real.real_natives = true;
-  ScriptHost host(file, nat, "", R"({"types": []})", "", nullptr, &tr, nullptr, real);
-  const NativeEntry* e = host.registry().find("gcsaver", "getmask");
-  REQUIRE(e);
-  CHECK(e->fn == grp_getmask);
-  CHECK(e->user == &host.context());
-  CHECK(e->tier == Tier::Implemented);
+  auto error_of = [&](const std::string& natives) {
+    try {
+      ScriptHost h(file, natives, "", R"({"types": []})", "", nullptr, &tr, nullptr, real);
+    } catch (const std::runtime_error& x) {
+      return std::string(x.what());
+    }
+    return std::string("<no error>");
+  };
+  // the selftest group binds nothing without its row: no group binds a body -> a hard error, not a stub run
+  CHECK(error_of(rows({mask})).find("no native group binds a body") != std::string::npos);
+  // a tier1 row whose body no group bound
+  const std::string e2 = error_of(rows({mask1, kSelftestRow}));
+  CHECK(e2.find("tier1 without a bound body") != std::string::npos);
+  CHECK(e2.find("gcsaver.getmask") != std::string::npos);
+  CHECK(error_of(rows({mask, kSelftestRow})) == "<no error>");
+  // a stub run is allowed, and reports the row's tier and that no body is bound
+  ScriptHost stubs(file, rows({mask1}), "", R"({"types": []})", "", nullptr, &tr, nullptr, ScriptHost::Options{});
+  REQUIRE(stubs.setup().ok);
+  REQUIRE(stubs.stats().hits.count("gcsaver.getmask"));
+  CHECK(stubs.stats().hits.at("gcsaver.getmask").tier == Tier::Implemented);
+  CHECK_FALSE(stubs.stats().hits.at("gcsaver.getmask").bound);
   // an override row must agree with the merged tier of its row
   bool threw = false;
   try {
-    ScriptHost bad(file, nat, "", R"({"types": []})", R"([{"key": "gcsaver.getmask", "tier": "tier2", "cite": "body 0x5d36d0", "note": "x"}])",
-                   nullptr, &tr, nullptr, stub_opt);
+    ScriptHost bad(file, rows({mask}), "", R"({"types": []})",
+                   R"([{"key": "gcsaver.getmask", "tier": "tier2", "cite": "body 0x5d36d0", "note": "x"}])", nullptr, &tr,
+                   nullptr, ScriptHost::Options{});
   } catch (const std::runtime_error&) {
     threw = true;
   }
   CHECK(threw);
+}
+
+// ============================== fix 1 ruling 2(a): the host sequence number -1 ==============================
+
+TEST_CASE("osi natives T3 fix1 2(a): outside any native the records are C -1 and X -1 (literal; natives.md §3.1)") {
+  Rig r;
+  Asm a;
+  a.fn("ok", 0).i8(3).ret();
+  a.fn("bad", 0).i8(4).label("x").op(0x02).ret();
+  r.load(a);
+  REQUIRE_FALSE(r.vm->in_native());
+  CallResult c = r.ctx->engine_call("ok", {make_int(1)});
+  CHECK(c.ok);
+  CHECK(c.result == make_int(3));
+  bool sw = false;
+  CallResult d = r.ctx->engine_call_swallowing("bad", {}, &sw);
+  CHECK(sw);
+  CHECK(d.found);
+  CHECK_FALSE(d.ok);
+  const std::string pad9 = " 000f:00000000 000f:00000000 000f:00000000 000f:00000000 000f:00000000 000f:00000000 "
+                           "000f:00000000 000f:00000000 000f:00000000";
+  const std::vector<std::string> want = {"C -1 ok 0010:00000001" + pad9, "C -1 bad 000f:00000000" + pad9, "X -1"};
+  CHECK(r.log.lines == want);
+  // the swallowed host-route error has its E line once (the outermost call writes it), at the failing instruction
+  const auto e = r.starting("E ");
+  REQUIRE(e.size() == 1);
+  char b[128];
+  std::snprintf(b, sizeof b, "E %08x 02    2 \"Debugger not enabled! but encountered DebugOn\"", a.at("x"));
+  CHECK(e[0] == b);
+  // inside a native the number stays %08d (T3-5/T3-6 pin that); a swallow there writes X %08d
+}
+
+// ============================== fix 1 M-7: the engine-count invariant ==============================
+
+namespace {
+GameObject* g_m7_obj = nullptr;
+Variant nat_m7_get(NativeCall&, void*) { return g_ctx->create_variant(g_m7_obj); }
+Variant nat_m7_split(NativeCall&, void*) {
+  g_ctx->heap().add_ref(g_m7_obj->handle());  // bypasses HostContext: the two counts split
+  return nothing();
+}
+}  // namespace
+
+TEST_CASE("osi natives T3 fix1 M-7: after every native the host object's engine count equals the heap's") {
+  Rig r;
+  Asm a;
+  a.fn("get", 0).call("t", "get", 0).ret();
+  a.fn("split", 0).label("c").call("t", "split", 0).ret();
+  r.load(a);
+  g_ctx = r.ctx.get();
+  g_m7_obj = r.ctx->make<GameObject>(0x27, 1);
+  r.reg.add(nentry("t", "get", 0, 0, {}, nat_m7_get, nullptr));
+  r.reg.add(nentry("t", "split", 0, 0, {}, nat_m7_split, nullptr));
+  REQUIRE(r.vm->call("get", {}).ok);
+  CHECK(r.ctx->check_engine_refs().empty());
+  CHECK_FALSE(r.vm->call("split", {}).ok);
+  CHECK(r.vm->last_error()->message == "Script is calling t.split");
+  CHECK(r.ctx->check_engine_refs() == "handle 00000001: host engine count 1, heap engine count 2");
+}
+
+// ============================== fix 1 M-6: the KEYSPEC parser on hostile input ==============================
+
+TEST_CASE("osi natives T3 fix1 M-6: expand_keys rejects hostile frames without undefined behaviour (keys.py grammar)") {
+  auto ok = [](const std::string& spec, std::vector<KeyCall>* out = nullptr) {
+    std::vector<KeyCall> k;
+    std::string err;
+    const bool r = expand_keys(spec, k, &err);
+    if (out) *out = k;
+    return r;
+  };
+  std::vector<KeyCall> k;
+  REQUIRE(ok("down@2147483646", &k));  // INT_MAX - 1: the release lands on INT_MAX
+  REQUIRE(k.size() == 2);
+  CHECK(k[0].frame == 2147483646);
+  CHECK(k[1].frame == 2147483647);
+  CHECK_FALSE(ok("down@2147483647"));      // f + 1 would overflow
+  CHECK_FALSE(ok("down@99999999999"));     // out of int range (atoi was UB here)
+  CHECK_FALSE(ok("down@-99999999999"));
+  REQUIRE(ok("esc@-2147483648", &k));      // keys.py accepts a leading '-'; INT_MIN + 1 is the release frame
+  CHECK(k[0].frame == INT32_MIN);
+  CHECK(k[1].frame == INT32_MIN + 1);
+  for (const char* bad : {"down@", "down@5x", "down@+5", "down@--5", "down@ 5", "down@0x10", "down", "@5", "up@5",
+                          "down@5@6", "down@-", "esc@\xff"})
+    CHECK_MESSAGE(!ok(bad), bad);
+  CHECK(ok(""));
+  // fuzz-style: random tokens over the grammar's alphabet; no crash (run under ASan in lomn_tests_asan), and every
+  // accepted expansion has 2 calls per tap in frame order
+  const char alphabet[] = "downescter@-+0123456789 \t9x";
+  uint32_t seed = 12345;
+  auto rnd = [&] {
+    seed = seed * 1103515245u + 12345u;
+    return (seed >> 16) & 0x7fff;
+  };
+  int accepted = 0;
+  for (int n = 0; n < 20000; ++n) {
+    std::string spec;
+    const int len = static_cast<int>(rnd() % 24);
+    for (int i = 0; i < len; ++i) spec += alphabet[rnd() % (sizeof alphabet - 1)];
+    if (n % 3 == 0) spec = (rnd() % 2 ? "down@" : "esc@") + std::to_string(static_cast<int64_t>(rnd()) * 300000 - 4000000000LL);
+    std::vector<KeyCall> out;
+    std::string err;
+    if (!expand_keys(spec, out, &err)) continue;
+    ++accepted;
+    for (size_t i = 1; i < out.size(); ++i) CHECK(out[i - 1].frame <= out[i].frame);
+    CHECK(out.size() % 2 == 0);
+  }
+  CHECK(accepted > 0);
 }
 
 // ============================== subsystem<T>() and the flags ==============================

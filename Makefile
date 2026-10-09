@@ -148,7 +148,8 @@ fuzz-osi:
 FUZZ_OSI_VM_N ?= 5000
 FUZZ_OSI_VM_STEPS ?= 100000
 OSI_VM_SRCS := engine/src/osi/heap.cpp engine/src/osi/convert.cpp engine/src/osi/registry.cpp engine/src/osi/trace.cpp \
-  engine/src/osi/vm.cpp engine/src/osi/vm_handlers.cpp engine/src/osi/natives/framework.cpp engine/src/sage/osi.cpp
+  engine/src/osi/vm.cpp engine/src/osi/vm_handlers.cpp engine/src/osi/natives/framework.cpp engine/src/osi/natives/groups.cpp \
+  engine/src/osi/natives/selftest.cpp engine/src/sage/osi.cpp
 fuzz-osi-vm: $(VENV)/.ok
 	mkdir -p build/fuzz
 	rm -rf build/fuzz/osi-vm-seeds && timeout 120 $(PY) tools/osi/conform_assemble.py tests/osi/conformance build/fuzz/osi-vm-seeds

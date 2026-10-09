@@ -12,7 +12,10 @@
 #include "lomn/osi/host.h"
 
 #include <algorithm>
+#include <cerrno>
+#include <climits>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -116,6 +119,25 @@ double time_step() {
 }
 }  // namespace
 
+namespace {
+// keys.py's frame grammar (`f.lstrip("-").isdigit()`, one optional '-'), parsed without undefined behaviour (review M-6:
+// the KEYSPEC reaches the browser): checked strtoll, then the int range less one at the top, because the release frame
+// is f + 1.
+bool parse_frame(const std::string& t, int& out) {
+  size_t i = t.size() > 0 && t[0] == '-' ? 1 : 0;
+  if (i == t.size()) return false;
+  for (size_t k = i; k < t.size(); ++k)
+    if (t[k] < '0' || t[k] > '9') return false;
+  errno = 0;
+  char* end = nullptr;
+  const long long v = std::strtoll(t.c_str(), &end, 10);
+  if (errno == ERANGE || !end || *end != 0) return false;
+  if (v < INT32_MIN || v > static_cast<long long>(INT32_MAX) - 1) return false;
+  out = static_cast<int>(v);
+  return true;
+}
+}  // namespace
+
 bool expand_keys(const std::string& spec, std::vector<KeyCall>& out, std::string* err) {
   std::istringstream ss(spec);
   std::string tok;
@@ -123,7 +145,8 @@ bool expand_keys(const std::string& spec, std::vector<KeyCall>& out, std::string
     const size_t at = tok.find('@');
     if (at == std::string::npos) return *err = "bad key token " + tok, false;
     const std::string name = tok.substr(0, at);
-    const int f = std::atoi(tok.c_str() + at + 1);
+    int f = 0;
+    if (!parse_frame(tok.substr(at + 1), f)) return *err = "bad key token " + tok, false;
     for (int st : {2, 1}) {
       KeyCall k;
       k.frame = st == 2 ? f : f + 1;
@@ -179,7 +202,16 @@ ScriptHost::ScriptHost(const sage::OsiFile& script, std::string_view natives_jso
   heap_ = std::make_unique<Heap>(trace_);
   vm_ = std::make_unique<Vm>(script_, reg_, *heap_, trace_);
   ctx_ = std::make_unique<HostContext>(*vm_, *heap_, vfs, opt_.flags, log_);
-  if (opt_.real_natives) bind_natives(reg_, *ctx_);
+  if (opt_.real_natives) {  // fails closed (review I-1): never a silent stub run
+    const BindReport rep = bind_natives(reg_, *ctx_);
+    if (rep.bodies == 0)
+      throw std::runtime_error("real natives: no native group binds a body (" + std::to_string(native_group_count()) +
+                               " game-native groups linked, " + std::to_string(rep.groups) + " groups run)");
+    std::string missing;
+    for (size_t i = 0; i < reg_.size(); ++i)
+      if (reg_.entry(i).tier == Tier::Implemented && !reg_.entry(i).fn) missing += " " + reg_.entry(i).key;
+    if (!missing.empty()) throw std::runtime_error("real natives: tier1 without a bound body:" + missing);
+  }
   vm_->set_native_observer([this](const NativeEntry& e, uint64_t seq) {
     ++stats_.natives;
     auto it = stats_.hits.find(e.key);
@@ -188,6 +220,7 @@ ScriptHost::ScriptHost(const sage::OsiFile& script, std::string_view natives_jso
       h.first_frame = setup_done_ ? current_frame_ : -1;
       h.first_seq = seq;
       h.tier = e.tier;
+      h.bound = e.fn != nullptr;
       it = stats_.hits.emplace(e.key, h).first;
     }
     ++it->second.calls;

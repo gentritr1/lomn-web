@@ -91,6 +91,7 @@ class HostContext {
     return t;
   }
   GameObject* object(uint32_t handle) const;  // the live host object of a game handle, else nullptr
+  std::string check_engine_refs() const;      // the M-7 invariant (see below); "" when it holds
 
   // The engine's own references (D13). Each change on an object that has a handle writes `H <type>:<handle> %+d` to
   // natives.log at that event (natives.md §3.1: one line per AddRef/Release, always +1 or -1). release() at a total of 0
@@ -100,11 +101,16 @@ class HostContext {
 
   // Call(name, a0..a9) from inside a native (natives.md §1.2): writes `C <vm.native_seq()> <name> <a0>..<a9>` (the query
   // name; 10 arguments, nothing-padded; ` S` after a 0x16, ` G` after a game value), runs the call and disposes its
-  // result. An error propagates out of the native.
+  // result. An error propagates out of the native. Outside any native (a host route) the record is `C -1 <name> …`, the
+  // literal -1 (natives.md §3.1), and the call is the outermost one (an error is recorded, ok = false).
   CallResult engine_call(std::string_view name, const std::vector<Variant>& args);
   // The same call made where the original catches (D16; only the three GcAreaLoader::LoadArea blocks, natives.md §5.2):
   // an error is swallowed (Vm::swallow: the `E` line at this point, the state left as at the throw), `X <seq>` is
-  // written, and the result is {found = true, ok = false}. `*swallowed` says whether that happened.
+  // written, and the result is {found = true, ok = false}. `*swallowed` says whether that happened. On a host route
+  // (no native in flight) the call is the outermost one: Vm::call records the error and writes its E line, and the
+  // swallow writes `X -1` (natives.md §3.1, r-m2). Only VmError is swallowed (review M-3): the original's pads also
+  // catch(...), but the only non-OSI exception in the port is its own "Undefined: host exception" (a std::exception from
+  // host code, conformance rule 15(d): no original counterpart, never compared), which therefore propagates.
   CallResult engine_call_swallowing(std::string_view name, const std::vector<Variant>& args, bool* swallowed = nullptr);
 
   // One instance per context and type, default-constructed on first use as T(HostContext&).
@@ -143,13 +149,30 @@ class HostContext {
   std::vector<std::shared_ptr<void>> subsystems_;
 };
 
-// Native groups (Tasks 7a/8a/9a) self-register at static initialisation; bind_natives runs every registered group
-// against the registry (each binds its natives with `user` = &ctx) and sets Tier::Implemented on every row bound.
+// Native groups (Tasks 7a/8a/9a). Fix 1 of Task 3 (review I-1): there is NO static-initialisation registration, because
+// a self-registering translation unit inside the STATIC lomn_osi archive is dropped by the linker when nothing
+// references it (the run would then silently use stubs). Every group is one line of the explicit list in
+// src/osi/natives/groups.cpp; bind_natives() calls that list, so a group listed there always reaches the link.
 using BindFn = void (*)(NativeRegistry&, HostContext&);
-void register_native_group(const char* name, BindFn fn);
-void bind_natives(NativeRegistry& reg, HostContext& ctx);
-size_t native_group_count();
+struct NativeGroup {
+  const char* name;
+  BindFn bind;
+  bool selftest;  // the framework's own link probe (natives/selftest.cpp): binds only its test row, never a game native
+};
+const std::vector<NativeGroup>& native_groups();  // the explicit list, in bind order
+size_t native_group_count();                      // the groups that are not selftest
+struct BindReport {
+  size_t groups = 0;          // groups run
+  size_t groups_binding = 0;  // groups that bound at least one body
+  size_t bodies = 0;          // rows whose body a group bound
+};
+// Runs every listed group against the registry (each binds its natives with `user` = &ctx) and sets Tier::Implemented
+// on every row a group bound.
+BindReport bind_natives(NativeRegistry& reg, HostContext& ctx);
 
+// The HostContext invariant (review M-7): after every native, each minted host object's engine count equals the heap's
+// engine part for its handle. Returns "" or a description of the first mismatch. HostContext checks it after every
+// native return and throws VmError("Undefined: engine reference count mismatch: ...") on a mismatch.
 // The `<v>` notation of natives.log for one value: the variant, then ` S %d <hex>` for a live 0x16 and ` G %d` for a live
 // game handle (natives.md §3.1). Shared by the VM's result lines and the host's `C` lines.
 std::string log_value(Heap& heap, Variant v);

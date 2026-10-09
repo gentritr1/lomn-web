@@ -97,6 +97,9 @@ class Vm {
   const std::vector<Swallowed>& swallowed() const { return swallowed_; }
   // Called at each native's entry with its registry entry and sequence number (ScriptHost's coverage counts).
   void set_native_observer(std::function<void(const NativeEntry&, uint64_t)> f) { observer_ = std::move(f); }
+  // Called after each native returns normally, before its trace/log lines (HostContext's M-7 invariant check). It may
+  // throw; the calling 0x82/0x83/0x84 then re-raises like any native error.
+  void set_native_exit_observer(std::function<void(const NativeEntry&, uint64_t)> f) { exit_observer_ = std::move(f); }
 
  private:
   static const char* const kDirectCallMessage;  // 0x84's text, reported at a memoised 0x82 site
@@ -200,6 +203,7 @@ class Vm {
   int max_nesting_ = 0;
   std::vector<uint64_t> active_seq_;  // sequence numbers of the natives executing now, innermost last
   std::function<void(const NativeEntry&, uint64_t)> observer_;
+  std::function<void(const NativeEntry&, uint64_t)> exit_observer_;
   std::vector<Swallowed> swallowed_;
   struct Saved {
     uint32_t depth = 0, pc = 0, frame = 0;

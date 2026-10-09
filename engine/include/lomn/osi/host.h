@@ -22,7 +22,8 @@ namespace lomn::osi {
 struct NativeHit {
   long first_frame = -1;  // -1 = Setup
   uint64_t first_seq = 0, calls = 0;
-  Tier tier = Tier::Stub;
+  Tier tier = Tier::Stub;  // the registry row's tier (the merged overrides): what the row DECLARES
+  bool bound = false;      // whether a body is bound (fix 1, I-1): a tier1 row run as its stub shows bound = false
 };
 
 struct HostStats {

@@ -784,6 +784,7 @@ void Vm::invoke_native(const NativeEntry& e, uint32_t n, const std::string& cls,
     throw;
   }
   active_seq_.pop_back();
+  if (exit_observer_) exit_observer_(e, seq);
   cur_pc_ = site;
   cur_op_ = site_op;
   if (e.sets_fpu_pc64) set_pc64();

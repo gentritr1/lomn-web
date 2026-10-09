@@ -2,7 +2,6 @@
 #include "lomn/osi/natives.h"
 
 #include <cstdio>
-#include <stdexcept>
 #include <utility>
 
 #include "lomn/osi/trace.h"
@@ -32,10 +31,16 @@ std::string log_value(Heap& heap, Variant v) {
 HostContext::HostContext(Vm& vm, Heap& heap, const fs::FileSystem* vfs, HostFlags flags, ReturnLog* log)
     : vm_(vm), heap_(heap), vfs_(vfs), flags_(flags), log_(log) {
   heap_.set_free_hook([this](uint32_t h) { on_free(h); });
+  vm_.set_native_exit_observer([this](const NativeEntry&, uint64_t) {
+    if (by_handle_.empty()) return;  // a stub run mints no host object: nothing to compare
+    const std::string m = check_engine_refs();
+    if (!m.empty()) throw VmError("Undefined: engine reference count mismatch: " + m);
+  });
 }
 
 HostContext::~HostContext() {
   heap_.set_free_hook(nullptr);  // the heap may outlive the context; its later frees no longer reach us
+  vm_.set_native_exit_observer(nullptr);
 }
 
 size_t HostContext::next_subsystem_id() {
@@ -111,20 +116,30 @@ void HostContext::release(GameObject* o) {
 }
 
 CallResult HostContext::engine_call(std::string_view name, const std::vector<Variant>& args) {
-  // C -1 (a host-originated call) is reserved: no M2a-2 code writes it (natives.md §3.1, Decision 8)
-  if (!vm_.in_native()) throw std::logic_error("engine_call outside a native (C -1 is reserved)");
-  std::string l = "C " + seq8(vm_.native_seq()) + " " + fmt_name(name);
+  // outside any native the host's own sequence number is the literal -1 (`C -1`, natives.md §3.1); no M2a-2 path on the
+  // A9 route makes such a call (Decision 8), but the record is fixed now
+  std::string l = "C " + (vm_.in_native() ? seq8(vm_.native_seq()) : std::string("-1")) + " " + fmt_name(name);
   for (size_t i = 0; i < 10; ++i) l += " " + log_value(heap_, i < args.size() ? args[i] : nothing());
   log_line(l);
   return vm_.call(name, args);
 }
 
 CallResult HostContext::engine_call_swallowing(std::string_view name, const std::vector<Variant>& args, bool* swallowed) {
-  const uint64_t seq = vm_.in_native() ? vm_.native_seq() : 0;
   if (swallowed) *swallowed = false;
+  if (!vm_.in_native()) {
+    // a host route (D16's process entries): the call is the outermost one, so Vm::call has already recorded the error
+    // and written its E line; the swallow is the host's: `X -1` (natives.md §3.1, r-m2), nothing reset
+    CallResult r = engine_call(name, args);
+    if (r.found && !r.ok) {
+      log_line("X -1");
+      if (swallowed) *swallowed = true;
+    }
+    return r;
+  }
+  const uint64_t seq = vm_.native_seq();
   try {
     return engine_call(name, args);
-  } catch (const VmError& e) {
+  } catch (const VmError& e) {  // VmError only (review M-3): see natives.h
     vm_.swallow(e);  // D16 rules 1-2: the E line here, the state as at the throw
     log_line("X " + seq8(seq));
     if (swallowed) *swallowed = true;
@@ -135,23 +150,45 @@ CallResult HostContext::engine_call_swallowing(std::string_view name, const std:
   }
 }
 
-// ---- groups ----
-namespace {
-std::vector<std::pair<std::string, BindFn>>& groups() {
-  static std::vector<std::pair<std::string, BindFn>> g;
-  return g;
+// ---- groups (the explicit list is natives/groups.cpp) ----
+size_t native_group_count() {
+  size_t n = 0;
+  for (const NativeGroup& g : native_groups()) n += g.selftest ? 0 : 1;
+  return n;
 }
-}  // namespace
 
-void register_native_group(const char* name, BindFn fn) { groups().emplace_back(name, fn); }
-size_t native_group_count() { return groups().size(); }
+BindReport bind_natives(NativeRegistry& reg, HostContext& ctx) {
+  BindReport rep;
+  for (const NativeGroup& g : native_groups()) {
+    std::vector<NativeFn> before(reg.size());
+    for (size_t i = 0; i < reg.size(); ++i) before[i] = reg.entry(i).fn;
+    g.bind(reg, ctx);
+    ++rep.groups;
+    size_t bound = 0;
+    for (size_t i = 0; i < reg.size(); ++i)
+      if (reg.entry(i).fn && reg.entry(i).fn != before[i]) {
+        reg.entry(i).tier = Tier::Implemented;
+        ++bound;
+      }
+    rep.bodies += bound;
+    rep.groups_binding += bound ? 1 : 0;
+  }
+  return rep;
+}
 
-void bind_natives(NativeRegistry& reg, HostContext& ctx) {
-  std::vector<NativeFn> before(reg.size());
-  for (size_t i = 0; i < reg.size(); ++i) before[i] = reg.entry(i).fn;
-  for (const auto& g : groups()) g.second(reg, ctx);
-  for (size_t i = 0; i < reg.size(); ++i)
-    if (reg.entry(i).fn && reg.entry(i).fn != before[i]) reg.entry(i).tier = Tier::Implemented;
+// M-7: the host object's count and the heap's engine part move together only through add_ref/release; a native that
+// touches the heap directly would split them.
+std::string HostContext::check_engine_refs() const {
+  for (const auto& kv : by_handle_) {
+    const int32_t heap_engine = heap_.live(kKindGame, kv.first) ? heap_.engine_refs(kv.first) : -1;
+    if (kv.second->engine_refs_ != heap_engine) {
+      char b[96];
+      std::snprintf(b, sizeof b, "handle %08x: host engine count %d, heap engine count %d", kv.first,
+                    kv.second->engine_refs_, heap_engine);
+      return b;
+    }
+  }
+  return "";
 }
 
 }  // namespace lomn::osi

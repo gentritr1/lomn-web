@@ -33,7 +33,8 @@ target_compile_options(lomn_sage PRIVATE -Wall -Wextra)
 # Fix round 1 (M3): kept PUBLIC for now; to be revisited in M2a-2, when natives living in other libraries call vm.call
 # and their frames must unwind too (those libraries would then need the flag as well).
 add_library(lomn_osi STATIC src/osi/heap.cpp src/osi/convert.cpp src/osi/registry.cpp src/osi/trace.cpp src/osi/vm.cpp
-            src/osi/vm_handlers.cpp src/osi/natives/framework.cpp src/osi/host.cpp)  # M2a-2 T3: the native framework, ScriptHost
+            src/osi/vm_handlers.cpp src/osi/natives/framework.cpp src/osi/natives/groups.cpp src/osi/natives/selftest.cpp
+            src/osi/host.cpp)  # M2a-2 T3: the native framework (groups: the explicit list, fix 1 I-1), ScriptHost
 target_link_libraries(lomn_osi PUBLIC lomn_sage)
 target_compile_options(lomn_osi PRIVATE -Wall -Wextra)
 if(EMSCRIPTEN)
@@ -341,7 +342,8 @@ if(NOT EMSCRIPTEN)
                  src/sage/blockfile.cpp src/sage/blockchain.cpp src/sage/slb.cpp src/sage/xfile.cpp src/sage/image.cpp src/sage/osi.cpp
                  tests/test_osi_vm.cpp src/osi/heap.cpp src/osi/convert.cpp src/osi/registry.cpp src/osi/trace.cpp
                  src/osi/vm.cpp src/osi/vm_handlers.cpp  # M2a-1: the VM's unit cases under ASan + UBSan
-                 tests/test_osi_natives.cpp src/osi/natives/framework.cpp src/osi/host.cpp)  # M2a-2 T3: the native framework
+                 tests/test_osi_natives.cpp src/osi/natives/framework.cpp src/osi/natives/groups.cpp
+                 src/osi/natives/selftest.cpp src/osi/host.cpp)  # M2a-2 T3: the native framework
   target_include_directories(lomn_tests_asan PRIVATE include "${LOMN_TOOLCHAIN_DIR}/include")
   target_compile_definitions(lomn_tests_asan PRIVATE "LOMN_TESTS_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/tests\"")
   target_compile_options(lomn_tests_asan PRIVATE -Wall -Wextra -ffp-contract=off -O1 -g -fno-omit-frame-pointer

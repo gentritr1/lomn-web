@@ -2,7 +2,11 @@
 //
 //   lomn_osi_run BASE.osi [--data-dir data/osi] [--frames 600] [--keys "down@100 down@160 enter@220 esc@280"]
 //                [--trace FILE [--trace-frames a:b]] [--digest FILE] [--natives-log FILE] [--perf-out FILE --commit C]
-//                [--print-keys] [--real-natives]
+//                [--print-keys] [--real-natives] [--list-natives] [--coverage]
+// --list-natives prints every registry row (`native <key> tier <t> bound yes|no`, sorted by key) after binding and exits;
+// --coverage prints, after the run, every native hit with its declared tier AND whether a body was bound (fix 1, I-1:
+// a tier1 row run as its stub shows `bound no`). --real-natives fails at startup (exit 2) when no group binds a body or
+// a tier1 row has none.
 //
 // The run: Setup(); then for frame k = 0..frames-1: the fake time advances, the `K` record, that frame's key Input calls
 // (KEYSPEC, tools/osi/keys.py has the same expansion), then Process(time, dt, counter) with the re-run rule. All natives are
@@ -96,7 +100,7 @@ double pctd(std::vector<double> v, double p) {
 int main(int argc, char** argv) {
   std::string osi, data_dir = LOMN_OSI_DATA_DIR, keys, trace_path, digest_path, log_path, perf_path, commit = "unknown";
   long frames = 600, wa = -1, wb = 1L << 30;
-  bool print_keys = false, real_natives = false;
+  bool print_keys = false, real_natives = false, list_natives = false, coverage = false;
   for (int i = 1; i < argc; ++i) {
     const std::string a = argv[i];
     auto next = [&]() -> std::string {
@@ -122,6 +126,8 @@ int main(int argc, char** argv) {
     else if (a == "--commit") commit = next();
     else if (a == "--print-keys") print_keys = true;
     else if (a == "--real-natives") real_natives = true;
+    else if (a == "--list-natives") list_natives = true;
+    else if (a == "--coverage") coverage = true;
     else if (!a.empty() && a[0] == '-') return std::fprintf(stderr, "lomn_osi_run: unknown option %s\n", a.c_str()), 2;
     else osi = a;
   }
@@ -188,6 +194,16 @@ int main(int argc, char** argv) {
     return std::fprintf(stderr, "lomn_osi_run: %s\n", e.what()), 2;
   }
   Vm& vm = host->vm();
+  if (list_natives) {
+    std::vector<const NativeEntry*> rows;
+    for (size_t i = 0; i < host->registry().size(); ++i) rows.push_back(&host->registry().entry(i));
+    std::sort(rows.begin(), rows.end(), [](const NativeEntry* a, const NativeEntry* b) { return a->key < b->key; });
+    for (const NativeEntry* e : rows)
+      std::printf("native %-48s tier %-5s bound %s\n", e->key.c_str(), tier_name(e->tier), e->fn ? "yes" : "no");
+    std::printf("natives: %zu rows, %zu bound\n", rows.size(),
+                static_cast<size_t>(std::count_if(rows.begin(), rows.end(), [](const NativeEntry* e) { return e->fn != nullptr; })));
+    return 0;
+  }
 
   // T11: the 1-minute loadavg at the start and at the end of the run (perf_history.py reads both keys); -1 = unavailable
   auto loadavg1 = []() { double l[1] = {-1.0}; return ::getloadavg(l, 1) == 1 ? l[0] : -1.0; };
@@ -243,6 +259,19 @@ int main(int argc, char** argv) {
     std::printf(")");
   }
   std::printf("\n");
+  if (coverage) {
+    std::vector<std::pair<std::string, NativeHit>> hits(hs.hits.begin(), hs.hits.end());
+    std::sort(hits.begin(), hits.end(), [](const auto& a, const auto& b) {
+      return a.second.first_frame != b.second.first_frame ? a.second.first_frame < b.second.first_frame
+                                                          : a.second.first_seq < b.second.first_seq;
+    });
+    size_t bound = 0;
+    for (const auto& h : hits) bound += h.second.bound ? 1 : 0;
+    std::printf("coverage: natives distinct %zu, bound %zu, calls %llu\n", hits.size(), bound, (unsigned long long)hs.natives);
+    for (const auto& h : hits)
+      std::printf("native %-48s tier %-5s bound %-3s first %6ld calls %6llu\n", h.first.c_str(), tier_name(h.second.tier),
+                  h.second.bound ? "yes" : "no", h.second.first_frame, (unsigned long long)h.second.calls);
+  }
   std::printf("stop: %s\n", stop.c_str());
   std::printf("script sha256 unchanged: %s\n", sha_after == sha_before ? "True" : "False");
   std::printf("flattening: the last frame that executed a new PC is %ld; distinct PCs overall %zu; stack high-water %u; "
