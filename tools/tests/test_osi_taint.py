@@ -141,10 +141,13 @@ def test_report_lines_format():
 
 
 def test_cli_real_natives_fails_closed_when_nothing_is_bound(tmp_path):
+    """The registered Python groups (Tasks 7b-9b) bind real rows, so the driver empties the group registry first: the
+    check is on what `--real-natives` does when NO group binds anything."""
     (tmp_path / "s.osi").write_bytes(osi_vm_image(".function Setup 0\n    PushConstanti8 1\n    Return\n"))
-    p = subprocess.run([sys.executable, str(REPO / "tools" / "research" / "osi_taint.py"), "--osi",
-                        str(tmp_path / "s.osi"), "--frames", "1", "--real-natives"], capture_output=True, text=True,
-                       timeout=60)
+    code = ("import sys; sys.path.insert(0, %r); from osi_natives import framework; framework._GROUPS.clear(); "
+            "import osi_taint; sys.exit(osi_taint.main(sys.argv[1:]))" % str(REPO / "tools" / "research"))
+    p = subprocess.run([sys.executable, "-c", code, "--osi", str(tmp_path / "s.osi"), "--frames", "1", "--real-natives"],
+                       capture_output=True, text=True, timeout=60)
     assert p.returncode != 0 and "nothing is bound" in p.stderr
 
 

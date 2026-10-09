@@ -121,6 +121,37 @@ def calls_in(disasm, start, stop):
             if t.startswith("call 0x")]
 
 
+def iat_names(dll):
+    """{IAT slot VA: (dll name, function name)} of a PE32 image's import table, parsed as data."""
+    d = Path(dll).read_bytes()
+    pe = struct.unpack_from("<I", d, 0x3C)[0]
+    nsec, osz = struct.unpack_from("<H", d, pe + 6)[0], struct.unpack_from("<H", d, pe + 20)[0]
+    base = struct.unpack_from("<I", d, pe + 24 + 28)[0]
+    secs = [struct.unpack_from("<IIII", d, pe + 24 + osz + 40 * i + 8) for i in range(nsec)]    # vsize, rva, rawsize, rawptr
+
+    def off(rva):
+        for vs, va, rs, rp in secs:
+            if va <= rva < va + max(vs, rs):
+                return rp + rva - va
+        raise ValueError(hex(rva))
+
+    def cstr(o):
+        return d[o:d.index(b"\0", o)]
+    out = {}
+    p = off(struct.unpack_from("<I", d, pe + 24 + 104)[0])
+    while True:
+        ot, _, _, nm, ft = struct.unpack_from("<IIIII", d, p)
+        if nm == 0:
+            break
+        dll_name, q, a = cstr(off(nm)), off(ot or ft), ft
+        while struct.unpack_from("<I", d, q)[0]:
+            v = struct.unpack_from("<I", d, q)[0]
+            out[base + a] = (dll_name, b"ord%d" % (v & 0xFFFF) if v & 0x80000000 else cstr(off(v) + 2))
+            q, a = q + 4, a + 4
+        p += 20
+    return out
+
+
 # ===============================================================================================================
 # 0. registration, citations and the overrides rows
 # ===============================================================================================================
@@ -146,33 +177,58 @@ def test_every_bound_key_has_a_citation_in_the_natives_md_1_3_form():
     s = sv()
     assert sorted(s.CITES) == TIER1_KEYS
     for key, cite in s.CITES.items():
-        assert re.match(r"^// body 0x[0-9a-f]+, method 0x[0-9a-f]+ <[^>]+>( → 0x[0-9a-f]+ <[^>]+>)*; asm pin: \S", cite), key
+        assert cite.isascii(), key                                  # review I1: the overrides are pure ASCII
+        assert re.match(r"^// body 0x[0-9a-f]+, method 0x[0-9a-f]+ <[^>]+>( -> 0x[0-9a-f]+ <[^>]+>)*; asm pin: \S", cite), key
         assert re.search(r"0x[0-9a-f]{5,}", cite)
         assert not re.search(r"0x0[0-9a-f]|0X|0x[0-9a-f]*[A-F]", cite)    # shortest lowercase hex (natives.md §1.3, review m-5)
 
 
-def test_committed_overrides_rows_are_valid_sorted_and_carry_the_module_citations():
+def _addrs(text):
+    """Code addresses (5+ hex digits) in a cite, as numbers: 0x18 or 0x68 are shifts and offsets, not addresses."""
+    return {int(m, 16) for m in re.findall(r"0x([0-9a-fA-F]{5,})", text)}
+
+
+# Addresses this module cites that the merged file's cite for the same key (the C++ side's wording) does not carry. The
+# test pins them exactly (a changed cite on either side shows up); they are reported, not forced into the file.
+CITE_ADDRESSES_ONLY_IN_THE_MODULE = {
+    "gcgame.getresolutionheight": {0x4077f0, 0x5d4a7c},
+    "gcgame.getresolutionwidth": {0x4077f0, 0x5d4a62},
+    "gctimer.create": {0x4458fc, 0x4c2440},
+    "scprocessmanager.userealdeltatime": {0x4a9170},
+    "scslosifileio.doesfileexist": {0x10001da0, 0x10001dbe, 0x54de11, 0x60fec0, 0x73612c},
+    "scslosifoundation.identifiertostring": {0x6178dd, 0x6178e6, 0x6178f7, 0x61796b},
+    "scslosifoundation.stringtoidentifier": set(),
+}
+
+
+def test_committed_overrides_rows_are_valid_sorted_ascii_and_agree_with_the_module():
+    """The merged overrides file carries both sides' rows (the C++ side's wording). Checked per key: `tier` and `default`
+    exactly, and that the code addresses the module cites also appear in the file's cite (as numbers); the exceptions are
+    pinned above."""
     import importlib.util
     spec = importlib.util.spec_from_file_location("osi_registry_t7b", REPO / "tools" / "osi" / "registry.py")
     reg = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(reg)
     rows = json.loads((REPO / "data" / "osi" / "natives.json").read_text())
     mods = json.loads((REPO / "data" / "osi" / "natives_beta150.json").read_text())
+    assert OVERRIDES.read_bytes().isascii()                         # review I1 / the controller's pure-ASCII ruling
     data = json.loads(OVERRIDES.read_text())
     assert reg.check_overrides(data, rows, mods) == []
-    mine = {r["key"]: r for r in data if r["key"] in set(TIER1_KEYS + TIER3_KEYS + ["debug.print"])}
-    assert sorted(mine) == sorted(TIER1_KEYS + TIER3_KEYS + ["debug.print"])
-    for k in TIER1_KEYS:
-        assert mine[k]["tier"] == "tier1" and "default" not in mine[k]
-        assert mine[k]["cite"] == sv().CITES[k], k                  # one source for the citation
-    assert mine["debug.print"]["tier"] == "tier2"
-    for k in TIER3_KEYS:
-        assert mine[k]["tier"] == "tier3"
+    by_key = {r["key"]: r for r in data}
     keys = [r["key"] for r in data]
-    assert keys == sorted(keys)
-    text = OVERRIDES.read_text()
-    assert text.startswith("[\n") and text.endswith("\n]\n")
-    assert len(text.splitlines()) == len(data) + 2                  # one JSON object per line (registry.render_rows form)
+    assert keys == sorted(keys) and len(set(keys)) == len(keys)
+    nothing = {"type": "0x0f", "value": 0}
+    for k in TIER1_KEYS:
+        assert by_key[k]["tier"] == "tier1" and "default" not in by_key[k], k
+        mine, theirs = _addrs(sv().CITES[k]), _addrs(by_key[k]["cite"])
+        assert mine - theirs == CITE_ADDRESSES_ONLY_IN_THE_MODULE[k], (k, sorted(hex(a) for a in mine - theirs))
+    assert by_key["debug.print"]["tier"] == "tier2" and "default" not in by_key["debug.print"]
+    for k in TIER3_KEYS:
+        assert by_key[k]["tier"] == "tier3" and by_key[k]["default"] == nothing, k
+    # the bodies of the tier3 and tier2 rows are named in their cites
+    for k, body in (("debug.print", 0x61d5e0), ("scslosifileio.loadosiobject", 0x615990),
+                    ("scslosifileio.loadosiobjectfrommemcard", 0x615ab0), ("scslosistringfuncs.getstringtable", 0x61b7d0)):
+        assert body in _addrs(by_key[k]["cite"]), k
 
 
 def test_the_merged_tables_carry_the_tiers():
@@ -408,6 +464,8 @@ def test_doesfileexist_block_find_matches_the_original_binary_search(tmp_path):
     for i, n in enumerate(sorted_ci(names)):
         assert s.block_find(srt, n.encode()) == i
         assert s.block_find(srt, ("Dir\\Sub/" + n.swapcase()).encode()) == i   # last separator, then A-Z folded compare
+        assert s.block_find(srt, ("Dir/Sub\\" + n.swapcase()).encode()) == i   # a BACKSLASH last (0x60fef6: 0x5c as well as 0x2f)
+        assert s.block_find(srt, ("Dir\\" + n).encode()) == i
     assert s.block_find(srt, b"zzz") == -1 and s.block_find(srt, b"") == -1 and s.block_find([], b"alpha.txt") == -1
     assert s.block_find(srt, b"alpha.tx") == -1 and s.block_find(srt, b"alpha.txtx") == -1    # no prefix matching
     # an unsorted table: the original's search finds "a" but not "b" in [b, a] (hand-traced from 0x60ff0e-0x60ff6b)
@@ -443,17 +501,71 @@ def test_doesfileexist_routes(tmp_path):
     assert exists(inst2, "Root/Data/loose.txt")[0] == 1 and exists(inst2, "Root/Data/Art/foo.tga")[0] == 0
 
 
-def test_doesfileexist_betersaver_hook_user_paths(tmp_path):
-    inst = make_install(tmp_path, art=["foo.tga"], loose=["User/data/player1.sav", "data/User_notes.txt"])
-    # a path containing "User/" (strstr, case-sensitive) is the hook's: resolved in the per-run User store, which the
-    # oracle host does not model (no Save in M2a-2), so false even when a file of that name sits in the install
-    assert exists(inst, "Root/User/data/player1.sav")[0] == 0
+def test_doesfileexist_hook_resolve_game_path_asm_pins(lomn_data, disasm):
+    """The hook hands the path to LOMNHook::ResolveGamePath (import of ijl15.dll, 0x1000813c) with size 0x104 and flag 0, then
+    GetFileAttributesA on the result. ResolveGamePath (ijl15.dll 0x10001570, read as data, never run) has three branches on
+    the position of "Root/" and "User/" (strstr results compared with the path pointer): Root/ -> GetCurrentDirectory +
+    path[4:]; User/ -> SHGetFolderPath(0x1a) + edition + path[4:]; NEITHER -> a MessageBoxA "OSI Script Security Abort"
+    (0x10001632) and then FALL THROUGH to the same strcat_s (0x10001641) with the path unchanged, so the result is the path
+    itself, relative to the current directory (= the Root/ mapping); '/' becomes '\\' (0x1000166a); the directory-creating
+    tail (0x10001683) is skipped for flag 0."""
+    mods = lomn_data / "install" / "mods" / "BetterSaver.dll"
+    ijl = lomn_data / "install" / "ijl15.dll"
+    if not mods.exists() or not ijl.exists():
+        pytest.skip("SKIPPED (no BetterSaver.dll / ijl15.dll)")
+    pin(disasm, 0x10001da0, 0x10001e3c, {
+        0x10001dcb: "push 0x0", 0x10001dcd: "push 0x104", 0x10001de2: "call dword ptr [0x1000813c]"}, exe=mods)
+    assert iat_names(mods)[0x1000813c] == (b"ijl15.dll", b"?ResolveGamePath@LOMNHook@@YAXPBDPADI_N@Z")
+    import exc
+    img = exc.Image.from_file(ijl)
+    assert img.read(0x1001e5b4, 6) == b"Root/\0" and img.read(0x1001e5bc, 6) == b"User/\0"
+    assert img.read(0x1001e624, 26) == b"OSI Script Security Abort\0"
+    names = iat_names(ijl)
+    for va, want in ((0x1001e128, b"strstr"), (0x1001e01c, b"GetCurrentDirectoryA"), (0x1001e0f0, b"SHGetFolderPathA"),
+                     (0x1001e100, b"MessageBoxA"), (0x1001e1f0, b"strcat_s")):
+        assert names[va][1] == want, hex(va)
+    pin(disasm, 0x10001570, 0x100016ae, {
+        0x1000159e: "mov byte ptr [eax], 0x0",                                  # out[0] = 0
+        0x10001592: "push 0x1001e5b4", 0x100015a1: "call esi", 0x100015a3: "push 0x1001e5bc", 0x100015ab: "call esi",
+        0x100015b2: "cmp edi, ebx", 0x100015b7: "jne 0x100015cc",                # strstr(path, "Root/") == path
+        0x100015c1: "call dword ptr [0x1001e01c]", 0x100015c7: "add ebx, 0x4", 0x100015ca: "jmp 0x1000163e",
+        0x100015cc: "cmp ecx, ebx", 0x100015ce: "jne 0x10001608",                # strstr(path, "User/") == path
+        0x100015db: "push 0x1a", 0x100015df: "call dword ptr [0x1001e0f0]", 0x10001603: "add ebx, 0x4",
+        0x10001606: "jmp 0x1000163e",
+        0x10001608: "push ebx", 0x1000161a: "call 0x10001ab0",                    # neither: the message text from the path
+        0x10001628: "push 0x10", 0x1000162a: "push 0x1001e624", 0x10001632: "call dword ptr [0x1001e100]",
+        0x10001638: "mov esi, dword ptr [ebp - 0x198]",                          # ... and no jump: it falls through
+        0x1000163e: "push ebx", 0x10001641: "call dword ptr [0x1001e1f0]",       # strcat_s(out, size, ebx): ebx = path
+        0x10001665: "cmp bl, 0x2f", 0x1000166a: "mov byte ptr [esi + edx], 0x5c",
+        0x1000167f: "cmp byte ptr [ebp + 0x14], 0x0", 0x10001683: "je 0x1000169d"}, exe=ijl)
+
+
+def test_doesfileexist_hook_user_paths(tmp_path):
+    inst = make_install(tmp_path, art=["foo.tga"],
+                        loose=["User/data/player1.sav", "data/User_notes.txt", "Data/Saves/User/x.sav"])
+    # 1. "Root/" at the start (branch Root): GetCurrentDirectory + path[4:], i.e. the install's own file; here the file exists
+    assert exists(inst, "Root/User/data/player1.sav")[0] == 1
+    assert exists(inst, "Root/User/data/missing.sav")[0] == 0
+    # 2. "User/" at the start (branch User): the per-run User store, which the oracle host does not hold: false even when
+    #    a file of that name sits in the install
     assert exists(inst, "User/data/player1.sav")[0] == 0
-    # lower case "user/" is not the needle: the original route (Art.blk, then FileExists)
+    # 3. NEITHER prefix (C-1): MessageBoxA, then the SAME strcat_s with the path unchanged, relative to the current
+    #    directory = the Root/ mapping: exists("Root/" + path). The message box is not logged.
+    assert exists(inst, "Data/Saves/User/x.sav")[0] == 1
+    assert exists(inst, "Data/Saves/User/y.sav")[0] == 0
+    assert exists(inst, "Whatever/User/data/player1.sav")[0] == 0              # install/Whatever/... does not exist
+    assert exists(inst, "root/User/data/player1.sav")[0] == 0                   # lower-case root/: neither prefix, install/root/User/.. is absent
+    # no "User/" at all (lower case "user/"): the original route (Art.blk, then FileExists)
     assert exists(inst, "Root/user/data/player1.sav")[0] == 1
     assert exists(inst, "Root/Data/User_notes.txt")[0] == 1
+    # the step is a pure function of the strings
+    s = sv()
+    assert s.hook_route(b"Root/User/x") == ("root", "Root/User/x") and s.hook_route(b"User/x") == ("user", "User/x")
+    assert s.hook_route(b"a/User/x") == ("neither", "Root/a/User/x") and s.hook_route(b"a/user/x") == ("original", "a/user/x")
     # embedded NUL: the C string ends there (the hook and SrBlockFileExists read a char*)
-    assert sv().has_user_needle(b"Root/Us\0er/User/x") is False and sv().has_user_needle(b"a/User/x") is True
+    assert s.has_user_needle(b"Root/Us\0er/User/x") is False and s.has_user_needle(b"a/User/x") is True
+    # strstr finds the FIRST "Root/"/"User/" anywhere: "User/" is checked only at the start, so a later "Root/" is neither
+    assert s.hook_route(b"a/Root/User/x")[0] == "neither"
 
 
 def test_doesfileexist_without_a_vfs_is_false():
@@ -601,6 +713,11 @@ def test_real_time_smoothing_follows_the_0x4a9170_constants():
     t.last = 1.0
     # gap > 0.5 s: dt := 0.016666 (the constant), the pass counter still increments
     assert t.step(now=1.6)[0] == s.REAL_DT_DEFAULT and t.count == 1
+    # the boundary: diff == 0.5 exactly is NOT a gap (`test ah, 0x45; jne` at 0x4a9244 skips on "<= 0.5"), so it smooths
+    t = s.ProcessTime(None)
+    t.use_real, t.last = 1, 1.0
+    assert t.step(now=1.5)[0] == pytest.approx(0.5 * 0.07000000029802322 + 0.9300000071525574 * 0.016666000708937645, abs=1e-15)
+    assert t.step(now=1.5 + 0.5000001)[0] == s.REAL_DT_DEFAULT                   # just above: a gap
     # the first ten passes use the default as the previous smoothed value: 0.07 * diff + 0.93 * 0.016666
     t = s.ProcessTime(None)
     t.use_real = 1

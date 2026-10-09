@@ -12,6 +12,7 @@ What is NOT modelled, and why:
   constructor (0x445840), and the path never starts a timer (natives.md §6.2).
 - A started timer firing: no host hook in M2a-2 (natives.md §6.2: `gctimer.create(0, 0, 5.0)` is the only call).
 - The per-run `User/` store behind BetterSaver's DoesFileExist hook: the oracle host has no Save, so it holds no file.
+- The real-time branch of `ProcessTime.step`: the oracle's frame loop keeps its fixed dt (D3), so only tests call it.
 - The INI behind the resolution: the cited default (640 x 480) stands until M2a-3.
 """
 from __future__ import annotations
@@ -31,18 +32,18 @@ M32 = 0xFFFFFFFF
 # --------------------------------------------------------------------------------------------------------------
 CITES = {
     "scslosifoundation.stringtoidentifier":
-        "// body 0x617700, method 0x617810 <ScSLOSIFoundation::StringToIdentifier> → 0x5fb060 "
+        "// body 0x617700, method 0x617810 <ScSLOSIFoundation::StringToIdentifier> -> 0x5fb060 "
         "<ScOSISystem::ConvertStringToID>; asm pin: 0x5fb093/0x5fb09e/0x5fb0a9/0x5fb0b2 shift immediates "
         "(first character in the high byte)",
     "scslosifoundation.identifiertostring":
         "// body 0x6177a0, method 0x6178c0 <ScSLOSIFoundation::IdentifierToString>; asm pin: 0x6178e6/0x6178dd/0x617908/"
         "0x6178f7 byte-swap immediates (shl 0x18, shl 8, shr 8, shr 0x18), 4-byte copy at 0x617938, strlen copy at 0x61796b",
     "scslosifileio.doesfileexist":
-        "// body 0x615950, method 0x615ef0 <ScSLOSIFileIO::DoesFileExist> → 0x54ddc0 <SrBlockFileExists> → 0x60fec0 "
+        "// body 0x615950, method 0x615ef0 <ScSLOSIFileIO::DoesFileExist> -> 0x54ddc0 <SrBlockFileExists> -> 0x60fec0 "
         "<ScBlockFile::Find>; asm pin: 0x54ddc7 Art.blk object 0x83b0b8, 0x54ddf0 slot [0x736128], 0x54de11 slot "
         "[0x73612c], 0x54de41 FileExists 0x54de70; BetterSaver hook 0x10001da0 takes paths containing User/ (0x10001dbe)",
     "gctimer.create":
-        "// body 0x4454f0, method 0x445840 <GcTimer::GcTimer> → 0x445990 <GcTimer::Start>; asm pin: 0x445906/0x44590f "
+        "// body 0x4454f0, method 0x445840 <GcTimer::GcTimer> -> 0x445990 <GcTimer::Start>; asm pin: 0x445906/0x44590f "
         "ctor Start guard on the second argument's low byte, 0x4459c6-0x4459f1 Start's AddTrigger 0x4c2440 and flag +0x78, "
         "0x4458fc duration double at +0x68",
     "scprocessmanager.userealdeltatime":
@@ -191,11 +192,34 @@ def has_user_needle(name: bytes) -> bool:
     return b"User/" in cut(name)
 
 
+def hook_route(name: bytes):
+    """The hook's three-way split (BetterSaver 0x10001da0 -> LOMNHook::ResolveGamePath in ijl15.dll 0x10001570, read as data;
+    the hook passes size 0x104 and flag 0 at 0x10001dcb/0x10001dcd, then GetFileAttributesA on the result, file not
+    directory, 0x10001df2-0x10001e01). Returns (route, path to test):
+    - no "User/" anywhere (strstr 0x10001dbe): ("original", name), the original DoesFileExist (0x10001e24);
+    - strstr(path, "Root/") == path (0x100015b2): ("root", name): GetCurrentDirectory + path[4:], the install's own file;
+    - strstr(path, "User/") == path (0x100015cc): ("user", name): SHGetFolderPath + edition + path[4:], the per-run User
+      store, which the oracle host does not hold;
+    - NEITHER (0x10001608): MessageBoxA "OSI Script Security Abort" (0x10001632, not logged) and then NO jump: the same
+      strcat_s (0x10001641) with the path unchanged onto an empty buffer, '/' turned into '\\' (0x1000166a), relative to the
+      current directory, which is the Root/ mapping: ("neither", "Root/" + name). Review C-1 (a shared misreading of "false").
+    Case-sensitive strstr; the first occurrence decides."""
+    n = cut(name)
+    if b"User/" not in n:
+        return "original", n.decode("latin-1")
+    if n.find(b"Root/") == 0:
+        return "root", n.decode("latin-1")
+    if n.find(b"User/") == 0:
+        return "user", n.decode("latin-1")
+    return "neither", "Root/" + n.decode("latin-1")
+
+
 def file_exists(ctx, name: bytes) -> bool:
-    """ScFileManager-based FileExists 0x54de70: Open(name, [0x71edf8] | [0x71ee10] = 0x41) then Close, inside a try whose
-    catch gives false (0x54df52). A path whose first component is no mounted volume throws in Open (0x4db0f0 returns null,
-    SrThrow 0x4daef...), so it is false. INFERRED: the Root volume is the install directory and an existing regular file
-    opens (the VFS contract); a directory does not."""
+    """FileExists 0x54de70: Open(name, [0x71edf8] | [0x71ee10] = 0x41) then Close, inside a try. The catch returns false only for
+    kFileOpen [0x83a9a8] (0x54df4e) and kFileNotFound [0x83b024] (0x54df60); any other error goes on (a rethrow, 0x657260,
+    INFERRED). A path whose first component is no mounted volume throws kFileNotFound in Open (0x4db0f0 returns null,
+    SrThrow 0x4daeea, CITED), so it is false. INFERRED: the Root volume is the install directory, and an existing regular
+    file opens while a missing one gives kFileNotFound (the VFS contract); a directory does not."""
     vfs = ctx.vfs
     if vfs is None:
         return False
@@ -219,12 +243,15 @@ def sr_block_file_exists(ctx, name: bytes) -> bool:
 
 
 def does_file_exist(ctx, name: bytes) -> bool:
-    """ScSLOSIFileIO::DoesFileExist 0x615ef0 with BetterSaver's hook 0x10001da0 (natives.md §9.3): a path containing
-    "User/" is resolved in the per-run User store (not modelled: false); any other path goes to the original."""
-    name = cut(name)
-    if has_user_needle(name):
+    """ScSLOSIFileIO::DoesFileExist 0x615ef0 with BetterSaver's hook 0x10001da0 (natives.md §9.3): see `hook_route`. The
+    "root" and "neither" routes test the install's own file (a regular file; a directory is false, 0x10001dfd); the "user"
+    route is the per-run User store (not modelled: false); any other path goes to the original."""
+    route, path = hook_route(name)
+    if route == "original":
+        return sr_block_file_exists(ctx, path.encode("latin-1"))
+    if route == "user":
         return False
-    return sr_block_file_exists(ctx, name)
+    return file_exists(ctx, path.encode("latin-1"))
 
 
 def _does_file_exist(ctx):
@@ -320,7 +347,7 @@ def _use_real_delta_time(ctx):
         if ctx.flags.deterministic:                                      # D3: a logged no-op (the VM logs the call)
             return NOTHING
         ctx.subsystem(ProcessTime).use_real = call.arg(0).value & 0xFF   # mov al, byte [edx] (0x4a8aca); mov [0x712d78], dl
-        return NOTHING                                                   # the bool the method returns is discarded (0x4a8ad3)
+        return NOTHING                                                   # void (?UseRealDeltaTime@ScProcessManager@@SAX_N@Z); the `sete al` at 0x4a90ef is dead; {0x0f, 0} at 0x4a8ad3
     return fn
 
 
