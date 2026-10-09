@@ -5,7 +5,7 @@ export LOMN_DATA LOMN_CACHE
 VENV := .venv
 PY := $(VENV)/bin/python
 EMSDK_ENV := source .toolchain/emsdk/emsdk_env.sh >/dev/null 2>&1
-.PHONY: setup check-data decomp worklist native wasm site test-tools test-native test-wasm test-web check perf perf-areas datacheck datacheck-wasm fuzz-osi fuzz-osi-vm fuzz-formats fuzz-formats-help a9-sweep a13-real manifest osi-tables osi-diff conform-trace-cmp
+.PHONY: setup check-data decomp worklist native wasm site test-tools test-native test-wasm test-web check perf perf-areas datacheck datacheck-wasm fuzz-osi fuzz-osi-vm fuzz-formats fuzz-formats-help a9-sweep a13-real manifest osi-tables osi-diff osi-coverage conform-trace-cmp
 
 setup: $(VENV)/.ok
 	timeout 3600 tools/toolchain.sh
@@ -208,6 +208,18 @@ osi-diff: native wasm $(VENV)/.ok
 	  echo "cmp 4/4 full trace Setup + frames 0-2 native == Python == wasm32: OK ($$(wc -l < $(OSI_DIFF)/native.window) lines)"
 	@echo "summary (native):"; cat $(OSI_DIFF)/native.summary
 	@if [ -n "$(OSI_PERF)" ]; then cat $(OSI_DIFF)/osi-a6.jsonl >> perf/osi-a6.jsonl && echo "appended to perf/osi-a6.jsonl"; fi
+
+# M2a-2 T1 (A8): the coverage report of a typed-stub run of the real Base.osi in the Python oracle: which natives were hit,
+# by tier (tools/osi/coverage.py; tiers come from data/osi/native_overrides.json once it exists, else every exe row is a
+# stub). OSI_COV_FRAMES=0 reports Setup only; the default is the A6 path (600 frames + OSI_KEYS). The trace goes to
+# build/osi-coverage/ (untracked, about 15 MB). Light: about 10 s, no native or wasm build.
+OSI_COV_FRAMES ?= 600
+osi-coverage: $(VENV)/.ok
+	@if [ -z "$(LOMN_DATA)" ]; then echo "osi-coverage: LOMN_DATA is not set"; exit 2; fi
+	mkdir -p build/osi-coverage
+	timeout 110 $(PY) tools/research/osi_vm.py --run "$(LOMN_DATA)/install/data/Base.osi" $(OSI_TABLES) --frames $(OSI_COV_FRAMES) \
+	  --keys "$(OSI_KEYS)" --trace build/osi-coverage/python.trace > build/osi-coverage/python.summary
+	timeout 60 $(PY) tools/osi/coverage.py --trace build/osi-coverage/python.trace
 
 # M2a-1 T4: the conformance corpus traces of the C++ runner and the Python oracle, compared file by file with cmp.
 conform-trace-cmp: native $(VENV)/.ok

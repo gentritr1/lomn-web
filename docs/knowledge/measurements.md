@@ -487,3 +487,44 @@ Run by the controller on a frozen `git archive 8b91a14` of `m1-integration` (own
   - Base.osi reaches a maximum depth of 1 in A6. This is a floor: the stub natives never re-enter. Re-measure in M2a-2.
   - Port cap: 64.
   - wasm stack: 1,648 bytes per level, 116,240 bytes at the cap. The default 64 KiB runs out near level 33. `STACK_SIZE` = 512 KiB (4.5× need).
+
+## M2a-2 baseline (Task 1, 2026-10-09; Python oracle with typed stubs on the Beta 1.5.0 `Base.osi`; load average 5 to 11 from other sessions)
+
+Every row was re-measured with the committed tools (`tools/osi/coverage.py`, `flip_probe.py`, `reach.py`, `exc.py`). The numbers below are the ones later tasks pin.
+`$OSI` is `$LOMN_DATA/install/data/Base.osi`; `$T` is `--natives data/osi/natives.json --mods data/osi/natives_beta150.json --types data/osi/types.json` (spell the three options out in zsh). Traces go to a scratch directory and are not committed.
+
+| Fact | Value | Command |
+|---|---|---|
+| Setup with stubs | 48,850 instructions, 980 native calls, **54 distinct natives**, 0 `P` lines | `osi_vm.py --run $OSI $T --frames 0 --trace S.trace`, then `coverage.py --trace S.trace` (`natives distinct 54 … calls 980, unregistered 0`) |
+| Setup + 600 frames + keys `down@100 down@160 enter@220 esc@280` | 390,706 instructions, **1,699 native calls, 69 distinct natives** (68 exe rows + 1 Beta 1.5.0 mod row, `bettersaver.getbooleanvalue`, 1 call at frame 3); 15 are first hit after Setup: 1 at frame 0 (`gcstatusscreen.hideinventory`), 14 at frame 3 | `osi_vm.py --run $OSI $T --frames 600 --keys "down@100 down@160 enter@220 esc@280" --trace A6.trace`, then `coverage.py --trace A6.trace` (the same report is `make osi-coverage`, about 10 s); the first-hit frames are column 6 of the `native` rows |
+| The 30-frame set equals the 600-frame set | the 69 natives hit by Setup + 30 frames are the same 69 as above, so a 30-frame flip probe covers every native of the stub path | `flip_probe.run_once(…, frames=30).natives` against the A6 report |
+| Natives whose return changes the path (Setup + 30 frames, one alternative each) | **16 of 69**: **7 CHANGED** (`bettersaver.getbooleanvalue` +8, `gcareadirector.getcurrentlevel` +24, `gcsaver.cheatmenu` −37,713, `gcgame.getmp3player` −11, `gctimer.create` +8, `scslosifileio.doesfileexist` +293, `scslosifoundation.stringtoidentifier` +24) and **9 CHANGED-NULL** (`sctilefont.create` −69,359, `sctextobject.create` −61,030, `gcbigsprite.loadhudsprite` −67,381, `gcgame.getmainview` −47,736, `gcviewport.getcamera` −47,730, `gcgame.getkeymapper` −47,604, `gcmodeldirector.gettoa` −44,797, `gcmodeldirector.getcharacter` −44,719, `scslosislkcubicspline.create` −16,455); 53 SAME. Baseline 70,222 instructions, 13,534 distinct PCs; a repeated baseline is identical (null control) and no native changes the PC set without changing the instruction total or the other way round. The 69-run probe takes 6 to 7 s | `flip_probe.py --osi $OSI --frames 30 \| awk '{print $1}' \| sort \| uniq -c` (`7 CHANGED`, `9 CHANGED-NULL`, `53 SAME`) |
+| Natives that statically reach `ScOSIVirtualMachine::Call` 0x60b320 / `CallWithReturn` 0x60b450 | **35 of 1,049**. On the stub path, with call depth: `gcmodeldirector.addtoa` 3, `gccharacter.setupmoveable` 4, `gcareadirector.setcurrentlevel` 5, `gcareadirector.setcurrentarea` 6. The deepest are depth 11 (`gccharacter.setholder`, `gcfireboss.drop`, `gcmodeldirector.setinputstate`, `gctoa.setholder`, `gcwindboss.introfinished`) | `reach.py --vm-reentry \| tail -1` |
+| Direct callers of 0x60b320 / 0x60b450 | **71** functions: 69 call `Call` and 2 call `CallWithReturn` (`ScSLOSIProcess::Process` and `Call` itself, so `Call` is a caller of the second target). Spec §3.3 says 69 (the callers of `Call`); opcodes.md counts 144 raw `E8` sites. Task 2a reconciles the three counts | the summary line of `reach.py --vm-reentry` |
+| Setup's script-visible arguments | `setcurrentlevel("lev0")`, `setcurrentarea("frnt")`, `addtoa("onua")`, `doesfileexist("Root/Data/AreaViewer.txt")`, `sctilefont.create("Root/Data/Art/Fonts/BionicleFont")` ×4, `gctimer.create(0, 0, 5.0)` (the float is `0012:40a00000`), `gchuddirector.playcinematic` ×3 (`Root/Data/cinematics/*.bik`, second argument 1) | `grep '^N ' S.trace` for those natives, with the `S` lines of the argument handles decoded from hex |
+| `P` lines (string → float) on the stub A9 path | 0 in Setup and in the 600-frame trace | `grep -c '^P ' A6.trace` |
+| One oracle run of Setup + 30 frames | about 0.1 s (69 runs plus the baseline in 6 to 7 s) | the `flip_probe:` line on stderr |
+
+Rows from the plan that are CITED from the asm and not re-measurable by these tools (the Setup timer is never started, `CreateVariant(GcTimer*)`, engine-call nesting 1 / cap 64 / 1,648 B per level) are unchanged.
+
+### The `.exc` decoder (`tools/osi/exc.py`, the exe read as data)
+
+| Function | Info record | Catch landing pads |
+|---|---|---|
+| `BCLCallGameFunction` 0x6015a0 | 0x6dafe4, flags 0xc8, 24 call sites | outer `0x601c94` (`!ScCatchMessage!`), `0x601cb3` (`!exception!`), `0x601cd3` (`...`); inner, around the native call at 0x601af5: `0x601b10`, `0x601b30`, `0x601b50` |
+| `GcGame::SetUpScripting` 0x4390d0 | 0x675566, flags 0xc8, 20 call sites | `0x439324`, `0x439343`, `0x439363` |
+| `_WinMain@16` 0x401020 | 0x66702e, flags 0x08, 2 call sites | `0x401080`, `0x401093`, `0x4010b0` |
+
+Corrections to opcodes.md "Exception tables", found while writing the decoder (the document is not edited here):
+- An info record is **4 bytes long in 4,966 index entries, not 4,605**: bit 0 set (4,605) or bytes 1 to 3 zero with bit 0 clear (361: flags 0x00, 0x08, 0x48, 0xc8 and similar). The long layout holds in the other 2,036 entries. A decoder that follows the document reads the next record as a call-site table for those 361.
+- Kind **0x07** is 14 bytes (`{flags, i32 frame offset, destructor, u32}`, an array destructor): the record after it is a known kind in 3,017 of 3,017 non-final occurrences. Kinds 0x05, 0x06, 0x09, 0x0b and 0x12 are still not decoded; `exc.py` stops that chain and prints `truncated N`.
+- A catch's landing pad appears once per call-site chain, so the catch records of `0x6015a0` are listed per site; the summary line gives the distinct pads.
+
+### Static reachability of the 20 argc-violation sites (`reach.py --argc-violations --0x19`)
+
+M2a-0 claimed the 20 `Base.osi` sites whose argc is outside the registered `[min, max]` are all statically unreachable. **Confirmed under the plan's rule: 0 of 20 are reachable**, and still 0 when an UNRESOLVED 0x19 may name any method (`wild`).
+- The walk covers 3,606 subroutines (23 global functions + 3,583 distinct method bodies); 2,825 are reachable, 319 of the 395 classes are constructed in reachable code. The roots are `setup`, `process`, `input`, `onevent`; the 16 `0x50` sites all push a global-function offset directly. The four global functions that are not reachable: `setupdemoscreen`, `setuplanguagetest`, `setupshoefitterscreen`, `setuptestlevel`.
+- The reasons, per owner class: `lego3dsound`, `ss_base3dobject`, `ss_base3dcharacter` are never constructed (no `0x13` anywhere); `cavedigging` is constructed only in the method `lego_testlevel.lego_testlevel`, and `lego_testlevel` is constructed only in `setuptestlevel`, which no `0x50` or pushed offset reaches; `lego_timer` is constructed, but the symbols `durationpeek`, `durationlast` and `durationaverage` are never taken by a reachable `0x12`/`0x17`/`0x19`.
+- **The 12 `0x19` sites** are all UNRESOLVED: each name comes from `GetThisMemberValue` (`base_safeevent.functionpointer` 10 times, `gs_tweakobject.func` twice), never from a literal. All 12 sit in unreachable methods (`base_safeevent.execute`, `.executearguments`, `gs_tweakobject.incvalue`, `.decvalue`), so no UNRESOLVED site widens the closure. Task 10's runtime trace is their confirmation. `0x83` has 0 sites.
+- **Engine roots**: the exe contains no string for any of the other 19 global function names (case-insensitive byte search of the whole exe for each name, and for the substrings `setuplevel`, `setuptest`, `testlevel`), so the engine does not call them by name; it holds `Setup`, `Process`, `Input` and `OnEvent` as NUL-delimited tokens. UNVERIFIED: a name built at run time from pieces.
+- **Caveat the walk cannot see**: `ScOSIVirtualMachine::ConstructObject` 0x60be00 has a second caller, `ScSLOSIFileIO::GetVariantFromBuffer` 0x6160a0 (deserialising a saved object), reached from the natives `scslosifileio.loadosiobject` and `scslosifileio.loadosiobjectfrommemcard`. A class could be built from a save file without a `0x13`. Neither native is on the stub path (not in the 69).
