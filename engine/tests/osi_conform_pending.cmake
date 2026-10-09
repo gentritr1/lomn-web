@@ -1,8 +1,9 @@
 # ctest helper (M2a-2): the "pending" marker of lomn_osi_conform (docs/osi/conformance.md "Pending programs"), on a temporary
 # corpus built here: g/ok (passes), n/pend (pending "T3"; its .asm does not even assemble and its expectation could not be
 # met), n/gone (pending, no .asm at all), then, in a second corpus, one real failure next to a pending program, and in a
-# third the fail-closed rule (amendment 18): g/unk carries the uncompared key expect.pc_after and FAILS without running (no
-# trace); n/unkp carries the same key but is pending, so it is only PENDING.
+# third the fail-closed rule (amendment 18): g/unk carries the uncompared key expect.no_such_key and FAILS without running (no
+# trace); n/unkp carries the same key but is pending, so it is only PENDING. (M2a-2 T3: the probe key was expect.pc_after
+# until the C++ runner began to compare pc_after; a key no format defines keeps the probe meaningful.)
 # RUNNER is empty natively and "node" for wasm32; ASSEMBLE is tools/osi/conform_assemble.py; PYTHON the interpreter.
 file(REMOVE_RECURSE ${OUT})
 file(MAKE_DIRECTORY ${OUT}/c1/g ${OUT}/c1/n ${OUT}/c2/g ${OUT}/c2/n ${OUT}/c3/g ${OUT}/c3/n)
@@ -21,9 +22,9 @@ endforeach()
 file(WRITE ${OUT}/c3/g/ok.asm "${ASM}")
 file(WRITE ${OUT}/c3/g/ok.expect.json "${OKJ}")
 file(WRITE ${OUT}/c3/g/unk.asm "${ASM}")
-file(WRITE ${OUT}/c3/g/unk.expect.json "{\"id\":\"unk\",\"entry\":\"main\",\"args\":[],\"natives\":[],\"registry\":\"none\",\"expect\":{\"ok\":true,\"pc_after\":5}}")
+file(WRITE ${OUT}/c3/g/unk.expect.json "{\"id\":\"unk\",\"entry\":\"main\",\"args\":[],\"natives\":[],\"registry\":\"none\",\"expect\":{\"ok\":true,\"no_such_key\":5}}")
 file(WRITE ${OUT}/c3/n/unkp.asm "${ASM}")
-file(WRITE ${OUT}/c3/n/unkp.expect.json "{\"id\":\"unkp\",\"pending\":\"T4\",\"entry\":\"main\",\"args\":[],\"natives\":[],\"registry\":\"none\",\"expect\":{\"ok\":true,\"pc_after\":5}}")
+file(WRITE ${OUT}/c3/n/unkp.expect.json "{\"id\":\"unkp\",\"pending\":\"T4\",\"entry\":\"main\",\"args\":[],\"natives\":[],\"registry\":\"none\",\"expect\":{\"ok\":true,\"no_such_key\":5}}")
 file(WRITE ${OUT}/c2/g/bad.asm "${ASM}")
 file(WRITE ${OUT}/c2/g/bad.expect.json "${BADJ}")
 
@@ -77,7 +78,7 @@ run_runner(c3 rc out)
 if(rc EQUAL 0)
   message(FATAL_ERROR "an uncompared key must fail the run:\n${out}")
 endif()
-foreach(line "FAIL g/unk.expect.json: uncompared key expect.pc_after" "PENDING n/unkp (T4)" "conformance: 1/2 pass, 1 pending")
+foreach(line "FAIL g/unk.expect.json: uncompared key expect.no_such_key" "PENDING n/unkp (T4)" "conformance: 1/2 pass, 1 pending")
   string(FIND "\n${out}" "\n${line}\n" at)
   if(at EQUAL -1)
     message(FATAL_ERROR "missing the line '${line}' in:\n${out}")

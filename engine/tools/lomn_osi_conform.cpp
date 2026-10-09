@@ -19,6 +19,12 @@
 // {"game": C}, {"text": t}, {"hex": h}, {"arg": i}); `writes` (by-ref slots overwritten WITHOUT dispose, §6.14d);
 // `calls` ({"entry", "args"}, a nested vm.call before the native returns, §6.1); `sets_fpu_pc64`. Inside a native the
 // order is: nested calls, then writes, then the return value.
+// M2a-2 T3 (conformance.md §1 "Native-framework fields", rules 15 and 17-19), through the native framework
+// (lomn/osi/natives.h): `returns.engine_refs` k (a host GameObject held k times, minted by HostContext::create_variant),
+// `returns.object` (one host object per name while it is live: the same handle, no new A g), `calls.depth` d (the
+// nested call only while the VM's context_depth < d), `swallow` (D16: HostContext::engine_call_swallowing). Compared
+// after the call: `pc_after` (snapshot().pc, "@L+k" allowed), `expect.top`, `swallowed` (exactly the swallowed errors;
+// no key = none), and `then` (a second call on the same VM; after an error the runner resets first, rule 19).
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
@@ -33,6 +39,7 @@
 
 #include "lomn/osi/heap.h"
 #include "lomn/osi/json.h"
+#include "lomn/osi/natives.h"
 #include "lomn/osi/registry.h"
 #include "lomn/osi/trace.h"
 #include "lomn/osi/vm.h"
@@ -42,13 +49,13 @@
 #define LOMN_OSI_DATA_DIR "data/osi"
 #endif
 
-namespace fs = std::filesystem;
+namespace sfs = std::filesystem;  // not `fs`: lomn::fs (the VFS) is visible through `using namespace lomn`
 using namespace lomn;
 using namespace lomn::osi;
 
 namespace {
 
-bool slurp(const fs::path& p, std::string& out) {
+bool slurp(const sfs::path& p, std::string& out) {
   std::ifstream f(p, std::ios::binary);
   if (!f) return false;
   std::stringstream ss;
@@ -162,6 +169,24 @@ std::set<std::string> compared_keys() {
   for (const char* f : {"message", "pc", "op", "depth"}) s.insert(std::string("expect_error.") + f);
   add_value(s, "expect_error.top", true);
   add_state(s, "expect_error");
+  // M2a-2 T3: the native-framework fields of conformance.md §1 (Task 2b), every one compared or honoured
+  s.insert("natives[*].returns.engine_refs");
+  s.insert("natives[*].returns.object");
+  s.insert("natives[*].calls.depth");
+  s.insert("natives[*].swallow");
+  add_value(s, "expect.top", true);
+  for (const char* x : {"expect", "expect_error"}) {
+    const std::string b = x;
+    s.insert(b + ".pc_after");
+    s.insert(b + ".swallowed");
+    for (const char* f : {"message", "pc", "op", "depth"}) s.insert(b + ".swallowed[*]." + f);
+    add_value(s, b + ".swallowed[*].top", true);
+  }
+  s.insert("then");
+  for (const char* f : {"entry", "args", "ok", "depth", "context_depth", "pc_after"}) s.insert(std::string("then.") + f);
+  add_value(s, "then.args[*]", false);
+  add_value(s, "then.result", true);
+  add_value(s, "then.top", true);
   return s;
 }
 
@@ -199,13 +224,36 @@ std::vector<std::string> uncompared_keys(const Json& ex) {
 struct TestNative {
   const Json* spec = nullptr;
   const TypeTable* types = nullptr;
+  HostContext* ctx = nullptr;
+  std::map<std::string, uint32_t>* objects = nullptr;  // returns.object: name -> its handle (0 or freed: make a new one)
 };
 
+// a `returns` game value through the framework: a host object held engine_refs times (D13); `object` names one
+struct TestObject : GameObject {
+  using GameObject::GameObject;
+};
+Variant test_game_return(TestNative& tn, const Json& r, uint16_t id) {
+  int32_t k = 0;
+  if (const Json* e = r.get("engine_refs")) k = static_cast<int32_t>(num_u32(*e));
+  GameObject* o = nullptr;
+  const Json* name = r.get("object");
+  if (name) {
+    auto it = tn.objects->find(name->str);
+    if (it != tn.objects->end()) o = tn.ctx->object(it->second);  // nullptr once freed: "creates a new object"
+  }
+  if (!o) o = tn.ctx->make<TestObject>(id, k);
+  const Variant v = tn.ctx->create_variant(o, id);
+  if (name) (*tn.objects)[name->str] = o->handle();
+  return v;
+}
+
 Variant test_native(NativeCall& c, void* user) {
-  const TestNative& tn = *static_cast<TestNative*>(user);
+  TestNative& tn = *static_cast<TestNative*>(user);
   Heap& heap = c.vm.heap();
   std::string err;
-  if (const Json* k = tn.spec->get("calls")) {  // one nested call: {"entry", "args"}
+  const Json* k = tn.spec->get("calls");  // one nested call: {"entry", "args", "depth"}
+  const Json* d = k ? k->get("depth") : nullptr;
+  if (k && (!d || c.vm.snapshot().context_depth < num_u32(*d))) {  // calls.depth: only below d engine calls in flight
     std::vector<Variant> args;
     if (const Json* a = k->get("args"))
       for (const Json& x : a->arr) {
@@ -214,7 +262,10 @@ Variant test_native(NativeCall& c, void* user) {
         args.push_back(v);
       }
     const Json* e = k->get("entry");
-    c.vm.call(e ? e->str : std::string("inner"), args);  // the host disposes the nested result after its R (§6.1)
+    const std::string entry = e ? e->str : std::string("inner");
+    const Json* sw = tn.spec->get("swallow");
+    if (sw && sw->type == Json::Bool && sw->b) tn.ctx->engine_call_swallowing(entry, args);  // D16, rule 17
+    else tn.ctx->engine_call(entry, args);  // the host disposes the nested result after its R (§6.1)
   }
   if (const Json* ws = tn.spec->get("writes"))
     for (const Json& w : ws->arr) {
@@ -232,13 +283,18 @@ Variant test_native(NativeCall& c, void* user) {
     if (i >= c.args.size()) throw VmError("Undefined: test native returns an absent argument");
     return heap.duplicate(*c.args[i]);
   }
+  if (const Json* g = r->get("game")) {
+    const uint16_t id = tn.types->id(g->str);
+    if (id == 0xffff) throw VmError("Undefined: test native returns: unknown game type " + g->str);
+    return test_game_return(tn, *r, id);
+  }
   Variant v;
   if (!make_value(*r, heap, *tn.types, v, &err)) throw VmError("Undefined: test native returns: " + err);
   return v;
 }
 
 struct Runner {
-  fs::path corpus, osi_dir, data_dir, trace_dir;
+  sfs::path corpus, osi_dir, data_dir, trace_dir;
   TypeTable types;
   NativeRegistry base;
   std::string sha_natives, sha_mods, sha_types;
@@ -289,6 +345,69 @@ struct Runner {
     if (w != got) fail(field, std::to_string(w), std::to_string(got));
   }
 
+  // a PC expectation: an integer, "@L" or "@L+k" (a label plus a decimal byte count), as an absolute file offset
+  const std::map<std::string, uint32_t>* labels = nullptr;
+  bool resolve_pc(const Json& j, uint32_t& out, const std::string& field) {
+    if (j.type == Json::String && !j.str.empty() && j.str[0] == '@') {
+      std::string name = j.str.substr(1);
+      uint32_t add = 0;
+      const size_t plus = name.find('+');
+      if (plus != std::string::npos) {
+        add = static_cast<uint32_t>(std::strtoul(name.c_str() + plus + 1, nullptr, 10));
+        name.resize(plus);
+      }
+      auto it = labels->find(name);
+      if (it == labels->end()) {
+        fail_msg(field, "unknown label " + j.str);
+        return false;
+      }
+      out = it->second + add;
+      return true;
+    }
+    out = num_u32(j);
+    return true;
+  }
+  void check_pc(const Json* want, uint32_t got, const std::string& field) {
+    if (!want) return;
+    uint32_t w = 0;
+    if (!resolve_pc(*want, w, field)) return;
+    char a[16], b[16];
+    std::snprintf(a, sizeof a, "%08x", w);
+    std::snprintf(b, sizeof b, "%08x", got);
+    if (w != got) fail(field, a, b);
+  }
+  // `top`: null = depth 0, else the top slot's value
+  void check_top(const Json* t, bool has_top, Variant top, const std::string& field) {
+    if (!t) return;
+    if (t->type == Json::Null) {
+      if (has_top) fail(field, "null (depth 0)", fmt_variant(top));
+    } else if (!has_top) {
+      fail(field, "a value", "depth 0");
+    } else {
+      check_value(field, *t, top, nullptr);
+    }
+  }
+  // `swallowed`: exactly the errors swallowed during the call, in order (no key = none)
+  void check_swallowed(const Json* want, const std::vector<Vm::Swallowed>& got, const std::string& field) {
+    const size_t n = want ? want->arr.size() : 0;
+    if (n != got.size()) {
+      fail(field, std::to_string(n) + " swallowed error(s)", std::to_string(got.size()));
+      return;
+    }
+    for (size_t i = 0; i < n; ++i) {
+      const Json& w = want->arr[i];
+      const Vm::Swallowed& g = got[i];
+      const std::string f = field + "[" + std::to_string(i) + "]";
+      if (const Json* m = w.get("message"))
+        if (m->str != g.error.message)
+          fail(f + ".message", "\"" + fmt_message(m->str) + "\"", "\"" + fmt_message(g.error.message) + "\"");
+      check_pc(w.get("pc"), g.error.pc, f + ".pc");
+      check_u32(w.get("op"), g.error.op, f + ".op");
+      check_u32(w.get("depth"), g.error.depth, f + ".depth");
+      check_top(w.get("top"), g.has_top, g.top, f + ".top");
+    }
+  }
+
   enum class Outcome { Pass, Fail, Pending };
 
   // The task id when the expectation is pending (a non-empty string `pending`), else empty.
@@ -297,8 +416,8 @@ struct Runner {
     return p && p->type == Json::String ? p->str : std::string();
   }
 
-  Outcome run_program(const fs::path& expect_path) {
-    cur = fs::relative(expect_path, corpus).generic_string();
+  Outcome run_program(const sfs::path& expect_path) {
+    cur = sfs::relative(expect_path, corpus).generic_string();
     std::string text, err;
     Json ex;
     if (slurp(expect_path, text) && parse_json(text, ex, &err)) {
@@ -312,9 +431,9 @@ struct Runner {
     return run_one(expect_path) ? Outcome::Pass : Outcome::Fail;
   }
 
-  bool run_one(const fs::path& expect_path) {
+  bool run_one(const sfs::path& expect_path) {
     fails_in_program = 0;
-    cur = fs::relative(expect_path, corpus).generic_string();
+    cur = sfs::relative(expect_path, corpus).generic_string();
     std::string text, err;
     Json ex;
     if (!slurp(expect_path, text) || !parse_json(text, ex, &err)) {
@@ -330,8 +449,8 @@ struct Runner {
     }
     std::string stem = expect_path.filename().string();
     stem = stem.substr(0, stem.size() - std::string(".expect.json").size());
-    const fs::path rel_dir = fs::relative(expect_path.parent_path(), corpus);
-    fs::path img_dir = osi_dir.empty() ? expect_path.parent_path() : osi_dir / rel_dir;
+    const sfs::path rel_dir = sfs::relative(expect_path.parent_path(), corpus);
+    sfs::path img_dir = osi_dir.empty() ? expect_path.parent_path() : osi_dir / rel_dir;
     std::string image;
     if (!slurp(img_dir / (stem + ".osi"), image)) {
       fail_msg("osi", "missing " + (img_dir / (stem + ".osi")).string());
@@ -356,6 +475,7 @@ struct Runner {
     const Json* rj = ex.get("registry");
     if (rj && rj->str == "natives.json") reg = base;
     std::vector<std::unique_ptr<TestNative>> tns;
+    std::map<std::string, uint32_t> objects;
     if (const Json* ns = ex.get("natives"))
       for (const Json& n : ns->arr) {
         NativeEntry e;
@@ -378,6 +498,7 @@ struct Runner {
         tns.push_back(std::make_unique<TestNative>());
         tns.back()->spec = &n;
         tns.back()->types = &types;
+        tns.back()->objects = &objects;
         e.fn = test_native;
         e.user = tns.back().get();
         e.tier = Tier::Implemented;
@@ -386,6 +507,9 @@ struct Runner {
     StringTrace tr;
     Heap heap(&tr);
     Vm vm(file, reg, heap, &tr);
+    HostContext ctx(vm, heap, nullptr, HostFlags{}, nullptr);
+    for (auto& tn : tns) tn->ctx = &ctx;
+    this->labels = &labels;
     std::vector<Variant> args;
     if (const Json* a = ex.get("args"))
       for (const Json& x : a->arr) {  // host strings are allocated in index order before the call (§6.2)
@@ -400,6 +524,30 @@ struct Runner {
     CallResult r = vm.call(entry, args);
     const VmState st = vm.snapshot();
     const VmError* e = vm.last_error();
+    const std::vector<Vm::Swallowed> swallowed = vm.swallowed();
+    // rule 19: a second engine call on the same VM, after the first call has been compared
+    auto run_then = [&](const Json& th) {
+      std::vector<Variant> targs;
+      if (const Json* a = th.get("args"))
+        for (const Json& x : a->arr) {
+          Variant v;
+          if (!make_value(x, heap, types, v, &err)) return fail_msg("then.args", err);
+          targs.push_back(v);
+        }
+      const std::string te = th.get("entry") ? th.get("entry")->str : std::string("main2");
+      CallResult r2 = vm.call(te, targs);
+      const VmState s2 = vm.snapshot();
+      if (const Json* x = th.get("ok"))
+        if (x->type == Json::Bool && x->b != (r2.ok && !vm.last_error()))
+          fail("then.ok", x->b ? "true" : "false",
+               vm.last_error() ? "error \"" + fmt_message(vm.last_error()->message) + "\"" : (r2.ok ? "true" : "false"));
+      if (const Json* x = th.get("result")) check_value("then.result", *x, r2.result, &r2.result_text);
+      check_u32(th.get("depth"), s2.depth, "then.depth");
+      check_top(th.get("top"), s2.depth > 0, s2.top, "then.top");
+      check_u32(th.get("context_depth"), s2.context_depth, "then.context_depth");
+      check_pc(th.get("pc_after"), s2.pc, "then.pc_after");
+    };
+    const Json* then = ex.get("then");
     // the post-call state fields shared by expect and expect_error (the oracle's _cmp_state): context_depth, fpu_pc,
     // globals.<name>, heap.{live,allocs}.{o,a,s,g}; only the fields present are compared (§6.7)
     auto check_state = [&](const Json& x) {
@@ -429,38 +577,21 @@ struct Runner {
       } else {
         if (const Json* m = ee->get("message"))
           if (m->str != e->message) fail("message", "\"" + fmt_message(m->str) + "\"", "\"" + fmt_message(e->message) + "\"");
-        if (const Json* pc = ee->get("pc")) {
-          uint32_t want = 0;
-          if (pc->type == Json::String && !pc->str.empty() && pc->str[0] == '@') {
-            auto it = labels.find(pc->str.substr(1));
-            if (it == labels.end()) fail_msg("pc", "unknown label " + pc->str);
-            else want = it->second;
-          } else {
-            want = num_u32(*pc);
-          }
-          char a[16], b[16];
-          std::snprintf(a, sizeof a, "%08x", want);
-          std::snprintf(b, sizeof b, "%08x", e->pc);
-          if (want != e->pc) fail("pc", a, b);
-        }
+        check_pc(ee->get("pc"), e->pc, "pc");
         if (const Json* op = ee->get("op")) check_u32(op, e->op, "op");
         check_u32(ee->get("depth"), e->depth, "depth");
-        if (const Json* t = ee->get("top")) {
-          if (t->type == Json::Null) {
-            if (st.depth != 0) fail("top", "null (depth 0)", fmt_variant(st.top));
-          } else if (st.depth == 0) {
-            fail("top", "a value", "depth 0");
-          } else {
-            check_value("top", *t, st.top, nullptr);
-          }
-        }
+        check_top(ee->get("top"), st.depth > 0, st.top, "top");
+        check_pc(ee->get("pc_after"), st.pc, "pc_after");  // rule 15: snapshot().pc after the error
+        check_swallowed(ee->get("swallowed"), swallowed, "swallowed");
         check_state(*ee);  // before the reset: the snapshot's context_depth, fpu_pc, the globals and the heap
         // our host behaviour (not the original's): reset, then the second entry point must run
         vm.reset_after_error();
         bool has_main2 = false;
         for (const auto& f : file.functions())
           if (NativeRegistry::fold(f.name) == "main2") has_main2 = true;
-        if (has_main2) {
+        if (then) {
+          run_then(*then);  // `then` replaces the implicit main2 check (rule 19)
+        } else if (has_main2) {
           CallResult r2 = vm.call("main2", {});
           if (!r2.found || !r2.ok)
             fail("main2", "ok after reset_after_error", vm.last_error() ? "\"" + fmt_message(vm.last_error()->message) + "\"" : "not found");
@@ -472,13 +603,17 @@ struct Runner {
         if (x->type == Json::Bool && x->b != r.ok) fail("ok", x->b ? "true" : "false", r.ok ? "true" : "false");  // M: ok (§6.14a)
       if (const Json* x = ok->get("result")) check_value("result", *x, r.result, &r.result_text);
       check_u32(ok->get("depth"), st.depth, "depth");
+      check_top(ok->get("top"), st.depth > 0, st.top, "top");
+      check_pc(ok->get("pc_after"), st.pc, "pc_after");
+      check_swallowed(ok->get("swallowed"), swallowed, "swallowed");
       check_state(*ok);
+      if (then) run_then(*then);  // no reset: the second call runs above whatever the first left (D16 rule 5)
     } else {
       fail_msg("expect.json", "neither expect nor expect_error");
     }
     if (!trace_dir.empty()) {
-      const fs::path d = trace_dir / rel_dir;
-      fs::create_directories(d);
+      const sfs::path d = trace_dir / rel_dir;
+      sfs::create_directories(d);
       FileTrace out((d / (stem + ".trace")).string());
       out.line(header_line(sha256_hex(reinterpret_cast<const uint8_t*>(image.data()), image.size()), sha_natives, sha_mods, sha_types));
       for (const auto& l : tr.lines) out.line(l);
@@ -487,7 +622,7 @@ struct Runner {
   }
 };
 
-std::string file_sha(const fs::path& p) {
+std::string file_sha(const sfs::path& p) {
   std::string s;
   if (!slurp(p, s)) return std::string(64, '0');
   return sha256_hex(reinterpret_cast<const uint8_t*>(s.data()), s.size());
@@ -540,9 +675,9 @@ int main(int argc, char** argv) {
   rn.sha_natives = file_sha(rn.data_dir / "natives.json");
   rn.sha_mods = file_sha(rn.data_dir / "natives_beta150.json");
   rn.sha_types = file_sha(rn.data_dir / "types.json");
-  std::vector<fs::path> progs;
+  std::vector<sfs::path> progs;
   std::error_code ec;
-  for (fs::recursive_directory_iterator it(rn.corpus, ec), end; !ec && it != end; it.increment(ec)) {
+  for (sfs::recursive_directory_iterator it(rn.corpus, ec), end; !ec && it != end; it.increment(ec)) {
     const std::string n = it->path().filename().string();
     if (n.size() > 12 && n.compare(n.size() - 12, 12, ".expect.json") == 0) progs.push_back(it->path());
   }
