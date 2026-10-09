@@ -143,9 +143,9 @@ def test_smoke_coverage_equals_coverage_py(smoke, tmp_path):
     smoke_keys = ["gcgame.getresolutionwidth", "gcsaver.clearcinema", "gcgame.getresolutionheight", "gcsaver.cheatmenu"]
     # HAND-PINNED for the integrated tables (T7a + T7b merged), not derived from coverage.py's loader: the four natives of
     # osi_a9_smoke.asm are gcgame.getresolutionwidth (override row tier1), gcsaver.clearcinema (a Beta 1.5.0 mod row, tier
-    # `mod`), gcgame.getresolutionheight (override row tier1) and gcsaver.cheatmenu (no override row: stub). A later task
-    # that promotes one of them changes this line on purpose (review I2).
-    assert cov[0] == "coverage: natives distinct 4 (tier1 2, tier2 0, stub 1, mod 1, tier3 0), calls 9, unregistered 0"
+    # `mod`), gcgame.getresolutionheight (override row tier1) and gcsaver.cheatmenu (override row tier1 since T8, was a
+    # stub). A later task that promotes one of them changes this line on purpose (review I2).
+    assert cov[0] == "coverage: natives distinct 4 (tier1 3, tier2 0, stub 0, mod 1, tier3 0), calls 9, unregistered 0"
     assert [l.split()[1] for l in cov[1:]] == ["gcgame.getresolutionwidth", "gcsaver.clearcinema",
                                                  "gcgame.getresolutionheight", "gcsaver.cheatmenu"]
     lines = r.stdout.splitlines()
