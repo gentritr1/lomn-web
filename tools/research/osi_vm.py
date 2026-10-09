@@ -2325,6 +2325,9 @@ def run_program(asm_path: Path, trace_dir: Optional[Path] = None, *, natives_p=D
     import osiasm
     exp_path = asm_path.with_name(asm_path.name[:-4] + ".expect.json")
     spec = json.loads(exp_path.read_text())
+    bad = uncompared_keys(spec)
+    if bad:                                           # fail closed: a field nobody compares must not pass unexamined
+        return ["uncompared key " + k for k in bad]
     try:
         image, info = osiasm.assemble(asm_path.read_text(encoding="latin-1"))
     except osiasm.AsmError as e:
@@ -2440,6 +2443,56 @@ def _cmp_state(vm: Vm, ex: dict, snap: VmState, fails: list, error: bool = False
         for k, v in (hp.get("allocs") or {}).items():
             if allocs.get(k) != v:
                 fails.append("heap.allocs.%s: expected %d, got %d" % (k, v, allocs.get(k)))
+
+
+# The expectation keys this oracle reads (fail-closed, docs/osi/conformance.md amendment 18). A key path is the chain of object
+# keys from the top of the .expect.json, `[*]` after a key whose value is an array of objects, and `*` for the name of a global
+# under expect.globals / expect_error.globals. A non-pending program with a key path in neither list FAILS before it runs:
+# "uncompared key <path>". The C++ runner (engine/tools/lomn_osi_conform.cpp) keeps its own list; both print as sorted
+# `compared|ignored <path>` lines with `--list-keys`, and tools/tests/test_osi_conform_keys.py asserts they are the same set.
+_VALUE_FORMS = ("text", "hex", "game", "type", "value", "bits")      # a value spec (host_variant / parse_variant_spec / _spec_eq)
+
+
+def _value_keys(prefix: str) -> list[str]:
+    return [prefix] + [prefix + "." + k for k in _VALUE_FORMS]
+
+
+def _state_keys(prefix: str) -> list[str]:
+    heap = [prefix + ".heap", prefix + ".heap.live", prefix + ".heap.allocs"]
+    heap += ["%s.heap.%s.%s" % (prefix, part, kind) for part in ("live", "allocs") for kind in "oasg"]
+    return [prefix, prefix + ".context_depth", prefix + ".fpu_pc", prefix + ".globals"] + _value_keys(prefix + ".globals.*") + heap
+
+
+COMPARED_KEYS = frozenset(
+    ["registry", "entry", "args", "natives", "expect", "expect_error"]
+    + [k for k in _value_keys("args[*]")[1:]]
+    + ["natives[*]." + k for k in ("cls", "name", "min", "max", "types", "sets_fpu_pc64", "calls", "writes", "returns")]
+    + ["natives[*].calls.entry", "natives[*].calls.args"] + _value_keys("natives[*].calls.args[*]")[1:]
+    + ["natives[*].writes[*].arg"] + _value_keys("natives[*].writes[*]")[1:]
+    + ["natives[*].returns.arg"] + _value_keys("natives[*].returns")[1:]
+    + ["expect.ok", "expect.depth"] + _value_keys("expect.result") + _state_keys("expect")[1:]
+    + ["expect_error.message", "expect_error.pc", "expect_error.op", "expect_error.depth"] + _value_keys("expect_error.top")
+    + _state_keys("expect_error")[1:])
+# descriptive keys no runner compares (the coverage report reads some of them): listed so that nothing else passes unexamined
+IGNORED_KEYS = frozenset(["id", "rows", "note", "alternative", "falsifier", "falsifier_id", "argc_violation", "pending"])
+
+
+def _key_paths(node, path="", pattern=""):
+    """(real path, pattern path) of every object key under `node`; arrays of objects add `[*]`, scalars add nothing."""
+    if isinstance(node, list):
+        for v in node:
+            yield from _key_paths(v, path + "[*]", pattern + "[*]")
+    elif isinstance(node, dict):
+        for k, v in node.items():
+            wild = "*" if pattern in ("expect.globals", "expect_error.globals") else k
+            rp, pp = (path + "." + k) if path else k, (pattern + "." + wild) if pattern else wild
+            yield rp, pp
+            yield from _key_paths(v, rp, pp)
+
+
+def uncompared_keys(spec) -> list[str]:
+    """The key paths of an expectation that no runner compares and the ignored list does not allow."""
+    return [rp for rp, pp in _key_paths(spec) if pp not in COMPARED_KEYS and pp not in IGNORED_KEYS]
 
 
 def conform(directory, trace_dir=None) -> int:
@@ -2603,6 +2656,7 @@ def run_base(a) -> int:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="LOMN OSI VM oracle (M2a-1 T2)")
     ap.add_argument("--conform", metavar="DIR")
+    ap.add_argument("--list-keys", action="store_true", help="print the compared and ignored expectation key paths")
     ap.add_argument("--trace-dir")
     ap.add_argument("--run", metavar="BASE_OSI")
     ap.add_argument("--natives", default=str(DEFAULT_NATIVES))
@@ -2615,6 +2669,11 @@ def main(argv=None) -> int:
     ap.add_argument("--digest")
     ap.add_argument("--log-out", help="write the natives.log of this run (stub returns)")
     a = ap.parse_args(argv)
+    if a.list_keys:
+        for kind, keys in (("compared", COMPARED_KEYS), ("ignored", IGNORED_KEYS)):
+            for k in sorted(keys):
+                print("%s %s" % (kind, k))
+        return 0
     if a.conform:
         return conform(a.conform, a.trace_dir)
     if a.run:

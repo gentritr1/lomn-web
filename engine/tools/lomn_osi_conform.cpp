@@ -1,6 +1,7 @@
 // M2a-1 T1: lomn_osi_conform, the C++ conformance runner (docs/osi/conformance.md §1, §4, §6 amendments 1-14).
 //
 //   lomn_osi_conform CORPUS_DIR [--osi-dir DIR] [--data-dir data/osi] [--trace-dir DIR]
+//   lomn_osi_conform --list-keys     (the compared and ignored expectation key paths, one per line)
 //
 // Every `<id>.expect.json` under CORPUS_DIR (recursively, sorted by path) is one program. Its image `<id>.osi` and label
 // table `<id>.labels` come from --osi-dir (the same relative directory; written at build time by
@@ -11,7 +12,8 @@
 // Pending programs: an expectation with a top-level non-empty string `"pending": "<task id>"` (any other value is ignored,
 // so the program runs) is not run. The runner prints `PENDING <group>/<id> (<task>)` in the place of its PASS/FAIL line, reads
 // no .osi, writes no trace, and counts it only in P (M excludes it). It never fails the run. An all-pending corpus exits 0.
-// Unknown keys in an expectation are ignored (every field is read by name), so the new group-n fields need no allowance.
+// Unknown keys fail closed: a non-pending program with a key path no runner compares (and the ignored list does not allow)
+// FAILS with `FAIL <path>: uncompared key <key path>` before it runs; see compared_keys() / ignored_keys() below.
 //
 // Test natives are declarative (conformance.md §1, §6.1): types in the registry vocabulary; `returns` (a variant,
 // {"game": C}, {"text": t}, {"hex": h}, {"arg": i}); `writes` (by-ref slots overwritten WITHOUT dispose, §6.14d);
@@ -24,6 +26,7 @@
 #include <fstream>
 #include <map>
 #include <memory>
+#include <set>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -119,6 +122,80 @@ bool make_value(const Json& j, Heap& heap, const TypeTable& types, Variant& out,
   return true;
 }
 
+// Fail-closed expectation keys (docs/osi/conformance.md amendment 18). A key path is the chain of object keys from the top of
+// the .expect.json, `[*]` after a key whose value is an array of objects, and `*` for the name of a global under
+// expect.globals / expect_error.globals. A non-pending program with a key path in neither set FAILS before it runs
+// (`FAIL <path>: uncompared key <key path>`, no trace). The Python oracle keeps its own list (tools/research/osi_vm.py
+// COMPARED_KEYS / IGNORED_KEYS); `--list-keys` prints both as sorted `compared|ignored <path>` lines and
+// tools/tests/test_osi_conform_keys.py asserts the two are the same set.
+const char* const kValueForms[] = {"text", "hex", "game", "type", "value", "bits"};  // make_value / check_value
+
+void add_value(std::set<std::string>& s, const std::string& prefix, bool container) {
+  if (container) s.insert(prefix);
+  for (const char* f : kValueForms) s.insert(prefix + "." + f);
+}
+
+// the post-call state fields a program may check: context_depth, fpu_pc, globals, heap (check_state)
+void add_state(std::set<std::string>& s, const std::string& prefix) {
+  for (const char* f : {".context_depth", ".fpu_pc", ".globals", ".heap", ".heap.live", ".heap.allocs"}) s.insert(prefix + f);
+  add_value(s, prefix + ".globals.*", true);
+  for (const char* part : {"live", "allocs"})
+    for (const char* kind : {"o", "a", "s", "g"}) s.insert(prefix + ".heap." + part + "." + kind);
+}
+
+std::set<std::string> compared_keys() {
+  std::set<std::string> s = {"registry", "entry", "args", "natives", "expect", "expect_error"};
+  add_value(s, "args[*]", false);
+  for (const char* f : {"cls", "name", "min", "max", "types", "sets_fpu_pc64", "calls", "writes", "returns"})
+    s.insert(std::string("natives[*].") + f);
+  s.insert("natives[*].calls.entry");
+  s.insert("natives[*].calls.args");
+  add_value(s, "natives[*].calls.args[*]", false);
+  s.insert("natives[*].writes[*].arg");
+  add_value(s, "natives[*].writes[*]", false);
+  s.insert("natives[*].returns.arg");
+  add_value(s, "natives[*].returns", false);
+  s.insert("expect.ok");
+  s.insert("expect.depth");
+  add_value(s, "expect.result", true);
+  add_state(s, "expect");
+  for (const char* f : {"message", "pc", "op", "depth"}) s.insert(std::string("expect_error.") + f);
+  add_value(s, "expect_error.top", true);
+  add_state(s, "expect_error");
+  return s;
+}
+
+// descriptive keys no runner compares (the coverage report reads some of them)
+std::set<std::string> ignored_keys() {
+  return {"id", "rows", "note", "alternative", "falsifier", "falsifier_id", "argc_violation", "pending"};
+}
+
+// every object key under `n` as (real path, pattern path); arrays of objects add `[*]`, scalars add nothing
+void key_paths(const Json& n, const std::string& path, const std::string& pat,
+               std::vector<std::pair<std::string, std::string>>& out) {
+  if (n.type == Json::Array) {
+    for (const Json& v : n.arr) key_paths(v, path + "[*]", pat + "[*]", out);
+  } else if (n.type == Json::Object) {
+    for (const auto& kv : n.obj) {
+      const std::string wild = (pat == "expect.globals" || pat == "expect_error.globals") ? "*" : kv.first;
+      const std::string rp = path.empty() ? kv.first : path + "." + kv.first;
+      const std::string pp = pat.empty() ? wild : pat + "." + wild;
+      out.emplace_back(rp, pp);
+      key_paths(kv.second, rp, pp, out);
+    }
+  }
+}
+
+std::vector<std::string> uncompared_keys(const Json& ex) {
+  static const std::set<std::string> compared = compared_keys(), ignored = ignored_keys();
+  std::vector<std::pair<std::string, std::string>> all;
+  key_paths(ex, "", "", all);
+  std::vector<std::string> bad;
+  for (const auto& kp : all)
+    if (!compared.count(kp.second) && !ignored.count(kp.second)) bad.push_back(kp.first);
+  return bad;
+}
+
 struct TestNative {
   const Json* spec = nullptr;
   const TypeTable* types = nullptr;
@@ -128,23 +205,16 @@ Variant test_native(NativeCall& c, void* user) {
   const TestNative& tn = *static_cast<TestNative*>(user);
   Heap& heap = c.vm.heap();
   std::string err;
-  if (const Json* calls = tn.spec->get("calls")) {
-    std::vector<const Json*> list;
-    if (calls->type == Json::Array)
-      for (const Json& x : calls->arr) list.push_back(&x);
-    else
-      list.push_back(calls);
-    for (const Json* k : list) {
-      std::vector<Variant> args;
-      if (const Json* a = k->get("args"))
-        for (const Json& x : a->arr) {
-          Variant v;
-          if (!make_value(x, heap, *tn.types, v, &err)) throw VmError("Undefined: test native calls: " + err);
-          args.push_back(v);
-        }
-      const Json* e = k->get("entry");
-      c.vm.call(e ? e->str : std::string("inner"), args);  // the host disposes the nested result after its R (§6.1)
-    }
+  if (const Json* k = tn.spec->get("calls")) {  // one nested call: {"entry", "args"}
+    std::vector<Variant> args;
+    if (const Json* a = k->get("args"))
+      for (const Json& x : a->arr) {
+        Variant v;
+        if (!make_value(x, heap, *tn.types, v, &err)) throw VmError("Undefined: test native calls: " + err);
+        args.push_back(v);
+      }
+    const Json* e = k->get("entry");
+    c.vm.call(e ? e->str : std::string("inner"), args);  // the host disposes the nested result after its R (§6.1)
   }
   if (const Json* ws = tn.spec->get("writes"))
     for (const Json& w : ws->arr) {
@@ -251,6 +321,13 @@ struct Runner {
       fail_msg("expect.json", "unreadable: " + err);
       return false;
     }
+    if (const auto bad = uncompared_keys(ex); !bad.empty()) {  // fail closed: nothing runs, no trace
+      for (const std::string& k : bad) {
+        ++fails_in_program;
+        std::printf("FAIL %s: uncompared key %s\n", cur.c_str(), k.c_str());
+      }
+      return false;
+    }
     std::string stem = expect_path.filename().string();
     stem = stem.substr(0, stem.size() - std::string(".expect.json").size());
     const fs::path rel_dir = fs::relative(expect_path.parent_path(), corpus);
@@ -323,6 +400,29 @@ struct Runner {
     CallResult r = vm.call(entry, args);
     const VmState st = vm.snapshot();
     const VmError* e = vm.last_error();
+    // the post-call state fields shared by expect and expect_error (the oracle's _cmp_state): context_depth, fpu_pc,
+    // globals.<name>, heap.{live,allocs}.{o,a,s,g}; only the fields present are compared (§6.7)
+    auto check_state = [&](const Json& x) {
+      check_u32(x.get("context_depth"), st.context_depth, "context_depth");
+      check_u32(x.get("fpu_pc"), static_cast<uint32_t>(st.fpu_pc), "fpu_pc");
+      if (const Json* g = x.get("globals"))
+        for (const auto& kv : g->obj) {
+          const Variant* v = vm.find_global(kv.first);
+          const Variant got = v ? *v : nothing();
+          std::string t = got.type == kString && heap.live(kKindString, got.value) ? heap.text(got.value) : std::string();
+          check_value("globals." + kv.first, kv.second, got, &t);
+        }
+      if (const Json* h = x.get("heap")) {
+        const HeapStats hs = heap.stats();
+        const char* kinds[4] = {"o", "a", "s", "g"};
+        for (const char* part : {"live", "allocs"})
+          if (const Json* p = h->get(part))
+            for (int k = 0; k < 4; ++k)
+              if (const Json* v = p->get(kinds[k]))
+                check_u32(v, static_cast<uint32_t>(std::string(part) == "live" ? hs.live[k] : hs.allocs[k]),
+                          std::string("heap.") + part + "." + kinds[k]);
+      }
+    };
     if (const Json* ee = ex.get("expect_error")) {
       if (!e) {
         fail("expect_error", "an error", r.found ? "ok" : "function not found");
@@ -354,7 +454,7 @@ struct Runner {
             check_value("top", *t, st.top, nullptr);
           }
         }
-        check_u32(ee->get("fpu_pc"), static_cast<uint32_t>(st.fpu_pc), "fpu_pc");
+        check_state(*ee);  // before the reset: the snapshot's context_depth, fpu_pc, the globals and the heap
         // our host behaviour (not the original's): reset, then the second entry point must run
         vm.reset_after_error();
         bool has_main2 = false;
@@ -370,29 +470,9 @@ struct Runner {
       if (e) fail("ok", "true", "error \"" + fmt_message(e->message) + "\"");
       if (const Json* x = ok->get("ok"))
         if (x->type == Json::Bool && x->b != r.ok) fail("ok", x->b ? "true" : "false", r.ok ? "true" : "false");  // M: ok (§6.14a)
-      if (const Json* x = ok->get("found"))
-        if (x->type == Json::Bool && x->b != r.found) fail("found", x->b ? "true" : "false", r.found ? "true" : "false");
       if (const Json* x = ok->get("result")) check_value("result", *x, r.result, &r.result_text);
       check_u32(ok->get("depth"), st.depth, "depth");
-      check_u32(ok->get("context_depth"), st.context_depth, "context_depth");
-      check_u32(ok->get("fpu_pc"), static_cast<uint32_t>(st.fpu_pc), "fpu_pc");
-      if (const Json* g = ok->get("globals"))
-        for (const auto& kv : g->obj) {
-          const Variant* v = vm.find_global(kv.first);
-          const Variant got = v ? *v : nothing();
-          std::string t = got.type == kString && heap.live(kKindString, got.value) ? heap.text(got.value) : std::string();
-          check_value("globals." + kv.first, kv.second, got, &t);
-        }
-      if (const Json* h = ok->get("heap")) {  // optional; only the fields present (§6.7)
-        const HeapStats s = heap.stats();
-        const char* kinds[4] = {"o", "a", "s", "g"};
-        for (const char* part : {"live", "allocs"})
-          if (const Json* p = h->get(part))
-            for (int k = 0; k < 4; ++k)
-              if (const Json* x = p->get(kinds[k]))
-                check_u32(x, static_cast<uint32_t>(std::string(part) == "live" ? s.live[k] : s.allocs[k]),
-                          std::string("heap.") + part + "." + kinds[k]);
-      }
+      check_state(*ok);
     } else {
       fail_msg("expect.json", "neither expect nor expect_error");
     }
@@ -430,6 +510,11 @@ int main(int argc, char** argv) {
     if (a == "--osi-dir") rn.osi_dir = next();
     else if (a == "--data-dir") rn.data_dir = next();
     else if (a == "--trace-dir") rn.trace_dir = next();
+    else if (a == "--list-keys") {
+      for (const auto& k : compared_keys()) std::printf("compared %s\n", k.c_str());
+      for (const auto& k : ignored_keys()) std::printf("ignored %s\n", k.c_str());
+      return 0;
+    }
     else if (!a.empty() && a[0] == '-') {
       std::fprintf(stderr, "usage: lomn_osi_conform CORPUS_DIR [--osi-dir DIR] [--data-dir DIR] [--trace-dir DIR]\n");
       return 2;

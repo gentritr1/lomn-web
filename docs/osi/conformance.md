@@ -55,8 +55,8 @@ test time; the binary is never committed.
 - **`value` or `bits` is MANDATORY in every value expectation** (`expect.result`, `expect.globals.<name>`,
   `expect_error.top`). `{"type": X}` alone is not a valid expectation: the C++ runner compares it as value 0 and the
   oracle compares the type only, so the two runners would disagree. `text`, `hex` and `game` are the other forms and
-  need no `value`. `found` is not part of the format: the C++ runner checks an `expect.found` key if present, the oracle
-  ignores it, and no corpus file may contain one. `tools/tests/test_conformance_report.py` fails on both rules.
+  need no `value`. `found` is not part of the format: both runners now fail a program that carries an `expect.found` key
+  (amendment 18), and `tools/tests/test_conformance_report.py` still fails on both rules.
 - `fpu_pc` (optional in `expect`, `expect_error`) is the precision state after the call; after any error it is 64 (D8′/D10).
   `reset_after_error()` does not change `fpu_pc`, so a second entry point (`main2`) called after an error runs at 64.
 
@@ -367,5 +367,27 @@ Both runners (`lomn_osi_conform`, `osi_vm.py --conform`) implement these. They c
       identical and trace-free, and prints `conform-trace-cmp: P pending (no trace on either side)`.
     - `tools/osi/conformance_report.py` counts them as `pending: P` and excludes them from `programs` and from every
       coverage number.
-    - Unknown keys: neither runner rejects any key it does not read. This is how the group-n fields (`returns.object`,
-      `expect.top`, `pc_after`, `swallowed`, `then`) are accepted. Removing `pending` is how a program is promoted.
+    - Unknown keys: see amendment 18 (they fail closed).
+18. **Fail-closed expectation keys** (2026-10-09, M2a-2). A runner must not let a program pass on a field nobody compares.
+    - Each runner keeps an explicit list of the key paths it compares and a list of descriptive keys it ignores. A key
+      path is the chain of object keys from the top of the `.expect.json`, with `[*]` after a key whose value is an array
+      of objects and `*` for the name of a global under `expect.globals` / `expect_error.globals`. Scalars inside an
+      array add no path (`natives[*].types` is one path).
+    - A NON-pending program with a key path in neither list FAILS, before it runs and with no trace:
+      `FAIL <path>: uncompared key <key path>` (the oracle prints it among the reasons of its `FAIL` line). A pending
+      program is not checked, because it is not run.
+    - The lists are code: `COMPARED_KEYS` / `IGNORED_KEYS` in `tools/research/osi_vm.py`, `compared_keys()` /
+      `ignored_keys()` in `engine/tools/lomn_osi_conform.cpp`. Both runners print them with `--list-keys` (sorted
+      `compared <path>` / `ignored <path>` lines), and `tools/tests/test_osi_conform_keys.py` asserts the outputs are
+      identical. Adding a key to a runner means adding it to both lists in the same commit, with a program that needs it.
+    - **Ignored (8):** `id`, `rows`, `note`, `alternative`, `falsifier`, `falsifier_id`, `argc_violation`, `pending`.
+    - **Compared (105):** `registry`, `entry`, `args`, `natives`, `expect`, `expect_error`; the value forms
+      `text`, `hex`, `game`, `type`, `value`, `bits` under `args[*]`, `natives[*].calls.args[*]`, `natives[*].writes[*]`,
+      `natives[*].returns`, `expect.result`, `expect_error.top`, `expect.globals.*`, `expect_error.globals.*`;
+      `natives[*].{cls,name,min,max,types,sets_fpu_pc64,calls,writes,returns}`, `natives[*].calls.{entry,args}`,
+      `natives[*].writes[*].arg`, `natives[*].returns.arg`; `expect.{ok,depth}`; `expect_error.{message,pc,op,depth}`;
+      and, under both `expect` and `expect_error`, `context_depth`, `fpu_pc`, `globals`, `heap.{live,allocs}.{o,a,s,g}`.
+      (`natives[*].calls` is one object, not an array.)
+    - Before this amendment the C++ runner did not compare `expect_error.{context_depth,globals,heap}` (the oracle did;
+      one corpus program, `b/b-eng-reenter-depth`, uses `expect_error.context_depth`) and it checked `expect.found` (the
+      oracle did not). Both now compare the same set; `found` is gone.

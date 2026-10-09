@@ -1,9 +1,11 @@
 # ctest helper (M2a-2): the "pending" marker of lomn_osi_conform (docs/osi/conformance.md "Pending programs"), on a temporary
 # corpus built here: g/ok (passes), n/pend (pending "T3"; its .asm does not even assemble and its expectation could not be
-# met), n/gone (pending, no .asm at all), then, in a second corpus, one real failure next to a pending program.
+# met), n/gone (pending, no .asm at all), then, in a second corpus, one real failure next to a pending program, and in a
+# third the fail-closed rule (amendment 18): g/unk carries the uncompared key expect.pc_after and FAILS without running (no
+# trace); n/unkp carries the same key but is pending, so it is only PENDING.
 # RUNNER is empty natively and "node" for wasm32; ASSEMBLE is tools/osi/conform_assemble.py; PYTHON the interpreter.
 file(REMOVE_RECURSE ${OUT})
-file(MAKE_DIRECTORY ${OUT}/c1/g ${OUT}/c1/n ${OUT}/c2/g ${OUT}/c2/n)
+file(MAKE_DIRECTORY ${OUT}/c1/g ${OUT}/c1/n ${OUT}/c2/g ${OUT}/c2/n ${OUT}/c3/g ${OUT}/c3/n)
 set(ASM ".function main 0\n    PushConstanti8 1\n    PushConstanti8 2\n    Add\n    Return\n")
 set(OKJ "{\"id\":\"ok\",\"entry\":\"main\",\"args\":[],\"natives\":[],\"registry\":\"none\",\"expect\":{\"ok\":true,\"result\":{\"type\":\"0x10\",\"value\":3},\"depth\":0,\"context_depth\":0,\"fpu_pc\":24}}")
 set(BADJ "{\"id\":\"bad\",\"entry\":\"main\",\"args\":[],\"natives\":[],\"registry\":\"none\",\"expect\":{\"ok\":true,\"result\":{\"type\":\"0x10\",\"value\":4}}}")
@@ -16,6 +18,12 @@ foreach(c c1 c2)
   file(WRITE ${OUT}/${c}/n/pend.expect.json "${PENDJ}")
   file(WRITE ${OUT}/${c}/n/gone.expect.json "${GONEJ}")
 endforeach()
+file(WRITE ${OUT}/c3/g/ok.asm "${ASM}")
+file(WRITE ${OUT}/c3/g/ok.expect.json "${OKJ}")
+file(WRITE ${OUT}/c3/g/unk.asm "${ASM}")
+file(WRITE ${OUT}/c3/g/unk.expect.json "{\"id\":\"unk\",\"entry\":\"main\",\"args\":[],\"natives\":[],\"registry\":\"none\",\"expect\":{\"ok\":true,\"pc_after\":5}}")
+file(WRITE ${OUT}/c3/n/unkp.asm "${ASM}")
+file(WRITE ${OUT}/c3/n/unkp.expect.json "{\"id\":\"unkp\",\"pending\":\"T4\",\"entry\":\"main\",\"args\":[],\"natives\":[],\"registry\":\"none\",\"expect\":{\"ok\":true,\"pc_after\":5}}")
 file(WRITE ${OUT}/c2/g/bad.asm "${ASM}")
 file(WRITE ${OUT}/c2/g/bad.expect.json "${BADJ}")
 
@@ -63,4 +71,21 @@ foreach(line "conformance: 1/2 pass, 2 pending" "PENDING n/pend (T3)")
 endforeach()
 if(NOT out MATCHES "FAIL g/bad.expect.json: result")
   message(FATAL_ERROR "the real failure is not reported:\n${out}")
+endif()
+
+run_runner(c3 rc out)
+if(rc EQUAL 0)
+  message(FATAL_ERROR "an uncompared key must fail the run:\n${out}")
+endif()
+foreach(line "FAIL g/unk.expect.json: uncompared key expect.pc_after" "PENDING n/unkp (T4)" "conformance: 1/2 pass, 1 pending")
+  string(FIND "\n${out}" "\n${line}\n" at)
+  if(at EQUAL -1)
+    message(FATAL_ERROR "missing the line '${line}' in:\n${out}")
+  endif()
+endforeach()
+if(EXISTS ${OUT}/c3-trace/g/unk.trace OR EXISTS ${OUT}/c3-trace/n)
+  message(FATAL_ERROR "a program that failed closed (or a pending one) left a trace")
+endif()
+if(NOT EXISTS ${OUT}/c3-trace/g/ok.trace)
+  message(FATAL_ERROR "the passing program of c3 left no trace")
 endif()
