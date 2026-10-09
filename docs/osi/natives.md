@@ -241,6 +241,8 @@ checks.
   `AddProcess` (+1, §2.4, INFERRED). A host writes such an `H` only if it models that holder; in M2a-2 the Toa process
   path is the documented D8 gap (§6.3), so neither engine models or writes it.
 
+One H line per AddRef/Release event, always +1 or -1, temporaries included: a pair that cancels inside one native body is written as two lines (controller ruling r-m1, 2026-10-09). X -1 is reserved for a swallow on a host route with no native (D16's process entries); no M2a-2 path writes it (ruling r-m2).
+
 An object that has no handle yet (never passed through `CreateVariant`) is not script-visible: its engine references are
 carried by the `G` of the record that mints its handle. An `H` that takes the total to 0 frees the object: `F g` in the
 trace, at that event.

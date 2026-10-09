@@ -166,3 +166,18 @@ def test_readme_repeats_the_authoring_rules():
     rules = (REPO / "docs" / "osi" / "conformance.md").read_text().split(
         "## 2. Authoring rules (independence of both implementations)\n", 1)[1].split("\n## 3.", 1)[0].strip("\n")
     assert rules in (REPO / "tests" / "osi" / "conformance" / "README.md").read_text()
+
+
+def test_expect_json_has_no_escape_above_latin1():
+    """Conformance.md §1: .expect.json files are Latin-1, so no \\u escape above ÿ (0xff). The C++ runner's JSON
+    reader rejects any value > 0xff."""
+    bad = {}
+    for path in sorted(CORPUS.glob("*/*.expect.json")):
+        content = path.read_text()
+        for match in re.finditer(r'\\u([0-9a-fA-F]{4})', content):
+            val = int(match.group(1), 16)
+            if val > 0xff:
+                if str(path.relative_to(CORPUS)) not in bad:
+                    bad[str(path.relative_to(CORPUS))] = []
+                bad[str(path.relative_to(CORPUS))].append(f"\\u{match.group(1)} (U+{match.group(1).upper()} = {val})")
+    assert bad == {}, f"Unicode escapes above 0xff (Latin-1 limit): {bad}"

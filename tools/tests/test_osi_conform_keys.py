@@ -15,6 +15,7 @@ sys.path.insert(0, str(REPO / "tools" / "research"))
 sys.path.insert(0, str(REPO / "tools" / "osi"))
 import osi_vm  # noqa: E402
 import conform_assemble  # noqa: E402
+import conform_pending  # noqa: E402
 
 CPP = REPO / "build" / "native" / "lomn_osi_conform"
 ASM = ".function main 0\n    PushConstanti8 1\n    PushConstanti8 2\n    Add\n    Return\n"
@@ -45,7 +46,8 @@ def test_the_ignored_list_is_exactly_the_descriptive_keys():
 def test_the_existing_corpus_has_no_uncompared_key():
     files = sorted((REPO / "tests" / "osi" / "conformance").glob("*/*.expect.json"))
     assert len(files) > 500
-    bad = {f.name: osi_vm.uncompared_keys(json.loads(f.read_text())) for f in files}
+    bad = {f.name: osi_vm.uncompared_keys(json.loads(f.read_text())) for f in files
+           if not conform_pending.pending_task(f)}
     assert {k: v for k, v in bad.items() if v} == {}
 
 

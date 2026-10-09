@@ -4,7 +4,7 @@
     "0x83"
   ],
   "falsifier": "the 0x83 name copy of a 0x11 literal measures the name with strlen (operator=(const char*) 0x4f5c00, strlen 0x6573c0 at 0x4f5c13), so an entry whose terminator byte is not NUL is read into the next entry, and a 256-character result throws kOutOfRange (capacity 0xff at 0x602224, seta 0x4f5c27, SrThrow 0x4f5c38) before the try, at +3",
-  "alternative": "the name taken from the entry's length byte (255, as a table reader does) passes the copy: the lookup misses and the error is \"Script is calling t.aaa\u2026\" at +4; or no bound at all: the same",
+  "alternative": "the name taken from the entry's length byte (255, as a table reader does) passes the copy: the lookup misses and the error is \"Script is calling t.aaa...\" at +4; or no bound at all: the same",
   "pending": "T3/T4",
   "entry": "main",
   "args": [],
