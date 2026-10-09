@@ -198,7 +198,10 @@ def _worked_registry(live: bool):
                 st["toa"] = f.GameObject(0x37, 1)                     # the model-director map: G 1
                 return ctx.create_variant(st["toa"])
             if key == "gcmodeldirector.show":
-                ctx.add_ref(st["toa"])                                # GcBAGroup::SetCharacter +1 (0x54b344)
+                ctx.add_ref(st["toa"])                                # first show: +1 +1 -1 +1 (natives.md §2.4/§3.4)
+                ctx.add_ref(st["toa"])
+                ctx.release(st["toa"])
+                ctx.add_ref(st["toa"])                                # GcBAGroup::SetCharacter +1 (0x54b344): G 3 after
                 return NOTHING
             if key == "gcmodeldirector.getcharacter":
                 return ctx.create_variant(st["toa"], 0x22)            # the same Toa as GcCharacter (§2.3)
@@ -234,7 +237,7 @@ def test_log_v2_records_byte_exact_against_the_worked_example():    # natives.md
     log = []
     _run_worked(_worked_registry(True), log)
     want = _worked_example_lines()
-    assert len(want) == 14
+    assert len(want) == 17
     assert log == want
 
 
@@ -264,13 +267,16 @@ def _replay_mutated(tmp_path, edit):
 
 
 def test_replay_G_mismatch_is_a_desync(tmp_path):
-    m = _replay_mutated(tmp_path, lambda l: [x.replace("0022:00000003 G 2", "0022:00000003 G 3") for x in l])
-    assert m == "G check at seq 6: handle 3, engine count 2, logged G 3"
+    m = _replay_mutated(tmp_path, lambda l: [x.replace("0022:00000003 G 3", "0022:00000003 G 4") for x in l])
+    assert m == "G check at seq 6: handle 3, engine count 3, logged G 4"
 
 
 def test_replay_without_the_H_record_fails_the_next_G_check(tmp_path):  # H is authoritative, G a checked snapshot
-    m = _replay_mutated(tmp_path, lambda l: [x for x in l if x != "H 0037:00000003 +1"])
-    assert m == "G check at seq 6: handle 3, engine count 1, logged G 2"
+    def edit(l):                                                     # drop the LAST of the first show's H +1 records
+        i = len(l) - 1 - l[::-1].index("H 0037:00000003 +1")
+        return l[:i] + l[i + 1:]
+    m = _replay_mutated(tmp_path, edit)
+    assert m == "G check at seq 6: handle 3, engine count 2, logged G 3"
 
 
 def test_replay_C_of_another_native_is_a_desync(tmp_path):
