@@ -94,6 +94,8 @@ Arm order is counterbalanced: in M1a-4, batch 1 goes to Sonnet and batch 2 to Op
 | 1 | S05 regex + anchors guard test | $0.187, 8 turns, 1.1 min | $0.017, 13 turns, 1.5 min | both correct (controller re-ran tests; regex vs the real failure line) |
 | 2 | review minors M3/M6 + expect_calc atof overflow | $0.321, 13 turns, 1.4 min | $0.038, 32 turns, 2.5 min | both correct (controller: native build, osi 1028/1028, pytest); Haiku's merged |
 
+| 3 | M2a-2 T11: loadavg fields on the osi perf row (C++ + cmake assertion) | $0.237, 11 turns, 0.8 min | $0.015, 13 turns, 0.7 min | both correct; controller: native + wasm `osi_a6_rerun` passed for both; Haiku's merged (first correct). Design note: Haiku's -1 'unavailable' sentinel is less robust than Sonnet's 0, but it never triggers on our targets |
+
 **Reading after 2 of 3 reps.** Quality was equal both times. Haiku costs 8.5–11× less and uses 1.5–2.5× the turns and 1.4–1.8× the wall time. Rep 3 is still needed before Haiku is adopted for this class. On the owner's plan (2026-10-09 billing split), the $ saving matters only for credit-billed runs.
 
 ## API cost reference (2026-10-09, Console credits; the JSON cost matches the Console log)
@@ -102,3 +104,5 @@ Arm order is counterbalanced: in M1a-4, batch 1 goes to Sonnet and batch 2 to Op
 - I2 (two engines, CMake, measurement), Opus-medium implementer: $2.25.
 
 Details in `.superpowers/sdd/cost-test/results.md` (git-ignored) and ROADMAP §4.1.
+
+**E3 verdict (3/3 reps, 2026-10-09): ADOPT Haiku 5.5 for bounded, checkable mechanical jobs.** It was first-time correct 3 of 3, the same as Sonnet. It costs 8.5–16× less, with similar wall time (0.7–1.8×). The guard holds: the controller verifies every Haiku job with the same commands as a Sonnet one, and anything needing judgement (design, reviews, asm/RE, rulings) stays on Sonnet, Opus or Fable. Watch rep 3's pattern: on robustness details Haiku made the weaker of two valid choices, so its edge-case choices get one extra controller read.
