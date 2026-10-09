@@ -1,0 +1,149 @@
+<title>LOMN Web Mission</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one reading column (~68ch) of lessons; each concept = kid box then real box; glossary and quiz at the end */
+:root{
+  --bg:#eef2f3; --surface:#ffffff; --ink:#15202a; --muted:#52626f; --line:#d3dce2;
+  --accent:#0d7372; --hex:#9a5400; --kid:#e4f2ef; --kid-ink:#0b4f4e; --warn:#a33a2a;
+  --display:"Chakra Petch",ui-sans-serif,system-ui,sans-serif;
+  --body:"IBM Plex Sans",ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0e151b; --surface:#152029; --ink:#e2eaef; --muted:#9aacb9; --line:#283844;
+  --accent:#4cc4be; --hex:#f2a654; --kid:#123230; --kid-ink:#a9e6df; --warn:#f08a78; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0e151b; --surface:#152029; --ink:#e2eaef; --muted:#9aacb9; --line:#283844;
+  --accent:#4cc4be; --hex:#f2a654; --kid:#123230; --kid-ink:#a9e6df; --warn:#f08a78; color-scheme:dark}
+body{background:var(--bg);color:var(--ink);font:16px/1.6 var(--body);padding-inline:16px;padding-block:28px 64px}
+main{max-width:46rem;margin:0 auto;display:grid;gap:28px}
+.series{font:500 12px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--accent)}
+h1{font:600 clamp(30px,6vw,44px)/1.1 var(--display);margin:8px 0 10px;text-wrap:balance}
+h2{font:600 24px/1.2 var(--display);margin:0 0 10px;text-wrap:balance}
+h3{font:600 17px/1.3 var(--body);margin:0 0 6px}
+p{margin:0 0 10px} ul,ol{margin:0 0 10px;padding-left:1.3em} li{margin:3px 0}
+.lede{font-size:18px;color:var(--muted);max-width:60ch}
+section{display:grid;gap:12px;min-width:0}
+.kid{background:var(--kid);color:var(--kid-ink);border-radius:10px;padding:14px 16px}
+.kid::before{content:"In kid words";display:block;font:600 11px/1 var(--mono);letter-spacing:.1em;text-transform:uppercase;margin-bottom:8px;opacity:.85}
+.real{border-left:3px solid var(--accent);padding:2px 0 2px 16px}
+.real::before{content:"The real version";display:block;font:600 11px/1 var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--accent);margin-bottom:8px}
+code,.mono{font-family:var(--mono);font-size:.92em}
+.hex{font-family:var(--mono);color:var(--hex)}
+.note{color:var(--muted);font-size:14px}
+.warn{color:var(--warn);font-weight:600}
+.scroll{overflow-x:auto;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
+table{border-collapse:collapse;width:100%;font-size:14px}
+th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font:600 12px/1.3 var(--mono);letter-spacing:.04em;text-transform:uppercase;color:var(--muted)}
+tr:last-child td{border-bottom:0}
+td.num{font-variant-numeric:tabular-nums;white-space:nowrap}
+dl{display:grid;grid-template-columns:minmax(8rem,max-content) 1fr;gap:8px 16px;margin:0}
+dt{font:600 14px/1.5 var(--mono);color:var(--accent)} dd{margin:0}
+@media (max-width:520px){dl{grid-template-columns:1fr} dd{margin-bottom:6px}}
+details{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:10px 14px}
+summary{cursor:pointer;font-weight:600}
+summary:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+details p{margin:8px 0 0}
+a{color:var(--accent)}
+pre.mermaid{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:12px;overflow-x:auto;margin:0}
+.steps{counter-reset:s;list-style:none;padding:0;display:grid;gap:8px}
+.steps li{counter-increment:s;display:grid;grid-template-columns:2rem 1fr;gap:8px}
+.steps li::before{content:counter(s);font:600 15px/1.6 var(--display);color:var(--accent)}
+footer{color:var(--muted);font-size:13px;border-top:1px solid var(--line);padding-top:12px}
+</style>
+<main>
+<header>
+<div class="series">LOMN Web field notes · 1 of 5</div>
+<h1>The Mission</h1>
+<p class="lede">What we are building, why, and how far we are. Read this page first.</p>
+</header>
+
+<section>
+<h2>The game</h2>
+<div class="kid">There is an old LEGO computer game from 2001. It was never finished or sold. Fans saved a copy. But it only runs on old Windows computers. We want it to run in any web browser.</div>
+<div class="real">
+<p><em>BIONICLE: The Legend of Mata Nui</em> (LOMN) is a PC game. Saffire made it for LEGO in 2001. LEGO cancelled it before release.</p>
+<p>A fan group named <span class="mono">TheLegendOfMataNui</span> keeps a playable beta build. We use their release 1.5.0. It includes two community mods: BetterSaver and a mod loader (<span class="mono">ijl15.dll</span>).</p>
+<p>The game is a Windows 32-bit program. It uses Direct3D 8 for graphics. Modern Macs and browsers cannot run it directly.</p>
+</div>
+</section>
+
+<section>
+<h2>The end goal</h2>
+<div class="kid">You open a web page. You give the page your own copy of the game files. The game starts and you can play it. Nothing gets installed.</div>
+<div class="real">
+<ul>
+<li><b>Platform:</b> any modern browser with WebGPU.</li>
+<li><b>Bring your own files (BYO):</b> the player supplies the game files. We never host or share them.</li>
+<li><b>Free and open source:</b> no money, credit to LEGO and the original makers.</li>
+<li><b>Faithful:</b> the port must act like the original. We prove this with tests, not by feel.</li>
+</ul>
+</div>
+</section>
+
+<section>
+<h2>Why not just emulate it?</h2>
+<div class="kid">An emulator is a fake old computer inside your new computer. It works, but it is slow. We tried it. The game moved like a slideshow.</div>
+<div class="real">
+<p>We tested the original game under Boxedwine on an M1 Pro Mac. It ran at about 8 frames per second. A browser version of the emulator is slower still. So we chose a different route: <b>rebuild</b> the game engine in modern C++.</p>
+<p>The rebuild copies the original behaviour. We read the original program as data to learn how it works. Then we write new code that does the same thing.</p>
+</div>
+</section>
+
+<section>
+<h2>The route, step by step</h2>
+<ol class="steps">
+<li><div><b>M0 Foundations.</b> Tools, build system, and a readable decompile of the game program (5,618 functions).</div></li>
+<li><div><b>M1 Read and draw.</b> Read the game's files and draw its areas in the browser. <b>Done:</b> you can test the area viewer today.</div></li>
+<li><div><b>M2 Scripts and menu.</b> Run the game's own script language, then show the real main menu. <b>In progress</b> (M2a-2 almost closed).</div></li>
+<li><div><b>M3 One playable area.</b> Walk, collide, talk, solve one area's puzzles.</div></li>
+<li><div><b>M4 Sound, cutscenes, saves.</b></div></li>
+<li><div><b>M5 The full game.</b></div></li>
+<li><div><b>M6 Release.</b> Only with the owner's yes on licence, hosting and the public repo.</div></li>
+</ol>
+<pre class="mermaid">
+flowchart LR
+  A[Game files<br/>from the player] --> B[Our engine<br/>C++17]
+  B -->|Emscripten| C[WebAssembly]
+  C --> D[Browser]
+  B -->|D3D8 shim| E[WebGPU]
+  E --> D
+</pre>
+</section>
+
+<section>
+<h2>Where we are (2026-10-09)</h2>
+<div class="kid">The engine can open every game file and draw the world. Now it is learning to run the game's own little programs, the "scripts". That part is almost done. Then comes the menu, then the first playable level.</div>
+<div class="real">
+<ul>
+<li>About <b>17 %</b> of the whole road is done (board estimate).</li>
+<li>The script engine runs 541 of 541 test programs. Two independent engines give identical results.</li>
+<li>69 game functions that the scripts call are rebuilt. On the real menu script, 600 frames match exactly between the native build, the browser build and a second reference engine.</li>
+<li>Work is paused. Everything is saved in a private GitHub repo with a resume kit.</li>
+</ul>
+</div>
+</section>
+
+<section>
+<h2>Words to know</h2>
+<dl>
+<dt>Port</dt><dd>The same program, made to run on a new platform.</dd>
+<dt>Engine</dt><dd>The code that runs a game: drawing, physics, sound, scripts.</dd>
+<dt>WebAssembly</dt><dd>Fast compiled code that a browser can run. Short name: wasm.</dd>
+<dt>WebGPU</dt><dd>The modern browser interface for the graphics card.</dd>
+<dt>BYO</dt><dd>Bring your own. The player supplies the game files.</dd>
+<dt>Milestone</dt><dd>One big step with a clear test at its end (M0, M1, M2 …).</dd>
+</dl>
+</section>
+
+<section>
+<h2>Check yourself</h2>
+<details><summary>Why do we not ship the game files with the port?</summary><p>The files belong to LEGO. We ship only our own code. Each player supplies a copy they have.</p></details>
+<details><summary>Why did emulation lose?</summary><p>It ran at about 8 frames per second on a fast Mac. A browser would be slower. A rebuild can run at full speed.</p></details>
+<details><summary>What does "faithful" mean here?</summary><p>The port must do the same thing as the original in the same situation. We prove it with tests that compare against the original program's logic.</p></details>
+</section>
+
+<footer>LOMN Web is a fan project for learning and preservation. BIONICLE and LEGO are trademarks of the LEGO Group, which does not sponsor or endorse this project. Next: 2 · Reverse Engineering 101.</footer>
+</main>

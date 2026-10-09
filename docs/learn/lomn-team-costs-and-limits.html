@@ -1,0 +1,142 @@
+<title>LOMN Team, Costs and Limits</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one reading column (~68ch) of lessons; each concept = kid box then real box; glossary and quiz at the end */
+:root{
+  --bg:#eef2f3; --surface:#ffffff; --ink:#15202a; --muted:#52626f; --line:#d3dce2;
+  --accent:#0d7372; --hex:#9a5400; --kid:#e4f2ef; --kid-ink:#0b4f4e; --warn:#a33a2a;
+  --display:"Chakra Petch",ui-sans-serif,system-ui,sans-serif;
+  --body:"IBM Plex Sans",ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0e151b; --surface:#152029; --ink:#e2eaef; --muted:#9aacb9; --line:#283844;
+  --accent:#4cc4be; --hex:#f2a654; --kid:#123230; --kid-ink:#a9e6df; --warn:#f08a78; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0e151b; --surface:#152029; --ink:#e2eaef; --muted:#9aacb9; --line:#283844;
+  --accent:#4cc4be; --hex:#f2a654; --kid:#123230; --kid-ink:#a9e6df; --warn:#f08a78; color-scheme:dark}
+body{background:var(--bg);color:var(--ink);font:16px/1.6 var(--body);padding-inline:16px;padding-block:28px 64px}
+main{max-width:46rem;margin:0 auto;display:grid;gap:28px}
+.series{font:500 12px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--accent)}
+h1{font:600 clamp(30px,6vw,44px)/1.1 var(--display);margin:8px 0 10px;text-wrap:balance}
+h2{font:600 24px/1.2 var(--display);margin:0 0 10px;text-wrap:balance}
+h3{font:600 17px/1.3 var(--body);margin:0 0 6px}
+p{margin:0 0 10px} ul,ol{margin:0 0 10px;padding-left:1.3em} li{margin:3px 0}
+.lede{font-size:18px;color:var(--muted);max-width:60ch}
+section{display:grid;gap:12px;min-width:0}
+.kid{background:var(--kid);color:var(--kid-ink);border-radius:10px;padding:14px 16px}
+.kid::before{content:"In kid words";display:block;font:600 11px/1 var(--mono);letter-spacing:.1em;text-transform:uppercase;margin-bottom:8px;opacity:.85}
+.real{border-left:3px solid var(--accent);padding:2px 0 2px 16px}
+.real::before{content:"The real version";display:block;font:600 11px/1 var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--accent);margin-bottom:8px}
+code,.mono{font-family:var(--mono);font-size:.92em}
+.hex{font-family:var(--mono);color:var(--hex)}
+.note{color:var(--muted);font-size:14px}
+.warn{color:var(--warn);font-weight:600}
+.scroll{overflow-x:auto;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
+table{border-collapse:collapse;width:100%;font-size:14px}
+th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font:600 12px/1.3 var(--mono);letter-spacing:.04em;text-transform:uppercase;color:var(--muted)}
+tr:last-child td{border-bottom:0}
+td.num{font-variant-numeric:tabular-nums;white-space:nowrap}
+dl{display:grid;grid-template-columns:minmax(8rem,max-content) 1fr;gap:8px 16px;margin:0}
+dt{font:600 14px/1.5 var(--mono);color:var(--accent)} dd{margin:0}
+@media (max-width:520px){dl{grid-template-columns:1fr} dd{margin-bottom:6px}}
+details{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:10px 14px}
+summary{cursor:pointer;font-weight:600}
+summary:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+details p{margin:8px 0 0}
+a{color:var(--accent)}
+pre.mermaid{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:12px;overflow-x:auto;margin:0}
+.steps{counter-reset:s;list-style:none;padding:0;display:grid;gap:8px}
+.steps li{counter-increment:s;display:grid;grid-template-columns:2rem 1fr;gap:8px}
+.steps li::before{content:counter(s);font:600 15px/1.6 var(--display);color:var(--accent)}
+footer{color:var(--muted);font-size:13px;border-top:1px solid var(--line);padding-top:12px}
+</style>
+<main>
+<header>
+<div class="series">LOMN Web field notes · 5 of 5</div>
+<h1>Team, Costs and Limits</h1>
+<p class="lede">Who does the work, what it costs, and what we cannot do (yet).</p>
+</header>
+
+<section>
+<h2>The team is mostly AI agents</h2>
+<div class="kid">One boss plans the work and checks it. Helpers do the building. Other helpers check the building, without seeing how it was done. The owner (you) makes the big choices.</div>
+<div class="real">
+<div class="scroll"><table>
+<tr><th>Role</th><th>Who</th><th>Job</th></tr>
+<tr><td>Owner</td><td>You</td><td>Goals, money, approvals: push, merge to main, public, licence. Screenshots of the real game.</td></tr>
+<tr><td>Controller</td><td>Claude Opus 5.5</td><td>Writes plans and briefs, makes rulings, merges, re-runs every check.</td></tr>
+<tr><td>Implementers</td><td>Opus 5.5 (C++, hard RE), Sonnet 5.5 (Python, clear tasks)</td><td>Write the code, test first.</td></tr>
+<tr><td>Blind reviewers</td><td>Opus or Sonnet</td><td>Check one change against the binary. Never see the other side's code.</td></tr>
+<tr><td>Searchers and clerks</td><td>Haiku 5.5</td><td>Find code, keep logs. Small jobs a script can check.</td></tr>
+<tr><td>Plan reviewer</td><td>Fable 5.1</td><td>One careful review of each plan, and at each milestone end.</td></tr>
+</table></div>
+</div>
+</section>
+
+<section>
+<h2>One work cycle</h2>
+<ol class="steps">
+<li><div><b>Plan.</b> The controller writes a plan with exact tests. Fable reviews it once.</div></li>
+<li><div><b>Brief.</b> Each task gets a brief: context, goals, non-goals, how it will be checked.</div></li>
+<li><div><b>Build.</b> An implementer works in its own copy of the repo (a git worktree).</div></li>
+<li><div><b>Review.</b> A fresh reviewer checks it blind. Up to a few fix rounds.</div></li>
+<li><div><b>Merge and verify.</b> The controller merges and re-runs everything.</div></li>
+<li><div><b>Ledger.</b> Every step, ruling and number goes in the log, so work can resume after a pause.</div></li>
+</ol>
+</section>
+
+<section>
+<h2>What it costs (measured)</h2>
+<div class="kid">Smart helpers cost more per word. Big tasks need many words. So we give each job to the cheapest helper that does it well, and we measure.</div>
+<div class="real">
+<div class="scroll"><table>
+<tr><th>Work</th><th>Model mix</th><th>Cost</th></tr>
+<tr><td>Small fix and test</td><td>Sonnet / Haiku</td><td class="num">$0.19 / $0.02</td></tr>
+<tr><td>Careful review of a fix</td><td>Opus</td><td class="num">$0.86</td></tr>
+<tr><td>Native groups 8 + 9 (49 min)</td><td>Opus + Sonnet</td><td class="num">$35.94</td></tr>
+<tr><td>Follow-up batch F7</td><td>Opus + Sonnet</td><td class="num">$34.91</td></tr>
+<tr><td>Code search, per question set</td><td>Haiku vs Opus</td><td class="num">$0.03 vs $0.32</td></tr>
+</table></div>
+<p>The Haiku search test: 3 runs each, same 6 questions. Both scored 15 of 15 every time. Haiku cost about 10 times less. So Haiku now does code search.</p>
+<p>About $122 of API credits remain. Estimate to the first playable area: $400–900 (low confidence).</p>
+</div>
+</section>
+
+<section>
+<h2>Our limits</h2>
+<div class="real">
+<ul>
+<li><b>Law.</b> The game and its art belong to LEGO. We ship only our own code. Players bring their own files. The README screenshots need a decision before the repo goes public.</li>
+<li><b>No running original.</b> We never run the .exe. So we cannot record the true game directly. Our oracles are rebuilt from reading.</li>
+<li><b>Gameplay has a weak oracle.</b> Physics, AI and camera are harder to prove than file reading. Milestone M3 will need recordings or screenshots from you.</li>
+<li><b>Human eyes.</b> Visual work needs your screenshots of the real menu and areas. Tests cannot judge "looks right".</li>
+<li><b>Budget and quota.</b> Credits are finite. The Max plan's weekly limit is shared with other projects.</li>
+<li><b>Browsers.</b> WebGPU support differs. Safari and Firefox are not tested yet.</li>
+<li><b>Performance.</b> Clean speed numbers need a quiet Mac (load under 6).</li>
+</ul>
+</div>
+</section>
+
+<section>
+<h2>Lessons we keep</h2>
+<ul>
+<li>Never say "it works" without running it. Mark each claim verified or not.</li>
+<li>Decompiler borders are hints. Take function ends from the bytes.</li>
+<li>Two engines that agree can still both be wrong.</li>
+<li>Long waits run in the background. No step blocks for more than two minutes.</li>
+<li>Measure cost per task, then choose the model. Do not guess.</li>
+</ul>
+</section>
+
+<section>
+<h2>Check yourself</h2>
+<details><summary>Why do reviewers work blind?</summary><p>If a reviewer sees the author's reasoning, they tend to accept it. A blind reviewer reads the binary fresh and catches shared mistakes.</p></details>
+<details><summary>Why not use the strongest model for everything?</summary><p>Cost. Our test showed Haiku finds code as well as Opus at about a tenth of the price. Opus stays where judgment matters.</p></details>
+<details><summary>What does the project need from you before M2 closes?</summary><p>Screenshots of the real main menu and Options screen, and approval for any push, merge to main or public release.</p></details>
+</section>
+
+<footer>See also: the Project Map page for where every file and repo lives.</footer>
+</main>

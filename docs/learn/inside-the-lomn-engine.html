@@ -1,0 +1,155 @@
+<title>Inside the LOMN Engine</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one reading column (~68ch) of lessons; each concept = kid box then real box; glossary and quiz at the end */
+:root{
+  --bg:#eef2f3; --surface:#ffffff; --ink:#15202a; --muted:#52626f; --line:#d3dce2;
+  --accent:#0d7372; --hex:#9a5400; --kid:#e4f2ef; --kid-ink:#0b4f4e; --warn:#a33a2a;
+  --display:"Chakra Petch",ui-sans-serif,system-ui,sans-serif;
+  --body:"IBM Plex Sans",ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0e151b; --surface:#152029; --ink:#e2eaef; --muted:#9aacb9; --line:#283844;
+  --accent:#4cc4be; --hex:#f2a654; --kid:#123230; --kid-ink:#a9e6df; --warn:#f08a78; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0e151b; --surface:#152029; --ink:#e2eaef; --muted:#9aacb9; --line:#283844;
+  --accent:#4cc4be; --hex:#f2a654; --kid:#123230; --kid-ink:#a9e6df; --warn:#f08a78; color-scheme:dark}
+body{background:var(--bg);color:var(--ink);font:16px/1.6 var(--body);padding-inline:16px;padding-block:28px 64px}
+main{max-width:46rem;margin:0 auto;display:grid;gap:28px}
+.series{font:500 12px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--accent)}
+h1{font:600 clamp(30px,6vw,44px)/1.1 var(--display);margin:8px 0 10px;text-wrap:balance}
+h2{font:600 24px/1.2 var(--display);margin:0 0 10px;text-wrap:balance}
+h3{font:600 17px/1.3 var(--body);margin:0 0 6px}
+p{margin:0 0 10px} ul,ol{margin:0 0 10px;padding-left:1.3em} li{margin:3px 0}
+.lede{font-size:18px;color:var(--muted);max-width:60ch}
+section{display:grid;gap:12px;min-width:0}
+.kid{background:var(--kid);color:var(--kid-ink);border-radius:10px;padding:14px 16px}
+.kid::before{content:"In kid words";display:block;font:600 11px/1 var(--mono);letter-spacing:.1em;text-transform:uppercase;margin-bottom:8px;opacity:.85}
+.real{border-left:3px solid var(--accent);padding:2px 0 2px 16px}
+.real::before{content:"The real version";display:block;font:600 11px/1 var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--accent);margin-bottom:8px}
+code,.mono{font-family:var(--mono);font-size:.92em}
+.hex{font-family:var(--mono);color:var(--hex)}
+.note{color:var(--muted);font-size:14px}
+.warn{color:var(--warn);font-weight:600}
+.scroll{overflow-x:auto;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
+table{border-collapse:collapse;width:100%;font-size:14px}
+th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font:600 12px/1.3 var(--mono);letter-spacing:.04em;text-transform:uppercase;color:var(--muted)}
+tr:last-child td{border-bottom:0}
+td.num{font-variant-numeric:tabular-nums;white-space:nowrap}
+dl{display:grid;grid-template-columns:minmax(8rem,max-content) 1fr;gap:8px 16px;margin:0}
+dt{font:600 14px/1.5 var(--mono);color:var(--accent)} dd{margin:0}
+@media (max-width:520px){dl{grid-template-columns:1fr} dd{margin-bottom:6px}}
+details{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:10px 14px}
+summary{cursor:pointer;font-weight:600}
+summary:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+details p{margin:8px 0 0}
+a{color:var(--accent)}
+pre.mermaid{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:12px;overflow-x:auto;margin:0}
+.steps{counter-reset:s;list-style:none;padding:0;display:grid;gap:8px}
+.steps li{counter-increment:s;display:grid;grid-template-columns:2rem 1fr;gap:8px}
+.steps li::before{content:counter(s);font:600 15px/1.6 var(--display);color:var(--accent)}
+footer{color:var(--muted);font-size:13px;border-top:1px solid var(--line);padding-top:12px}
+</style>
+<main>
+<header>
+<div class="series">LOMN Web field notes · 3 of 5</div>
+<h1>Inside the Old Game</h1>
+<p class="lede">How LOMN stores its world, how its scripts work, and how we move it all to the browser.</p>
+</header>
+
+<section>
+<h2>The game's files</h2>
+<div class="kid">The game keeps its things in packed boxes. Some boxes hold pictures. Some hold 3D shapes. Some hold tables of numbers. We built tools that open every kind of box.</div>
+<div class="real">
+<div class="scroll"><table>
+<tr><th>Kind</th><th>What it holds</th></tr>
+<tr><td class="mono">.blk</td><td>Archives. One file holds many smaller files.</td></tr>
+<tr><td class="mono">.slb</td><td>Tables: object lists, settings, positions.</td></tr>
+<tr><td class="mono">.x</td><td>3D models in the DirectX format.</td></tr>
+<tr><td class="mono">.dds / .tga</td><td>Textures (images on the models).</td></tr>
+<tr><td class="mono">.osi</td><td>Compiled scripts (see below).</td></tr>
+</table></div>
+<p>Each reader was checked against a second, independent reader. Each reader also survived broken and hostile files without a crash.</p>
+</div>
+</section>
+
+<section>
+<h2>Scripts and the OSI machine</h2>
+<div class="kid">The game has a small helper inside it. The helper reads a list of simple orders, like "show the menu" or "play this sound". The list is the script. We had to build our own copy of the helper that obeys the orders in exactly the same way.</div>
+<div class="real">
+<p>Much of LOMN's logic is not in C++. It is in scripts: menus, puzzles, talking, cutscenes. The scripts are compiled to <b>bytecode</b> in <span class="mono">Base.osi</span>. A <b>virtual machine (VM)</b> in the game runs the bytecode one instruction at a time.</p>
+<p>We rebuilt that VM twice:</p>
+<ul>
+<li>in <b>C++</b>, for the real port;</li>
+<li>in <b>Python</b>, as an independent reference ("oracle") for testing.</li>
+</ul>
+<p>Small details matter. Example: the original reads numbers with a C library call that clips very large values. Both of our first versions wrapped them instead. Tests caught this, and now both clip.</p>
+</div>
+</section>
+
+<section>
+<h2>Natives: where scripts touch the engine</h2>
+<div class="kid">Sometimes the script says "ask the engine". For example, "load the village" or "how wide is the screen?". Each of these questions is a native. We must answer each one the way the old game did.</div>
+<div class="real">
+<p>A <b>native</b> is a C++ function that the script can call, like <span class="mono">gcareadirector.loadarea</span>. <span class="mono">Base.osi</span> calls 728 different native names. We sort each native into a <b>tier</b>:</p>
+<div class="scroll"><table>
+<tr><th>Tier</th><th>Rule</th></tr>
+<tr><td>tier1</td><td>Must be exact. Its result changes what the script does.</td></tr>
+<tr><td>tier2</td><td>A simpler model is fine. Its result cannot change the script's path.</td></tr>
+<tr><td>stub</td><td>Placeholder. Allowed only when a test proves it is harmless.</td></tr>
+</table></div>
+<p>Today the menu path uses 69 natives: 35 tier1, 34 tier2, 0 stubs, with 1,705 calls in 600 frames.</p>
+<p>Some natives call back into the script. Example: loading an area can fire an <span class="mono">OnEvent</span> for some objects. These re-entrant paths caused most of our subtle bugs.</p>
+</div>
+</section>
+
+<section>
+<h2>Graphics: Direct3D 8 to WebGPU</h2>
+<div class="kid">The old game talks to the graphics card in an old language. Browsers speak a new one. We wrote a translator in the middle, so the old drawing orders still work.</div>
+<div class="real">
+<p>LOMN draws with <b>Direct3D 8</b> (2000). Browsers draw with <b>WebGPU</b>. Our engine has a <b>shim</b>: a layer that takes the old-style draw calls and sends them to WebGPU. We use Google's <b>Dawn</b> library for WebGPU on the Mac and in the browser.</p>
+<p>The area viewer (milestone M1b) already draws the real areas this way.</p>
+</div>
+</section>
+
+<section>
+<h2>From C++ to the browser</h2>
+<div class="kid">Our code is written in C++. A special tool turns it into a form the browser can run fast. The same code also runs on the Mac, which makes testing easy.</div>
+<div class="real">
+<p><b>Emscripten</b> compiles our C++17 to <b>WebAssembly (wasm32)</b>. We build every part twice: native (Mac) and wasm32 (browser). Tests check that both builds give byte-identical results.</p>
+<p>The game runs on a fixed time step of 1/150 s, read from the original program's data. Fixed steps make runs repeatable, which makes them testable.</p>
+</div>
+<pre class="mermaid">
+flowchart TB
+  S[Base.osi scripts] --> V[OSI VM]
+  V -->|calls| N[Natives]
+  N --> E[Engine: files, objects, camera, HUD]
+  E --> R[D3D8 shim]
+  R --> W[WebGPU via Dawn]
+</pre>
+</section>
+
+<section>
+<h2>Words to know</h2>
+<dl>
+<dt>Bytecode</dt><dd>Compact instructions for a virtual machine, not for the processor.</dd>
+<dt>Virtual machine</dt><dd>A program that runs bytecode step by step.</dd>
+<dt>Native</dt><dd>An engine function that scripts can call.</dd>
+<dt>Re-entrant</dt><dd>A call that starts a new script call before the first one ends.</dd>
+<dt>Shim</dt><dd>A thin layer that makes an old interface work on a new one.</dd>
+<dt>Deterministic</dt><dd>Same input, same output, every time.</dd>
+</dl>
+</section>
+
+<section>
+<h2>Check yourself</h2>
+<details><summary>Why build the script VM twice?</summary><p>Two independent versions let us compare results. If they differ, one has a bug. If they agree, we have stronger (but not full) proof.</p></details>
+<details><summary>What is the difference between tier1 and tier2?</summary><p>A tier1 result changes the script's behaviour, so it must be exact. A tier2 result does not change the script's path, so a simpler model is safe.</p></details>
+<details><summary>Why does a fixed time step help testing?</summary><p>Every run does the same steps in the same order. So two runs can be compared line by line.</p></details>
+</section>
+
+<footer>Next: 4 · How We Know It Is Right. Contracts: docs/osi/ in the repo.</footer>
+</main>

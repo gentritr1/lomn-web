@@ -42,6 +42,15 @@ Everything needed to pick the work up again. The day-to-day controller workspace
   - Haiku 5.5: code search (the Explore subagent: same accuracy as Opus on a 6-question test at ~10× lower cost) and exact-list bookkeeping.
   - Fable 5.1: only plan reviews and milestone ends.
 
+## Learning pages
+Plain-English lessons (ELI5 + ASD-STE100 style). Live versions are private claude.ai artifacts; copies are in [../learn/](../learn/).
+1. [LOMN Web Mission](https://claude.ai/artifact/Fwq8bSGV7cngnydcXEyF6w): goal, route, where we are ([local](../learn/lomn-web-mission.html))
+2. [LOMN Reverse Engineering 101](https://claude.ai/artifact/55NmU1TZ2vhcwb1qPtxroQ): RE, .exe files, assembly, debug symbols, Ghidra ([local](../learn/lomn-reverse-engineering-101.html))
+3. [Inside the LOMN Engine](https://claude.ai/artifact/73T8LoCANhM6ddGojXdsqs): file formats, the OSI script VM, natives, D3D8 to WebGPU ([local](../learn/inside-the-lomn-engine.html))
+4. [Proving the LOMN Port](https://claude.ai/artifact/GJRp9GWiDg3QWzouwaJMay): oracles, differential tests, taint, mutation, blind reviews ([local](../learn/proving-the-lomn-port.html))
+5. [LOMN Team, Costs and Limits](https://claude.ai/artifact/K3LoXLjjiKJQc9Kv45WK6U): agent roles, measured costs, limits ([local](../learn/lomn-team-costs-and-limits.html))
+- [LOMN Project Map](https://claude.ai/artifact/4yApp6C7MGDmPJo1VuBmdp): where every file, repo and source lives ([local](../learn/lomn-project-map.html))
+
 ## Files here
 - [m2a2-ledger.md](m2a2-ledger.md): the full M2a-2 ledger. Every dispatch, verdict, ruling and integration number, in order. The last sections are the resume point.
 - [task-10-brief.md](task-10-brief.md): the next implementer brief.

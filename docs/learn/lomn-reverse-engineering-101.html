@@ -1,0 +1,160 @@
+<title>LOMN Reverse Engineering 101</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one reading column (~68ch) of lessons; each concept = kid box then real box; glossary and quiz at the end */
+:root{
+  --bg:#eef2f3; --surface:#ffffff; --ink:#15202a; --muted:#52626f; --line:#d3dce2;
+  --accent:#0d7372; --hex:#9a5400; --kid:#e4f2ef; --kid-ink:#0b4f4e; --warn:#a33a2a;
+  --display:"Chakra Petch",ui-sans-serif,system-ui,sans-serif;
+  --body:"IBM Plex Sans",ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0e151b; --surface:#152029; --ink:#e2eaef; --muted:#9aacb9; --line:#283844;
+  --accent:#4cc4be; --hex:#f2a654; --kid:#123230; --kid-ink:#a9e6df; --warn:#f08a78; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0e151b; --surface:#152029; --ink:#e2eaef; --muted:#9aacb9; --line:#283844;
+  --accent:#4cc4be; --hex:#f2a654; --kid:#123230; --kid-ink:#a9e6df; --warn:#f08a78; color-scheme:dark}
+body{background:var(--bg);color:var(--ink);font:16px/1.6 var(--body);padding-inline:16px;padding-block:28px 64px}
+main{max-width:46rem;margin:0 auto;display:grid;gap:28px}
+.series{font:500 12px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--accent)}
+h1{font:600 clamp(30px,6vw,44px)/1.1 var(--display);margin:8px 0 10px;text-wrap:balance}
+h2{font:600 24px/1.2 var(--display);margin:0 0 10px;text-wrap:balance}
+h3{font:600 17px/1.3 var(--body);margin:0 0 6px}
+p{margin:0 0 10px} ul,ol{margin:0 0 10px;padding-left:1.3em} li{margin:3px 0}
+.lede{font-size:18px;color:var(--muted);max-width:60ch}
+section{display:grid;gap:12px;min-width:0}
+.kid{background:var(--kid);color:var(--kid-ink);border-radius:10px;padding:14px 16px}
+.kid::before{content:"In kid words";display:block;font:600 11px/1 var(--mono);letter-spacing:.1em;text-transform:uppercase;margin-bottom:8px;opacity:.85}
+.real{border-left:3px solid var(--accent);padding:2px 0 2px 16px}
+.real::before{content:"The real version";display:block;font:600 11px/1 var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--accent);margin-bottom:8px}
+code,.mono{font-family:var(--mono);font-size:.92em}
+.hex{font-family:var(--mono);color:var(--hex)}
+.note{color:var(--muted);font-size:14px}
+.warn{color:var(--warn);font-weight:600}
+.scroll{overflow-x:auto;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
+table{border-collapse:collapse;width:100%;font-size:14px}
+th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font:600 12px/1.3 var(--mono);letter-spacing:.04em;text-transform:uppercase;color:var(--muted)}
+tr:last-child td{border-bottom:0}
+td.num{font-variant-numeric:tabular-nums;white-space:nowrap}
+dl{display:grid;grid-template-columns:minmax(8rem,max-content) 1fr;gap:8px 16px;margin:0}
+dt{font:600 14px/1.5 var(--mono);color:var(--accent)} dd{margin:0}
+@media (max-width:520px){dl{grid-template-columns:1fr} dd{margin-bottom:6px}}
+details{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:10px 14px}
+summary{cursor:pointer;font-weight:600}
+summary:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+details p{margin:8px 0 0}
+a{color:var(--accent)}
+pre.mermaid{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:12px;overflow-x:auto;margin:0}
+.steps{counter-reset:s;list-style:none;padding:0;display:grid;gap:8px}
+.steps li{counter-increment:s;display:grid;grid-template-columns:2rem 1fr;gap:8px}
+.steps li::before{content:counter(s);font:600 15px/1.6 var(--display);color:var(--accent)}
+footer{color:var(--muted);font-size:13px;border-top:1px solid var(--line);padding-top:12px}
+</style>
+<main>
+<header>
+<div class="series">LOMN Web field notes · 2 of 5</div>
+<h1>Reverse Engineering 101</h1>
+<p class="lede">How we learn what an old program does when nobody has its source code.</p>
+</header>
+
+<section>
+<h2>What reverse engineering is</h2>
+<div class="kid">Someone baked a cake and lost the recipe. You taste the cake, look at its layers, and write the recipe again. Reverse engineering is that, for programs.</div>
+<div class="real">
+<p>A programmer writes <b>source code</b> in a language like C++. A <b>compiler</b> turns it into <b>machine code</b>: the numbers a processor runs. The source code of LOMN is lost. We only have the machine code, in <span class="mono">LEGOBionicle.exe</span>.</p>
+<p>Reverse engineering (RE) reads that machine code and works out the logic. We then write new source code with the same logic.</p>
+</div>
+</section>
+
+<section>
+<h2>Inside an .exe file</h2>
+<div class="kid">An .exe is a box with labelled drawers. One drawer holds the instructions. One holds numbers and words. One holds a list of help the program asks Windows for.</div>
+<div class="real">
+<p>Windows programs use the <b>PE format</b> (Portable Executable). Its main parts are <b>sections</b>:</p>
+<ul>
+<li><code>.text</code>: the machine code.</li>
+<li><code>.data</code> and <code>.rdata</code>: numbers, text and tables. Example: the game's fixed time step lives here as a number, 1/150 s.</li>
+<li><b>Imports</b>: the Windows functions the game calls. LOMN imports 117 functions from 16 DLLs. Our port must replace all of them.</li>
+</ul>
+<p>Every byte has an <b>address</b>, written in hexadecimal, like <span class="hex">0x4ff93e</span>. We cite these addresses for every claim.</p>
+</div>
+</section>
+
+<section>
+<h2>Assembly in one minute</h2>
+<div class="kid">Machine code is very small steps. "Put this number here." "Add these two." "If they match, jump over there." Thousands of tiny steps make one game action.</div>
+<div class="real">
+<p><b>Assembly</b> is machine code written as short words, for people. The game uses 32-bit x86. One instruction does one small job:</p>
+<div class="scroll"><table>
+<tr><th>Instruction</th><th>Meaning</th></tr>
+<tr><td class="mono">cmp a, b</td><td>Compare two values.</td></tr>
+<tr><td class="mono">jne target</td><td>If they were not equal, continue at <i>target</i>.</td></tr>
+<tr><td class="mono">call f</td><td>Run function <i>f</i>, then come back.</td></tr>
+<tr><td class="mono">ret</td><td>Return from the function. This marks a real function end.</td></tr>
+</table></div>
+</div>
+</section>
+
+<section>
+<h2>Our lucky break: debug symbols</h2>
+<div class="kid">Usually a program has no labels inside. This one forgot to remove its labels. So we know the real names of most parts. It is like finding the cake recipe's chapter titles.</div>
+<div class="real">
+<p>The build kept its <b>CodeView NB11 debug information</b> (Microsoft Visual C++ 6, built 2001-10-22). That block is 2.17 MB. It holds 7,057 names, 505 classes and about 4,800 type records.</p>
+<p>So we see names like <span class="mono">GcAreaLoader::LoadArea</span> instead of <span class="mono">FUN_004fedd0</span>. This makes the work much faster and safer.</p>
+</div>
+</section>
+
+<section>
+<h2>Ghidra</h2>
+<div class="kid">Ghidra is a big magnifying glass for programs. It turns the tiny steps back into something that looks like normal code. It is a guess, but a very good one.</div>
+<div class="real">
+<p><b>Ghidra</b> is a free RE tool from the NSA (we use version 12.1.4). Its <b>decompiler</b> turns machine code into C-like code. We run it <b>headless</b> (with no window) in a fixed pipeline:</p>
+<ol>
+<li>Import the .exe and apply the debug names and types.</li>
+<li>Let Ghidra analyse the code.</li>
+<li>Apply local variable names and the Direct3D 8 types.</li>
+<li>Export every function to a readable corpus (5,618 functions).</li>
+</ol>
+<p class="warn">Ghidra output is a hint, not a fact.</p>
+<p>Example from this project: Ghidra said <span class="mono">LoadArea</span> was 7,431 bytes long. The real function runs to its <code>ret</code> at <span class="hex">0x500fe4</span>. A count that trusted Ghidra missed a third error-catch block. Now we always take function ends from the bytes.</p>
+</div>
+</section>
+
+<section>
+<h2>Our safety rules</h2>
+<div class="real">
+<ul>
+<li><b>Never run</b> the game's .exe or any DLL on our machines. We read them as data only.</li>
+<li><b>Never commit</b> game files, decompiled code blocks or disassembly listings to our repo. Short cited addresses are fine.</li>
+<li><b>Cite everything.</b> Every rebuilt behaviour names the address it comes from.</li>
+<li><b>The player's game folder is read-only.</b> Our tools refuse to write into it.</li>
+</ul>
+</div>
+</section>
+
+<section>
+<h2>Words to know</h2>
+<dl>
+<dt>Source code</dt><dd>The text a programmer writes.</dd>
+<dt>Machine code</dt><dd>The numbers a processor runs.</dd>
+<dt>Compiler</dt><dd>Turns source code into machine code.</dd>
+<dt>Decompiler</dt><dd>Turns machine code back into source-like code. The result is approximate.</dd>
+<dt>Disassembler</dt><dd>Shows machine code as assembly words. The result is exact.</dd>
+<dt>Address</dt><dd>The position of a byte in the program, in hex.</dd>
+<dt>Hexadecimal</dt><dd>Base-16 numbers: 0–9 then a–f. <span class="hex">0x10</span> = 16.</dd>
+<dt>Debug symbols</dt><dd>Names and types left in a program by its build.</dd>
+</dl>
+</section>
+
+<section>
+<h2>Check yourself</h2>
+<details><summary>Why is a disassembler "exact" but a decompiler not?</summary><p>A disassembler only renames each instruction. A decompiler must guess loops, variables and function borders. Guesses can be wrong.</p></details>
+<details><summary>Why do we never run the original .exe?</summary><p>Safety and law. It is old code with mods we did not write. Reading it as data is enough and it cannot harm the machine.</p></details>
+<details><summary>What made this project possible at all?</summary><p>The leftover debug symbols. They gave real names to most functions and classes.</p></details>
+</section>
+
+<footer>Next: 3 · Inside the Old Game. Source: docs/knowledge/reverse-engineering-playbook.md in the repo.</footer>
+</main>

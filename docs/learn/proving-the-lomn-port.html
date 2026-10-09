@@ -1,0 +1,155 @@
+<title>Proving the LOMN Port</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one reading column (~68ch) of lessons; each concept = kid box then real box; glossary and quiz at the end */
+:root{
+  --bg:#eef2f3; --surface:#ffffff; --ink:#15202a; --muted:#52626f; --line:#d3dce2;
+  --accent:#0d7372; --hex:#9a5400; --kid:#e4f2ef; --kid-ink:#0b4f4e; --warn:#a33a2a;
+  --display:"Chakra Petch",ui-sans-serif,system-ui,sans-serif;
+  --body:"IBM Plex Sans",ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0e151b; --surface:#152029; --ink:#e2eaef; --muted:#9aacb9; --line:#283844;
+  --accent:#4cc4be; --hex:#f2a654; --kid:#123230; --kid-ink:#a9e6df; --warn:#f08a78; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0e151b; --surface:#152029; --ink:#e2eaef; --muted:#9aacb9; --line:#283844;
+  --accent:#4cc4be; --hex:#f2a654; --kid:#123230; --kid-ink:#a9e6df; --warn:#f08a78; color-scheme:dark}
+body{background:var(--bg);color:var(--ink);font:16px/1.6 var(--body);padding-inline:16px;padding-block:28px 64px}
+main{max-width:46rem;margin:0 auto;display:grid;gap:28px}
+.series{font:500 12px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--accent)}
+h1{font:600 clamp(30px,6vw,44px)/1.1 var(--display);margin:8px 0 10px;text-wrap:balance}
+h2{font:600 24px/1.2 var(--display);margin:0 0 10px;text-wrap:balance}
+h3{font:600 17px/1.3 var(--body);margin:0 0 6px}
+p{margin:0 0 10px} ul,ol{margin:0 0 10px;padding-left:1.3em} li{margin:3px 0}
+.lede{font-size:18px;color:var(--muted);max-width:60ch}
+section{display:grid;gap:12px;min-width:0}
+.kid{background:var(--kid);color:var(--kid-ink);border-radius:10px;padding:14px 16px}
+.kid::before{content:"In kid words";display:block;font:600 11px/1 var(--mono);letter-spacing:.1em;text-transform:uppercase;margin-bottom:8px;opacity:.85}
+.real{border-left:3px solid var(--accent);padding:2px 0 2px 16px}
+.real::before{content:"The real version";display:block;font:600 11px/1 var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--accent);margin-bottom:8px}
+code,.mono{font-family:var(--mono);font-size:.92em}
+.hex{font-family:var(--mono);color:var(--hex)}
+.note{color:var(--muted);font-size:14px}
+.warn{color:var(--warn);font-weight:600}
+.scroll{overflow-x:auto;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
+table{border-collapse:collapse;width:100%;font-size:14px}
+th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font:600 12px/1.3 var(--mono);letter-spacing:.04em;text-transform:uppercase;color:var(--muted)}
+tr:last-child td{border-bottom:0}
+td.num{font-variant-numeric:tabular-nums;white-space:nowrap}
+dl{display:grid;grid-template-columns:minmax(8rem,max-content) 1fr;gap:8px 16px;margin:0}
+dt{font:600 14px/1.5 var(--mono);color:var(--accent)} dd{margin:0}
+@media (max-width:520px){dl{grid-template-columns:1fr} dd{margin-bottom:6px}}
+details{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:10px 14px}
+summary{cursor:pointer;font-weight:600}
+summary:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+details p{margin:8px 0 0}
+a{color:var(--accent)}
+pre.mermaid{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:12px;overflow-x:auto;margin:0}
+.steps{counter-reset:s;list-style:none;padding:0;display:grid;gap:8px}
+.steps li{counter-increment:s;display:grid;grid-template-columns:2rem 1fr;gap:8px}
+.steps li::before{content:counter(s);font:600 15px/1.6 var(--display);color:var(--accent)}
+footer{color:var(--muted);font-size:13px;border-top:1px solid var(--line);padding-top:12px}
+</style>
+<main>
+<header>
+<div class="series">LOMN Web field notes · 4 of 5</div>
+<h1>How We Know It Is Right</h1>
+<p class="lede">We cannot run the original game to compare. So we use tests that do not trust any single source.</p>
+</header>
+
+<section>
+<h2>The oracle</h2>
+<div class="kid">You and a friend do the same maths homework alone. Then you compare answers. If an answer is different, one of you made a mistake. Our "friend" is a second engine, written separately.</div>
+<div class="real">
+<p>An <b>oracle</b> is something that tells you the correct answer. We have no running original, so we build a second implementation in Python. Different people (different agents) write the C++ side and the Python side. Neither reads the other's code.</p>
+<p>Then we run both on the same input and compare every line of output. This is <b>differential testing</b>.</p>
+</div>
+</section>
+
+<section>
+<h2>The conformance corpus</h2>
+<div class="kid">We wrote 541 tiny test programs. Each one checks one rule of the script machine. Both engines must pass every one, and their step-by-step notes must be the same, letter for letter.</div>
+<div class="real">
+<p>Each program says what the correct result is. Both runners check it. They also write a <b>trace</b>: a log of every step. We compare the traces <b>byte for byte</b>.</p>
+<p>Current result: 541 of 541 pass, and 541 of 541 traces are identical.</p>
+<p>The runners <b>fail closed</b>: if a program has a field that no runner checks, the test fails. This rule once exposed a C++ check that had never run.</p>
+</div>
+</section>
+
+<section>
+<h2>The real-script test (osi-a9)</h2>
+<div class="real">
+<p>We run the game's real menu script for 600 frames, four ways:</p>
+<ol>
+<li>the native Mac build;</li>
+<li>the browser (wasm32) build;</li>
+<li>the Python engine, replaying the C++ engine's native answers;</li>
+<li>the Python engine with its own native models.</li>
+</ol>
+<p>All four must agree on all 601 lines. Today they do.</p>
+</div>
+</section>
+
+<section>
+<h2>Agreement is not proof</h2>
+<div class="kid">If you and your friend learned the same wrong rule from the same book, you both get the same wrong answer. Comparing does not catch it. You need a third person who reads the real source.</div>
+<div class="real">
+<p>This happened several times. Both sides agreed, and both were wrong, because both read the original the same wrong way:</p>
+<ul>
+<li>four-letter codes stored with their bytes swapped;</li>
+<li>a number parser that should clip large values, not wrap them;</li>
+<li>an area-loading event. Both sides fired it for the wrong objects. The binary at <span class="hex">0x544065</span> shows it fires only for one object type.</li>
+</ul>
+<p>Our rule now: every modelled constant and branch needs its <b>own citation</b> from the binary. For tricky paths, a <b>third reader</b> checks the bytes.</p>
+</div>
+</section>
+
+<section>
+<h2>More test tools</h2>
+<div class="scroll"><table>
+<tr><th>Tool</th><th>Question it answers</th><th>Kid words</th></tr>
+<tr><td><b>Taint analysis</b></td><td>Could a simplified native change what the script does?</td><td>We paint every rough answer red and watch where the red paint goes.</td></tr>
+<tr><td><b>Mutation testing</b></td><td>Would our tests notice a bug?</td><td>We break the code on purpose. A good test must turn red.</td></tr>
+<tr><td><b>Coverage</b></td><td>Which natives and paths did the run use?</td><td>A map of every road we drove on.</td></tr>
+<tr><td><b>Blind review</b></td><td>Is the change right, judged by someone who did not write it?</td><td>A new teacher marks your work without seeing your notes.</td></tr>
+<tr><td><b>Off-path differential</b></td><td>Do both engines agree on paths the menu never uses?</td><td>We test the side roads, not only the main road.</td></tr>
+</table></div>
+<p class="note">Taint result with real natives: 0 places where a simplified native can change behaviour (it was 19 before the last native groups landed).</p>
+</section>
+
+<section>
+<h2>How a change gets accepted</h2>
+<ol class="steps">
+<li><div>Write the test first. Show that it <b>fails</b> on the old code.</div></li>
+<li><div>Change the code. Show that the test now <b>passes</b>.</div></li>
+<li><div>A blind reviewer checks the change against the binary.</div></li>
+<li><div>Fix what the review finds. Review the fix.</div></li>
+<li><div>Merge. Run the full set again: conformance, osi-a9, all tool tests, both builds.</div></li>
+<li><div>The controller re-runs the checks itself. A report that says "all green" is not evidence.</div></li>
+</ol>
+</section>
+
+<section>
+<h2>Words to know</h2>
+<dl>
+<dt>Oracle</dt><dd>A trusted source of correct answers.</dd>
+<dt>Differential test</dt><dd>Run two versions on the same input and compare.</dd>
+<dt>Trace</dt><dd>A step-by-step log of a run.</dd>
+<dt>Fail closed</dt><dd>When unsure, fail the test instead of passing it.</dd>
+<dt>Mutant</dt><dd>A copy of the code with one deliberate bug.</dd>
+<dt>Shared misreading</dt><dd>Two "independent" sides that make the same mistake.</dd>
+</dl>
+</section>
+
+<section>
+<h2>Check yourself</h2>
+<details><summary>Both engines agree on every line. Is the port correct?</summary><p>Not for sure. Both could share one misreading. Agreement proves consistency. Citations from the binary prove correctness.</p></details>
+<details><summary>Why must a new test fail before the fix?</summary><p>A test that never failed may not test the bug at all. Seeing it fail proves it checks the broken path.</p></details>
+<details><summary>What does mutation testing measure?</summary><p>The strength of the tests. If a deliberate bug survives, the tests have a blind spot.</p></details>
+</section>
+
+<footer>Next: 5 · Our Team, Costs and Limits.</footer>
+</main>
