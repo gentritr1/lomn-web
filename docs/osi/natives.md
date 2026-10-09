@@ -1,6 +1,6 @@
 # OSI natives: rulings for M2a-2 (the native framework)
 
-This file collects the asm rulings that the M2a-2 native framework implements. Task 2a wrote them by reading the exe and the mod DLLs as data; neither was ever run. Sections §1, §3 and §7 are for Task 2b, which writes the Decisions, the tiers and the registry overrides. This file is one of the documents both engines may read (two-engine independence, plan "Independence").
+This file collects the asm rulings that the M2a-2 native framework implements. Task 2a wrote them by reading the exe and the mod DLLs as data; neither was ever run. Task 2b wrote §1 (the Decisions, the native ABI, the citation format), §3 (natives.log v2), §7 (tiers, overrides, taint sinks), §8.3 (the name bound) and the notes after D16 in §5.4. This file is one of the documents both engines may read (two-engine independence, plan "Independence").
 
 **Citation labels.**
 - **CITED (addr):** read from `objdump -d -M intel` of the canonical exe (`$LOMN_DATA/reference/LEGOBionicle.exe`) or of a DLL in `$LOMN_DATA/install/mods`, at that address.
@@ -9,9 +9,98 @@ This file collects the asm rulings that the M2a-2 native framework implements. T
 
 Decompiled code is never quoted. The decomp (`gen/decomp`) only supplied names.
 
-## §1 Decisions
+## §1 Decisions, the port's native ABI and the citation format
 
-(Task 2b.)
+Task 2b wrote this section and §3 and §7 from the plan's Decisions 1–13 and spec §4 (D13–D16). Where the plan's
+Decision text differs from a ruling in §2–§9, the ruling here wins. The differences are marked "corrected".
+
+### 1.1 The Decisions
+
+1. **Acceptance rows.** M2a-2 owns A8, A9 and A10, the menu tagging of the A3 amendment (defined by the A8/A9 run
+   trace), and an A15 row for the new run, with no thresholds. A11–A13 stay in M2a-3; A14 and the final A15 go to M2a-4.
+2. **`--script` syntax.** `lomn_view --install DIR --script 1 [--frames N]`. `Base.osi` is read through the VFS at
+   `Root/Data/base.osi`, the literal that `GcGame::SetUpScripting` passes to `CreateVM`.
+3. **Generated stubs and overrides.** M2a-1's runtime stub table (D11, driven by the generated `ret` column) is the
+   logging stub. Tiers and decided defaults live in `data/osi/native_overrides.json` (§7). `tools/osi/registry.py`
+   merges them into `data/osi/natives.json` and adds no key to a row that no override names, so an empty file changes
+   no byte.
+4. **D13, game objects:** §2, and conformance.md rule 18.
+5. **D14, natives.log v2:** §3, and `docs/osi/trace.md` §6.
+6. **Tier 1 inside M2a-2** means the script-visible behaviour is modelled: the return value, by-reference writes, nested
+   engine calls, reference counts, and state that another native reads back (set → get). Render, audio and model side
+   effects are not modelled; M2a-3 promotes the natives it renders.
+7. **Taint sinks:** §7.3.
+8. **The engine → VM sources of the headless frame** are those of the A6 frame: the KEYSPEC `Input` calls, then the
+   `Process` passes with the re-run and skip rules. §6.2 found no started timer and no other host-originated call on the
+   600-frame front-end path except the Toa process path, which is a documented gap (§6.3, D8). So `C -1` and `H` (§3)
+   stay reserved.
+9. **Saver, INI, `doesfileexist`, mods** (corrected): the values are those of §8.2 and §9, not the plan's. The saver
+   bytes are `[0x7474a0]` (mask, a dword), `[0x7474a4]` (glyph), `[0x7474a8]` (health), `[0x7474ac]` (energy).
+   `doesfileexist` checks `Art.blk` (0x83b0b8) first, then the two block-file slots, and with both slots 0 at Setup it
+   falls back to `FileExists`; on the owner's install it returns int 0. `gcsaver.cheatmenu` is int 0 (the INI has no
+   `CheatMenu` key; "ini → M2a-3"). `bettersaver.getbooleanvalue` is int 0 (empty map).
+10. **The swallowed nested error** (corrected): Task 2a found branch **(b)**. Three `LoadArea` blocks catch errors from
+    nested engine calls (§5.2), so the asm defines the state, and the port implements **D16** (§5.4). The (a) mechanism
+    of the plan (a `nested_error_pending_` flag and the error "Undefined: native returned after a nested engine-call
+    error") is **not** used: under D16 a native that swallows returns normally, and dispatch continues at the error PC.
+    Both engines implement D16 for `swallow` test natives (conformance.md rule 17) and for the modelled `LoadArea`
+    blocks. A native that does not swallow lets the error propagate, and the 0x82/0x83/0x84 catch re-reports it
+    (rule 15(b)).
+11. **D15, the nesting cap:** keep 64 while 64 ≥ 4 × the measured maximum M; otherwise use 4 × M. `STACK_SIZE` is at
+    least 4.5 × cap × the bytes per level, measured on a real re-entrant chain.
+12. **`-fwasm-exceptions` scope.** `lomn_view` (the wasm32 node tool) inherits the flag once it links `lomn_osi`.
+    `lomn_web` does not link `lomn_osi` until M2b.
+13. **Close-out review:** Opus 5.5 medium.
+
+### 1.2 The port's native ABI
+
+What a native body in either engine sees and may do. The original's ABI is the 0x82 row of `docs/osi/opcodes.md`:
+`fn(vm, w0..w9)`, with `wi` the converted argument's value, and the address of the stack slot for a by-reference
+(0x200) parameter.
+
+- **Arguments.** The handler has already checked argc and converted each argument to its declared type
+  (`ConvertVariant`; a wrong game type never reaches the native). A native reads argument i as the converted variant.
+  - A `type:<Class>` argument is a handle. `object_arg` maps it to the host object; nothing maps to null.
+  - A by-reference argument is the stack slot the handler addressed **before** the call. A write goes to that slot,
+    even after a swallowed nested error has left values above it (D16 rule 3). The write overwrites the slot and does
+    not dispose the old value (conformance.md rule 14(d)).
+- **Results.** A native returns one variant, built the way the original's `CreateVariant` overload builds it. A game
+  object goes through `create_variant`: null → nothing; otherwise +1 reference, and the handle is minted on first use
+  (D13).
+- **Reference counts.** `add_ref` / `release` change the engine's references on an object. A release that reaches 0
+  writes `F g` and deletes the host object. Each engine reference a native takes or drops is cited from the asm (for
+  example `GcBAGroup::SetCharacter` +1 at 0x54b344, §2.4).
+- **Nested engine calls.** `engine_call(name, args)` is `Call(name, a0..a9)`: it writes the `C <seq>` record of §3,
+  runs the call, and disposes the call's result. An error inside it propagates out of the native, unless the native
+  is one that swallows (D16). A native swallows only where the original catches: the three `LoadArea` blocks (§5.2).
+- **Order inside one native:** nested `C` calls, then `W` writes, then the return.
+- **Sequence numbers** are assigned at native entry (Vm `native_seq()`), so a nested native has a higher number than
+  the native that called it, while its log line comes first (§3).
+- **What a native must not do:** touch VM state other than through these calls (the stack, `pc`, `frame_ptr`,
+  `context_depth`, `fpu_pc`), or keep a host pointer in a variant (D7). Its own errors are thrown as `VmError` and
+  re-reported by the calling handler as "Script is calling %s.%s" (0x82/0x83) or "Script is calling a game function
+  directly." (0x84).
+- **`sets_fpu_pc64`** is registry data. The VM applies it at the native's return, stubs included (D8′).
+
+The exact C++ and Python interfaces are in the plan (Tasks 3 and 4). This section is their contract.
+
+### 1.3 The citation format
+
+Every implemented native carries one citation comment, in both engines, in this form:
+
+```
+// body 0x……, method 0x…… <Class::Method> [→ 0x…… <callee that decides>]; asm pin: <addr> <what>
+```
+
+- `body` is the registry `body` (the wrapper that `RegisterFunction` registers).
+- `method` is the function the wrapper calls. `→` follows the chain down to the function that actually decides the
+  result, when that is not the method itself.
+- `asm pin` is the instruction address whose immediate or data constant the native's asm-pin test checks (plan Review
+  focus 1). The value is read from `objdump` at that address, never from the decomp alone.
+- Example: `// body 0x00617700, method 0x617810 <ScSLOSIFoundation::StringToIdentifier> → 0x5fb060 <ScOSISystem::ConvertStringToID>; asm pin: 0x5fb093/0x5fb09e/0x5fb0a9/0x5fb0b2 shift immediates (first character in the high byte)`
+  (calls at 0x61771d and 0x617868).
+  The pin's test gives `stringtoidentifier("frnt")` = 0x66726e74.
+- A mod native cites the DLL: `// body BetterSaver.dll 0x10001f70, …`.
 
 ## §2 Game objects (D13)
 
@@ -120,9 +209,80 @@ Example on the A9 path:
 - **The first `ScProcessManager::Process`** applies the Toa's queued `AddProcess`: +1 (INFERRED).
 - **Natives that store a game argument** (for example `gchuddirector.addbigsprite` 0x47afe0, `gchuddirector.addtextobject` 0x47b010) take engine references. Each one's tier-1 citation (Tasks 3 and 4) states its +1.
 
-## §3 Tiers and the registry
+## §3 natives.log v2 (D14)
 
-(Task 2b.)
+`natives.log` is the native-return replay log of `docs/osi/trace.md` §6. Version 2 adds three records and keeps every
+v1 line byte for byte. The trace format itself does not change.
+
+### 3.1 Records
+
+| record | exact format (C `printf`) | meaning |
+|---|---|---|
+| call (v1) | `%08d <cls>.<fn> %d -> <r>[ S %d <hex>][ G %d][ W %d <v>[ S %d <hex>][ G %d]]…` | native seq N returned `<r>`; ` W` writes in argument index order |
+| ` G %d` (new) | after every game value: a result, a `W` value, or a `C` argument | the references **the engine** holds on that object after the native returns, not counting this variant. The heap stores total = engine + variants |
+| `C` (new) | `C %08d <name> <a0> <a1> … <a9>` | native seq N starts an engine → script call here. `<name>` is a name token; the 10 arguments use the `<v>` notation, each 0x16 followed by ` S %d <hex>` and each game value by ` G %d` |
+| `K` (new) | `K %6d` | the start of frame N (the trace's `K` frame number). Setup has no `K` |
+| `C -1` (reserved) | `C -1 <name> <a0> … <a9>` | a host-originated engine call, outside any native |
+| `H` (reserved) | `H <type>:<handle> %+d` | a host-side reference change, outside any native |
+
+**`C -1` and `H` are reserved.** No M2a-2 code writes them: §6.2 found no host source on the 600-frame path. Their rules
+are fixed now so they are not invented later.
+
+### 3.2 Order
+
+- Sequence numbers are assigned at native **entry**. Lines are written in **event order**, so a native's own line is
+  written at its return, after everything it caused.
+- Inside one native: its `C` lines, each followed by the lines of the nested call's own natives, then its own line.
+  That line carries the result and, after it, the ` W` writes. The writes happen before the return (the order of
+  events), but they are printed after `-> <r>` (the v1 layout).
+- A `K` line is written before the first native call of its frame, so a frame that calls no native still has its `K`.
+
+### 3.3 Replay rules (I6)
+
+- **Order:** on call seq N, the replay asserts that `cls.fn/argc` matches the log, as in v1.
+- **Identity:** if the logged handle is live, the replay returns it with one more variant reference and writes no
+  `A g`. Otherwise the logged handle must equal the heap's next game handle, and it is minted with `G` engine
+  references.
+- **`C N` records:** the replay performs the nested call at that point, inside native N, with the logged arguments.
+- **`C -1` and `H` records:** the replay never performs them. Host-originated calls are host behaviour, implemented in
+  both engines. The replay asserts that its own host's next call (or reference change) matches the next record, the
+  same way it asserts `cls.fn/argc`.
+- **v1 logs** (no `G`, no `C`, no `K`) still replay: a missing `G` means 0 engine references.
+
+### 3.4 Worked example
+
+The example is illustrative. These are not lines from the real `Base.osi` log. Assume Setup calls `gcgame.getkeymapper`,
+`gctimer.create(0, 0, 5.0)` and `gcmodeldirector.addtoa("onua")`. Inside `addtoa`, the engine calls
+`OnEvent(int 0x32, int 250)` (§4), and that `OnEvent` calls `sctextobject.setstring`. Then Setup calls
+`gcmodeldirector.gettoa()` and `gcmodeldirector.getcharacter('cnt1')`, which reach the same Toa (§2.3). Frame 0 calls
+`gcsaver.getmask()`. The type ids are those of `data/osi/types.json` (GcKeyMapper 0x3e, GcTimer 0x27, GcToa 0x37,
+GcCharacter 0x22).
+
+```
+00000000 gcgame.getkeymapper 0 -> 003e:00000001 G 1
+00000001 gctimer.create 3 -> 0027:00000002 G 0
+C 00000002 OnEvent 0010:00000032 0010:000000fa 000f:00000000 000f:00000000 000f:00000000 000f:00000000 000f:00000000 000f:00000000 000f:00000000 000f:00000000
+00000003 sctextobject.setstring 2 -> 000f:00000000
+00000002 gcmodeldirector.addtoa 1 -> 0010:00000001
+00000004 gcmodeldirector.gettoa 0 -> 0037:00000003 G 1
+00000005 gcmodeldirector.getcharacter 1 -> 0022:00000003 G 1
+K      0
+00000006 gcsaver.getmask 0 -> 0010:3f3f3f3f
+```
+
+- Line 1: the key mapper is held once by the global `ScAutoRefPtr` (§2.4), so `G 1`. The heap stores 1 + 1 = 2.
+- Line 2: a timer constructed by the native: `G 0`. It is freed when the script drops its last variant.
+- Lines 3–5: `addtoa` is seq 2 (numbered at entry). Its `C 00000002` line comes first. The nested `OnEvent`'s own
+  native is seq 3, and its line comes next. `addtoa`'s line is written at its return, last.
+- Lines 6–7: the same Toa, once as `GcToa` and once as `GcCharacter`: one handle (3), two type tags. `G 1` both times
+  is the model-director map's reference (§2.4); the first variant is a variant reference, not an engine one. The
+  replay mints handle 3 at line 6 and, at line 7, returns the live handle 3 with one more variant reference.
+- Line 8: frame 0 starts. Line 9: an int result needs no `G`.
+
+**Header hash (C1).** Merging overrides changes `natives.json`, so the `natives=` hash in the trace header and the
+digest's `T` line change, while the trace does not. Digest guards therefore compare `D` lines only:
+`grep '^D' a | cmp - <(grep '^D' b)`. Headers are compared with the `natives=` field stripped:
+`diff <(grep '^#' a | sed 's/natives=[0-9a-f]*//') <(grep '^#' b | sed 's/natives=[0-9a-f]*//')`.
 
 ## §4 Re-entry: the four on-path natives
 
@@ -272,6 +432,17 @@ Three blocks of `GcAreaLoader::LoadArea` 0x4fedd0 reach the VM. Each is a try wi
 >   - Expect: `main`'s result is **7**. The handler's single pop disposes `onevent`'s leftover int 4. After the call the top is **int 9**, in T's argument slot, and `context_depth` is 1.
 >   - A write addressed from the top after the nested call would land on the int 4. The pop would then remove the 9, and the top would be int 3, so the program tells the two readings apart.
 
+**Contract notes (Task 2b), for Tasks 3 and 4.**
+- *The `E` line of a swallowed re-raise.* Rule 2 says the swallowed `E` line "directly follows the failing
+  instruction's `I` line". That holds when the failing instruction raised the error itself. When the swallowed error
+  is a 0x82/0x83/0x84 re-raise after its own nested call raised (rule 15(b)), the `E` line follows the last record of
+  that inner call instead: its `pc` and `op` are the re-raising call's, and `depth` and `top` are the stack at the
+  throw. `n-reenter-nested-error-swallowed` pins this case.
+- *The `N` line after a swallow* prints the arguments as converted before the native ran. The `F` lines of the n pops
+  are the inner leftovers' (conformance.md rule 17(d)).
+- *More programs than the four above:* group `n` also holds `n-reenter-nested-error-swallowed` and
+  `n-reenter-nested-error-propagates` (plan Review focus 4). The README lists them all with their status.
+
 ## §6 The headless frame
 
 ### 6.1 Process order (CITED, `ScProcessManager::Process` 0x4a9170)
@@ -359,9 +530,61 @@ The map's key order between processes, set by the priority byte that `ScProcessM
 - There are **2** `call 0x60b450` sites, in `ScSLOSIProcess::Process` (0x43b32d) and in `Call` itself (0x60b402).
 - So **71** functions call one of the two directly. That is Task 1's `reach.py` count.
 
-## §7 Registry overrides
+## §7 Tiers, the registry overrides and the taint sinks
 
-(Task 2b.)
+### 7.1 Tiers
+
+Every registered native has exactly one tier. `tools/osi/coverage.py` counts natives by these names (A8).
+
+| tier | meaning | where it is set |
+|---|---|---|
+| `stub` | the default: D11's typed, logging stub (the generated `ret` column, or the row's `default`) | no override |
+| `mod` | a Beta 1.5.0 mod native (D12): a stub until its DLL body is cited | `data/osi/natives_beta150.json` |
+| `tier1` | implemented: its script-visible behaviour is modelled (Decision 6) and cited in the §1.3 format | override |
+| `tier2` | not modelled; a taint pass in the oracle shows its return value reaches no sink (§7.3) on the menu path. It returns its typed stub, or the override's `default` | override |
+| `tier3` | on the worklist; hitting one on the menu path is a failure (A10) | override |
+
+A10 requires that every native hit on the A6/A9 path is `tier1` or `tier2`.
+
+### 7.2 The overrides file and the merge
+
+`data/osi/native_overrides.json` is a JSON list, one row per native key, sorted by `key`. The committed file is `[]`
+until Tasks 5 and 7–9 add rows. `tools/tests/test_native_overrides.py` checks the schema.
+
+| field | required | rule |
+|---|---|---|
+| `key` | yes | a winner key of `natives.json` or `natives_beta150.json` (lower case `cls.fn`); each key once |
+| `tier` | yes | `tier1`, `tier2` or `tier3` |
+| `default` | no | `{"type": "0xNN", "value": u32}` or `{"type": "0x12", "bits": "8 hex"}`, the stub's return; not allowed on `tier1` (its body decides the result) |
+| `cite` | yes | names the row's `body` address (for example `body 0x005d35b0, …`); a `tier1` row uses the §1.3 format |
+| `note` | yes | one line, for example `"ini → M2a-3"` |
+
+No other field is allowed.
+
+**The merge.** `make osi-tables` runs `tools/osi/registry.py --overrides data/osi/native_overrides.json`.
+- On the winner row of each named key, the merge sets `tier` and, when the override has one, replaces `default`. An
+  exe key is merged into `natives.json`, a mod key into `natives_beta150.json`.
+- `cite` and `note` stay in the overrides file. The registry tables carry only what the engines read.
+- A row that no override names is written byte for byte as before. It gains no `tier` key: no `tier` means `stub` (mod
+  rows keep their own `"tier": "mod"`). So the empty file is a byte-level no-op (minor m6).
+- An unknown key, a duplicated key or a schema error stops the merge (`RegistryError`).
+- `docs/osi/types.md` gains one generated line with the per-tier counts.
+- The merge changes `natives.json` and therefore the trace header's `natives=` hash. That is why digest guards compare
+  `D` lines only (§3.4, C1).
+
+### 7.3 Taint sinks (Decision 7)
+
+A tier-2 native's return value must reach none of these on the menu path. The first three are the spec's (§6); the
+last two are added.
+1. the condition of a 0x53 (`CompareAndBranchIfFalse`);
+2. the value a 0x81 writes. 0x81 is a no-op in this build (opcodes.md row 0x81), so the sink exists for the spec's
+   wording and never fires;
+3. any argument of a `tier1` native;
+4. the `Process` result, which the re-run rule reads (spec §3.1: a false result re-runs `Process` in the same frame);
+5. a 0x19 member name or a 0x83 function name that comes from a tainted string.
+
+The CHANGED-NULL natives (flip probe) are handled by the rule "game-returning → must" (plan Review focus 5), not by a
+sink: every CHANGED-NULL native must be `tier1` in the merged overrides.
 
 ## §8 Copy-kind natives and block files
 
@@ -396,6 +619,29 @@ D11's "copy of argument 0" stub is **wrong** for all three. If the path ever hit
 - So `doesfileexist` does fall back to `FileExists`. The plan's "never checks loose files while Main.blk is loaded" is incorrect.
 
 **Value on the owner's install: int 0.** `Root/Data/AreaViewer.txt` is in neither `Art.blk` nor `Main.blk` (EXECUTED: `blk.py` listings), and no such file exists under `$LOMN_DATA/install`. Whichever route is taken, the result is int 0 (`CreateVariant` 0x407f30). The flip probe shows a 1 would change the path (+293).
+
+### 8.3 The 255-byte bound on name copies (0x18, 0x19, 0x1a, 0x83)
+
+| handler | copy calls (CITED) | bound | PC at the throw |
+|---|---|---|---|
+| 0x83 | 0x60226a (0x11 name: `operator=(const char*)` 0x4f5c00) / 0x602299 (0x16 name: `operator=(const ScFixedString&)` 0x4f5b00) | the local `ScFixedString` has capacity **0xff** (stored at 0x602224). Both operators throw `kOutOfRange` when **len > capacity**: `seta` at 0x4f5c27 / 0x4f5b16, `SrThrow` at 0x4f5c38 / 0x4f5b27. So 255 passes and 256 throws | +3, before the try (0x6022c8): not caught, not re-reported |
+| 0x18, 0x19, 0x1a | 0x5fef3b / 0x5fef69, 0x5ff2e7 / 0x5ff313, 0x5ff49b / 0x5ff4c9 (the same two operators, 0x4f5c00 / 0x4f5b00) | capacity 0xff, stored at 0x5fee9b, 0x5ff261 and 0x5ff3fb: the same `len > 255` test | +1 (opcodes.md error-PC table) |
+
+**Unreachable in the original and in `Base.osi`** (EXECUTED, CITED):
+- A 0x11 name is a string-table entry: a u8 length, then the bytes and a NUL, so at most 255 bytes. `Base.osi`'s
+  longest entry is **145 bytes** (2,749 entries, none of 200 or more; every entry has its NUL). Measured on 2026-10-09
+  by walking the table with `tools/research/osi.py` `parse` (the reader `tools/osi/reach.py` uses); the walk agrees
+  with `parse` on the count and the maximum.
+- A 0x16 is an `ScFixedStringTemplate<255>` (capacity 0xff, stored at 0x60b915). Its builders keep it at 254 or less:
+  `ConvertStringIDToDynamicString` throws when len ≥ 255 (`setae` at 0x60b95f), and `append` (0x70) when len + added ≥
+  255 (`setae` at 0x4f5c98).
+- `Base.osi` has 12 0x19 sites and no 0x18, 0x1a or 0x83 site (`tools/osi/reach.py --0x19`, EXECUTED). All 12 take
+  their name from a member value (`functionpointer`, `func`), all UNRESOLVED and in UNREACHABLE code.
+
+So the throw needs a port string longer than 255 bytes, which only a test native (its `{"text"}` return is not bounded,
+conformance.md §1) or a future native model can create. Neither engine models the bound today. **Corpus:**
+`n-name-256` (kOutOfRange at +3, pending Tasks 3/4) and its boundary control `n-name-255` (copy passes; "Script is
+calling t.<name>" at +4).
 
 ## §9 Saver and mods
 

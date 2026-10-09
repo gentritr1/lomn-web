@@ -62,6 +62,11 @@ The trace is written in the order things happen; a record is never moved to "tid
 end of the trace. No `R` line is written for the failed call, and no `F` line for what the error left on the stack
 (D10: nothing is disposed until the host resets).
 
+**A swallowed nested error (D16, M2a-2).** A native that swallows its nested call's error (the three `LoadArea` blocks;
+a `swallow` test native) writes that error's `E` line, and `P` if the mode was still 24, at the swallow point. No `R`
+line is written for the nested call. The trace then goes on in event order: the native's `S`/`N` lines, its pops' `F`
+lines, and the next `I` line at the error PC (conformance.md rule 17).
+
 **A native call (0x82; 0x83 and 0x84 the same after their own operand handling)**, pinned to the 0x82 row of
 `docs/osi/opcodes.md` (BCLCallGameFunction 0x6015a0):
 1. `I` for the instruction.
@@ -183,3 +188,27 @@ Python's `NativeRegistry.replay_from(log)` replaces every native body:
 
 So any A6/A9 disagreement is VM semantics, never native semantics. For A6 the log is produced by the typed stubs (D11);
 the replay path is used anyway so that A9 (M2a-2, real natives) needs no new mechanism.
+
+### Version 2 (D14, M2a-2)
+
+The full contract, with a worked example, is `docs/osi/natives.md` §3. In short:
+- **` G %d`** follows every game value: a result, a ` W` value, or a `C` argument. It is the number of references the
+  engine holds on that object after the native returns, not counting this variant. The heap stores total = engine +
+  variants. A v1 line is a v2 line with no game value, or with `G` absent, which means 0.
+- **`C %08d <name> <a0> … <a9>`**, its own line: native seq N starts an engine → script call at this point. The 10
+  arguments use the `<v>` notation, a 0x16 is followed by ` S %d <hex>` and a game value by ` G %d`.
+- **`K %6d`**, its own line, at the start of each frame (the trace's `K` frame number), before that frame's first
+  native line.
+- **Reserved:** `C -1 <name> <a0> … <a9>` (a host-originated call) and `H <type>:<handle> %+d` (a host-side reference
+  change). No M2a-2 code writes them.
+- **Order.** Sequence numbers are assigned at native entry, and lines are written in event order. So a native's own
+  line is written at its return, after its `C` lines and the lines of the natives they caused.
+- **Replay (I6).** The order assertion is as in v1. A live logged handle is returned with one more variant reference
+  and no `A g`; otherwise the logged handle must equal the next handle, and it is minted with `G` engine references.
+  The replay performs each `C N` call inside native N. It never performs `C -1` or `H`, and it asserts that its own
+  host's next call or reference change matches them.
+
+**Header hash (C1).** The overrides merge (`natives.md` §7.2) changes `natives.json` and therefore the header's
+`natives=` hash and the digest's `T` line, but not the trace. Digest guards compare `D` lines only:
+`grep '^D' a | cmp - <(grep '^D' b)`. Headers are compared with the `natives=` field stripped:
+`diff <(grep '^#' a | sed 's/natives=[0-9a-f]*//') <(grep '^#' b | sed 's/natives=[0-9a-f]*//')`.

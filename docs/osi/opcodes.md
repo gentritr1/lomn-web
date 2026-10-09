@@ -172,6 +172,28 @@ described in words, never as decompiled code.
   `Base.osi`, 2026-10-09). The A6 stubs never re-enter, so 1 is a floor, not a measured game maximum. The cap keeps the
   wasm32 C++ recursion (about 7 frames per level) inside its stack. Corpus: `b-eng-reenter-depth`.
 
+  **A nested engine call's error (Decision 10 → (b), D16; M2a-2 T2b).** Task 2a found that the original does catch
+  errors from nested engine calls, in exactly three places: the `LoadObjects`, `LoadCharacters` and `LoadHives` blocks
+  of `GcAreaLoader::LoadArea` 0x4fedd0 (`docs/osi/natives.md` §5.2). So the port has one mechanism for both engines,
+  D16 (spec §4; natives.md §5.4), and the plan's "(a)" flag mechanism is not used (natives.md §1.1, Decision 10):
+  - **A native that does not swallow** (every native except those blocks) lets the nested error propagate. No
+    epilogue of the nested `Vm::call` runs, so the inner marker, frame and `context_depth` stay, and `pc` stays at the
+    inner error PC. The calling 0x82/0x83/0x84 re-reports it as "Script is calling %s.%s" (or "…directly." for 0x84),
+    with that PC (conformance.md rule 15(b)). The outermost `Vm::call` writes the one `E` line, as D10 says. The
+    nested calls it passes through record nothing.
+  - **A swallowing native** (the modelled `LoadArea` blocks; a `swallow` test native) catches the error inside its
+    body. The VM state stays as at the throw (D16 rule 1). The swallowing catch writes the error's `E` line (and `P`)
+    at that point (rule 2), sets no `last_error`, runs no reset and ends no engine call. The native then makes its
+    by-reference writes to the slots the handler addressed before the call and returns normally. The handler pops n
+    slots from the **current** top, pushes the result and leaves `pc` alone (rule 3). Dispatch continues in the inner
+    function at the error PC. Its first `0x52` that meets an `0xff` marker ends the outer `Run` (rule 4).
+  - **`reset_after_error()`** after a later error that escapes the outermost call pops down to and including that
+    call's own marker, through any inner markers a swallow left, and restores `context_depth`, `frame_ptr` and `pc`
+    to their values at that call's entry (rule 6). Leftovers below that depth are not touched.
+  - Corpus: `n-swallow-continue`, `n-swallow-reerror`, `n-swallow-pops`, `n-swallow-writes`,
+    `n-reenter-nested-error-swallowed` and `n-reenter-nested-error-propagates` (group `n`, pending Tasks 3/4 except the
+    last).
+
 ## Variant types seen in the handlers
 
 | type | meaning | cited from |
@@ -479,15 +501,26 @@ interpreter that follows `this` (the VM, `ecx` at entry) through registers and f
   store to that address, or a store at displacement 0x1f58 through a base the pass lost track of, stops the pass with
   an error. A grep of every `[reg+0x1f58]` store in the linear-sweep listing of `.text` finds writes outside the
   handlers only in the constructor (0x60b283), `CallWithReturn` (0x60b5a5) and `SetPCAndArgs` (0x60b623). That grep
-  misses 6 handler writes, which the sweep decodes out of step; `test_pc_write_forms` reconciles the two counts.
+  misses 6 handler writes, which the sweep decodes out of step. The reconciliation (166 − 3 + 6 = 169) was done by
+  hand and is written in `test_pc_write_forms`' docstring; the test itself asserts the per-form counts.
 - **Raises.** `Error` (vtable +0xc) and direct calls to `SrOSIError` 0x5faee0, `SrThrow` 0x4d91f0 and `___throw`
   0x657260 end a path. Calls to VM methods (the vtable, `ConvertVariant`, `ConvertStringIDToDynamicString`,
   `ConstructObject`) are followed inline with the current PC. Every other direct call is scanned, with its own direct
   callees, for those throwers. The indirect calls (natives, landing-pad cleanups, the dead game-variable accessors)
   are classified by hand in the script, which refuses one it does not know.
+  **Limit (residual risk, T2a-pc review M3):** indirect calls *inside* the summarised callees are not followed. These
+  are the virtual releases in `ScOSIVariant::Dispose` 0x60a930 (`call [esi+4]` at 0x60a957 / 0x60a9e5 / 0x60a9fe),
+  which `Pop`, `PushInto`, `PushIntoFrame` and `Duplicate` reach; `ScFixedString::Format` 0x4f6130's output callbacks
+  (0x658af0); the allocator internals (0x4e4310 / 0x4e4350 / 0x4e44f0); and `_pow`'s CRT handlers. They are INFERRED
+  not to raise OSI errors (destructors, CRT and allocator code). A game object's virtual destructor reached through
+  `Dispose` is the only plausible throw path left, and it is INFERRED to be very unlikely.
 - **Catches.** A raise at a call site with a catch record (kind 0x10, `!ScCatchMessage!` or catch-all) continues at
   the landing pad with the PC unchanged. The CodeWarrior retry and rethrow byte flags (written only with 0) and the
-  `kNoException` identity test after each try are evaluated. Every other branch is taken both ways. So a row reached
+  `kNoException` identity test after each try are evaluated. So **four `___throw` rethrows are infeasible and are in
+  no count** (the 272 sites do not include them): 0x601e16 (0x82), 0x602b76 (0x83) and 0x603074 (0x84), each guarded
+  by a flag written only with 0, and 0x602791 (0x83), guarded by a flag set only after a non-returning `Error`
+  (0x60273d follows 0x602738). A grep for `call 0x657260` in 0x82–0x84 therefore finds five calls, and the fifth,
+  0x601be5 (0x82's inner rethrow of the native's error), is the one listed `___throw` site. Every other branch is taken both ways. So a row reached
   only through an impossible branch could appear. The "caught" exits are reported apart and never counted as normal
   exits.
 - **Self-check.** Every handler that falls through leaves PC at 1 + its operand bytes on every normal exit (osi.py
@@ -500,11 +533,16 @@ interpreter that follows `this` (the VM, `ecx` at entry) through registers and f
   its differences are listed in the M2a-2 T2a-pc report (from reading the source).
 
 **The result in words.** Almost every handler advances PC past its whole instruction at entry, before any pop or
-check, so its errors are at **+(1 + operand bytes)**. The exceptions:
+check, so its errors are at **+(1 + operand bytes)**. Over the 194 listed raises (272 sites less 73 allocation failures
+and 5 cleanup calls) the distribution is +0 3, +1 126, +2 5, +3 26, +4 13, +5 1, +6 21. That sums to **195 site-PC
+pairs, not 194**, because the 0x83 re-raise 0x602b24 is counted twice: at +4, and at +3 for its allocation-only
+origins (0x602316 GetStringTableToken, 0x602332 `operator new`). EXECUTED 2026-10-09 (T2b) over `error_pc.analyze`.
+0x50/0x51 (+2) fit the general rule; only their normal exit (a jump target) differs. The exceptions:
 - **+0:** BCLUnused (160 ops) and 0x41 never write the PC. 0x53 pops and checks before it writes the PC: its error and
   its pop are at +0, and only then is the PC set (+3, or through 0x54 inlined to +3 + offset). 0x52 raises nothing; its
   pops are at +0.
-- **0x50 / 0x51: +2.** The operand is consumed, and the error comes before the jump target is stored.
+- **0x50 / 0x51: +2**, as the general rule gives (opcode plus one operand byte). Listed because the error comes
+  before the jump target is stored, which is their normal exit.
 - **0x82: +5, then +6.** The map miss (`SrOSIError` at 0x601725, outside the try) is raised before the sixth `inc`
   (0x601780). Every error after it, and the re-raise "Script is calling %s.%s" at 0x601dd3, is at +6.
 - **0x83: +3, then +4.** "Invalid member type…" (0x6022c3) is at +3. The n byte is read (`inc` 0x60237c) inside the
