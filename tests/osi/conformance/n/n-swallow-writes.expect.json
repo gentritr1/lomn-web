@@ -5,13 +5,7 @@
   ],
   "falsifier": "D16 rule 3: a by-ref write after a swallow lands in the slot the handler addressed BEFORE the nested call (slot = top - (n - i) at 0x601804-0x601819), and the pop then disposes the inner leftover",
   "alternative": "the write addressed from the top after the nested call lands on onevent's int 4, the pop removes the 9, and the top after the call is int 3",
-  "pending": [
-    "swallow",
-    "swallowed",
-    "expect.top",
-    "pc_after",
-    "then"
-  ],
+  "pending": "T3/T4",
   "entry": "main",
   "args": [],
   "natives": [

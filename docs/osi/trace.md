@@ -198,7 +198,9 @@ The full contract, with a worked example, is `docs/osi/natives.md` §3. In short
 - **`C %08d <name> <a0> … <a9>`**, its own line: native seq N starts an engine → script call at this point. The 10
   arguments use the `<v>` notation, a 0x16 is followed by ` S %d <hex>` and a game value by ` G %d`.
 - **`K %6d`**, its own line, at the start of each frame (the trace's `K` frame number), before that frame's first
-  native line.
+  native line. It is written for every frame, also for a frame that calls no native.
+- **` W` after `-> <r>`.** A native's by-reference writes happen before its return, but they are printed after the
+  result, in the v1 layout: `%08d <cls>.<fn> %d -> <r>[ S …][ G …][ W %d <v>[ S …][ G …]]…`.
 - **Reserved:** `C -1 <name> <a0> … <a9>` (a host-originated call) and `H <type>:<handle> %+d` (a host-side reference
   change). No M2a-2 code writes them.
 - **Order.** Sequence numbers are assigned at native entry, and lines are written in event order. So a native's own
@@ -207,6 +209,10 @@ The full contract, with a worked example, is `docs/osi/natives.md` §3. In short
   and no `A g`; otherwise the logged handle must equal the next handle, and it is minted with `G` engine references.
   The replay performs each `C N` call inside native N. It never performs `C -1` or `H`, and it asserts that its own
   host's next call or reference change matches them.
+
+**The merge (controller ruling, M2a-2 T2b, accepted as proposed; `natives.md` §7.2):** an override sets `tier`, and
+`default` when it has one, on the **winner row** of its key only (exe keys in `natives.json`, mod keys in
+`natives_beta150.json`); `cite` and `note` stay in `data/osi/native_overrides.json`; a `tier1` row has no `default`.
 
 **Header hash (C1).** The overrides merge (`natives.md` §7.2) changes `natives.json` and therefore the header's
 `natives=` hash and the digest's `T` line, but not the trace. Digest guards compare `D` lines only:

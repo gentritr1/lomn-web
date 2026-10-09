@@ -80,10 +80,11 @@ These fields serve corpus group `n` (`tests/osi/conformance/n/`). The rules they
   still applies).
 - `swallow: true` (D16, rule 17): if the `calls` nested call raises, the runner catches the error inside the native,
   writes its `E` line there, then applies the native's `writes` and returns its `returns`.
-- A test native's `{"text": …}` return is not bounded: a string of 256 bytes or more is created as written. The
-  original cannot hold one (`natives.md` §8.3); `n-name-256` uses one to reach the name-copy bound.
+- A test native's `{"text": …}` return longer than 255 bytes is a value the original cannot hold (a 0x16 is an
+  `ScFixedStringTemplate<255>`, `natives.md` §8.3). No program uses one; `n-name-256` reaches the name-copy bound
+  through a string-table literal instead.
 
-**Expectations:**
+**Expectations** (controller ruling, M2a-2 T2b: all of these are accepted):
 - `expect.top`: the top slot after the call, after the host has disposed the result; `null` means depth 0. It is
   written like `expect_error.top`.
 - `pc_after` (in `expect`, `expect_error`, `then` and `swallowed` entries): `snapshot().pc`, compared under rule 15. It
@@ -94,11 +95,15 @@ These fields serve corpus group `n` (`tests/osi/conformance/n/`). The rules they
 - `then: {"entry", "args", "ok", "result", "depth", "top", "context_depth", "pc_after"}`: a second engine call on the
   same VM, made after the first call has been compared (rule 19). The fields present are compared like `expect`.
 
+**Assembler:** `tools/osi/osiasm.py` `.rawstring "text" TERM` writes one string-table entry whose terminator byte is
+TERM instead of NUL, as a hostile file can (`n-name-256`; `natives.md` §8.3).
+
 **Metadata:**
-- `pending`: a list naming the runner features of Tasks 3/4 that the program needs before it can pass (for example
-  `"swallow"`, `"engine_refs"`, `"calls.depth"`, `"pc_after"`). A pending program is expected to fail on both runners
-  until those tasks land, and it is not a gate (`tests/osi/conformance/README.md`). The key is removed when the program
-  passes on both.
+- `pending`: `"pending": "<task id>"`, a string naming the task whose runner features the program needs (every
+  pending program of group `n` carries `"T3/T4"`: both runners). Both runners skip such a program: they do not run it,
+  they print `PENDING <id> (<task>)`, and their summary line shows the pending count. The feature each program needs
+  is listed in `tests/osi/conformance/README.md`. The key is removed when the program passes on both runners. The
+  M2a-2 gate (Task 10) requires the pending count to be 0.
 
 ### Coverage metadata (read by `tools/osi/conformance_report.py`, which reads nothing else)
 

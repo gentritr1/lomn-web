@@ -385,7 +385,7 @@ Three blocks of `GcAreaLoader::LoadArea` 0x4fedd0 reach the VM. Each is a try wi
 > 2. **The `E` line of a swallowed error (port rule; the `E` line is a trace artifact).**
 >    - The original records nothing that can be seen. Each pad stores `{error, qualifier}` in `LoadArea`'s own locals, and nothing reads that pair again (natives.md §5.2).
 >    - The port writes the swallowed error's `E` line **at the swallow point**, in the swallowing host's catch (the conformance runner for a `swallow` test native; the modelled `LoadArea` block for the real natives). The line is built from the VM state as at the throw: `pc` and `op` are the failing instruction's own address and byte (as for every `E` line), and `depth` is the stack depth at the throw. A `P <pc> 64` line follows it if `fpu_pc` was 24.
->    - Unwinding runs no VM code, so this `E` line directly follows the failing instruction's `I` line.
+>    - Unwinding runs no VM code, so when the failing instruction raised the error itself, this `E` line directly follows that instruction's `I` line. When the swallowed error is a 0x82/0x83/0x84 re-raise after its own nested call raised (rule 15(b) of conformance.md), the `E` line follows the last record of that inner call instead: its `pc` and `op` are the re-raising call's, and `depth` and `top` are the stack at the throw (amended in M2a-2 T2b; corpus `n-reenter-nested-error-swallowed`).
 >    - The swallowing catch does **not** set the outermost call's `last_error`, does **not** run `reset_after_error()` and ends no engine call. The outermost `Vm::call` returns `ok = true` unless another error escapes it.
 >    - This amends D10's "the outermost `Vm::call` writes the `E` line" for swallowed errors only. A nested error that is **not** swallowed is still recorded exactly once, by the outermost `Vm::call` (one `E` line, `ok = false`). The nested calls it passes through record nothing.
 > 3. **The calling handler** (0x82, 0x83, 0x84), after a swallowing native returns:
@@ -433,11 +433,7 @@ Three blocks of `GcAreaLoader::LoadArea` 0x4fedd0 reach the VM. Each is a try wi
 >   - A write addressed from the top after the nested call would land on the int 4. The pop would then remove the 9, and the top would be int 3, so the program tells the two readings apart.
 
 **Contract notes (Task 2b), for Tasks 3 and 4.**
-- *The `E` line of a swallowed re-raise.* Rule 2 says the swallowed `E` line "directly follows the failing
-  instruction's `I` line". That holds when the failing instruction raised the error itself. When the swallowed error
-  is a 0x82/0x83/0x84 re-raise after its own nested call raised (rule 15(b)), the `E` line follows the last record of
-  that inner call instead: its `pc` and `op` are the re-raising call's, and `depth` and `top` are the stack at the
-  throw. `n-reenter-nested-error-swallowed` pins this case.
+- *The `E` line of a swallowed re-raise* is now part of rule 2 above (controller ruling, M2a-2 T2b: spec §4 D16 rule 2 carries the same text). `n-reenter-nested-error-swallowed` pins it.
 - *The `N` line after a swallow* prints the arguments as converted before the native ran. The `F` lines of the n pops
   are the inner leftovers' (conformance.md rule 17(d)).
 - *More programs than the four above:* group `n` also holds `n-reenter-nested-error-swallowed` and
@@ -627,21 +623,30 @@ D11's "copy of argument 0" stub is **wrong** for all three. If the path ever hit
 | 0x83 | 0x60226a (0x11 name: `operator=(const char*)` 0x4f5c00) / 0x602299 (0x16 name: `operator=(const ScFixedString&)` 0x4f5b00) | the local `ScFixedString` has capacity **0xff** (stored at 0x602224). Both operators throw `kOutOfRange` when **len > capacity**: `seta` at 0x4f5c27 / 0x4f5b16, `SrThrow` at 0x4f5c38 / 0x4f5b27. So 255 passes and 256 throws | +3, before the try (0x6022c8): not caught, not re-reported |
 | 0x18, 0x19, 0x1a | 0x5fef3b / 0x5fef69, 0x5ff2e7 / 0x5ff313, 0x5ff49b / 0x5ff4c9 (the same two operators, 0x4f5c00 / 0x4f5b00) | capacity 0xff, stored at 0x5fee9b, 0x5ff261 and 0x5ff3fb: the same `len > 255` test | +1 (opcodes.md error-PC table) |
 
-**Unreachable in the original and in `Base.osi`** (EXECUTED, CITED):
-- A 0x11 name is a string-table entry: a u8 length, then the bytes and a NUL, so at most 255 bytes. `Base.osi`'s
-  longest entry is **145 bytes** (2,749 entries, none of 200 or more; every entry has its NUL). Measured on 2026-10-09
-  by walking the table with `tools/research/osi.py` `parse` (the reader `tools/osi/reach.py` uses); the walk agrees
-  with `parse` on the count and the maximum.
-- A 0x16 is an `ScFixedStringTemplate<255>` (capacity 0xff, stored at 0x60b915). Its builders keep it at 254 or less:
-  `ConvertStringIDToDynamicString` throws when len ≥ 255 (`setae` at 0x60b95f), and `append` (0x70) when len + added ≥
-  255 (`setae` at 0x4f5c98).
-- `Base.osi` has 12 0x19 sites and no 0x18, 0x1a or 0x83 site (`tools/osi/reach.py --0x19`, EXECUTED). All 12 take
-  their name from a member value (`functionpointer`, `func`), all UNRESOLVED and in UNREACHABLE code.
+**How a name longer than 255 arises: a hostile `.osi`** (CITED; controller ruling, M2a-2 T2b).
+- The 0x11 copy measures the name with `strlen`: `operator=(const char*)` 0x4f5c00 calls 0x6573c0 at 0x4f5c13 on the
+  entry pointer + 1 (0x60224a–0x602262 in 0x83).
+- `ScOSIScript::ScOSIScript` 0x609570 builds the string pointer table from the file bytes alone: the u16 count
+  (0x6095f1–0x609601), table[0] = the first entry (0x609634), table[i] = table[i−1] + length byte + 2
+  (0x60964e–0x60966c). It never checks or writes the terminator byte.
+- So an entry whose terminator byte is not NUL is read on into the next entry. A file can carry a 255-byte entry with
+  a non-NUL terminator, and the name is then 256 bytes or more. The port loads whatever `.osi` the user supplies, so
+  this is the reachable case.
 
-So the throw needs a port string longer than 255 bytes, which only a test native (its `{"text"}` return is not bounded,
-conformance.md §1) or a future native model can create. Neither engine models the bound today. **Corpus:**
-`n-name-256` (kOutOfRange at +3, pending Tasks 3/4) and its boundary control `n-name-255` (copy passes; "Script is
-calling t.<name>" at +4).
+**`Base.osi` never does it** (EXECUTED):
+- Its string table has 2,749 entries. The longest is **145 bytes**, none is 200 or more, and every entry ends in NUL
+  (the maximum strlen is also 145). Measured on 2026-10-09 by walking the table with `tools/research/osi.py` `parse`
+  (the reader `tools/osi/reach.py` uses); the walk agrees with `parse` on the count and the maximum.
+- `Base.osi` has 12 0x19 sites and no 0x18, 0x1a or 0x83 site (`tools/osi/reach.py --0x19`). All 12 take their name
+  from a member value (`functionpointer`, `func`), all UNRESOLVED and in UNREACHABLE code.
+
+**A 0x16 name cannot do it.** A 0x16 is an `ScFixedStringTemplate<255>` (capacity 0xff, stored at 0x60b915). Its
+builders keep it at 254 or less: `ConvertStringIDToDynamicString` throws when len ≥ 255 (`setae` at 0x60b95f), and
+`append` (0x70) when len + added ≥ 255 (`setae` at 0x4f5c98).
+
+Neither engine models the bound today. **Corpus:** `n-name-256` (a `.rawstring` entry of 255 bytes with terminator
+0x61, followed by an empty entry: strlen 256 → kOutOfRange at +3, pending Tasks 3/4) and its boundary control
+`n-name-255` (a normal 255-byte entry: the copy passes; "Script is calling t.<name>" at +4). Both use no native.
 
 ## §9 Saver and mods
 

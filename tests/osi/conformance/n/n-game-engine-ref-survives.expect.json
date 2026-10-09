@@ -7,9 +7,7 @@
   ],
   "falsifier": "an engine-held game object (G = 1) is not freed when the script drops its last variant",
   "alternative": "engine references ignored (total = variants only): the third Pop frees it (F g 1), heap.live.g 0",
-  "pending": [
-    "engine_refs"
-  ],
+  "pending": "T3/T4",
   "entry": "main",
   "args": [],
   "natives": [

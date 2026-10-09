@@ -129,13 +129,22 @@ def test_counts_from_metadata_only(cr, tmp_path):
 
 
 def test_list_prints_each_program_with_its_status(cr, tmp_path, capsys):
-    """--list (M2a-2 T2b): one line per program, sorted by id, `pending: <features>` or `active`."""
+    """--list (M2a-2 T2b): one line per program, sorted by id, `pending <task>` or `active` (conformance.md §1:
+    `"pending": "<task id>"`, a string)."""
     (tmp_path / "x").mkdir()
-    for k, v in {"n-b": {"id": "n-b", "pending": ["swallow", "pc_after"]}, "n-a": {"id": "n-a"}}.items():
+    for k, v in {"n-b": {"id": "n-b", "pending": "T3/T4"}, "n-a": {"id": "n-a"}}.items():
         (tmp_path / "x" / (k + ".expect.json")).write_text(json.dumps(v))
     assert cr.main([str(tmp_path), "--list"]) == 0
     out = capsys.readouterr().out.splitlines()
-    assert out[1:] == ["program n-a active", "program n-b pending: swallow, pc_after"]
+    assert out[1:] == ["program n-a active", "program n-b pending T3/T4"]
+
+
+def test_pending_field_is_a_task_id_string():
+    """The runners skip a program whose `pending` names a task (controller ruling, M2a-2 T2b); the field is a string."""
+    pend = {p.name: json.loads(p.read_text())["pending"] for p in CORPUS.glob("*/*.expect.json")
+            if "pending" in json.loads(p.read_text())}
+    assert len(pend) == 9
+    assert set(pend.values()) == {"T3/T4"}
 
 
 def test_readme_repeats_the_authoring_rules():

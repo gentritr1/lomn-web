@@ -5,13 +5,7 @@
   ],
   "falsifier": "D16 rule 3: after a swallow the handler's n pops come from the CURRENT top (the inner leftovers), never from T's argument slots",
   "alternative": "pops remove T's arguments 11 and 22: the result is still 5 but depth 1, top M0 {0xff, 0}",
-  "pending": [
-    "swallow",
-    "swallowed",
-    "expect.top",
-    "pc_after",
-    "then"
-  ],
+  "pending": "T3/T4",
   "entry": "main",
   "args": [],
   "natives": [

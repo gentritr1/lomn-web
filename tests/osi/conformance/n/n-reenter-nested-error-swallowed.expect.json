@@ -5,13 +5,7 @@
   ],
   "falsifier": "D16 with the swallowed error being a 0x82 re-raise one level down: the swallowed E line is \"Script is calling t.inner\" (the inner DebugOn text is overwritten), its PC is the deepest function's, and dispatch continues there, so the deep function's 0x52 ends main's Run with T's result",
   "alternative": "the nested call resets on error: main continues after T -> result int 1, depth 0, context_depth 0; or PC restored from the markers: continues at @c+6, result int 1; or the swallowed line carries the inner message \"Debugger not enabled! but encountered DebugOn\"",
-  "pending": [
-    "swallow",
-    "swallowed",
-    "expect.top",
-    "pc_after",
-    "then"
-  ],
+  "pending": "T3/T4",
   "entry": "main",
   "args": [],
   "natives": [

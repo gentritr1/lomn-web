@@ -12,8 +12,8 @@
   argc violations  docs/osi/types.md "Argument-count violations" rows expanded per site ("key/argc#i", i = 1..sites);
                    a program covers one by naming it in "argc_violation";
   programs         the number of .expect.json files.
---list (M2a-2 T2b) adds one line per program, sorted by id: `program <id> active`, or `program <id> pending: <features>`
-from the program's `pending` key (docs/osi/conformance.md §1; such a program is not a gate).
+--list (M2a-2 T2b) adds one line per program, sorted by id: `program <id> active`, or `program <id> pending <task>`
+from the program's `pending` key (docs/osi/conformance.md §1: the runners skip it until that task lands).
 
 Usage: conformance_report.py DIR [--opcodes docs/osi/opcodes.md] [--types docs/osi/types.md] [--group a|b] [--list]
 Exit status 0 always (the report is a measurement; acceptance is read from its numbers)."""
@@ -155,7 +155,7 @@ def main(argv=None) -> int:
         for p in sorted((json.loads(f.read_text()) for f in Path(a.dir).rglob("*.expect.json")),
                         key=lambda p: p.get("id", "")):
             pend = p.get("pending")
-            print("program %s %s" % (p.get("id"), ("pending: " + ", ".join(pend)) if pend else "active"))
+            print("program %s %s" % (p.get("id"), ("pending " + pend) if pend else "active"))
     return 0
 
 

@@ -12,9 +12,10 @@ The fields are in `docs/osi/conformance.md` §1 ("Native-framework fields") and 
 derived by hand from `docs/osi/natives.md`, D13–D16 and the error-PC table in `docs/osi/opcodes.md`, and each `note`
 shows the derivation. Neither engine was run.
 
-**Pending Tasks 3/4.** A program with a `pending` key needs runner features that Tasks 3 (C++) and 4 (oracle) add. It
-is expected to FAIL on both runners until then, and it is not a gate. `conformance_report.py DIR --list` prints each
-program with its status.
+**Pending Tasks 3/4.** A program with `"pending": "T3/T4"` needs runner features that Tasks 3 (C++) and 4 (oracle)
+add. Both runners skip it (they print `PENDING <id> (<task>)` and count it in their summary), so it is not a gate until
+the key is removed. **The M2a-2 gate (Task 10) requires the pending count to be 0:** Tasks 3 and 4 remove the key from
+each program once it passes on both runners. `conformance_report.py DIR --list` prints each program with its status.
 
 | program | status | needs |
 |---|---|---|
@@ -29,8 +30,8 @@ program with its status.
 | `n-swallow-reerror` | pending | D16: `swallow`, `swallowed`, `pc_after`, `then` |
 | `n-swallow-pops` | pending | D16: `swallow`, `swallowed`, `expect.top`, `pc_after`, `then` |
 | `n-swallow-writes` | pending | D16: `swallow`, `swallowed`, `expect.top`, `pc_after`, `then` |
-| `n-name-256` | pending | the 255-character name bound (kOutOfRange), `pc_after` |
-| `n-name-255` | active | (the boundary control for `n-name-256`; `pc_after` and `then` are extra comparisons) |
+| `n-name-256` | pending | the strlen name read of a 0x11 literal with the 255 bound (kOutOfRange; a hostile file's non-NUL terminator), `pc_after` |
+| `n-name-255` | active | (the boundary control for `n-name-256`, same 0x11 path; `pc_after` and `then` are extra comparisons) |
 
 "Active" means that a runner which ignores the new comparison keys should already pass. That is INFERRED from the rules,
 not run: authoring rule 3 forbids running an engine to check an expectation.

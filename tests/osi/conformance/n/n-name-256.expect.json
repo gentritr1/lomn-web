@@ -3,26 +3,12 @@
   "rows": [
     "0x83"
   ],
-  "falsifier": "the 0x83 name copy throws kOutOfRange for a name longer than 255 (ScFixedString capacity 0xff stored at 0x602224; operator= 0x4f5b00 tests `len > cap` with seta at 0x4f5b16, SrThrow 0x4f5b27), before the try, at +3",
-  "alternative": "no name bound (neither engine models it today, controller finding): the lookup misses inside the try and the error is \"Script is calling t.aaa\u2026\" at +4",
-  "pending": [
-    "name bound (kOutOfRange)",
-    "pc_after"
-  ],
+  "falsifier": "the 0x83 name copy of a 0x11 literal measures the name with strlen (operator=(const char*) 0x4f5c00, strlen 0x6573c0 at 0x4f5c13), so an entry whose terminator byte is not NUL is read into the next entry, and a 256-character result throws kOutOfRange (capacity 0xff at 0x602224, seta 0x4f5c27, SrThrow 0x4f5c38) before the try, at +3",
+  "alternative": "the name taken from the entry's length byte (255, as a table reader does) passes the copy: the lookup misses and the error is \"Script is calling t.aaa\u2026\" at +4; or no bound at all: the same",
+  "pending": "T3/T4",
   "entry": "main",
   "args": [],
-  "natives": [
-    {
-      "cls": "t",
-      "name": "long",
-      "min": 0,
-      "max": 0,
-      "types": [],
-      "returns": {
-        "text": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-      }
-    }
-  ],
+  "natives": [],
   "registry": "none",
   "expect_error": {
     "message": "kOutOfRange",
@@ -35,7 +21,21 @@
     },
     "context_depth": 1,
     "fpu_pc": 64,
-    "pc_after": "@c+3"
+    "pc_after": "@c+3",
+    "heap": {
+      "live": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      },
+      "allocs": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      }
+    }
   },
   "then": {
     "entry": "main2",
@@ -48,5 +48,5 @@
     "depth": 0,
     "context_depth": 0
   },
-  "note": "UNREACHABLE in the original (natives.md \u00a78.3): a 0x11 name is at most 255 bytes (u8 length; Base.osi's longest string-table entry is 145, measured) and a 0x16 is an ScFixedStringTemplate<255> (capacity 0xff, 0x60b915) that its builders keep at <= 254. The program pins the bound for a port string that is longer (a test native's {text} return has no bound, conformance.md \u00a71). call(main): M0 (depth 1). t.long returns a 0x16 of 256 'a' (A s 1, length 256; depth 2). 0x83 at @c (0x3a): three incs (0x602178, 0x60218a, 0x6021a5) -> PC 0x3d = @c+3; s popped without dispose (0x6021c9; depth 1); type 0x16 -> operator=(const ScFixedString&) at 0x602299: 256 > 255 -> SrThrow(kOutOfRange). The call is before the try (0x6022c8), so nothing catches it: message \"kOutOfRange\" (our text for the non-OSI throw, as rule 14(e)), pc @c, op 0x83, depth 1, top M0, fpu_pc 64. heap is not asserted (the popped string's owner at the throw is the handler's local)."
+  "note": "Reachable with a hostile .osi: a user can supply any Base.osi, and ScOSIScript::ScOSIScript (0x609570) builds the string pointer table from the file bytes alone, table[0] = first entry (0x609634), table[i] = table[i-1] + len + 2 (0x60964e-0x60966c), without checking the terminator byte. Base.osi itself is safe: its longest entry is 145 bytes and every entry ends in NUL (natives.md \u00a78.3, measured). The file (osiasm .rawstring): entry 0 \"t\"; entry 1 = length byte 255, 255 'a', terminator byte 0x61 ('a'); entry 2 = \"\" (length byte 0, NUL). A C-string read from entry 1 + 1 gives 255 'a', the terminator 'a', then stops at entry 2's length byte 0: strlen 256. call(main): M0 (depth 1). PushConstantString entry 1 (0x46): {0x11, 1} (depth 2). 0x83 at @c (0x134): three incs (0x602178, 0x60218a, 0x6021a5) -> PC 0x137 = @c+3; s popped without dispose (0x6021c9; depth 1); s.type 0x11 -> pointer table [script+0x10][1] + 1 (0x60224a-0x602262) -> operator=(const char*) at 0x60226a: 256 > 255 -> SrThrow(kOutOfRange). The call precedes the try (0x6022c8), so nothing catches it: message \"kOutOfRange\" (our text for the non-OSI throw, as rule 14(e)), pc @c, op 0x83, depth 1, top M0, context_depth 1, fpu_pc 64. Nothing is allocated (a 0x11 owns nothing): heap all 0. Needs from Tasks 3/4: the strlen name read with the 255 bound, pc_after."
 }

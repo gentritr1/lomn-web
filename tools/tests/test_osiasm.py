@@ -176,3 +176,29 @@ def test_errors_are_reported_with_the_line(asm):
                      ("    BranchAlways @nowhere", "undefined label"), ('    PushConstantString "' + "x" * 256 + '"', "255")):
         with pytest.raises(asm.AsmError, match=msg):
             asm.assemble(".function main 0\n" + bad + "\n    Return\n")
+
+
+def test_rawstring_entry_with_a_non_nul_terminator(asm, osi):
+    """M2a-2 T2b (n-name-256): `.rawstring "text" TERM` writes one string-table entry {u8 len, text, TERM} instead of
+    the NUL. ScOSIScript::ScOSIScript (0x609570) steps the pointer table by `len + 2` (0x60964e-0x60966c) and never
+    checks the terminator, so a C-string read (strlen) of such an entry runs into the next entry. Later uses of the
+    same text resolve to it."""
+    a = "a" * 255
+    src = '.strings "t"\n.rawstring "%s" 0x61\n.strings ""\n.function main 0\n    PushConstantString "%s"\n    Return\n' % (a, a)
+    image, info = asm.assemble(src)
+    assert info["strings"] == ["t", a, ""]
+    o = osi.parse(image)                                   # the independent reader takes the length byte, as the exe does
+    assert o["strings"] == ["t", a, ""]
+    p = 10 + 3                                             # header 8, u16 count 2, entry 0 = {1, 't', 0}
+    assert image[p] == 255 and image[p + 1:p + 256] == a.encode() and image[p + 256] == 0x61 and image[p + 257] == 0
+    entry = image[p + 1:]
+    assert entry.index(b"\0") == 256                       # strlen of the entry: 255 'a' + the 'a' terminator
+    code = info["code_start"]
+    assert image[code:code + 3] == bytes([0x46, 1, 0])     # PushConstantString -> entry 1
+
+
+def test_rawstring_errors(asm):
+    for bad, msg in (('.rawstring "x" 300', "out of range"), ('.rawstring "x"', "TERM"),
+                     ('.strings "x"\n.rawstring "x" 0x61', "already")):
+        with pytest.raises(asm.AsmError, match=msg):
+            asm.assemble(bad + "\n.function main 0\n    Return\n")

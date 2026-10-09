@@ -9,6 +9,9 @@ String-like tables are u16 count + {u8 len, bytes, NUL}. Offsets are file offset
 
 Syntax (one statement per line; `;` or `#` starts a comment outside quotes):
   .strings "a" "b" ...        seed the string table in this order (later uses append new strings in first-use order)
+  .rawstring "text" TERM      append one string-table entry whose terminator byte is TERM instead of NUL (a hostile
+                              file: the exe never checks it, so a C-string read runs into the next entry; M2a-2 T2b,
+                              docs/osi/natives.md §8.3); later uses of the same text resolve to it
   .globals name ...           the global-name table (0x21/0x22 `global:name` operands index it)
   .symbols name ...           seed the symbol table (members/methods are appended in first-use order)
   .sources "file" ...         the source table (empty by default)
@@ -141,6 +144,7 @@ def _int(tok: str) -> int:
 class _Table:
     def __init__(self):
         self.items: list[bytes] = []
+        self.terms: dict[int, int] = {}      # entry index -> terminator byte, for .rawstring entries (else NUL)
 
     def index(self, s: bytes) -> int:
         if s not in self.items:
@@ -148,10 +152,10 @@ class _Table:
         return self.items.index(s)
 
 
-def _table_bytes(items: list[bytes]) -> bytes:
+def _table_bytes(items: list[bytes], terms: dict[int, int] | None = None) -> bytes:
     out = bytearray(struct.pack("<H", len(items)))
-    for s in items:
-        out += bytes([len(s)]) + s + b"\0"
+    for i, s in enumerate(items):
+        out += bytes([len(s)]) + s + bytes([(terms or {}).get(i, 0)])
     return bytes(out)
 
 
@@ -182,6 +186,15 @@ def assemble(text: str) -> tuple[bytes, dict]:
             elif head == ".strings":
                 for t in toks[1:]:
                     strings.index(_string(t))
+            elif head == ".rawstring":
+                if len(toks) != 3:
+                    raise AsmError(".rawstring takes \"text\" TERM")
+                text, term = _string(toks[1]), _int(toks[2])
+                if not 0 <= term <= 0xFF:
+                    raise AsmError("terminator %d out of range for a byte" % term)
+                if text in strings.items:
+                    raise AsmError(".rawstring text is already in the string table")
+                strings.terms[strings.index(text)] = term
             elif head == ".globals":
                 globals_ += [t.encode("latin-1") for t in toks[1:]]
             elif head == ".symbols":
@@ -240,7 +253,7 @@ def assemble(text: str) -> tuple[bytes, dict]:
     # ---- layout: the tables, then the code
     head = bytearray(b"OSI\0" + struct.pack("<HH", 4, 1))
     tables = bytearray()
-    tables += _table_bytes(strings.items) + _table_bytes(globals_)
+    tables += _table_bytes(strings.items, strings.terms) + _table_bytes(globals_)
     fpatch = []
     tables += struct.pack("<H", len(functions))
     for name, argc, target in functions:
