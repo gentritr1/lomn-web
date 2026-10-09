@@ -1,0 +1,41 @@
+{
+  "id": "t-members",
+  "kind": "propagation",
+  "path": "object members",
+  "entries": [
+    "main"
+  ],
+  "natives": [
+    {
+      "cls": "t",
+      "name": "src",
+      "min": 0,
+      "max": 0,
+      "types": [],
+      "ret": "int"
+    }
+  ],
+  "expect": {
+    "ok": true,
+    "sinks": [
+      {
+        "kind": "branch",
+        "pc": "@b_member",
+        "keys": [
+          "t.src"
+        ]
+      },
+      {
+        "kind": "branch",
+        "pc": "@b_this",
+        "keys": [
+          "t.src"
+        ]
+      }
+    ],
+    "verdicts": {
+      "t.src": "UNSAFE"
+    }
+  },
+  "note": "o.a <- s (0x10), o.b <- 1; GetMemberValue .b clean, .a tagged; method m (0x12 + 0x51): this.b <- this.a (0x16, 0x15), returns this.b"
+}

@@ -1,0 +1,41 @@
+{
+  "id": "t-arrays",
+  "kind": "propagation",
+  "path": "arrays",
+  "entries": [
+    "main"
+  ],
+  "natives": [
+    {
+      "cls": "t",
+      "name": "src",
+      "min": 0,
+      "max": 0,
+      "types": [],
+      "ret": "int"
+    }
+  ],
+  "expect": {
+    "ok": true,
+    "sinks": [
+      {
+        "kind": "branch",
+        "pc": "@b_array",
+        "keys": [
+          "t.src"
+        ]
+      },
+      {
+        "kind": "branch",
+        "pc": "@b_set",
+        "keys": [
+          "t.src"
+        ]
+      }
+    ],
+    "verdicts": {
+      "t.src": "UNSAFE"
+    }
+  },
+  "note": "[1] append s -> [1,s]; insert 7 at 0 -> [7,1,s]; set [1] <- 9 -> [7,9,s]; remove 0 -> [9,s]; [0] clean, [1] tagged; set [0] <- s, then [0] tagged"
+}

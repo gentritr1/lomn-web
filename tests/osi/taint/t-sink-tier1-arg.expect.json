@@ -1,0 +1,48 @@
+{
+  "id": "t-sink-tier1-arg",
+  "kind": "sink",
+  "path": "tier1-arg",
+  "entries": [
+    "main"
+  ],
+  "natives": [
+    {
+      "cls": "t",
+      "name": "src",
+      "min": 0,
+      "max": 0,
+      "types": [],
+      "ret": "int"
+    },
+    {
+      "cls": "t",
+      "name": "impl",
+      "min": 1,
+      "max": 1,
+      "types": [
+        "int"
+      ],
+      "returns": {
+        "type": "0x10",
+        "value": 3
+      },
+      "tier": "tier1"
+    }
+  ],
+  "expect": {
+    "ok": true,
+    "sinks": [
+      {
+        "kind": "tier1-arg",
+        "pc": "@c_tainted",
+        "keys": [
+          "t.src"
+        ]
+      }
+    ],
+    "verdicts": {
+      "t.src": "UNSAFE"
+    }
+  },
+  "note": "impl(s): sink at the 0x82; impl(1): none. A tier1 native's return is not tagged, so t.impl has no verdict line"
+}

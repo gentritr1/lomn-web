@@ -1,0 +1,57 @@
+{
+  "id": "t-byref",
+  "kind": "propagation",
+  "path": "by-ref writes",
+  "entries": [
+    "main",
+    "main2"
+  ],
+  "natives": [
+    {
+      "cls": "t",
+      "name": "sw",
+      "min": 1,
+      "max": 1,
+      "types": [
+        "byref"
+      ],
+      "returns": {
+        "type": "0x10",
+        "value": 5
+      },
+      "swallow": true,
+      "calls": {
+        "entry": "onevent",
+        "args": [
+          {
+            "type": "0x10",
+            "value": 4
+          }
+        ]
+      },
+      "writes": [
+        {
+          "arg": 0,
+          "type": "0x10",
+          "value": 9
+        }
+      ]
+    }
+  ],
+  "expect": {
+    "ok": true,
+    "sinks": [
+      {
+        "kind": "branch",
+        "pc": "@b_byref",
+        "keys": [
+          "t.sw"
+        ]
+      }
+    ],
+    "verdicts": {
+      "t.sw": "UNSAFE"
+    }
+  },
+  "note": "as n-swallow-writes: main leaves [M0, 9] (9 = t.sw's by-ref write into slot 1); main2 (marker at slot 2) pushes 1 (clean branch), Pull 2 copies slot 1: tagged t.sw"
+}

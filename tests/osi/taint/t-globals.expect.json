@@ -1,0 +1,42 @@
+{
+  "id": "t-globals",
+  "kind": "propagation",
+  "path": "globals",
+  "entries": [
+    "main",
+    "main2"
+  ],
+  "natives": [
+    {
+      "cls": "t",
+      "name": "src",
+      "min": 0,
+      "max": 0,
+      "types": [],
+      "ret": "int"
+    }
+  ],
+  "expect": {
+    "ok": true,
+    "sinks": [
+      {
+        "kind": "branch",
+        "pc": "@b_after_gamevar",
+        "keys": [
+          "t.src"
+        ]
+      },
+      {
+        "kind": "branch",
+        "pc": "@b_global",
+        "keys": [
+          "t.src"
+        ]
+      }
+    ],
+    "verdicts": {
+      "t.src": "UNSAFE"
+    }
+  },
+  "note": "main: g <- s, h <- 1; SetGameVariable (0x81) is a no-op: the tagged value stays on top and is branched on; main2 (a second engine call): h clean, g tagged"
+}

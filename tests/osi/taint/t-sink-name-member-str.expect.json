@@ -1,0 +1,50 @@
+{
+  "id": "t-sink-name-member-str",
+  "kind": "sink",
+  "path": "name",
+  "entries": [
+    "main"
+  ],
+  "natives": [
+    {
+      "cls": "t",
+      "name": "name",
+      "min": 0,
+      "max": 0,
+      "types": [],
+      "returns": {
+        "text": "a"
+      }
+    }
+  ],
+  "expect": {
+    "ok": true,
+    "sinks": [
+      {
+        "kind": "name",
+        "pc": "@s1a",
+        "keys": [
+          "t.name"
+        ]
+      },
+      {
+        "kind": "name",
+        "pc": "@s18",
+        "keys": [
+          "t.name"
+        ]
+      },
+      {
+        "kind": "branch",
+        "pc": "@b_read",
+        "keys": [
+          "t.name"
+        ]
+      }
+    ],
+    "verdicts": {
+      "t.name": "UNSAFE"
+    }
+  },
+  "note": "0x1a o.<t.name> <- 1 (clean value): name sink; 0x18 o.<t.name>: name sink, and the value read carries the name's tag; 0x18 o.\"a\": clean"
+}

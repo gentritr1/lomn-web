@@ -1,0 +1,41 @@
+{
+  "id": "t-arith",
+  "kind": "propagation",
+  "path": "arithmetic",
+  "entries": [
+    "main"
+  ],
+  "natives": [
+    {
+      "cls": "t",
+      "name": "src",
+      "min": 0,
+      "max": 0,
+      "types": [],
+      "ret": "int"
+    }
+  ],
+  "expect": {
+    "ok": true,
+    "sinks": [
+      {
+        "kind": "branch",
+        "pc": "@b_arith",
+        "keys": [
+          "t.src"
+        ]
+      },
+      {
+        "kind": "branch",
+        "pc": "@b_rhs",
+        "keys": [
+          "t.src"
+        ]
+      }
+    ],
+    "verdicts": {
+      "t.src": "UNSAFE"
+    }
+  },
+  "note": "((s + 1)++ * 2 - 1) << 1, ~, % 3: tagged; 8 / (s + 2): tagged through the rhs; 4 / 2 clean"
+}

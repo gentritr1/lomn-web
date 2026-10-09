@@ -1,0 +1,53 @@
+{
+  "id": "t-copy-native",
+  "kind": "propagation",
+  "path": "copy natives",
+  "entries": [
+    "main"
+  ],
+  "natives": [
+    {
+      "cls": "t",
+      "name": "src",
+      "min": 0,
+      "max": 0,
+      "types": [],
+      "ret": "int"
+    },
+    {
+      "cls": "t",
+      "name": "cp",
+      "min": 1,
+      "max": 1,
+      "types": [
+        "int"
+      ],
+      "ret": "copy"
+    }
+  ],
+  "expect": {
+    "ok": true,
+    "sinks": [
+      {
+        "kind": "branch",
+        "pc": "@b_copy",
+        "keys": [
+          "t.cp",
+          "t.src"
+        ]
+      },
+      {
+        "kind": "branch",
+        "pc": "@b_copy_clean_arg",
+        "keys": [
+          "t.cp"
+        ]
+      }
+    ],
+    "verdicts": {
+      "t.src": "UNSAFE",
+      "t.cp": "UNSAFE"
+    }
+  },
+  "note": "cp(s) carries {t.cp, t.src}; cp(1) carries {t.cp} (a stub return always carries its own key)"
+}

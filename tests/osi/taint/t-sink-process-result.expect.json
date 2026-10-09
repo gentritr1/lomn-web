@@ -1,0 +1,35 @@
+{
+  "id": "t-sink-process-result",
+  "kind": "sink",
+  "path": "process-result",
+  "entries": [
+    "Input",
+    "Process"
+  ],
+  "natives": [
+    {
+      "cls": "t",
+      "name": "src",
+      "min": 0,
+      "max": 0,
+      "types": [],
+      "ret": "int"
+    }
+  ],
+  "expect": {
+    "ok": true,
+    "sinks": [
+      {
+        "kind": "process-result",
+        "pc": "@r",
+        "keys": [
+          "t.src"
+        ]
+      }
+    ],
+    "verdicts": {
+      "t.src": "UNSAFE"
+    }
+  },
+  "note": "Input returns s (no sink: the host disposes it); Process returns s: the re-run rule reads it"
+}

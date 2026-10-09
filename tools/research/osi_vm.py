@@ -32,6 +32,8 @@ one cursor, G checked, H applied, C performed, X decides a swallow; v1 logs stil
 as the original's pointer table does), the error PCs of the opcodes.md table (rule 15) and the runner keys of group n
 (pc_after, then, swallowed, expect.top, returns.engine_refs/object, calls.depth, swallow). The host side natives use is
 tools/research/osi_natives/framework.py.
+
+M2a-2 T5 adds one hook, `Vm.wrap_handlers` (the A10 taint pass, tools/research/osi_taint.py); unused, it changes nothing.
 """
 from __future__ import annotations
 
@@ -1248,6 +1250,16 @@ class Vm:
         self.pc = self._outer_saved_pc
         self.context_depth, self.frame, self.refcount = self._outer_entry
         self.last_error = None
+
+    # ------------------------------------------------------------------ hooks
+    def wrap_handlers(self, wrap) -> None:
+        """Hook (M2a-2 T5): replace each of this VM's 256 opcode handlers h by wrap(op, h), a callable taking the VM.
+        The A10 taint pass (tools/research/osi_taint.py) uses it to keep a shadow of the stack, the globals, the members
+        and the arrays beside the VM. No runner calls it, so nothing changes when it is unused. Call it before the first
+        engine call (Run binds the table on entry)."""
+        H = self._h
+        for op in range(256):
+            H[op] = wrap(op, H[op])
 
     # ------------------------------------------------------------------ the native framework's VM side (M2a-2)
     def native_seq(self) -> int:

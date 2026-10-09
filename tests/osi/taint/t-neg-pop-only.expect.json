@@ -1,0 +1,35 @@
+{
+  "id": "t-neg-pop-only",
+  "kind": "negative",
+  "path": "popped only",
+  "entries": [
+    "main"
+  ],
+  "natives": [
+    {
+      "cls": "t",
+      "name": "src",
+      "min": 0,
+      "max": 0,
+      "types": [],
+      "ret": "int"
+    },
+    {
+      "cls": "t",
+      "name": "str",
+      "min": 0,
+      "max": 0,
+      "types": [],
+      "ret": "string"
+    }
+  ],
+  "expect": {
+    "ok": true,
+    "sinks": [],
+    "verdicts": {
+      "t.src": "safe",
+      "t.str": "safe"
+    }
+  },
+  "note": "src popped by Pop, src and str by PopN 2: no sink, both natives safe; the clean branch is no sink"
+}

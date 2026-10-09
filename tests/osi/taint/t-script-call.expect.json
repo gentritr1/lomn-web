@@ -1,0 +1,34 @@
+{
+  "id": "t-script-call",
+  "kind": "propagation",
+  "path": "script call arguments and returns",
+  "entries": [
+    "main"
+  ],
+  "natives": [
+    {
+      "cls": "t",
+      "name": "src",
+      "min": 0,
+      "max": 0,
+      "types": [],
+      "ret": "int"
+    }
+  ],
+  "expect": {
+    "ok": true,
+    "sinks": [
+      {
+        "kind": "branch",
+        "pc": "@b_ret",
+        "keys": [
+          "t.src"
+        ]
+      }
+    ],
+    "verdicts": {
+      "t.src": "UNSAFE"
+    }
+  },
+  "note": "sub(a0, a1) returns a0 (0x50 with 2 arguments, 0x52): sub(s, 1) tagged; sub(0, s) clean"
+}

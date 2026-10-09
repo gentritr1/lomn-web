@@ -1,0 +1,48 @@
+{
+  "id": "t-this-ref",
+  "kind": "propagation",
+  "path": "this reference",
+  "entries": [
+    "main"
+  ],
+  "natives": [
+    {
+      "cls": "t",
+      "name": "src",
+      "min": 0,
+      "max": 0,
+      "types": [],
+      "ret": "int"
+    }
+  ],
+  "expect": {
+    "ok": true,
+    "sinks": [
+      {
+        "kind": "branch",
+        "pc": "@j1",
+        "keys": [
+          "t.src"
+        ]
+      },
+      {
+        "kind": "branch",
+        "pc": "@b_this_val",
+        "keys": [
+          "t.src"
+        ]
+      },
+      {
+        "kind": "branch",
+        "pc": "@j2",
+        "keys": [
+          "t.src"
+        ]
+      }
+    ],
+    "verdicts": {
+      "t.src": "UNSAFE"
+    }
+  },
+  "note": "arr = [o]; arr[s] is o with the index's tag; o.m via 0x12 and 0x51 (sink j1); in m, this.a (0x16) carries this's tag (sink b_this_val), this.n via 0x17 and 0x51 (sink j2)"
+}

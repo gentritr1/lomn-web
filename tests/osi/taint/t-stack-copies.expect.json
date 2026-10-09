@@ -1,0 +1,48 @@
+{
+  "id": "t-stack-copies",
+  "kind": "propagation",
+  "path": "stack copies",
+  "entries": [
+    "main"
+  ],
+  "natives": [
+    {
+      "cls": "t",
+      "name": "src",
+      "min": 0,
+      "max": 0,
+      "types": [],
+      "ret": "int"
+    }
+  ],
+  "expect": {
+    "ok": true,
+    "sinks": [
+      {
+        "kind": "branch",
+        "pc": "@b_pull",
+        "keys": [
+          "t.src"
+        ]
+      },
+      {
+        "kind": "branch",
+        "pc": "@b_dupn",
+        "keys": [
+          "t.src"
+        ]
+      },
+      {
+        "kind": "branch",
+        "pc": "@b_swap",
+        "keys": [
+          "t.src"
+        ]
+      }
+    ],
+    "verdicts": {
+      "t.src": "UNSAFE"
+    }
+  },
+  "note": "[M,s] -> push 1, Swap [M,1,s], Dup [M,1,s,s], Pull 3 copies slot 1 (the clean 1: no sink at @clean), Pull 2 copies slot 2 (s), DupN 2 copies slots 2-3, PopN 2 leaves [M,1,s]: the s that Swap moved"
+}

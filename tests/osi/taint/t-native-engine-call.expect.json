@@ -1,0 +1,46 @@
+{
+  "id": "t-native-engine-call",
+  "kind": "propagation",
+  "path": "engine-call arguments",
+  "entries": [
+    "Process"
+  ],
+  "natives": [
+    {
+      "cls": "t",
+      "name": "n",
+      "min": 0,
+      "max": 0,
+      "types": [],
+      "returns": {
+        "type": "0x10",
+        "value": 3
+      },
+      "calls": {
+        "entry": "inner",
+        "args": [
+          {
+            "type": "0x10",
+            "value": 5
+          }
+        ]
+      }
+    }
+  ],
+  "expect": {
+    "ok": true,
+    "sinks": [
+      {
+        "kind": "branch",
+        "pc": "@b_arg",
+        "keys": [
+          "t.n"
+        ]
+      }
+    ],
+    "verdicts": {
+      "t.n": "UNSAFE"
+    }
+  },
+  "note": "t.n calls inner(5): the 5 carries {t.n}, so inner's branch on it is a sink and inner returns a tagged value; Process pops t.n's result and halts: its result is the clean nothing of 0xff"
+}

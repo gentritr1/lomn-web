@@ -1,0 +1,34 @@
+{
+  "id": "t-sink-jump-target",
+  "kind": "sink",
+  "path": "jump target",
+  "entries": [
+    "main"
+  ],
+  "natives": [
+    {
+      "cls": "t",
+      "name": "src",
+      "min": 0,
+      "max": 0,
+      "types": [],
+      "ret": "int"
+    }
+  ],
+  "expect": {
+    "ok": true,
+    "sinks": [
+      {
+        "kind": "branch",
+        "pc": "@j",
+        "keys": [
+          "t.src"
+        ]
+      }
+    ],
+    "verdicts": {
+      "t.src": "UNSAFE"
+    }
+  },
+  "note": "JumpRelative 0 to s + @sub: the target is tagged (branch sink); JumpRelative 0 to the literal @sub: none"
+}

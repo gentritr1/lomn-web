@@ -1,0 +1,45 @@
+{
+  "id": "t-sink-name-0x83",
+  "kind": "sink",
+  "path": "name",
+  "entries": [
+    "main"
+  ],
+  "natives": [
+    {
+      "cls": "t",
+      "name": "name",
+      "min": 0,
+      "max": 0,
+      "types": [],
+      "returns": {
+        "text": "dst"
+      }
+    },
+    {
+      "cls": "t",
+      "name": "dst",
+      "min": 0,
+      "max": 0,
+      "types": [],
+      "ret": "int"
+    }
+  ],
+  "expect": {
+    "ok": true,
+    "sinks": [
+      {
+        "kind": "name",
+        "pc": "@s83",
+        "keys": [
+          "t.name"
+        ]
+      }
+    ],
+    "verdicts": {
+      "t.name": "UNSAFE",
+      "t.dst": "safe"
+    }
+  },
+  "note": "0x83 calls t.dst by the name from t.name: sink; by the literal \"dst\": none; t.dst's results are popped"
+}

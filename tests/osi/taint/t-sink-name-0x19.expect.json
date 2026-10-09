@@ -1,0 +1,36 @@
+{
+  "id": "t-sink-name-0x19",
+  "kind": "sink",
+  "path": "name",
+  "entries": [
+    "main"
+  ],
+  "natives": [
+    {
+      "cls": "t",
+      "name": "name",
+      "min": 0,
+      "max": 0,
+      "types": [],
+      "returns": {
+        "text": "m"
+      }
+    }
+  ],
+  "expect": {
+    "ok": true,
+    "sinks": [
+      {
+        "kind": "name",
+        "pc": "@s19",
+        "keys": [
+          "t.name"
+        ]
+      }
+    ],
+    "verdicts": {
+      "t.name": "UNSAFE"
+    }
+  },
+  "note": "0x19 with the name from t.name (\"m\"): sink; with the literal \"m\": none"
+}

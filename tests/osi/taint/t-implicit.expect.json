@@ -1,0 +1,34 @@
+{
+  "id": "t-implicit",
+  "kind": "implicit",
+  "path": "implicit flow",
+  "entries": [
+    "main"
+  ],
+  "natives": [
+    {
+      "cls": "t",
+      "name": "src",
+      "min": 0,
+      "max": 0,
+      "types": [],
+      "ret": "int"
+    }
+  ],
+  "expect": {
+    "ok": true,
+    "sinks": [
+      {
+        "kind": "branch",
+        "pc": "@b_src",
+        "keys": [
+          "t.src"
+        ]
+      }
+    ],
+    "verdicts": {
+      "t.src": "UNSAFE"
+    }
+  },
+  "note": "if s then x <- 1 else x <- 2: only the branch on s is a sink; x is clean (implicit flows are not propagated)"
+}

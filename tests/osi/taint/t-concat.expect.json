@@ -1,0 +1,41 @@
+{
+  "id": "t-concat",
+  "kind": "propagation",
+  "path": "string concatenation",
+  "entries": [
+    "main"
+  ],
+  "natives": [
+    {
+      "cls": "t",
+      "name": "str",
+      "min": 0,
+      "max": 0,
+      "types": [],
+      "ret": "string"
+    }
+  ],
+  "expect": {
+    "ok": true,
+    "sinks": [
+      {
+        "kind": "branch",
+        "pc": "@b_lhs",
+        "keys": [
+          "t.str"
+        ]
+      },
+      {
+        "kind": "branch",
+        "pc": "@b_rhs",
+        "keys": [
+          "t.str"
+        ]
+      }
+    ],
+    "verdicts": {
+      "t.str": "UNSAFE"
+    }
+  },
+  "note": "str + \"x\" = \"x\" and \"y\" + str = \"y\" tagged; \"a\" + \"b\" = \"ab\" clean"
+}
