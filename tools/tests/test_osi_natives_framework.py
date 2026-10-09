@@ -401,12 +401,14 @@ def _uncompared_copy(tmp_path, ids):
     return c
 
 
-PENDING_N = sorted(p.name[:-len(".expect.json")] for p in GROUP_N.glob("*.expect.json")
-                   if json.loads(p.read_text()).get("pending"))
+# Since the merge of Tasks 3+4 (2026-10-09) every group-n program is active; the list is all of group n, so the
+# parametrized test below never silently shrinks to zero cases.
+PENDING_N = sorted(p.name[:-len(".expect.json")] for p in GROUP_N.glob("*.expect.json"))
 
 
-def test_the_twelve_pending_group_n_programs_are_the_ones_this_task_serves():
-    assert len(PENDING_N) == 12 and "n-reenter-nested-error-swallowed" in PENDING_N
+def test_the_group_n_programs_this_task_serves_are_all_active():
+    assert len(PENDING_N) == 13 and "n-reenter-nested-error-swallowed" in PENDING_N
+    assert not [p for p in PENDING_N if "pending" in json.loads((GROUP_N / (p + ".expect.json")).read_text(encoding="latin-1"))]
 
 
 @pytest.mark.parametrize("pid", PENDING_N)
