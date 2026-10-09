@@ -1,0 +1,87 @@
+{
+  "id": "t-tier1-output",
+  "kind": "propagation",
+  "path": "tier1 output",
+  "entries": [
+    "main"
+  ],
+  "natives": [
+    {
+      "cls": "t",
+      "name": "src",
+      "min": 0,
+      "max": 0,
+      "types": [],
+      "ret": "int"
+    },
+    {
+      "cls": "t",
+      "name": "src2",
+      "min": 0,
+      "max": 0,
+      "types": [],
+      "ret": "int"
+    },
+    {
+      "cls": "t",
+      "name": "impl",
+      "min": 1,
+      "max": 1,
+      "types": [
+        "0x05"
+      ],
+      "returns": {
+        "type": "0x10",
+        "value": 3
+      },
+      "tier": "tier1"
+    },
+    {
+      "cls": "t",
+      "name": "nest",
+      "min": 0,
+      "max": 0,
+      "types": [],
+      "returns": {
+        "type": "0x10",
+        "value": 0
+      },
+      "tier": "tier1",
+      "calls": {
+        "entry": "inner",
+        "args": []
+      }
+    }
+  ],
+  "expect": {
+    "ok": true,
+    "sinks": [
+      {
+        "kind": "tier1-arg",
+        "pc": "@c1",
+        "keys": [
+          "t.src"
+        ]
+      },
+      {
+        "kind": "branch",
+        "pc": "@b_contents",
+        "keys": [
+          "t.src"
+        ]
+      },
+      {
+        "kind": "branch",
+        "pc": "@b_nested",
+        "keys": [
+          "t.src2"
+        ]
+      }
+    ],
+    "verdicts": {
+      "t.src": "UNSAFE",
+      "t.src2": "UNSAFE"
+    }
+  },
+  "note": "impl([s]): the array reference is clean, its element tagged: a tier1-arg sink, and impl's result carries {t.src}; nest() calls inner(), which returns t.src2's value: nest's result carries {t.src2}"
+}

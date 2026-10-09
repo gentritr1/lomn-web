@@ -1,4 +1,4 @@
-; t-arith: the union of the operands through + - * / % << ~ and 0x7a Increment
+; t-arith: the union of the operands through + - * / % << ~ ^ and 0x7a Increment
 .function main 0
     CallGameFunction t.src 0
     PushConstanti8 1
@@ -20,6 +20,7 @@ a:
     CallGameFunction t.src 0
     PushConstanti8 2
     Add
+d_rhs:
     Divide
 b_rhs:
     CompareAndBranchIfFalse @b
@@ -30,5 +31,11 @@ b:
 clean:
     CompareAndBranchIfFalse @c
 c:
+    CallGameFunction t.src 0
+    PushConstanti8 2
+    Power
+b_pow:
+    CompareAndBranchIfFalse @d
+d:
     PushConstanti8 1
     Return

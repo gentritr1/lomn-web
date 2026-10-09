@@ -31,11 +31,32 @@
         "keys": [
           "t.src"
         ]
+      },
+      {
+        "kind": "branch",
+        "pc": "@b_gt",
+        "keys": [
+          "t.src"
+        ]
+      },
+      {
+        "kind": "branch",
+        "pc": "@b_le",
+        "keys": [
+          "t.src"
+        ]
+      },
+      {
+        "kind": "branch",
+        "pc": "@b_ge",
+        "keys": [
+          "t.src"
+        ]
       }
     ],
     "verdicts": {
       "t.src": "UNSAFE"
     }
   },
-  "note": "s = 0 (lhs) and 5 < s (rhs) tagged; 1 >= 2 clean"
+  "note": "s = 0 (lhs) and 5 < s (rhs) tagged; 1 >= 2 clean; s > 1, s <= 1, 2 >= s tagged"
 }

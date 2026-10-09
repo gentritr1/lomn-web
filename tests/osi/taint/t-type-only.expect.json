@@ -1,0 +1,83 @@
+{
+  "id": "t-type-only",
+  "kind": "sink",
+  "path": "type-only",
+  "entries": [
+    "main"
+  ],
+  "natives": [
+    {
+      "cls": "t",
+      "name": "ty",
+      "min": 0,
+      "max": 0,
+      "types": [],
+      "ret": "int"
+    },
+    {
+      "cls": "t",
+      "name": "val",
+      "min": 0,
+      "max": 0,
+      "types": [],
+      "ret": "int"
+    },
+    {
+      "cls": "t",
+      "name": "src",
+      "min": 0,
+      "max": 0,
+      "types": [],
+      "ret": "int"
+    }
+  ],
+  "expect": {
+    "ok": true,
+    "sinks": [
+      {
+        "kind": "branch",
+        "pc": "@b_ne",
+        "keys": [
+          "t.ty"
+        ],
+        "type_only": [
+          "t.ty"
+        ]
+      },
+      {
+        "kind": "branch",
+        "pc": "@b_mixed",
+        "keys": [
+          "t.ty",
+          "t.val"
+        ],
+        "type_only": [
+          "t.ty"
+        ]
+      },
+      {
+        "kind": "branch",
+        "pc": "@b_both",
+        "keys": [
+          "t.src"
+        ]
+      },
+      {
+        "kind": "branch",
+        "pc": "@b_test",
+        "keys": [
+          "t.src"
+        ],
+        "type_only": [
+          "t.src"
+        ]
+      }
+    ],
+    "verdicts": {
+      "t.ty": "UNSAFE type-only",
+      "t.val": "UNSAFE",
+      "t.src": "UNSAFE"
+    }
+  },
+  "note": "not (ty == nothing): type-only; (nothing == ty) or val: ty type-only, val by value (the site is not type-only); (src == nothing) or src: src by value; IsInteger(src): type-only, but src's verdict is by value (b_both)"
+}

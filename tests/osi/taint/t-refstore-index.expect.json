@@ -1,0 +1,90 @@
+{
+  "id": "t-refstore-index",
+  "kind": "sink",
+  "path": "refstore",
+  "entries": [
+    "main"
+  ],
+  "natives": [
+    {
+      "cls": "t",
+      "name": "src",
+      "min": 0,
+      "max": 0,
+      "types": [],
+      "ret": "int"
+    }
+  ],
+  "expect": {
+    "ok": true,
+    "sinks": [
+      {
+        "kind": "refstore",
+        "pc": "@set",
+        "keys": [
+          "t.src"
+        ]
+      },
+      {
+        "kind": "errpath",
+        "pc": "@set",
+        "keys": [
+          "t.src"
+        ]
+      },
+      {
+        "kind": "refstore",
+        "pc": "@ins",
+        "keys": [
+          "t.src"
+        ]
+      },
+      {
+        "kind": "errpath",
+        "pc": "@ins",
+        "keys": [
+          "t.src"
+        ]
+      },
+      {
+        "kind": "refstore",
+        "pc": "@rem",
+        "keys": [
+          "t.src"
+        ]
+      },
+      {
+        "kind": "errpath",
+        "pc": "@rem",
+        "keys": [
+          "t.src"
+        ]
+      },
+      {
+        "kind": "errpath",
+        "pc": "@get",
+        "keys": [
+          "t.src"
+        ]
+      },
+      {
+        "kind": "errpath",
+        "pc": "@div",
+        "keys": [
+          "t.src"
+        ]
+      },
+      {
+        "kind": "errpath",
+        "pc": "@mod",
+        "keys": [
+          "t.src"
+        ]
+      }
+    ],
+    "verdicts": {
+      "t.src": "UNSAFE"
+    }
+  },
+  "note": "[5,6]: set [s] <- 7, insert 8 at s, remove at s, read [s]; 9 / (s + 1), 9 % (s + 2); the literal-index set and read are no sinks"
+}

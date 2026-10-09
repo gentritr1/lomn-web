@@ -11,6 +11,7 @@
     AppendToArray
     GetVariableValue 0
     CallGameFunction t.src 0
+g:
     GetArrayValue
     Dup
     GetMemberFunction .m

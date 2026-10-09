@@ -1,0 +1,112 @@
+{
+  "id": "t-typetests",
+  "kind": "propagation",
+  "path": "type tests",
+  "entries": [
+    "main"
+  ],
+  "natives": [
+    {
+      "cls": "t",
+      "name": "src",
+      "min": 0,
+      "max": 0,
+      "types": [],
+      "ret": "int"
+    },
+    {
+      "cls": "t",
+      "name": "g",
+      "min": 0,
+      "max": 0,
+      "types": [],
+      "ret": "game",
+      "ret_class": "GcTimer"
+    },
+    {
+      "cls": "t",
+      "name": "cpa",
+      "min": 1,
+      "max": 1,
+      "types": [
+        "0x05"
+      ],
+      "ret": "copy"
+    }
+  ],
+  "expect": {
+    "ok": true,
+    "sinks": [
+      {
+        "kind": "branch",
+        "pc": "@b_float",
+        "keys": [
+          "t.src"
+        ],
+        "type_only": [
+          "t.src"
+        ]
+      },
+      {
+        "kind": "branch",
+        "pc": "@b_string",
+        "keys": [
+          "t.src"
+        ],
+        "type_only": [
+          "t.src"
+        ]
+      },
+      {
+        "kind": "branch",
+        "pc": "@b_object",
+        "keys": [
+          "t.src"
+        ],
+        "type_only": [
+          "t.src"
+        ]
+      },
+      {
+        "kind": "branch",
+        "pc": "@b_game",
+        "keys": [
+          "t.g"
+        ],
+        "type_only": [
+          "t.g"
+        ]
+      },
+      {
+        "kind": "branch",
+        "pc": "@b_array",
+        "keys": [
+          "t.src"
+        ],
+        "type_only": [
+          "t.src"
+        ]
+      },
+      {
+        "kind": "branch",
+        "pc": "@b_class",
+        "keys": [
+          "t.g"
+        ]
+      },
+      {
+        "kind": "branch",
+        "pc": "@b_count",
+        "keys": [
+          "t.cpa"
+        ]
+      }
+    ],
+    "verdicts": {
+      "t.src": "UNSAFE type-only",
+      "t.g": "UNSAFE",
+      "t.cpa": "UNSAFE"
+    }
+  },
+  "note": "IsFloat/IsString/IsAnObject/IsArray(src), IsGameObject(g): type-only; GetObjectClassID(g) and count(cpa([])) read values"
+}

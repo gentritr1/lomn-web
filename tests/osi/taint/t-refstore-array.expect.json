@@ -1,0 +1,41 @@
+{
+  "id": "t-refstore-array",
+  "kind": "sink",
+  "path": "refstore",
+  "entries": [
+    "main"
+  ],
+  "natives": [
+    {
+      "cls": "t",
+      "name": "src",
+      "min": 0,
+      "max": 0,
+      "types": [],
+      "ret": "int"
+    }
+  ],
+  "expect": {
+    "ok": true,
+    "sinks": [
+      {
+        "kind": "errpath",
+        "pc": "@g",
+        "keys": [
+          "t.src"
+        ]
+      },
+      {
+        "kind": "refstore",
+        "pc": "@st",
+        "keys": [
+          "t.src"
+        ]
+      }
+    ],
+    "verdicts": {
+      "t.src": "UNSAFE"
+    }
+  },
+  "note": "reviewer A4. count(A) is 1 when s = 0 and 0 when s = 1: the append through arrs[s] is the sink"
+}

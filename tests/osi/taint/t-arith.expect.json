@@ -31,11 +31,25 @@
         "keys": [
           "t.src"
         ]
+      },
+      {
+        "kind": "errpath",
+        "pc": "@d_rhs",
+        "keys": [
+          "t.src"
+        ]
+      },
+      {
+        "kind": "branch",
+        "pc": "@b_pow",
+        "keys": [
+          "t.src"
+        ]
       }
     ],
     "verdicts": {
       "t.src": "UNSAFE"
     }
   },
-  "note": "((s + 1)++ * 2 - 1) << 1, ~, % 3: tagged; 8 / (s + 2): tagged through the rhs; 4 / 2 clean"
+  "note": "((s + 1)++ * 2 - 1) << 1, ~, % 3: tagged; 8 / (s + 2): tagged through the rhs; 4 / 2 clean; 8 / (s + 2): the tagged divisor is an errpath sink; s ^ 2 (0x74) tagged"
 }

@@ -1,0 +1,55 @@
+{
+  "id": "t-colour",
+  "kind": "propagation",
+  "path": "colour channels",
+  "entries": [
+    "main"
+  ],
+  "natives": [
+    {
+      "cls": "t",
+      "name": "col",
+      "min": 0,
+      "max": 0,
+      "types": [],
+      "ret": "colour"
+    }
+  ],
+  "expect": {
+    "ok": true,
+    "sinks": [
+      {
+        "kind": "branch",
+        "pc": "@b_r",
+        "keys": [
+          "t.col"
+        ]
+      },
+      {
+        "kind": "branch",
+        "pc": "@b_g",
+        "keys": [
+          "t.col"
+        ]
+      },
+      {
+        "kind": "branch",
+        "pc": "@b_b",
+        "keys": [
+          "t.col"
+        ]
+      },
+      {
+        "kind": "branch",
+        "pc": "@b_a",
+        "keys": [
+          "t.col"
+        ]
+      }
+    ],
+    "verdicts": {
+      "t.col": "UNSAFE"
+    }
+  },
+  "note": "col -> SetRed/Green/Blue/Alpha (chained) -> local; GetRed/Green/Blue/Alpha of it each branched on; a literal colour's channel is clean"
+}

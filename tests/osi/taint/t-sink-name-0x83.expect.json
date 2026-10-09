@@ -34,12 +34,19 @@
         "keys": [
           "t.name"
         ]
+      },
+      {
+        "kind": "branch",
+        "pc": "@b_res",
+        "keys": [
+          "t.dst"
+        ]
       }
     ],
     "verdicts": {
       "t.name": "UNSAFE",
-      "t.dst": "safe"
+      "t.dst": "UNSAFE"
     }
   },
-  "note": "0x83 calls t.dst by the name from t.name: sink; by the literal \"dst\": none; t.dst's results are popped"
+  "note": "0x83 calls t.dst by the name from t.name: sink; by the literal \"dst\": none; the first t.dst result is branched on (a sink), the second popped"
 }

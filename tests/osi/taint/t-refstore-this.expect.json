@@ -1,0 +1,36 @@
+{
+  "id": "t-refstore-this",
+  "kind": "sink",
+  "path": "refstore",
+  "entries": [
+    "main"
+  ],
+  "natives": [
+    {
+      "cls": "t",
+      "name": "cpo",
+      "min": 1,
+      "max": 1,
+      "types": [
+        "0x01"
+      ],
+      "ret": "copy"
+    }
+  ],
+  "expect": {
+    "ok": true,
+    "sinks": [
+      {
+        "kind": "refstore",
+        "pc": "@st",
+        "keys": [
+          "t.cpo"
+        ]
+      }
+    ],
+    "verdicts": {
+      "t.cpo": "UNSAFE"
+    }
+  },
+  "note": "m(cpo(o)): this carries {t.cpo}, so this.a <- 1 at @st is a refstore sink; m(o) stores through a clean this (the same pc: the keys stay t.cpo)"
+}

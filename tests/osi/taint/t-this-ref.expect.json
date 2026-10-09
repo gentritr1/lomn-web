@@ -19,6 +19,13 @@
     "ok": true,
     "sinks": [
       {
+        "kind": "errpath",
+        "pc": "@g",
+        "keys": [
+          "t.src"
+        ]
+      },
+      {
         "kind": "branch",
         "pc": "@j1",
         "keys": [
@@ -44,5 +51,5 @@
       "t.src": "UNSAFE"
     }
   },
-  "note": "arr = [o]; arr[s] is o with the index's tag; o.m via 0x12 and 0x51 (sink j1); in m, this.a (0x16) carries this's tag (sink b_this_val), this.n via 0x17 and 0x51 (sink j2)"
+  "note": "arr = [o]; arr[s] is o with the index's tag; o.m via 0x12 and 0x51 (sink j1); in m, this.a (0x16) carries this's tag (sink b_this_val), this.n via 0x17 and 0x51 (sink j2); arr[s] is also an errpath sink (a tagged index)"
 }

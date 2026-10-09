@@ -4,13 +4,19 @@
 
 Runs Setup + N `Process` frames of the script B (with the key calls of K, the A6/A9 driver of osi_vm.py --run) in the
 oracle, and traces which native results reach a sink. Output (stdout):
-  taint: natives tainted %d, sinks %d (branch %d, gamevar %d, tier1-arg %d, process-result %d, name %d)
-  sink <kind> pc %08x frame %6d <- <key>[,<key>…]
-  native <key> verdict safe|UNSAFE
+  taint: natives tainted %d, sinks %d (branch %d, gamevar %d, tier1-arg %d, process-result %d, name %d, refstore %d,
+         errpath %d), type-only %d                                                        (one line)
+  sink <kind> pc %08x frame %6d <- <key>[,<key>…][ type-only| type-only:<key>[,<key>…]]
+  native <key> verdict safe|UNSAFE|UNSAFE type-only
 - "natives tainted" counts the distinct natives whose results carried a tag on the run (every native hit that is not
   tier1). One `native` line each, in first-hit order: UNSAFE when its key reaches any sink, else safe.
 - A sink line is one site: the distinct (kind, pc). Its keys are the union over every time it fired with a tagged value,
-  sorted; `frame` is the first time (-1 = Setup). "sinks" counts the lines; the five kind counts sum to it.
+  sorted; `frame` is the first time (-1 = Setup). "sinks" counts the lines; the seven kind counts sum to it.
+- Type-only (fix 1, M6): a key reached a site through its TYPE only when the value went through `== nothing` (0x60 with
+  a nothing operand) or a type test (0xb8-0xbd) on the way, and never by value. A site is `type-only` when that holds
+  for all its keys in every firing (the head counts those sites), `type-only:<keys>` when for some. A native is
+  `UNSAFE type-only` when every sink it reaches is type-only for it: on THIS run a stub of the right type takes the same
+  path (the other operand of the `==` was nothing here; on another path it may not be). The verdict rule is unchanged.
 - stderr: `osi_taint: frames %d, instructions %d, stop <stop>, %.1f s`. The exit status is 1 when the run stopped on
   an error (the report of the part that ran is still printed), 2 on a usage error or when --real-natives binds nothing.
 --overrides defaults to data/osi/native_overrides.json (natives.md §7.2; applied at load as osi_vm.py does).
@@ -19,8 +25,11 @@ oracle, and traces which native results reach a sink. Output (stdout):
 Semantics (the plan's Task 5). Every value has a tag, a set of native keys; a host value and a constant have none.
 - Sources. The return of every native that is not tier1 (a D11 stub, a decided default, tier2, tier3, mod) carries
   {its key}; so do its by-reference writes and the arguments of the engine calls it makes. A `copy`-kind stub adds the
-  tag of argument 0. A tier1 native (an override `tier1`, or a model bound by --real-natives) carries the union of its
-  arguments' tags instead: its value is modelled, and a tagged argument is already a sink.
+  tag of argument 0. A tier1 native (an override `tier1`, or a model bound by --real-natives) carries instead an
+  over-approximation of what its model can read (fix 1, M1): the union of its arguments' tags, of everything reachable
+  from an object or array argument (properties and elements, recursively), and of the results of the engine calls it
+  makes. The same set is its tier1-arg sink. Not covered: engine state a model reads back (set -> get) is not tagged;
+  Task 10 checks that no bound model returns such a value from a tagged input.
 - Propagation. Stack copies (0x32-0x35); locals and frames (0x21-0x25); object members by reference (0x10-0x1a, the
   value read also carries the object reference's tag); arrays per element (0x90-0x96; a read also carries the index's
   and the array reference's tags; a store, insert or removal at a tagged index adds that tag to every element);
@@ -34,7 +43,14 @@ Semantics (the plan's Task 5). Every value has a tag, a set of native keys; a ho
   4. `process-result`: the result of an outermost `Process` engine call (the re-run rule reads it, spec §3.1);
   5. `name`: the 0x19 member name or 0x83 function name, when the string is tagged. Addition: the 0x18/0x1a member
      names too (the name selects the member, or the error).
-- Implicit flows are not propagated: a branch on a tagged value is itself the sink.
+  Additions of fix 1 (controller ruling on the T5 review), conservative like the jump target:
+  6. `refstore` (I1): a store through a tagged reference: 0x10 / 0x1a into a tagged object, 0x15 into a tagged `this`,
+     0x93-0x96 into a tagged array, or 0x93/0x95/0x96 at a tagged index. The native chose WHICH object, array or
+     element is written; a dynamic pass cannot tag every candidate, so the store itself is the sink;
+  7. `errpath` (M2): a tagged array index (0x91, 0x93, 0x95, 0x96) or divisor (0x73, 0x75): its value decides the
+     out-of-range or divide-by-0 error path.
+- Implicit flows are not propagated: a branch on a tagged value is itself the sink. Other error paths a tagged value
+  can switch (a wrong type for an operator, say) are not sinks.
 
 The pass reads the VM only: a shadow of the stack (by absolute slot), the globals (by token), the members (by object
 handle and property index) and the arrays (by handle) is kept beside it through the documented hook
@@ -45,8 +61,9 @@ trace byte for byte the same with the pass attached.
 The propagation corpus is tests/osi/taint (run_program): `<id>.asm` + `<id>.expect.json`
   {"id", "kind": propagation|sink|implicit|negative, "path", "entries": [entry names, called in order],
    "natives": [a conformance test native (osi_vm.test_native_entry), or a registry-like row with "ret" (a D11 stub);
-               either may set "tier"; default "stub"],
-   "expect": {"ok": true, "sinks": [{"kind", "pc": "@label", "keys": [...]}], "verdicts": {key: "safe"|"UNSAFE"}},
+               either may set "tier"; default "stub"; a type "0x01" / "0x05" is that raw type id],
+   "expect": {"ok": true, "sinks": [{"kind", "pc": "@label", "keys": [...], "type_only": [keys; default none]}],
+              "verdicts": {key: "safe"|"UNSAFE"|"UNSAFE type-only"}},
    "note"}
 Sinks and verdicts are compared exactly; an unknown key fails the program (fail closed).
 """
@@ -71,7 +88,8 @@ from osi_vm import (NOTHING, STACK_SLOTS, T_ARRAY, T_FLOAT, T_INT, T_OBJECT, Var
 
 DATA = REPO / "data" / "osi"
 EMPTY: frozenset = frozenset()
-SINK_KINDS = ("branch", "gamevar", "tier1-arg", "process-result", "name")
+SINK_KINDS = ("branch", "gamevar", "tier1-arg", "process-result", "name", "refstore", "errpath")
+TYPE_MARK = "?"   # "?k" in a tag: k reached the value through its type only (== nothing, a type test)
 TIER1_TIERS = frozenset(["tier1", "implemented"])      # an override `tier1`; a model bound by --real-natives
 
 
@@ -88,9 +106,14 @@ class NothingBound(Exception):
 # ---------------------------------------------------------------------------------------------------------------
 
 class Report:
+    """Sinks by site. A site keeps, per key, whether every firing reached it through the key's TYPE only (a `?k` mark in
+    the tag and no plain `k`): a type-only sink tests `x == nothing` or a type, and any value of the right type passes
+    it the same way."""
+
     def __init__(self):
         self.tagged: dict[str, None] = {}               # natives whose results carried a tag, in first-hit order
-        self.sinks: dict[tuple[str, int], list] = {}    # (kind, pc) -> [first frame, set of keys], in first-fire order
+        self.tier1_hit: set = set()                     # tier1 natives the run called (never tagged)
+        self.sinks: dict[tuple[str, int], list] = {}    # (kind, pc) -> [first frame, {key: type-only}], first-fire order
         self.stop = "none"
         self.frames = 0
         self.instructions = 0
@@ -102,33 +125,51 @@ class Report:
         if not taint:
             return
         assert kind in SINK_KINDS, kind
+        value = {k for k in taint if not k.startswith(TYPE_MARK)}
+        typed = {k[1:] for k in taint if k.startswith(TYPE_MARK)} - value
         rec = self.sinks.get((kind, pc))
         if rec is None:
-            self.sinks[(kind, pc)] = [frame, set(taint)]
-        else:
-            rec[1] |= taint
+            rec = self.sinks[(kind, pc)] = [frame, {}]
+        keys = rec[1]
+        for k in value:
+            keys[k] = False
+        for k in typed:
+            keys.setdefault(k, True)
 
     def unsafe(self) -> set:
         out = set()
         for _frame, keys in self.sinks.values():
-            out |= keys
+            out |= set(keys)
         return out
+
+    def type_only(self) -> set:
+        """Keys whose every sink appearance is type-only."""
+        seen, by_value = set(), set()
+        for _frame, keys in self.sinks.values():
+            for k, t in keys.items():
+                seen.add(k)
+                if not t:
+                    by_value.add(k)
+        return seen - by_value
 
     def kinds_of(self, key: str) -> list:
         return sorted({k for (k, _pc), (_f, keys) in self.sinks.items() if key in keys})
 
     def verdicts(self) -> dict:
-        bad = self.unsafe()
-        return {k: ("UNSAFE" if k in bad else "safe") for k in self.tagged}
+        bad, typed = self.unsafe(), self.type_only()
+        return {k: ("safe" if k not in bad else "UNSAFE type-only" if k in typed else "UNSAFE") for k in self.tagged}
 
     def lines(self) -> list[str]:
         per = {k: 0 for k in SINK_KINDS}
         for kind, _pc in self.sinks:
             per[kind] += 1
-        out = ["taint: natives tainted %d, sinks %d (%s)" % (
-            len(self.tagged), len(self.sinks), ", ".join("%s %d" % (k, per[k]) for k in SINK_KINDS))]
+        n_typed = sum(1 for _f, keys in self.sinks.values() if all(keys.values()))
+        out = ["taint: natives tainted %d, sinks %d (%s), type-only %d" % (
+            len(self.tagged), len(self.sinks), ", ".join("%s %d" % (k, per[k]) for k in SINK_KINDS), n_typed)]
         for (kind, pc), (frame, keys) in self.sinks.items():
-            out.append("sink %s pc %08x frame %6d <- %s" % (kind, pc, frame, ",".join(sorted(keys))))
+            typed = sorted(k for k, t in keys.items() if t)
+            mark = "" if not typed else " type-only" if len(typed) == len(keys) else " type-only:" + ",".join(typed)
+            out.append("sink %s pc %08x frame %6d <- %s%s" % (kind, pc, frame, ",".join(sorted(keys)), mark))
         for key, verdict in self.verdicts().items():
             out.append("native %s verdict %s" % (key, verdict))
         return out
@@ -137,6 +178,12 @@ class Report:
 # ---------------------------------------------------------------------------------------------------------------
 # The shadow
 # ---------------------------------------------------------------------------------------------------------------
+
+def _typed(t) -> frozenset:
+    """The tag of a value computed from the TYPE of a tagged value: every key k becomes `?k` (natives.md §7.3 is
+    unchanged; the mark only feeds the report's type-only annotation, M6 of the T5 review)."""
+    return frozenset(k if k.startswith(TYPE_MARK) else TYPE_MARK + k for k in t) if t else EMPTY
+
 
 def _union(ts) -> frozenset:
     out = EMPTY
@@ -152,12 +199,15 @@ def _union(ts) -> frozenset:
 _BUILDERS = {}
 for _op in (0x13, 0x14, 0x23, 0x40, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x90):
     _BUILDERS[_op] = "clean_push"
-for _op in (0x60, 0x61, 0x62, 0x63, 0x64, 0x6A, 0x6B, 0x6D, 0x6E, 0x6F, 0x70, 0x71, 0x72, 0x73, 0x74, 0x75, 0x77, 0x78,
+for _op in (0x61, 0x62, 0x63, 0x64, 0x6A, 0x6B, 0x6D, 0x6E, 0x6F, 0x70, 0x71, 0x72, 0x74, 0x77, 0x78,
             0xA0, 0xA1, 0xA2, 0xA3):
     _BUILDERS[_op] = "binary"
-for _op in (0x12, 0x6C, 0x76, 0x92, 0xA4, 0xA5, 0xA6, 0xA7, 0xB0, 0xB1, 0xB2, 0xB8, 0xB9, 0xBA, 0xBB, 0xBC, 0xBD, 0xBF):
+for _op in (0x12, 0x6C, 0x76, 0x92, 0xA4, 0xA5, 0xA6, 0xA7, 0xB0, 0xB1, 0xB2, 0xBF):
     _BUILDERS[_op] = "unary"
+for _op in (0xB8, 0xB9, 0xBA, 0xBB, 0xBC, 0xBD):
+    _BUILDERS[_op] = "typetest"
 _BUILDERS.update({
+    0x60: "eq", 0x73: "div", 0x75: "div",
     0x10: "set_member", 0x11: "get_member", 0x15: "set_this", 0x16: "get_this", 0x17: "get_this_fn",
     0x18: "get_member_str", 0x19: "get_member_fn_str", 0x1A: "set_member_str",
     0x21: "get_var", 0x22: "set_var", 0x32: "swap", 0x33: "pull", 0x34: "dupn", 0x35: "dup",
@@ -180,6 +230,7 @@ class Tracker:
         self.objs: dict[int, list] = {}
         self.arrs: dict[int, list] = {}
         self.out_stack: list = []       # the output tag of each native executing (innermost last)
+        self.nested: list = []          # per native executing: the tags its engine calls returned
         self.results: list = []         # the result tag of each native that returned, until its 0x82/0x83 pushes it
         self.exit = (EMPTY, None)       # (tag, pc) of the value the last engine call's Run ended with (0x52 / 0xff)
         self.frame = -1
@@ -224,6 +275,25 @@ class Tracker:
         rec = self.vm.heap.arrays.get(v.value)
         if rec is not None and lst is not None and len(lst) != len(rec[1]):
             raise TaintError("array %d: shadow %d elements, VM %d" % (v.value, len(lst), len(rec[1])))
+
+    def reach(self, values) -> frozenset:
+        """The tags of everything reachable from these variants through script objects and arrays (their properties
+        and elements, recursively; game objects hold nothing script-visible)."""
+        out, seen, todo = set(), set(), list(values)
+        heap = self.vm.heap
+        while todo:
+            v = todo.pop()
+            if v.type == T_OBJECT and ("o", v.value) not in seen and v.value in heap.objects:
+                seen.add(("o", v.value))
+                lst, rec = self._objt(v)
+                out.update(*lst)
+                todo.extend(rec[2])
+            elif v.type == T_ARRAY and ("a", v.value) not in seen and v.value in heap.arrays:
+                seen.add(("a", v.value))
+                lst = self._arrt(v)
+                out.update(*lst)
+                todo.extend(heap.arrays[v.value][1])
+        return frozenset(out)
 
     def _gtok(self, idx: int) -> Optional[int]:
         g = self.vm.script.globals
@@ -282,6 +352,44 @@ class Tracker:
             return r
         return w
 
+    def _b_typetest(self, op, h):                                          # 0xb8-0xbd: the operand's type only
+        ts = self.ts
+
+        def w(vm):
+            d0 = vm.depth
+            t = _typed(ts[d0 - 1]) if d0 >= 1 else EMPTY
+            r = h(vm)
+            ts[vm.depth - 1] = t
+            return r
+        return w
+
+    def _b_eq(self, op, h):                                                # 0x60
+        ts = self.ts
+
+        def w(vm):
+            d0 = vm.depth
+            t = EMPTY
+            if d0 >= 2:
+                t = ts[d0 - 1] | ts[d0 - 2]
+                if vm.stack[d0 - 1].type == osi_vm.T_NOTHING or vm.stack[d0 - 2].type == osi_vm.T_NOTHING:
+                    t = _typed(t)                       # `x == nothing` (0x605xxx: 1 iff both nothing): x's type only
+            r = h(vm)
+            ts[vm.depth - 1] = t
+            return r
+        return w
+
+    def _b_div(self, op, h):                                               # 0x73 / 0x75: a tagged divisor
+        ts = self.ts
+
+        def w(vm):
+            d0 = vm.depth
+            self.sink("errpath", vm.pc, self._t(d0 - 1))                 # decides "Divide by 0"
+            t = (ts[d0 - 1] | ts[d0 - 2]) if d0 >= 2 else EMPTY
+            r = h(vm)
+            ts[vm.depth - 1] = t
+            return r
+        return w
+
     # ---- members
     def _b_set_member(self, op, h):                                        # 0x10: [v, o] -> o.m = v
         ts = self.ts
@@ -289,6 +397,7 @@ class Tracker:
         def w(vm):
             d0 = vm.depth
             o = vm.stack[d0 - 1] if d0 >= 1 else NOTHING
+            self.sink("refstore", vm.pc, self._t(d0 - 1))                # the native chose which object is written
             lst, rec = self._objt(o)
             i = self._prop(rec, vm._u16(vm.pc + 1))
             tv = self._t(d0 - 2)
@@ -316,6 +425,7 @@ class Tracker:
         def w(vm):
             d0, fr = vm.depth, vm.frame
             this = vm.stack[fr] if 0 <= fr < len(vm.stack) else NOTHING
+            self.sink("refstore", vm.pc, self._t(fr))                    # a tagged `this`
             lst, rec = self._objt(this)
             i = self._prop(rec, vm._u16(vm.pc + 1))
             tv = self._t(d0 - 1)
@@ -384,6 +494,7 @@ class Tracker:
         def w(vm):
             d0 = vm.depth
             self.sink("name", vm.pc, self._t(d0 - 1))
+            self.sink("refstore", vm.pc, self._t(d0 - 2))
             o = vm.stack[d0 - 2] if d0 >= 2 else NOTHING
             s = vm.stack[d0 - 1] if d0 >= 1 else NOTHING
             lst, rec = self._objt(o)
@@ -524,6 +635,7 @@ class Tracker:
             d0 = vm.depth
             a = vm.stack[d0 - 2] if d0 >= 2 else NOTHING
             i = vm.stack[d0 - 1] if d0 >= 1 else NOTHING
+            self.sink("errpath", vm.pc, self._t(d0 - 1))                 # decides "Reference beyond start/end of array"
             lst = self._arrt(a)
             iv = i.value & 0xFFFFFFFF
             el = lst[iv] if lst is not None and iv < len(lst) else EMPTY
@@ -545,6 +657,9 @@ class Tracker:
                 else:                                                     # set / insert: [a, i, v]
                     a, tv, ti = (vm.stack[d0 - 3] if d0 >= 3 else NOTHING), self._t(d0 - 1), self._t(d0 - 2)
                     iv = vm.stack[d0 - 2].value & 0xFFFFFFFF if d0 >= 2 else 0
+                ta = self._t(d0 - 2) if kind in ("append", "remove") else self._t(d0 - 3)
+                self.sink("refstore", vm.pc, ta | ti)          # the native chose the array, or the element
+                self.sink("errpath", vm.pc, ti)                # the index decides the out-of-range error
                 lst = self._arrt(a)
                 r = h(vm)
                 if lst is None:
@@ -599,18 +714,24 @@ class Tracker:
         ts = self.ts
         args = [ts[s] for s in call.slots]
         if e.tier in TIER1_TIERS:
-            out = _union(args)
+            # M1: the model may read what its object/array arguments hold, and return what its engine calls returned
+            out = _union(args) | self.reach([self.vm.stack[s] for s in call.slots])
             self.sink("tier1-arg", call.site_pc, out)
+            self.report.tier1_hit.add(e.key)
         else:
             self.report.tag(e.key)
             out = frozenset([e.key])
             if e.ret == "copy" and e.default is None and e.fn is None and args:
                 out = out | args[0]
         self.out_stack.append(out)
+        self.nested.append(set())
         try:
             r = orig(call)
         finally:
             self.out_stack.pop()
+            returned = self.nested.pop()
+        if e.tier in TIER1_TIERS and returned:
+            out = out | frozenset(returned)
         for i, _v in call.writes:
             ts[call.slots[i]] = out
         self.results.append(out)
@@ -643,6 +764,8 @@ class TaintVm(osi_vm.Vm):
         outer = self._nest == 0
         t.exit = (EMPTY, None)
         r = super().call(name, args)
+        if t.nested:                                    # a call made inside a native: what it returned (M1)
+            t.nested[-1].update(t.exit[0])
         nb = name.encode("latin-1") if isinstance(name, str) else bytes(name)
         if outer and r.ok and nb.lower() == b"process":
             t.sink("process-result", t.exit[1], t.exit[0])
@@ -714,13 +837,16 @@ def run_base(script: bytes, frames: int, keys: str = "", overrides=None, natives
 
 
 def flip_violations(flip_results, rep: Report, tier1: set, must_game_returning) -> list[str]:
-    """Review focus 5 (C2): a flip-probe CHANGED native must be UNSAFE; a CHANGED-NULL native must be tier1 in the merged
-    overrides or a "must (game-returning)" native of Tasks 7-9 (its only probed alternative, nothing, is refused by the
-    next native's argument conversion, so the probe cannot say what the real object changes)."""
+    """Review focus 5 (C2): a flip-probe CHANGED native must be UNSAFE, or tier1 (`tier1` = the merged overrides' tier1
+    keys; the tier1 natives the run hit are added: a tier1 native is never tagged, fix 1 I2). A CHANGED-NULL native must
+    be tier1 or a "must (game-returning)" native of Tasks 7-9 (its only probed alternative, nothing, is refused by the
+    next native's argument conversion, so the probe cannot say what the real object changes). Any sink kind satisfies
+    the CHANGED rule (review M3, no change: every A9 sink is a branch)."""
     bad = []
     unsafe = rep.unsafe()
+    tier1 = set(tier1) | rep.tier1_hit                 # I2 (fix 1): a tier1 native is never tagged; its tier answers
     for r in flip_results:
-        if r.verdict == "CHANGED" and r.key not in unsafe:
+        if r.verdict == "CHANGED" and r.key not in unsafe and r.key not in tier1:
             bad.append("CHANGED %s: no sink (verdict %s)" % (r.key, "safe" if r.key in rep.tagged else "not tagged"))
         elif r.verdict == "CHANGED-NULL" and r.key not in tier1 and r.key not in must_game_returning:
             bad.append("CHANGED-NULL %s: not tier1 and not a must (game-returning) native" % r.key)
@@ -732,11 +858,23 @@ def flip_violations(flip_results, rep: Report, tier1: set, must_game_returning) 
 # ---------------------------------------------------------------------------------------------------------------
 
 _SPEC_KEYS = {"id", "kind", "path", "entries", "natives", "expect", "note"}
+_SINK_KEYS = {"kind", "pc", "keys", "type_only"}
 _EXPECT_KEYS = {"ok", "sinks", "verdicts"}
 _ROW_KEYS = {"cls", "name", "min", "max", "types", "ret", "ret_class", "default", "tier"}
 
 
 def _corpus_entry(spec: dict, tt, reg) -> osi_vm.NativeEntry:
+    """A type given as "0x01" / "0x05" is that raw type id (a script object or an array argument, which no type name
+    in data/osi/types.json denotes)."""
+    raw = [int(t, 16) if isinstance(t, str) and t.startswith("0x") else None for t in spec.get("types", [])]
+    if any(r is not None for r in raw):
+        e = _corpus_entry(dict(spec, types=["nothing" if r is not None else t for r, t in zip(raw, spec["types"])]),
+                          tt, reg)
+        tys = list(e.types)
+        for i, r in enumerate(raw):
+            if r is not None:
+                tys[i] = r
+        return e._replace(types=tuple(tys))
     if "ret" in spec:                                   # a registry-like row: the D11 stub of its ret column
         extra = set(spec) - _ROW_KEYS
         if extra:
@@ -776,13 +914,18 @@ def run_program(asm_path) -> list[str]:
         fails.append("ok: expected %r, got %r" % (ex.get("ok", True), ok))
     want = set()
     for s in ex.get("sinks", []):
+        extra = set(s) - _SINK_KEYS
+        if extra:
+            fails.append("unknown key expect.sinks[*].%s" % sorted(extra)[0])
         pc = osi_vm._pc_spec(s["pc"], labels)
-        want.add((s["kind"], pc, tuple(sorted(s["keys"]))))
-    got = {(kind, pc, tuple(sorted(keys))) for (kind, pc), (_f, keys) in rep.sinks.items()}
-    for kind, pc, keys in sorted(want - got, key=str):
-        fails.append("sink missing: %s pc %s <- %s" % (kind, "?" if pc is None else "%08x" % pc, ",".join(keys)))
-    for kind, pc, keys in sorted(got - want, key=str):
-        fails.append("sink unexpected: %s pc %08x <- %s" % (kind, pc, ",".join(keys)))
+        want.add((s["kind"], pc, tuple(sorted(s["keys"])), tuple(sorted(s.get("type_only", [])))))
+    got = {(kind, pc, tuple(sorted(keys)), tuple(sorted(k for k, t in keys.items() if t)))
+           for (kind, pc), (_f, keys) in rep.sinks.items()}
+    for kind, pc, keys, typed in sorted(want - got, key=str):
+        fails.append("sink missing: %s pc %s <- %s type-only %s" % (kind, "?" if pc is None else "%08x" % pc,
+                                                                     ",".join(keys), ",".join(typed) or "-"))
+    for kind, pc, keys, typed in sorted(got - want, key=str):
+        fails.append("sink unexpected: %s pc %08x <- %s type-only %s" % (kind, pc, ",".join(keys), ",".join(typed) or "-"))
     if rep.verdicts() != ex.get("verdicts", {}):
         fails.append("verdicts: expected %s, got %s" % (ex.get("verdicts", {}), rep.verdicts()))
     return fails

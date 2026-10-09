@@ -26,11 +26,18 @@
         "keys": [
           "t.name"
         ]
+      },
+      {
+        "kind": "branch",
+        "pc": "@j",
+        "keys": [
+          "t.name"
+        ]
       }
     ],
     "verdicts": {
       "t.name": "UNSAFE"
     }
   },
-  "note": "0x19 with the name from t.name (\"m\"): sink; with the literal \"m\": none"
+  "note": "0x19 with the name from t.name (\"m\"): sink; with the literal \"m\": none; o.<t.name> is then called through 0x51: its target carries {t.name}"
 }

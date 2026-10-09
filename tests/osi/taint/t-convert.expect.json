@@ -30,6 +30,9 @@
         "pc": "@b_type",
         "keys": [
           "t.src"
+        ],
+        "type_only": [
+          "t.src"
         ]
       }
     ],
@@ -37,5 +40,5 @@
       "t.src": "UNSAFE"
     }
   },
-  "note": "int(float(string(s))) tagged; IsInteger(s) tagged; int(\"5\") clean"
+  "note": "int(float(string(s))) tagged; IsInteger(s) tagged; int(\"5\") clean; IsInteger(s) is a type-only sink"
 }

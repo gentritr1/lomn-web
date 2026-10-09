@@ -1,0 +1,41 @@
+{
+  "id": "t-refstore-member",
+  "kind": "sink",
+  "path": "refstore",
+  "entries": [
+    "main"
+  ],
+  "natives": [
+    {
+      "cls": "t",
+      "name": "src",
+      "min": 0,
+      "max": 0,
+      "types": [],
+      "ret": "int"
+    }
+  ],
+  "expect": {
+    "ok": true,
+    "sinks": [
+      {
+        "kind": "errpath",
+        "pc": "@g",
+        "keys": [
+          "t.src"
+        ]
+      },
+      {
+        "kind": "refstore",
+        "pc": "@st",
+        "keys": [
+          "t.src"
+        ]
+      }
+    ],
+    "verdicts": {
+      "t.src": "UNSAFE"
+    }
+  },
+  "note": "reviewer A3. s = 0 sets o0.a, s = 1 sets o1.a; o0.a == nothing then differs. The stored 1 is clean, so @b_alias is no sink: the store itself is"
+}
