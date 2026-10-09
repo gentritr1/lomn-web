@@ -3,6 +3,8 @@
 Everything needed to pick the work up again. The day-to-day controller workspace (`.superpowers/`) is git-ignored, so the parts that matter are copied here with personal paths scrubbed.
 
 ## Where we stopped
+> **Commit IDs changed on 2026-10-09.** History was rewritten once (privacy) before going public. Everything written before then (this kit, the ledger, ROADMAP) cites the OLD short IDs. Translate them with [commit-id-map.txt](commit-id-map.txt).
+
 - `main` @ the "resume kit" commit = the end of the F7 follow-up batch of **M2a-2** (merged a794f04, roadmap 1ba99cc).
 - Verified on that state (re-run by the controller, not just reported):
   - `make conform-trace-cmp`: 541/541 programs pass, traces byte-identical between C++ and the Python oracle;
