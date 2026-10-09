@@ -75,6 +75,8 @@ Process: the controller (Opus 5.5) writes the spec and plan, Fable 5.1 reviews t
   - a loadavg field in perf rows.
 
 ### 3.3 M2a-3: menu systems
+**Risk carried from M2a-2 (natives.md §6.3):** the front-end Toa runs its physics every frame, which the headless M2a-2 frame omits as a documented gap. A non-lethal wall-closeness event (`OnEvent(0x28, 2, 'impc')`, CheckWallCloseness 0x587240), if it fires repeatedly, skips 3 HUD `hide` calls at frame 4, so HUD visibility could differ from the original. M2a-3 must model CheckWallCloseness for the front-end Toa, or settle it against the owner's menu screenshots.
+
 Tile fonts (binary `.fnt`), HUD sprites, text and rectangles through the D3D8 shim (FVF 0x42, textured quads, HUD transform, drawn after the area), camera spline, SDL3 input, and `Bionicle.ini` via the VFS.
 - Acceptance: a pixel comparison against **your screenshots of the real menu**. This review cannot close without them.
 - It carries most of M2's size variance.
