@@ -1377,8 +1377,38 @@ def test_a9_path_with_the_directors_models(tmp_path, lomn_data):
         a, b, c = (int(t.split(":")[1], 16) for t in tok[4:7])
         want = read_fluff_independently(inst, a, b, c) or b"XXX"
         assert l.endswith(" S %d %s" % (len(want), want.hex())), (n_line, l)
-    # no error on the path; after the pair-9 merge the objects group's C/H lines (addtoa, show) are on it too, and the
-    # whole log is checked byte for byte against the C++ engine by `make osi-a9` (cmp 3/4, 4/4)
+    # no error record on the path; the C/H records are ATTRIBUTED by native key (F7b item 8): a `C <seq>` belongs to the
+    # native of that seq, an `H` to the native whose result line follows it (natives.md 3.1: records precede the line).
+    seqkey = {}
+    for l in log:
+        m = re.match(r"^([0-9a-f]{8}) (\S+) \d+ -> ", l)
+        if m:
+            seqkey[int(m.group(1), 16)] = m.group(2)
+    recs, pend = {}, []
+    for l in log:
+        if l.startswith("C "):
+            k = seqkey[int(l.split()[1], 16)]
+            recs.setdefault(k, {}).setdefault("C", 0)
+            recs[k]["C"] += 1
+        elif l.startswith(("H ", "X ")):
+            pend.append(l[0])
+        else:
+            m = re.match(r"^[0-9a-f]{8} (\S+) \d+ -> ", l)
+            if m:
+                for r in pend:
+                    recs.setdefault(m.group(1), {}).setdefault(r, 0)
+                    recs[m.group(1)][r] += 1
+                pend = []
+    assert pend == []
+    d = dr()
+    mine = set(d.CITES) | set(d.TIER2)                       # every native of this group
+    assert not [k for k in recs if k in mine], {k: recs[k] for k in recs if k in mine}    # this group: no C, H or X line
+    # the records of the other groups on the path, from this run (600 frames; counts measured with the same command): the
+    # HUD items' references, the Toa's OnEvent calls and Show's four references (objects.py module docstring)
+    assert recs == {"gchuddirector.addbigsprite": {"H": 135}, "sctextobject.create": {"H": 8},
+                    "gchuddirector.addtextobject": {"H": 7}, "gcmodeldirector.addtoa": {"C": 1},
+                    "gcmodeldirector.show": {"H": 4}, "gccharacter.setupmoveable": {"C": 1},
+                    "gclegocamera.setcameraspline": {"H": 1}}, recs
     assert not any(l.startswith("X ") for l in log)
 
 
