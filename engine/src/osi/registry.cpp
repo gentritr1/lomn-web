@@ -226,6 +226,17 @@ uint16_t type_id_of(std::string_view name, const TypeTable& types) {
 }
 
 // ---------------- registry ----------------
+const char* tier_name(Tier t) {
+  switch (t) {
+    case Tier::Stub: return "stub";
+    case Tier::Implemented: return "tier1";
+    case Tier::Mod: return "mod";
+    case Tier::Tier2: return "tier2";
+    case Tier::Tier3: return "tier3";
+    default: return "unknown";
+  }
+}
+
 std::string NativeRegistry::fold(std::string_view s) {
   std::string o(s);
   for (char& c : o)
@@ -287,6 +298,16 @@ NativeEntry entry_from(const Json& r, const TypeTable& types, Tier tier) {
   }
   if (const Json* f = r.get("sets_fpu_pc64")) e.sets_fpu_pc64 = f->type == Json::Bool && f->b;
   e.tier = tier;
+  // natives.md §7.2: the overrides merge writes `tier` on the winner row (tier1/tier2/tier3); mod rows carry "mod"
+  if (const Json* t = r.get("tier")) {
+    const std::string v = t->type == Json::String ? t->str : std::string();
+    if (v == "tier1") e.tier = Tier::Implemented;
+    else if (v == "tier2") e.tier = Tier::Tier2;
+    else if (v == "tier3") e.tier = Tier::Tier3;
+    else if (v == "mod") e.tier = Tier::Mod;
+    else if (v == "stub") e.tier = Tier::Stub;
+    else throw std::runtime_error("natives: unknown tier '" + v + "' in " + e.key);
+  }
   return e;
 }
 }  // namespace

@@ -38,6 +38,7 @@ VM = "engine/src/osi/vm.cpp"
 CV = "engine/src/osi/convert.cpp"
 HP = "engine/src/osi/heap.cpp"
 RUN = "engine/tools/lomn_osi_run.cpp"
+HOST = "engine/src/osi/host.cpp"  # M2a-2 T3: the frame loop moved from lomn_osi_run.cpp into ScriptHost
 
 # (id, name, file, old, new, {check: EXPECT regex}). C01-C33 = consult §5 rows 1-33; S01.. = semantics settled after the
 # consult (FindMemberID cache, atoi saturation, exact-zero sign, the site+6 marker, D8' switching, the Process rules ...).
@@ -55,8 +56,8 @@ M = [
      "  if (t.type != kInt) throw VmError(\"Internal error: Jump to non-integral address\");\n  stack_.insert_below(n, Variant{kRetMarker, cur_pc_ + 2});\n  if (stack_.depth() > high_water_) high_water_ = stack_.depth();\n  frame_ = stack_.find_frame();\n  pc_ = cur_pc_ + t.value;\n  return true;\n}\n// ==== row 0x51",
      {"conform": r"FAIL a/0x50-file-relative-target", "diff": r"after 'I \S+ 50 "}),
     ("C04", "0x51: return marker inserted above the arguments instead of below", VH,
-     "BCLJumpAbsolute 0x600c30: the target is the tagged file offset from 0x12/0x17/0x19\n  const uint32_t n = op_u8(1);\n  const Variant t = pop();\n  if (t.type != kInt) throw VmError(\"Internal error: Jump to non-integral address\");\n  stack_.insert_below(n,",
-     "BCLJumpAbsolute 0x600c30: the target is the tagged file offset from 0x12/0x17/0x19\n  const uint32_t n = op_u8(1);\n  const Variant t = pop();\n  if (t.type != kInt) throw VmError(\"Internal error: Jump to non-integral address\");\n  stack_.insert_below(0 * n,",
+     "BCLJumpAbsolute 0x600c30: the target is the tagged file offset from 0x12/0x17/0x19\n  pc_ = cur_pc_ + 2;  // T2a-pc: the error PC (+2); the jump target is written last\n  const uint32_t n = op_u8(1);\n  const Variant t = pop();\n  if (t.type != kInt) throw VmError(\"Internal error: Jump to non-integral address\");\n  stack_.insert_below(n,",
+     "BCLJumpAbsolute 0x600c30: the target is the tagged file offset from 0x12/0x17/0x19\n  pc_ = cur_pc_ + 2;  // T2a-pc: the error PC (+2); the jump target is written last\n  const uint32_t n = op_u8(1);\n  const Variant t = pop();\n  if (t.type != kInt) throw VmError(\"Internal error: Jump to non-integral address\");\n  stack_.insert_below(0 * n,",
      {"conform": r"FAIL a/0x51-(three-arguments|method-receives-this)", "diff": r"after 'I \S+ 51 "}),
     ("C05", "0x52: the result is disposed before it is re-pushed", VH,
      "    if (m.type == kRetMarker) {\n      push(r);",
@@ -202,20 +203,20 @@ M = [
      "      if (m == 0) return 0u;",
      {"conform": r"FAIL a/0x72-signed-zero-negative-times-int-zero"}),
     ("S07", "0x82: PC is advanced after the native, so a nested call's marker is the site, not site+6", VH,
-     "  pc_ = next_pc;  // the handler has consumed its operands before the native runs\n  NativeCall call{*this, e, site, args};\n  Variant r = e.fn ? e.fn(call, e.user) : natives_.stub_return(e, heap_, call);\n  cur_pc_ = site;",
-     "  NativeCall call{*this, e, site, args};\n  Variant r = e.fn ? e.fn(call, e.user) : natives_.stub_return(e, heap_, call);\n  pc_ = next_pc;\n  cur_pc_ = site;",
+     "  pc_ = next_pc;  // the handler has consumed its operands before the native runs\n  // D14: the sequence number is assigned at native ENTRY (a nested native gets a higher one, its line comes first)\n  const uint64_t seq = native_seq_++;\n  if (observer_) observer_(e, seq);\n  active_seq_.push_back(seq);\n  NativeCall call{*this, e, site, args};\n  Variant r;\n  try {\n    r = e.fn ? e.fn(call, e.user) : natives_.stub_return(e, heap_, call);\n  } catch (...) {\n    active_seq_.pop_back();\n    throw;\n  }\n  active_seq_.pop_back();\n  cur_pc_ = site;",
+     "  pc_ = site;  // M2a-2 T3: 0x82 now writes +6 before the native; the mutant puts the site back for the call\n  const uint64_t seq = native_seq_++;\n  if (observer_) observer_(e, seq);\n  active_seq_.push_back(seq);\n  NativeCall call{*this, e, site, args};\n  Variant r;\n  try {\n    r = e.fn ? e.fn(call, e.user) : natives_.stub_return(e, heap_, call);\n  } catch (...) {\n    active_seq_.pop_back();\n    throw;\n  }\n  active_seq_.pop_back();\n  pc_ = next_pc;\n  cur_pc_ = site;",
      {"unit": r"nested engine call's marker is the PC after", "tracecmp": r"DIFF \./b/b-eng-reenter"}),
     ("S08", "D8': a string -> float conversion does not switch fpu_pc to 64", VH,
      "        if (sw) set_pc64();                                              // ___dec2num 0x65f886 (D8')",
      "        (void)sw;",
      {"conform": r"FAIL a/0x70-d8-pc64-after-string-convert"}),
-    ("S09", "lomn_osi_run: Process re-runs at most 9 extra passes (10 in all) instead of 11", RUN,
-     "        for (int p = 0; p < 11; ++p) {",
-     "        for (int p = 0; p < 10; ++p) {",
+    ("S09", "lomn_osi_run: Process re-runs at most 9 extra passes (10 in all) instead of 11", HOST,
+     "      for (int p = 0; p < 11; ++p) {",
+     "      for (int p = 0; p < 10; ++p) {",
      {"rerun": r"RERUN pass counts: C\+\+ 'process passes"}),
-    ("S10", "lomn_osi_run: an 11-pass frame skips the frame after next instead of the next", RUN,
-     "        if (capped) skip_frame = k + 1;",
-     "        if (capped) skip_frame = k + 2;",
+    ("S10", "lomn_osi_run: an 11-pass frame skips the frame after next instead of the next", HOST,
+     "      if (capped) skip_frame_ = k + 1;",
+     "      if (capped) skip_frame_ = k + 2;",
      {"rerun": r"RERUN pass counts: C\+\+ 'process passes"}),
     ("S11", "0x82: the call site is never memoised (D4)", VH,
      "  memo_[site] = e;\n  return true;",

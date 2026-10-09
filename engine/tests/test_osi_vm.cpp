@@ -24,168 +24,15 @@
 #include "lomn/osi/variant.h"
 #include "lomn/osi/vm.h"
 #include "osi_builder.h"
+#include "osi_test_asm.h"
 
 using namespace lomn;
 using namespace lomn::osi;
 
+using lomn::test::Asm;
+using lomn::test::B;
+
 namespace {
-
-uint32_t B(float f) { return f32_bits(f); }
-
-// ---- a tiny OSI 4.1 assembler (layout as lomn/sage/osi.h reads it; byte writers from osi_builder.h) ----
-struct Asm {
-  struct Fn {
-    std::string name;
-    uint16_t argc;
-    std::string label;
-  };
-  struct Method {
-    std::string sym, label;
-  };
-  struct Cls {
-    std::string name;
-    std::vector<std::string> props;
-    std::vector<Method> methods;
-  };
-  std::vector<std::string> strings, globals, symbols;
-  std::vector<Fn> fns;
-  std::vector<Cls> classes;
-  std::vector<uint8_t> code;
-  std::map<std::string, uint32_t> labels;
-  struct Fix {
-    size_t at;
-    std::string label;
-    bool rel16;
-  };
-  std::vector<Fix> fixes;
-  uint32_t base = 0;
-
-  static uint16_t index_of(std::vector<std::string>& v, const std::string& s) {
-    for (size_t i = 0; i < v.size(); ++i)
-      if (v[i] == s) return static_cast<uint16_t>(i);
-    v.push_back(s);
-    return static_cast<uint16_t>(v.size() - 1);
-  }
-  uint16_t str(const std::string& s) { return index_of(strings, s); }
-  uint16_t sym(const std::string& s) { return index_of(symbols, s); }
-  uint16_t glob(const std::string& s) { return static_cast<uint16_t>(0x8000 | index_of(globals, s)); }
-  Asm& fn(const std::string& name, uint16_t argc) {
-    fns.push_back({name, argc, "fn:" + name});
-    return label("fn:" + name);
-  }
-  Asm& cls(const std::string& name, std::vector<std::string> props) {
-    for (auto& p : props) sym(p);
-    classes.push_back({name, props, {}});
-    return *this;
-  }
-  Asm& method(const std::string& s) {  // the method's code follows
-    sym(s);
-    classes.back().methods.push_back({s, "m:" + classes.back().name + "." + s});
-    return label("m:" + classes.back().name + "." + s);
-  }
-  Asm& label(const std::string& n) {
-    labels[n] = static_cast<uint32_t>(code.size());
-    return *this;
-  }
-  Asm& op(uint8_t o) {
-    code.push_back(o);
-    return *this;
-  }
-  Asm& u8(uint8_t v) { return op(v); }
-  Asm& u16(uint32_t v) {
-    test::osi_put16(code, v);
-    return *this;
-  }
-  Asm& u32(uint32_t v) {
-    test::osi_put32(code, v);
-    return *this;
-  }
-  Asm& i32(int32_t v) { return op(0x40).u32(static_cast<uint32_t>(v)); }
-  Asm& i8(int8_t v) { return op(0x43).u8(static_cast<uint8_t>(v)); }
-  Asm& f(float v) { return op(0x44).u32(B(v)); }
-  Asm& fbits(uint32_t b) { return op(0x44).u32(b); }
-  Asm& s(const std::string& t) { return op(0x46).u16(str(t)); }
-  Asm& nothing() { return op(0x47); }
-  Asm& ret() { return op(0x52); }
-  Asm& pop() { return op(0x30); }
-  Asm& call(const std::string& c, const std::string& f, uint8_t n) {
-    uint16_t ci = str(c), fi = str(f);
-    return op(0x82).u16(ci).u16(fi).u8(n);
-  }
-  Asm& rel(uint8_t o, const std::string& l) {  // 0x53 / 0x54
-    op(o);
-    fixes.push_back({code.size(), l, true});
-    return u16(0);
-  }
-  Asm& addr(const std::string& l) {  // 0x40 with a label's file offset (0x50's target)
-    op(0x40);
-    fixes.push_back({code.size(), l, false});
-    return u32(0);
-  }
-  uint32_t at(const std::string& l) const { return base + labels.at(l); }
-
-  std::vector<uint8_t> build() {
-    std::vector<uint8_t> b = {'O', 'S', 'I', 0};
-    test::osi_put16(b, 4);
-    test::osi_put16(b, 1);
-    auto table = [&](const std::vector<std::string>& v) {
-      test::osi_put16(b, static_cast<uint32_t>(v.size()));
-      for (const auto& x : v) {
-        b.push_back(static_cast<uint8_t>(x.size()));
-        b.insert(b.end(), x.begin(), x.end());
-        b.push_back(0);
-      }
-    };
-    table(strings);
-    table(globals);
-    test::osi_put16(b, static_cast<uint32_t>(fns.size()));
-    std::vector<std::pair<size_t, std::string>> patch;
-    for (const auto& f : fns) {
-      b.push_back(static_cast<uint8_t>(f.name.size()));
-      b.insert(b.end(), f.name.begin(), f.name.end());
-      patch.push_back({b.size(), f.label});
-      test::osi_put32(b, 0);
-      test::osi_put16(b, f.argc);
-    }
-    test::osi_put16(b, static_cast<uint32_t>(classes.size()));
-    for (const auto& c : classes) {
-      b.push_back(static_cast<uint8_t>(c.props.size()));
-      for (const auto& p : c.props) test::osi_put16(b, sym(p));
-      b.push_back(static_cast<uint8_t>(c.methods.size()));
-      for (const auto& m : c.methods) {
-        test::osi_put16(b, sym(m.sym));
-        patch.push_back({b.size(), m.label});
-        test::osi_put32(b, 0);
-      }
-    }
-    for (const auto& c : classes) {
-      b.push_back(static_cast<uint8_t>(c.name.size()));
-      b.insert(b.end(), c.name.begin(), c.name.end());
-      b.push_back(0);
-    }
-    table(symbols);
-    table({});
-    base = static_cast<uint32_t>(b.size());
-    std::vector<uint8_t> c = code;
-    for (const auto& fx : fixes) {
-      uint32_t t = base + labels.at(fx.label);
-      if (fx.rel16) {
-        uint32_t after = base + static_cast<uint32_t>(fx.at) + 2;
-        uint16_t d = static_cast<uint16_t>(t - after);
-        c[fx.at] = static_cast<uint8_t>(d);
-        c[fx.at + 1] = static_cast<uint8_t>(d >> 8);
-      } else {
-        for (int i = 0; i < 4; ++i) c[fx.at + i] = static_cast<uint8_t>(t >> (8 * i));
-      }
-    }
-    for (const auto& p : patch) {
-      uint32_t t = base + labels.at(p.second);
-      for (int i = 0; i < 4; ++i) b[p.first + i] = static_cast<uint8_t>(t >> (8 * i));
-    }
-    b.insert(b.end(), c.begin(), c.end());
-    return b;
-  }
-};
 
 // ---- test natives (declared like the corpus's declarative natives) ----
 Variant nat_echo_arg0(NativeCall& c, void*) { return c.vm.heap().duplicate(*c.args.at(0)); }
@@ -1697,4 +1544,155 @@ TEST_CASE("osi vm fix1 M5/M7: JSON text is latin-1; reset_after_error never thro
   CHECK(t.vm->snapshot().depth == 0);
   REQUIRE(t.vm->internal_errors().size() == 1);
   CHECK(t.vm->internal_errors()[0] == "reset_after_error: Undefined: dangling string handle");
+}
+
+// ============================== M2a-2 T3: error PCs (conformance rule 15) and the name bound ==============================
+// The PC at the throw, per handler, from docs/osi/opcodes.md "Error PC (the PC at the throw), per handler" (generated by
+// tools/osi/error_pc.py from the exe); the deltas below are that table's "PC at its errors" column. The E line keeps the
+// instruction's own address; snapshot().pc is address + delta (D10: nothing resets it).
+namespace {
+Variant nat_nothing(NativeCall&, void*) { return nothing(); }
+struct PcCase {
+  const char* what;
+  uint16_t argc;
+  std::vector<Variant> args;
+  void (*build)(Asm&);  // emits main's code; the failing instruction is at label "x"
+  uint32_t delta;
+  const char* message;
+};
+}  // namespace
+
+TEST_CASE("osi vm T3 rule 15: snapshot().pc after an error is the failing instruction + the error-PC table's delta") {
+  const std::string a255(255, 'a');
+  static std::string s255;
+  s255 = a255;
+  const std::vector<PcCase> cases = {
+      {"0x10 +3", 0, {}, [](Asm& a) { a.i8(1).i8(2).label("x").op(0x10).u16(0); }, 3, "Member property of non member variable"},
+      {"0x11 +3 (port)", 0, {}, [](Asm& a) { a.i8(1).label("x").op(0x11).u16(0); }, 3, "Undefined: 0x11 on a non-object"},
+      {"0x12 +3", 0, {}, [](Asm& a) { a.op(0x13).u16(0).label("x").op(0x12).u16(0); }, 3, "Call to undefined member method"},
+      {"0x13 +3 (port)", 0, {}, [](Asm& a) { a.label("x").op(0x13).u16(99); }, 3, "Undefined: class index out of range"},
+      {"0x14 +2", 0, {}, [](Asm& a) { a.i8(1).i8(2).label("x").op(0x14).u8(0); }, 2, "Too many arguments to method"},
+      {"0x15 +3", 1, {make_int(4)}, [](Asm& a) { a.i8(1).label("x").op(0x15).u16(0); }, 3, "Member property of non member variable"},
+      {"0x16 +3", 1, {make_int(4)}, [](Asm& a) { a.label("x").op(0x16).u16(0); }, 3, "Member property of non member variable"},
+      {"0x17 +3", 1, {make_int(4)}, [](Asm& a) { a.label("x").op(0x17).u16(0); }, 3, "Member method of non member variable"},
+      {"0x18 +1", 0, {}, [](Asm& a) { a.i8(1).s("a").label("x").op(0x18); }, 1, "Member property of non member variable"},
+      {"0x19 +1", 0, {}, [](Asm& a) { a.i8(1).s("a").label("x").op(0x19); }, 1, "Member method of non member variable"},
+      {"0x1a +1", 0, {}, [](Asm& a) { a.i8(1).s("a").label("x").op(0x1a); }, 1, "Member property of non object variable"},
+      {"0x24 +3", 1, {make_float(1.0f)}, [](Asm& a) { a.label("x").op(0x24).u16(0); }, 3, "increment of non-integral type"},
+      {"0x25 +3", 1, {make_float(1.0f)}, [](Asm& a) { a.label("x").op(0x25).u16(0); }, 3, "decrement of non-integral type"},
+      {"0x50 +2", 0, {}, [](Asm& a) { a.f(1.0f).label("x").op(0x50).u8(0); }, 2, "Internal error: Jump to non-integral address"},
+      {"0x51 +2", 0, {}, [](Asm& a) { a.f(1.0f).label("x").op(0x51).u8(0); }, 2, "Internal error: Jump to non-integral address"},
+      {"0x53 +0", 0, {}, [](Asm& a) { a.f(0.0f).label("x").rel(0x53, "x"); }, 0, "Results of comparison expression is not integral"},
+      {"0x60 +1", 0, {}, [](Asm& a) { a.f(1.0f).s("a").label("x").op(0x60); }, 1, "Invalid operand to operator '=' (lhs) (type:12)"},
+      {"0x61 +1", 0, {}, [](Asm& a) { a.s("a").i8(1).label("x").op(0x61); }, 1, "Invalid operand to operator '<' (lhs) (type:11)"},
+      {"0x6a +1", 0, {}, [](Asm& a) { a.f(1.0f).i8(1).label("x").op(0x6a); }, 1, "Invalid operand to operator 'and' (lhs) (type:12)"},
+      {"0x6c +1", 0, {}, [](Asm& a) { a.f(1.0f).label("x").op(0x6c); }, 1, "Invalid operand to operator 'not' (type:12)"},
+      {"0x70 +1", 0, {}, [](Asm& a) { a.s("a").i8(1).label("x").op(0x70); }, 1, "Invalid operand to string operator '+' (rhs) (type:10)"},
+      {"0x71 +1", 0, {}, [](Asm& a) { a.s("a").i8(1).label("x").op(0x71); }, 1, "Invalid operand to operator '-' (lhs) (type:11)"},
+      {"0x73 +1", 0, {}, [](Asm& a) { a.i8(1).i8(0).label("x").op(0x73); }, 1, "Divide by 0"},
+      {"0x74 +1", 0, {}, [](Asm& a) { a.s("a").i8(1).label("x").op(0x74); }, 1, "Invalid operand to operator '^' (lhs) (type:11)"},
+      {"0x75 +1", 0, {}, [](Asm& a) { a.i8(1).i8(0).label("x").op(0x75); }, 1, "Divide by 0"},
+      {"0x76 +1", 0, {}, [](Asm& a) { a.f(1.0f).label("x").op(0x76); }, 1, "Invalid operand to operator '~' (type:12)"},
+      {"0x82 map miss +5", 0, {}, [](Asm& a) { a.label("x").call("t", "nope", 0); }, 5, "Call to unregistered Game Function"},
+      {"0x82 after the lookup +6", 0, {}, [](Asm& a) { a.i8(1).label("x").call("t", "zero", 1); }, 6, "Script is calling t.zero"},
+      {"0x83 invalid member type +3", 0, {}, [](Asm& a) { a.i8(1).label("x").op(0x83).u16(a.str("t")).u8(0); }, 3,
+       "Invalid member type for function call (must be a string)"},
+      {"0x83 inside the try +4", 0, {}, [](Asm& a) { a.s("nope").label("x").op(0x83).u16(a.str("t")).u8(0); }, 4, "Script is calling t.nope"},
+      {"0x91 +1", 0, {}, [](Asm& a) { a.i8(1).i8(0).label("x").op(0x91); }, 1, "array reference on non-array"},
+      {"0x92 +1", 0, {}, [](Asm& a) { a.i8(1).label("x").op(0x92); }, 1, "array reference on non-array"},
+      {"0x93 +1", 0, {}, [](Asm& a) { a.i8(1).i8(0).i8(0).label("x").op(0x93); }, 1, "array reference on non-array"},
+      {"0x94 +1", 0, {}, [](Asm& a) { a.i8(1).i8(0).label("x").op(0x94); }, 1, "array reference on non-array"},
+      {"0x95 +1", 0, {}, [](Asm& a) { a.i8(1).i8(0).label("x").op(0x95); }, 1, "array reference on non-array"},
+      {"0x96 +1", 0, {}, [](Asm& a) { a.i8(1).i8(0).i8(0).label("x").op(0x96); }, 1, "array reference on non-array"},
+      {"0xa0 +1", 0, {}, [](Asm& a) { a.i8(1).i8(1).label("x").op(0xa0); }, 1, "cant access red value of anything but a color"},
+      {"0xa4 +1", 0, {}, [](Asm& a) { a.i8(1).label("x").op(0xa4); }, 1, "cant access red value of anything but a color"},
+      {"0xb0 kOutOfRange +1", 0, {}, [](Asm& a) { a.s(s255).label("x").op(0xb0); }, 1, "kOutOfRange"},
+      {"0xbf +1", 0, {}, [](Asm& a) { a.i8(1).label("x").op(0xbf); }, 1, "Cant get classID of non object"},
+      // unchanged rows (already at the table's PC in M2a-1)
+      {"0x02 +1", 0, {}, [](Asm& a) { a.label("x").op(0x02); }, 1, "Debugger not enabled! but encountered DebugOn"},
+      {"0x41 +0", 0, {}, [](Asm& a) { a.label("x").op(0x41).u16(0).u8(0); }, 0, "unwritten instruction BCL_PushConstanti24 called"},
+      {"BCLUnused +0", 0, {}, [](Asm& a) { a.label("x").op(0x85); }, 0, "Call of undefined instruction"},
+  };
+  int wrong = 0;
+  for (const PcCase& c : cases) {
+    T t;
+    Asm a;
+    a.cls("k", {});
+    a.fn("main", c.argc);
+    c.build(a);
+    a.ret();
+    t.reg.add(entry("t", "zero", 0, 0, {}, nat_nothing));
+    t.load(a);
+    CallResult r = t.vm->call("main", c.args);
+    CAPTURE(c.what);
+    REQUIRE_FALSE(r.ok);
+    CHECK(t.vm->last_error()->message == c.message);
+    CHECK(t.vm->last_error()->pc == a.at("x"));
+    const uint32_t got = t.vm->snapshot().pc - a.at("x");
+    if (got != c.delta) {
+      ++wrong;
+      MESSAGE(c.what << ": snapshot().pc = x + " << got << ", the table gives + " << c.delta);
+    }
+  }
+  CHECK(wrong == 0);
+}
+
+TEST_CASE("osi vm T3 natives.md §8.3: the name copies of 0x18/0x19/0x1a/0x83 throw kOutOfRange above 255 bytes") {
+  // a hostile string table (osiasm .rawstring): entry 1 = length byte 255, 255 'a', terminator 'a'; entry 2 = "". A
+  // C-string read of entry 1 runs on to entry 2's length byte 0: strlen 256.
+  const std::string a255(255, 'a');
+  auto hostile = [&](Asm& a) {
+    std::vector<uint8_t> b = a.build();
+    // strings: count (2 bytes at 8), entry 0 "t" = {1, 't', 0} at 10, entry 1 at 13: {255, 255 x 'a', 0} -> terminator at 269
+    REQUIRE(b[13] == 255);
+    REQUIRE(b[269] == 0);
+    b[269] = 'a';
+    return b;
+  };
+  struct Case {
+    const char* what;
+    uint8_t op;
+    uint32_t delta;
+  };
+  for (const Case& c : {Case{"0x83", 0x83, 3}, Case{"0x18", 0x18, 1}, Case{"0x19", 0x19, 1}, Case{"0x1a", 0x1a, 1}}) {
+    CAPTURE(c.what);
+    for (int len : {255, 256}) {
+      CAPTURE(len);
+      Asm a;
+      a.str("t");
+      a.str(a255);
+      a.str("");
+      a.cls("k", {});
+      a.fn("main", 0);
+      if (c.op == 0x83) {
+        a.s(a255).label("x").op(0x83).u16(0).u8(0);
+      } else {
+        a.op(0x13).u16(0).s(a255).label("x").op(c.op);
+      }
+      a.ret();
+      std::vector<uint8_t> img = len == 256 ? hostile(a) : a.build();
+      T t;
+      std::string err;
+      REQUIRE(t.file.parse(img, &err));
+      t.vm = std::make_unique<Vm>(t.file, t.reg, t.heap, &t.tr);
+      REQUIRE_FALSE(t.vm->call("main", {}).ok);
+      const VmError& e = *t.vm->last_error();
+      CHECK(e.pc == a.at("x"));
+      if (len == 256) {
+        CHECK(e.message == "kOutOfRange");
+        CHECK(t.vm->snapshot().pc == a.at("x") + c.delta);
+      } else {
+        CHECK(e.message != "kOutOfRange");  // 255 > 255 is false: the copy passes and the handler goes on
+      }
+    }
+  }
+  // a 0x16 name of 256 bytes (a host string; no script builder makes one) takes the same bound
+  T t;
+  Asm a;
+  a.cls("k", {});
+  a.fn("main", 1).op(0x13).u16(0).op(0x21).u16(0).label("x").op(0x18).ret();
+  t.load(a);
+  REQUIRE_FALSE(t.vm->call("main", {Variant{kString, t.heap.new_string(std::string(256, 'b'))}}).ok);
+  CHECK(t.vm->last_error()->message == "kOutOfRange");
+  CHECK(t.vm->snapshot().pc == a.at("x") + 1);
 }

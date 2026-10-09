@@ -83,9 +83,7 @@ void Vm::record_error(const VmError& e) {
   r.op = cur_op_;
   r.depth = stack_.depth();
   last_error_ = r;
-  char b[40];
-  std::snprintf(b, sizeof b, "E %08x %02x %4u \"", r.pc, r.op, r.depth);
-  trace_line(std::string(b) + fmt_message(r.message) + "\"");
+  trace_line(error_line(r.pc, r.op, r.depth, r.message));
   set_pc64();  // the landing pad's fninit (D8')
 }
 
@@ -96,9 +94,10 @@ CallResult Vm::call(std::string_view name, const std::vector<Variant>& args) {
   const bool outer = nesting_ == 0;
   if (outer) {
     last_error_.reset();
+    swallowed_.clear();
     saved_ = {stack_.depth(), pc_, frame_, context_depth_, refcount_};
   }
-  ++nesting_;
+  if (++nesting_ > max_nesting_) max_nesting_ = nesting_;  // D15: the measured maximum M
   try {
     CallResult r = call_impl(name, args);
     --nesting_;
@@ -190,6 +189,7 @@ void Vm::reset_after_error() {
   pc_ = saved_.pc;
   frame_ = saved_.frame;
   nesting_ = 0;
+  active_seq_.clear();
 }
 
 // Run (0x60b850): fetch, trace, dispatch until a handler returns false.
@@ -308,6 +308,54 @@ uint16_t Vm::find_member_id(const std::string& name) {
   if (member_cache_.size() >= 50) throw VmError("Undefined behaviour: FindMemberID cache overflow (51st miss)");
   member_cache_.push_back({last, id});
   return id;
+}
+
+// ---- M2a-2 T3: the native framework's view of the VM ----
+uint64_t Vm::native_seq() const { return active_seq_.empty() ? 0 : active_seq_.back(); }
+
+uint16_t Vm::member_id(std::string_view text) { return find_member_id(std::string(text)); }
+
+// D16 rules 1-2 (natives.md §5.4). Unwinding ran no VM code, so cur_pc_/cur_op_ still name the instruction that raised
+// (or the 0x82/0x83/0x84 that re-raised, rule 15(b)) and the stack is as at the throw.
+void Vm::swallow(const VmError& e) {
+  Swallowed s;
+  s.error = e;
+  s.error.pc = cur_pc_;
+  s.error.op = cur_op_;
+  s.error.depth = stack_.depth();
+  s.has_top = stack_.depth() > 0;
+  if (s.has_top) s.top = stack_.top();
+  trace_line(error_line(s.error.pc, s.error.op, s.error.depth, s.error.message));
+  set_pc64();  // the catch pad's fninit (0x657245)
+  swallowed_.push_back(s);
+}
+
+// natives.md §8.3: a 0x11 name is read C-string style from the entry's text in the image (ScOSIScript's string pointer
+// table points at the bytes after the length byte, 0x609634-0x60966c; the terminator byte is never checked), so a
+// hostile entry whose terminator is not NUL reads on into the next entry. 0x16: its own length.
+std::string Vm::name_copy(Variant s) {
+  if (s.type == kStringId) {
+    const uint32_t idx = s.value & 0xffff;
+    const auto& offs = script_.string_offsets();
+    if (idx >= offs.size()) throw VmError("Undefined: string-table index out of range");
+    std::string t;
+    for (size_t at = static_cast<size_t>(offs[idx]) + 1;; ++at) {
+      if (at >= img_.size()) throw VmError("Undefined: string-table entry runs past the end of the script");
+      const char c = static_cast<char>(img_[at]);
+      if (c == 0) break;
+      t += c;
+      if (t.size() > 255) throw VmError("kOutOfRange");  // len > capacity 0xff (seta 0x4f5c27); strlen would go on
+    }
+    return t;
+  }
+  const std::string& t = heap_.text(s.value);
+  if (t.size() > 255) throw VmError("kOutOfRange");  // seta 0x4f5b16
+  return upto_nul_copy(t);
+}
+std::string Vm::error_line(uint32_t pc, uint8_t op, uint32_t depth, const std::string& msg) const {
+  char b[40];
+  std::snprintf(b, sizeof b, "E %08x %02x %4u \"", pc, op, depth);
+  return std::string(b) + fmt_message(msg) + "\"";
 }
 
 // The binary's "(type:%02.2X)" messages: the token is replaced by the type in at least 2 upper-case hex digits.

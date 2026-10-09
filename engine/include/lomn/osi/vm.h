@@ -3,6 +3,7 @@
 // written), D7 (handles), D8' (precision state), D9 (canonical NaN), D10 (errors) and D11 (typed stubs).
 #pragma once
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <optional>
 #include <string>
@@ -71,6 +72,32 @@ class Vm {
   // Host-side problems met where throwing is not allowed (reset_after_error); never traced.
   const std::vector<std::string>& internal_errors() const { return internal_errors_; }
 
+  // ---- M2a-2 T3: the native framework's view of the VM ----
+  // D15: the high-water of active engine calls (Vm::call frames in flight, the outermost included) over the VM's life.
+  int max_nesting() const { return max_nesting_; }
+  // natives.log sequence numbers (D14, natives.md §3.2) are assigned at native ENTRY. native_seq() is the number of the
+  // innermost native executing now (the one a nested `C` record belongs to); in_native() says whether one is (m5).
+  uint64_t native_seq() const;
+  bool in_native() const { return !active_seq_.empty(); }
+  uint64_t natives_called() const { return native_seq_; }  // the next sequence number = natives entered so far
+  // FindMemberID 0x609ba0 for a native (parked N3: GetVariantFromBuffer's 0x616519): the same miss-poisoned cache as
+  // 0x18/0x19/0x1a.
+  uint16_t member_id(std::string_view text);
+  // D16 rules 1-2 (natives.md §5.4): a swallowing native caught `e`, raised by its nested engine call. The VM state stays
+  // exactly as at the throw; this writes the swallowed error's `E` line from that state (pc/op of the failing
+  // instruction, depth at the throw), then `P <pc> 64` if fpu_pc was 24, and records it for swallowed(). It does not set
+  // last_error(), does not reset and ends no engine call.
+  void swallow(const VmError& e);
+  struct Swallowed {
+    VmError error;  // message, pc, op, depth as at the throw
+    bool has_top = false;
+    Variant top;
+  };
+  // The errors swallowed since the outermost call began (cleared at each outermost call's entry).
+  const std::vector<Swallowed>& swallowed() const { return swallowed_; }
+  // Called at each native's entry with its registry entry and sequence number (ScriptHost's coverage counts).
+  void set_native_observer(std::function<void(const NativeEntry&, uint64_t)> f) { observer_ = std::move(f); }
+
  private:
   static const char* const kDirectCallMessage;  // 0x84's text, reported at a memoised 0x82 site
   using Handler = bool (Vm::*)();
@@ -93,6 +120,11 @@ class Vm {
   std::string str_entry(uint32_t idx) const;   // string-table text (raw bytes)
   std::string symbol_name(uint32_t idx) const; // symbol-table text
   std::string string_text(Variant s);          // text of a 0x11 or 0x16 variant
+  // The name copies of 0x18/0x19/0x1a/0x83 into a local ScFixedString of capacity 0xff (natives.md §8.3): a 0x11 name is
+  // read C-string style from the image (strlen from the entry + 1, operator= 0x4f5c00), a 0x16 one by its length
+  // (operator= 0x4f5b00); either throws kOutOfRange when the length exceeds 255 (seta 0x4f5c27 / 0x4f5b16).
+  std::string name_copy(Variant s);
+  std::string error_line(uint32_t pc, uint8_t op, uint32_t depth, const std::string& msg) const;
   Variant to_dynamic_string(Variant v);        // ConvertStringIDToDynamicString (0x60b880), "kOutOfRange" at >= 255
   Variant& var_ref(uint16_t idx);              // 0x21/0x22 addressing
   Variant& frame_slot(uint32_t idx);
@@ -165,6 +197,10 @@ class Vm {
   std::vector<std::string> internal_errors_;
   std::optional<VmError> last_error_;
   int nesting_ = 0;
+  int max_nesting_ = 0;
+  std::vector<uint64_t> active_seq_;  // sequence numbers of the natives executing now, innermost last
+  std::function<void(const NativeEntry&, uint64_t)> observer_;
+  std::vector<Swallowed> swallowed_;
   struct Saved {
     uint32_t depth = 0, pc = 0, frame = 0;
     uint16_t context = 0;

@@ -1,6 +1,7 @@
 // M2a-1 T1: the VM heap (D7) and the stack (D10 caps).
 #include "lomn/osi/heap.h"
 
+#include <cstdint>
 #include <cstdio>
 #include <utility>
 
@@ -31,7 +32,7 @@ void Heap::free_(HeapKind k, uint32_t id) {
 }
 
 uint32_t Heap::new_object(uint16_t class_id, uint32_t nprops) {
-  const uint32_t id = next_[kKindObject]++;
+  const uint32_t id = mint_(kKindObject);
   Obj& o = objs_[id];
   o.refs = 1;
   o.cls = class_id;
@@ -46,7 +47,7 @@ uint32_t Heap::new_object(uint16_t class_id, uint32_t nprops) {
 uint32_t Heap::new_array() { return new_array(0); }
 
 uint32_t Heap::new_array(uint32_t n) {
-  const uint32_t id = next_[kKindArray]++;
+  const uint32_t id = mint_(kKindArray);
   Arr& a = arrs_[id];
   a.refs = 1;
   a.elems.assign(n, nothing());
@@ -58,7 +59,7 @@ uint32_t Heap::new_array(uint32_t n) {
 }
 
 uint32_t Heap::new_string(std::string_view text) {
-  const uint32_t id = next_[kKindString]++;
+  const uint32_t id = mint_(kKindString);
   strs_[id].assign(text.data(), text.size());
   alloc_(kKindString);
   char b[40];
@@ -67,16 +68,43 @@ uint32_t Heap::new_string(std::string_view text) {
   return id;
 }
 
-uint32_t Heap::new_game(uint16_t type) {
-  const uint32_t id = next_[kKindGame]++;
+uint32_t Heap::new_game(uint16_t type, int32_t engine_refs) {
+  const uint32_t id = mint_(kKindGame);
   Game& g = games_[id];
-  g.refs = 1;
+  g.refs = engine_refs + 1;  // the engine's references + the returned variant (D13)
+  g.engine = engine_refs;
   g.type = type;
   alloc_(kKindGame);
   char b[32];
   std::snprintf(b, sizeof b, "A g %08x %02x", id, type);
   emit(b);
   return id;
+}
+
+// D13 engine references (natives.md §2.2): the engine's AddRef/Release move the total and the engine part together.
+void Heap::add_ref(uint32_t h) {
+  Game& g = game(h);
+  ++g.refs;
+  ++g.engine;
+}
+
+void Heap::release(uint32_t h) {
+  Game& g = game(h);
+  if (g.engine <= 0) throw VmError("Undefined: release of an engine reference the engine does not hold");
+  --g.engine;
+  if (--g.refs > 0) return;
+  games_.erase(h);
+  free_(kKindGame, h);
+  if (free_hook_) free_hook_(h);
+}
+
+int32_t Heap::engine_refs(uint32_t h) const { return game(h).engine; }
+int32_t Heap::refs(uint32_t h) const { return game(h).refs; }
+
+// D7 handles never wrap (parked N4): the last one minted is UINT32_MAX - 1, so handle 0 never appears.
+uint32_t Heap::mint_(HeapKind k) {
+  if (next_[k] == UINT32_MAX) throw VmError("Undefined: handle space exhausted");
+  return next_[k]++;
 }
 
 // A handle that is not live can only come from behaviour the table marks undefined (a stale slot, a fabricated engine
@@ -171,6 +199,7 @@ void Heap::dispose(const Variant& root) {
       if (--it->second.refs > 0) continue;
       games_.erase(it);
       free_(kKindGame, v.value);
+      if (free_hook_) free_hook_(v.value);  // the host deletes its object after the F record (D13)
     }
   }
 }

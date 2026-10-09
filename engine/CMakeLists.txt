@@ -33,7 +33,7 @@ target_compile_options(lomn_sage PRIVATE -Wall -Wextra)
 # Fix round 1 (M3): kept PUBLIC for now; to be revisited in M2a-2, when natives living in other libraries call vm.call
 # and their frames must unwind too (those libraries would then need the flag as well).
 add_library(lomn_osi STATIC src/osi/heap.cpp src/osi/convert.cpp src/osi/registry.cpp src/osi/trace.cpp src/osi/vm.cpp
-            src/osi/vm_handlers.cpp)
+            src/osi/vm_handlers.cpp src/osi/natives/framework.cpp src/osi/host.cpp)  # M2a-2 T3: the native framework, ScriptHost
 target_link_libraries(lomn_osi PUBLIC lomn_sage)
 target_compile_options(lomn_osi PRIVATE -Wall -Wextra)
 if(EMSCRIPTEN)
@@ -314,7 +314,7 @@ add_executable(lomn_tests tests/test_main.cpp tests/test_fs.cpp tests/test_rhi_n
                tests/test_rhi_mesh.cpp tests/test_view_mips.cpp tests/test_view_area.cpp tests/test_d3d.cpp tests/test_sage_osi.cpp
                tests/test_area_states.cpp tests/test_sage_frame.cpp tests/test_view_texture_cache.cpp tests/test_fuzz_fragments.cpp
                tests/test_rhi_destroy.cpp tests/test_prefetch_fs.cpp tests/test_fly_camera.cpp  # M1b
-               tests/test_osi_vm.cpp)  # M2a-1
+               tests/test_osi_vm.cpp tests/test_osi_natives.cpp)  # M2a-1, M2a-2 T3
 # wasm32 stack for the OSI VM (I2): a native re-entering the VM costs 1,648 bytes of C++ stack per engine call
 # (measured 2026-10-09, Vm::call -> call_impl -> run -> dispatch -> 0x82 -> native -> Vm::call), 116,240 bytes in use at
 # the 65th call's nesting-cap throw in lomn_osi_conform. 512 KiB = 4.5x that (the default 64 KiB runs out near level 33:
@@ -340,7 +340,8 @@ if(NOT EMSCRIPTEN)
                  tests/test_sage_blockfile.cpp tests/test_sage_slb.cpp tests/test_sage_image.cpp
                  src/sage/blockfile.cpp src/sage/blockchain.cpp src/sage/slb.cpp src/sage/xfile.cpp src/sage/image.cpp src/sage/osi.cpp
                  tests/test_osi_vm.cpp src/osi/heap.cpp src/osi/convert.cpp src/osi/registry.cpp src/osi/trace.cpp
-                 src/osi/vm.cpp src/osi/vm_handlers.cpp)  # M2a-1: the VM's unit cases under ASan + UBSan
+                 src/osi/vm.cpp src/osi/vm_handlers.cpp  # M2a-1: the VM's unit cases under ASan + UBSan
+                 tests/test_osi_natives.cpp src/osi/natives/framework.cpp src/osi/host.cpp)  # M2a-2 T3: the native framework
   target_include_directories(lomn_tests_asan PRIVATE include "${LOMN_TOOLCHAIN_DIR}/include")
   target_compile_definitions(lomn_tests_asan PRIVATE "LOMN_TESTS_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/tests\"")
   target_compile_options(lomn_tests_asan PRIVATE -Wall -Wextra -ffp-contract=off -O1 -g -fno-omit-frame-pointer

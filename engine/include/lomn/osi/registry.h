@@ -29,7 +29,11 @@ struct NativeCall {
   std::vector<Variant*> args;
 };
 using NativeFn = Variant (*)(NativeCall&, void* user);
-enum class Tier : uint8_t { Stub, Implemented, Mod, Unknown };
+// natives.md §7.1: stub (no override), mod (natives_beta150.json), tier1 = Implemented (a modelled body, cited), tier2
+// (a taint-proven stub), tier3 (on the worklist). The registry reads `tier` from each row (the overrides merge of §7.2
+// writes it on the winner row; no key = stub); bind_natives() sets Implemented on every row a group binds.
+enum class Tier : uint8_t { Stub, Implemented, Mod, Unknown, Tier2, Tier3 };
+const char* tier_name(Tier t);  // "stub", "tier1", "mod", "unknown", "tier2", "tier3" (tools/osi/coverage.py's names)
 enum class RetKind : uint8_t { None, Int, Float, String, Colour, Game, Copy };
 
 struct NativeEntry {
@@ -77,6 +81,8 @@ class NativeRegistry {
   void set_return_log(ReturnLog* log) { log_ = log; }
   ReturnLog* return_log() const { return log_; }
   size_t size() const { return entries_.size(); }
+  NativeEntry& entry(size_t i) { return entries_.at(i); }  // in load order (bind_natives, coverage)
+  const NativeEntry& entry(size_t i) const { return entries_.at(i); }
 
   static std::string fold(std::string_view s);  // A-Z -> a-z, every other byte unchanged
 

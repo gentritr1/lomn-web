@@ -22,6 +22,7 @@
 #include <cstdio>
 #include <exception>
 
+#include "lomn/osi/natives.h"
 #include "lomn/osi/vm.h"
 
 namespace lomn::osi {
@@ -101,6 +102,7 @@ bool Vm::bcl_06() {
 
 // ==== row 0x10
 bool Vm::bcl_10() {  // BCLSetMemberValue 0x5fe610
+  pc_ = cur_pc_ + 3;  // T2a-pc: PC first (error-PC table)
   const uint16_t m = op_u16(1);
   const Variant o = pop();
   if (is_game_type(o.type)) throw VmError("Reference to unregistered Game Variable");  // map never populated
@@ -111,11 +113,11 @@ bool Vm::bcl_10() {  // BCLSetMemberValue 0x5fe610
   heap_.dispose(*prop);
   *prop = v;
   heap_.dispose(o);
-  pc_ = cur_pc_ + 3;
   return true;
 }
 // ==== row 0x11
 bool Vm::bcl_11() {  // BCLGetMemberValue 0x5fe9a0
+  pc_ = cur_pc_ + 3;  // T2a-pc: PC first (error-PC table)
   const uint16_t m = op_u16(1);
   const Variant o = pop();
   if (is_game_type(o.type)) throw VmError("Reference to unregistered Game Variable");
@@ -124,39 +126,39 @@ bool Vm::bcl_11() {  // BCLGetMemberValue 0x5fe9a0
   if (!prop) throw VmError("Undefined: 0x11 on an absent property");
   push(heap_.duplicate(*prop));
   heap_.dispose(o);
-  pc_ = cur_pc_ + 3;
   return true;
 }
 // ==== row 0x12
 bool Vm::bcl_12() {  // BCLGetMemberFunction 0x5fe590: pushes {0x10, file offset} (D4: never a host address)
+  pc_ = cur_pc_ + 3;  // T2a-pc: PC first (error-PC table)
   const uint16_t m = op_u16(1);
   const Variant o = pop();
   if (o.type != kObject) throw VmError("Undefined: 0x12 on a non-object");
   const uint32_t off = find_method(o.value, m, "Call to undefined member method");
   push(Variant{kInt, off});
   heap_.dispose(o);
-  pc_ = cur_pc_ + 3;
   return true;
 }
 // ==== row 0x13
 bool Vm::bcl_13() {  // BCLCreateObject 0x5fe530
+  pc_ = cur_pc_ + 3;  // T2a-pc: PC first (error-PC table)
   const uint16_t c = op_u16(1);
   if (c >= script_.classes().size()) throw VmError("Undefined: class index out of range");
   push(Variant{kObject, heap_.new_object(c, static_cast<uint32_t>(script_.classes()[c].props.size()))});
-  pc_ = cur_pc_ + 3;
   return true;
 }
 // ==== row 0x14
 bool Vm::bcl_14() {  // BCLMemberFunctionArgumentCheck 0x5feb90
+  pc_ = cur_pc_ + 2;  // T2a-pc: PC first (error-PC table)
   const uint32_t n = op_u8(1);
   uint32_t k = (stack_.depth() - frame_) & 0xff;
   if (n < k) throw VmError("Too many arguments to method");
   for (; k < n; ++k) push(nothing());
-  pc_ = cur_pc_ + 2;
   return true;
 }
 // ==== row 0x15
 bool Vm::bcl_15() {  // BCLSetThisMemberValue 0x5fec10: the type check precedes the pop
+  pc_ = cur_pc_ + 3;  // T2a-pc: PC first (error-PC table)
   const uint16_t m = op_u16(1);
   const Variant self = frame_slot(0);
   if (self.type != kObject) throw VmError("Member property of non member variable");
@@ -165,35 +167,35 @@ bool Vm::bcl_15() {  // BCLSetThisMemberValue 0x5fec10: the type check precedes 
   if (!prop) throw VmError(fmt_s("Reference to non-existant member property \"%s\"", symbol_name(m)));
   heap_.dispose(*prop);
   *prop = v;
-  pc_ = cur_pc_ + 3;
   return true;
 }
 // ==== row 0x16
 bool Vm::bcl_16() {  // BCLGetThisMemberValue 0x5fecf0
+  pc_ = cur_pc_ + 3;  // T2a-pc: PC first (error-PC table)
   const uint16_t m = op_u16(1);
   const Variant self = frame_slot(0);
   if (self.type != kObject) throw VmError("Member property of non member variable");
   Variant* prop = heap_.property(self.value, m, script_);
   if (!prop) throw VmError(fmt_s("Reference to non-existant member property \"%s\"", symbol_name(m)));
   push(heap_.duplicate(*prop));
-  pc_ = cur_pc_ + 3;
   return true;
 }
 // ==== row 0x17
 bool Vm::bcl_17() {  // BCLGetThisMemberFunction 0x5fedb0
+  pc_ = cur_pc_ + 3;  // T2a-pc: PC first (error-PC table)
   const uint16_t m = op_u16(1);
   const Variant self = frame_slot(0);
   if (self.type != kObject) throw VmError("Member method of non member variable");
   push(Variant{kInt, find_method(self.value, m, "Call to undefined member method")});
-  pc_ = cur_pc_ + 3;
   return true;
 }
 // ==== row 0x18
 bool Vm::bcl_18() {  // BCLGetMemberValueFromString 0x5fee40
+  pc_ = cur_pc_ + 1;  // T2a-pc: PC first (error-PC table)
   const Variant s = pop();
   const Variant o = pop();
   if (!is_str(s)) throw VmError("Invalid type for member access (must be a string)");
-  const std::string name = upto_nul(string_text(s));
+  const std::string name = name_copy(s);  // kOutOfRange above 255 (natives.md §8.3)
   if (is_game_type(o.type)) throw VmError("Reference to unregistered Game Variable");
   if (o.type != kObject) throw VmError("Member property of non member variable");
   Variant* prop = heap_.property(o.value, find_member_id(name), script_);
@@ -201,28 +203,28 @@ bool Vm::bcl_18() {  // BCLGetMemberValueFromString 0x5fee40
   push(heap_.duplicate(*prop));
   heap_.dispose(o);
   heap_.dispose(s);
-  pc_ = cur_pc_ + 1;
   return true;
 }
 // ==== row 0x19
 bool Vm::bcl_19() {  // BCLGetMemberFunctionFromString 0x5ff210
+  pc_ = cur_pc_ + 1;  // T2a-pc: PC first (error-PC table)
   const Variant s = pop();
   const Variant o = pop();
   if (o.type != kObject) throw VmError("Member method of non member variable");
   if (!is_str(s)) throw VmError("Invalid method type for function call (must be a string)");
-  const std::string name = upto_nul(string_text(s));
+  const std::string name = name_copy(s);  // kOutOfRange above 255 (natives.md §8.3)
   push(Variant{kInt, find_method(o.value, find_member_id(name), "Call to undefined member method")});
   heap_.dispose(o);
   heap_.dispose(s);
-  pc_ = cur_pc_ + 1;
   return true;
 }
 // ==== row 0x1a
 bool Vm::bcl_1a() {  // BCLSetMemberValueFromString 0x5ff3a0
+  pc_ = cur_pc_ + 1;  // T2a-pc: PC first (error-PC table)
   const Variant s = pop();
   const Variant o = pop();
   if (!is_str(s)) throw VmError("Invalid type for member set (must be a string)");
-  const std::string name = upto_nul(string_text(s));
+  const std::string name = name_copy(s);  // kOutOfRange above 255 (natives.md §8.3)
   if (is_game_type(o.type)) throw VmError("Reference to unregistered Game Variable");
   if (o.type != kObject) throw VmError("Member property of non object variable");
   const Variant v = pop();
@@ -232,44 +234,44 @@ bool Vm::bcl_1a() {  // BCLSetMemberValueFromString 0x5ff3a0
   *prop = v;
   heap_.dispose(o);
   heap_.dispose(s);
-  pc_ = cur_pc_ + 1;
   return true;
 }
 
 // ==== row 0x21
 bool Vm::bcl_21() {  // BCLGetVariableValue 0x607c50
+  pc_ = cur_pc_ + 3;  // T2a-pc: PC first (error-PC table)
   const Variant d = heap_.duplicate(var_ref(op_u16(1)));
   push(d);
-  pc_ = cur_pc_ + 3;
   return true;
 }
 // ==== row 0x22
 bool Vm::bcl_22() {  // BCLSetVariableValue 0x607b50
+  pc_ = cur_pc_ + 3;  // T2a-pc: PC first (error-PC table)
   const uint16_t idx = op_u16(1);
   const Variant v = pop();
   Variant& t = var_ref(idx);
   heap_.dispose(t);
   t = v;
-  pc_ = cur_pc_ + 3;
   return true;
 }
 // ==== row 0x23
 bool Vm::bcl_23() {  // BCLCreateStackVariables 0x607b00
+  pc_ = cur_pc_ + 2;  // T2a-pc: PC first (error-PC table)
   const uint32_t n = op_u8(1);
   for (uint32_t i = 0; i < n; ++i) push(nothing());
-  pc_ = cur_pc_ + 2;
   return true;
 }
 // ==== row 0x24
 bool Vm::bcl_24() {  // BCLIncrementVariable 0x607cf0
+  pc_ = cur_pc_ + 3;  // T2a-pc: PC first (error-PC table)
   Variant& v = var_ref(op_u16(1));
   if (v.type != kInt) throw VmError("increment of non-integral type");
   v.value += 1;
-  pc_ = cur_pc_ + 3;
   return true;
 }
 // ==== row 0x25
 bool Vm::bcl_25() {  // BCLDecrementVariable 0x607d90: the global path reuses the "increment" text
+  pc_ = cur_pc_ + 3;  // T2a-pc: PC first (error-PC table)
   const uint16_t idx = op_u16(1);
   Variant& v = var_ref(idx);
   if (v.type != kInt) {
@@ -277,118 +279,118 @@ bool Vm::bcl_25() {  // BCLDecrementVariable 0x607d90: the global path reuses th
     throw VmError("decrement of non-integral type");
   }
   v.value -= 1;
-  pc_ = cur_pc_ + 3;
   return true;
 }
 
 // ==== row 0x30
 bool Vm::bcl_30() {  // BCLPop 0x606310
+  pc_ = cur_pc_ + 1;  // T2a-pc: PC first (error-PC table)
   pop_dispose();
-  pc_ = cur_pc_ + 1;
   return true;
 }
 // ==== row 0x31
 bool Vm::bcl_31() {  // BCLPopN 0x606340
+  pc_ = cur_pc_ + 2;  // T2a-pc: PC first (error-PC table)
   const uint32_t n = op_u8(1);
   for (uint32_t i = 0; i < n; ++i) pop_dispose();
-  pc_ = cur_pc_ + 2;
   return true;
 }
 // ==== row 0x32
 bool Vm::bcl_32() {  // BCLSwap 0x606390
+  pc_ = cur_pc_ + 1;  // T2a-pc: PC first (error-PC table)
   const Variant a = pop(), b = pop();
   push(a);
   push(b);
-  pc_ = cur_pc_ + 1;
   return true;
 }
 // ==== row 0x33
 bool Vm::bcl_33() {  // BCLPull 0x606420: copies top-n (n = 1 is Dup)
+  pc_ = cur_pc_ + 2;  // T2a-pc: PC first (error-PC table)
   const uint32_t n = op_u8(1);
   if (n == 0 || n > stack_.depth()) throw VmError("Undefined: 0x33 operand outside the stack");
   const Variant d = heap_.duplicate(stack_.at(stack_.depth() - n));
   push(d);
-  pc_ = cur_pc_ + 2;
   return true;
 }
 // ==== row 0x34
 bool Vm::bcl_34() {  // BCLDupN 0x6064b0
+  pc_ = cur_pc_ + 2;  // T2a-pc: PC first (error-PC table)
   const uint32_t n = op_u8(1);
   for (uint32_t i = 0; i < n; ++i) {
     if (n > stack_.depth()) throw VmError("Undefined: 0x34 operand outside the stack");
     const Variant d = heap_.duplicate(stack_.at(stack_.depth() - n));
     push(d);
   }
-  pc_ = cur_pc_ + 2;
   return true;
 }
 // ==== row 0x35
 bool Vm::bcl_35() {  // BCLDup 0x606470
+  pc_ = cur_pc_ + 1;  // T2a-pc: PC first (error-PC table)
   const Variant d = heap_.duplicate(stack_.top());
   push(d);
-  pc_ = cur_pc_ + 1;
   return true;
 }
 
 // ==== row 0x40
 bool Vm::bcl_40() {
+  pc_ = cur_pc_ + 5;  // T2a-pc: PC first (error-PC table)
   push(Variant{kInt, op_u32(1)});
-  pc_ = cur_pc_ + 5;
   return true;
 }
 // ==== row 0x41
 bool Vm::bcl_41() { throw VmError("unwritten instruction BCL_PushConstanti24 called"); }  // 0x6065e0, PC not advanced
 // ==== row 0x42
 bool Vm::bcl_42() {
+  pc_ = cur_pc_ + 3;  // T2a-pc: PC first (error-PC table)
   push(make_int(static_cast<int16_t>(op_u16(1))));
-  pc_ = cur_pc_ + 3;
   return true;
 }
 // ==== row 0x43
 bool Vm::bcl_43() {
+  pc_ = cur_pc_ + 2;  // T2a-pc: PC first (error-PC table)
   push(make_int(static_cast<int8_t>(op_u8(1))));
-  pc_ = cur_pc_ + 2;
   return true;
 }
 // ==== row 0x44
 bool Vm::bcl_44() {
+  pc_ = cur_pc_ + 5;  // T2a-pc: PC first (error-PC table)
   push(Variant{kFloat, op_u32(1)});
-  pc_ = cur_pc_ + 5;
   return true;
 }
 // ==== row 0x45
 bool Vm::bcl_45() {
+  pc_ = cur_pc_ + 1;  // T2a-pc: PC first (error-PC table)
   push(make_int(0));
-  pc_ = cur_pc_ + 1;
   return true;
 }
 // ==== row 0x46
 bool Vm::bcl_46() {
+  pc_ = cur_pc_ + 3;  // T2a-pc: PC first (error-PC table)
   push(Variant{kStringId, op_u16(1)});
-  pc_ = cur_pc_ + 3;
   return true;
 }
 // ==== row 0x47
 bool Vm::bcl_47() {
+  pc_ = cur_pc_ + 1;  // T2a-pc: PC first (error-PC table)
   push(nothing());
-  pc_ = cur_pc_ + 1;
   return true;
 }
 // ==== row 0x48
 bool Vm::bcl_48() {
+  pc_ = cur_pc_ + 5;  // T2a-pc: PC first (error-PC table)
   push(Variant{kColour, op_u32(1)});
-  pc_ = cur_pc_ + 5;
   return true;
 }
 // ==== row 0x49
 bool Vm::bcl_49() {
+  pc_ = cur_pc_ + 3;  // T2a-pc: PC first (error-PC table)
   push(Variant{kColour16, op_u16(1)});
-  pc_ = cur_pc_ + 3;
   return true;
 }
 
 // ==== row 0x50
 bool Vm::bcl_50() {  // BCLJumpRelative 0x600ae0: the target is a FILE offset (0 = 'OSI\0')
+  pc_ = cur_pc_ + 2;  // T2a-pc: the error PC (+2); the jump target is written last
   const uint32_t n = op_u8(1);
   const Variant t = pop();
   if (t.type != kInt) throw VmError("Internal error: Jump to non-integral address");
@@ -400,6 +402,7 @@ bool Vm::bcl_50() {  // BCLJumpRelative 0x600ae0: the target is a FILE offset (0
 }
 // ==== row 0x51
 bool Vm::bcl_51() {  // BCLJumpAbsolute 0x600c30: the target is the tagged file offset from 0x12/0x17/0x19
+  pc_ = cur_pc_ + 2;  // T2a-pc: the error PC (+2); the jump target is written last
   const uint32_t n = op_u8(1);
   const Variant t = pop();
   if (t.type != kInt) throw VmError("Internal error: Jump to non-integral address");
@@ -449,6 +452,7 @@ bool Vm::bcl_54() {  // BCLBranchAlways 0x600e70
 
 // ==== shared: compares 0x61-0x64 (each row passes its texts)
 bool Vm::compare(Op op, const char* lhs_msg, const char* rhs_msg) {
+  pc_ = cur_pc_ + 1;  // T2a-pc: PC first (error-PC table)
   const Variant b = pop(), a = pop();
   int r;
   if ((a.type == kFloat || a.type == kInt) && (b.type == kFloat || b.type == kInt) && (a.type == kFloat || b.type == kFloat)) {
@@ -459,13 +463,12 @@ bool Vm::compare(Op op, const char* lhs_msg, const char* rhs_msg) {
     r = cmp_exact(static_cast<int32_t>(a.value), static_cast<int32_t>(b.value), op);
   }
   push(make_int(r));
-  pc_ = cur_pc_ + 1;
   return true;
 }
 // ==== row 0x60
 bool Vm::bcl_60() {  // BCLEqualTo 0x605180
+  pc_ = cur_pc_ + 1;  // T2a-pc: PC first (error-PC table)
   Variant b = pop(), a = pop();
-  pc_ = cur_pc_ + 1;
   if (a.type == kNothing) {
     push(make_int(b.type == kNothing ? 1 : 0));
     if (b.type != kNothing) heap_.dispose(b);
@@ -525,6 +528,7 @@ bool Vm::bcl_64() {
 
 // ==== shared: int,int operators (and 0x6a 0x6b 0x6d 0x6e 0x6f 0x75 0x77 0x78; which: 0 and 1 or 2 & 3 | 4 ^ 5 % 6 << 7 >>)
 bool Vm::int_binop(int which, const char* lhs_msg, const char* rhs_msg) {
+  pc_ = cur_pc_ + 1;  // T2a-pc: PC first (error-PC table)
   const Variant b = pop(), a = pop();
   if (a.type != kInt) throw VmError(fmt_err(lhs_msg, a.type));
   if (b.type != kInt) throw VmError(fmt_err(rhs_msg, b.type));
@@ -541,7 +545,6 @@ bool Vm::int_binop(int which, const char* lhs_msg, const char* rhs_msg) {
     default: break;
   }
   push(Variant{a.type, r});
-  pc_ = cur_pc_ + 1;
   return true;
 }
 // ==== row 0x6a
@@ -554,11 +557,11 @@ bool Vm::bcl_6b() {
 }
 // ==== row 0x6c
 bool Vm::bcl_6c() {  // BCLNot 0x605b40
+  pc_ = cur_pc_ + 1;  // T2a-pc: PC first (error-PC table)
   const Variant a = pop();
   if (a.type == kNothing) push(make_int(1));
   else if (a.type == kInt) push(make_int(a.value == 0 ? 1 : 0));
   else throw VmError(fmt_err("Invalid operand to operator 'not' (type:%02.2X)", a.type));
-  pc_ = cur_pc_ + 1;
   return true;
 }
 // ==== row 0x6d
@@ -604,6 +607,7 @@ Variant arith_result(Op op, Variant a, Variant b, int pc, const char* div0_msg, 
 
 // ==== row 0x70
 bool Vm::bcl_70() {  // BCLAdd 0x603ff0
+  pc_ = cur_pc_ + 1;  // T2a-pc: PC first (error-PC table)
   Variant b = pop(), a = pop();
   if (a.type == kStringId) a = to_dynamic_string(a);
   if (b.type == kStringId) b = to_dynamic_string(b);
@@ -622,38 +626,38 @@ bool Vm::bcl_70() {  // BCLAdd 0x603ff0
                       fmt_err("Invalid operand to operator '+' (lhs) (type:%02.2X)", a.type),
                       fmt_err("Invalid operand to operator '+' (rhs) (type:%02.2X)", b.type)));
   }
-  pc_ = cur_pc_ + 1;
   return true;
 }
 // ==== row 0x71
 bool Vm::bcl_71() {  // BCLSubtract 0x6042b0
+  pc_ = cur_pc_ + 1;  // T2a-pc: PC first (error-PC table)
   const Variant b = pop(), a = pop();
   push(arith_result(Op::Sub, a, b, fpu_pc_, "",
                     fmt_err("Invalid operand to operator '-' (lhs) (type:%02.2X)", a.type),
                     fmt_err("Invalid operand to operator '-' (rhs) (type:%02.2X)", b.type)));
-  pc_ = cur_pc_ + 1;
   return true;
 }
 // ==== row 0x72
 bool Vm::bcl_72() {  // BCLMultiply 0x604450 (its lhs text differs)
+  pc_ = cur_pc_ + 1;  // T2a-pc: PC first (error-PC table)
   const Variant b = pop(), a = pop();
   push(arith_result(Op::Mul, a, b, fpu_pc_, "",
                     fmt_err("Invalid left-hand-side operand to operator '*' (type:%02.2X)", a.type),
                     fmt_err("Invalid operand to operator '*' (rhs) (type:%02.2X)", b.type)));
-  pc_ = cur_pc_ + 1;
   return true;
 }
 // ==== row 0x73
 bool Vm::bcl_73() {  // BCLDivide 0x6045f0
+  pc_ = cur_pc_ + 1;  // T2a-pc: PC first (error-PC table)
   const Variant b = pop(), a = pop();
   push(arith_result(Op::Div, a, b, fpu_pc_, "Divide by 0",
                     fmt_err("Invalid operand to operator '/' (lhs) (type:%02.2X)", a.type),
                     fmt_err("Invalid operand to operator '/' (rhs) (type:%02.2X)", b.type)));
-  pc_ = cur_pc_ + 1;
   return true;
 }
 // ==== row 0x74
 bool Vm::bcl_74() {  // BCLPower 0x6047f0
+  pc_ = cur_pc_ + 1;  // T2a-pc: PC first (error-PC table)
   const Variant b = pop(), a = pop();
   Variant r;
   if (a.type == kFloat && b.type == kFloat) {
@@ -680,26 +684,25 @@ bool Vm::bcl_74() {  // BCLPower 0x6047f0
     r = Variant{a.type, x};
   }
   push(r);
-  pc_ = cur_pc_ + 1;
   return true;
 }
 // ==== row 0x75
 bool Vm::bcl_75() {  // BCLModulus 0x604a00: unsigned div, no float path
+  pc_ = cur_pc_ + 1;  // T2a-pc: PC first (error-PC table)
   const Variant b = pop(), a = pop();
   if (a.type != kInt) throw VmError(fmt_err("Invalid operand to operator '%' (lhs) (type:%02.2X)", a.type));
   if (b.type != kInt) throw VmError(fmt_err("Invalid operand to operator '%' (rhs) (type:%02.2X)", b.type));
   if (b.value == 0) throw VmError("Divide by 0");
   push(Variant{a.type, a.value % b.value});
-  pc_ = cur_pc_ + 1;
   return true;
 }
 // ==== row 0x76
 bool Vm::bcl_76() {  // BCLBitwiseNot 0x605aa0
+  pc_ = cur_pc_ + 1;  // T2a-pc: PC first (error-PC table)
   const Variant a = pop();
   if (a.type == kNothing) push(make_int(1));
   else if (a.type == kInt) push(Variant{kInt, ~a.value});
   else throw VmError(fmt_err("Invalid operand to operator '~' (type:%02.2X)", a.type));
-  pc_ = cur_pc_ + 1;
   return true;
 }
 // ==== row 0x77
@@ -712,14 +715,14 @@ bool Vm::bcl_78() {
 }
 // ==== row 0x7a
 bool Vm::bcl_7a() {  // BCLIncrement 0x605be0: raw value + 1, no type check
+  pc_ = cur_pc_ + 1;  // T2a-pc: PC first (error-PC table)
   stack_.top().value += 1;
-  pc_ = cur_pc_ + 1;
   return true;
 }
 // ==== row 0x7b
 bool Vm::bcl_7b() {
+  pc_ = cur_pc_ + 1;  // T2a-pc: PC first (error-PC table)
   stack_.top().value -= 1;
-  pc_ = cur_pc_ + 1;
   return true;
 }
 // ==== row 0x80
@@ -768,8 +771,19 @@ void Vm::invoke_native(const NativeEntry& e, uint32_t n, const std::string& cls,
   const uint32_t site = cur_pc_;
   const uint8_t site_op = cur_op_;
   pc_ = next_pc;  // the handler has consumed its operands before the native runs
+  // D14: the sequence number is assigned at native ENTRY (a nested native gets a higher one, its line comes first)
+  const uint64_t seq = native_seq_++;
+  if (observer_) observer_(e, seq);
+  active_seq_.push_back(seq);
   NativeCall call{*this, e, site, args};
-  Variant r = e.fn ? e.fn(call, e.user) : natives_.stub_return(e, heap_, call);
+  Variant r;
+  try {
+    r = e.fn ? e.fn(call, e.user) : natives_.stub_return(e, heap_, call);
+  } catch (...) {
+    active_seq_.pop_back();
+    throw;
+  }
+  active_seq_.pop_back();
   cur_pc_ = site;
   cur_op_ = site_op;
   if (e.sets_fpu_pc64) set_pc64();
@@ -797,23 +811,14 @@ void Vm::invoke_native(const NativeEntry& e, uint32_t n, const std::string& cls,
     }
     trace_line(l + " -> " + fmt_variant(r));
   }
-  if (ReturnLog* log = natives_.return_log()) {
+  if (ReturnLog* log = natives_.return_log()) {  // natives.log v2 (D14): ` S` after a 0x16, ` G` after a game value
     char b[24];
-    std::snprintf(b, sizeof b, "%08llu ", static_cast<unsigned long long>(native_seq_));
-    std::string l = std::string(b) + fmt_name(cls) + "." + fmt_name(fn) + " " + std::to_string(n) + " -> " + fmt_variant(r);
-    auto text = [&](Variant v) {
-      const std::string& t = heap_.text(v.value);
-      return " S " + std::to_string(t.size()) + (t.empty() ? std::string() : " " + fmt_hex(t));
-    };
-    if (r.type == kString) l += text(r);
+    std::snprintf(b, sizeof b, "%08llu ", static_cast<unsigned long long>(seq));
+    std::string l = std::string(b) + fmt_name(cls) + "." + fmt_name(fn) + " " + std::to_string(n) + " -> " + log_value(heap_, r);
     for (uint32_t i = 0; i < n; ++i)
-      if (byref[i] && *args[i] != before[i]) {
-        l += " W " + std::to_string(i) + " " + fmt_variant(*args[i]);
-        if (args[i]->type == kString) l += text(*args[i]);
-      }
+      if (byref[i] && *args[i] != before[i]) l += " W " + std::to_string(i) + " " + log_value(heap_, *args[i]);
     log->line(l);
   }
-  ++native_seq_;
   for (uint32_t i = 0; i < n; ++i) pop_dispose();  // 0x601c5f: top first
   push(r);
 }
@@ -853,8 +858,10 @@ bool Vm::bcl_82() {  // BCLCallGameFunction 0x6015a0 (self-patch -> memoised per
   const uint32_t next = cur_pc_ + 6;
   const uint32_t site = cur_pc_;
   const uint8_t op = cur_op_;
+  pc_ = cur_pc_ + 5;  // T2a-pc: five incs before the map lookup (the map miss 0x601725 is at +5)
   const std::string cls = str_entry(op_u16(1)), fn = str_entry(op_u16(3));
   if (const NativeEntry* m = memo(site)) {  // the patched 0x84: no lookup, no min/max (0x602bb0)
+    pc_ = cur_pc_ + 6;  // 0x84: +6 for the whole body
     try {
       invoke_native(*m, n, cls, fn, next, false, NativeMsgs{nullptr, nullptr, nullptr});
     } catch (...) {
@@ -866,6 +873,7 @@ bool Vm::bcl_82() {  // BCLCallGameFunction 0x6015a0 (self-patch -> memoised per
   }
   const NativeEntry* e = natives_.find(cls, fn);
   if (!e) throw VmError("Call to unregistered Game Function");  // SrOSIError 0x601725, outside the try
+  pc_ = cur_pc_ + 6;  // the sixth inc (0x601780): every later error, and the re-raise 0x601dd3, at +6
   try {
     invoke_native(*e, n, cls, fn, next, true,
                   NativeMsgs{"Too many parameters passed to game function", "Too few parameters passed to game function", nullptr});
@@ -883,11 +891,13 @@ bool Vm::bcl_83() {  // BCLCallGameFunctionFromString 0x602160 (not self-patchin
   const uint32_t next = cur_pc_ + 4;
   const uint32_t site = cur_pc_;
   const uint8_t op = cur_op_;
+  pc_ = cur_pc_ + 3;  // T2a-pc: three incs (0x602178, 0x60218a, 0x6021a5) before the name pop
   const std::string cls = str_entry(op_u16(1));
   const Variant s = pop();
   if (!is_str(s)) throw VmError("Invalid member type for function call (must be a string)");  // 0x6022c3
-  const std::string fn = upto_nul(string_text(s));
+  const std::string fn = name_copy(s);  // kOutOfRange above 255 (0x60226a / 0x602299), before the try: not re-raised
   try {
+    pc_ = cur_pc_ + 4;  // the n byte's inc (0x60237c) inside the try: every caught error is re-raised at +4
     const NativeEntry* e = natives_.find(cls, fn);
     if (!e) throw VmError("Call to unregistered Game Function");  // SrOSIError 0x602431, inside the try
     invoke_native(*e, n, cls, fn, next, true,
@@ -908,12 +918,13 @@ bool Vm::bcl_84() { throw VmError("Direct call without a memoised site"); }  // 
 
 // ==== row 0x90
 bool Vm::bcl_90() {
+  pc_ = cur_pc_ + 1;  // T2a-pc: PC first (error-PC table)
   push(Variant{kArray, heap_.new_array()});
-  pc_ = cur_pc_ + 1;
   return true;
 }
 // ==== row 0x91
 bool Vm::bcl_91() {  // BCLGetArrayValue 0x5fd0f0: i's type is not checked, its value is compared unsigned
+  pc_ = cur_pc_ + 1;  // T2a-pc: PC first (error-PC table)
   const Variant i = pop(), a = pop();
   if (a.type == kStringTable) throw VmError("Reference beyond end of string table");  // no 0x13 exists: modelled empty
   if (a.type != kArray) throw VmError("array reference on non-array");
@@ -922,22 +933,22 @@ bool Vm::bcl_91() {  // BCLGetArrayValue 0x5fd0f0: i's type is not checked, its 
   const Variant d = heap_.duplicate(el[i.value]);
   push(d);
   heap_.dispose(a);
-  pc_ = cur_pc_ + 1;
   return true;
 }
 // ==== row 0x92
 bool Vm::bcl_92() {  // BCLElementsInArray 0x5fd2d0
+  pc_ = cur_pc_ + 1;  // T2a-pc: PC first (error-PC table)
   const Variant a = pop();
   uint32_t n = 0;
   if (a.type == kArray) n = static_cast<uint32_t>(heap_.elements(a.value).size());
   else if (a.type != kStringTable) throw VmError("array reference on non-array");
   push(make_int(static_cast<int32_t>(n)));
   heap_.dispose(a);
-  pc_ = cur_pc_ + 1;
   return true;
 }
 // ==== row 0x93
 bool Vm::bcl_93() {  // BCLSetArrayValue 0x5fd360
+  pc_ = cur_pc_ + 1;  // T2a-pc: PC first (error-PC table)
   const Variant v = pop(), i = pop(), a = pop();
   if (a.type == kStringTable) throw VmError("Assigning into string table is illegal");
   if (a.type != kArray) throw VmError("array reference on non-array");
@@ -947,21 +958,21 @@ bool Vm::bcl_93() {  // BCLSetArrayValue 0x5fd360
   heap_.elements(a.value)[i.value] = v;
   heap_.dispose(old);
   heap_.dispose(a);
-  pc_ = cur_pc_ + 1;
   return true;
 }
 // ==== row 0x94
 bool Vm::bcl_94() {  // BCLAppendToArray 0x5fd450
+  pc_ = cur_pc_ + 1;  // T2a-pc: PC first (error-PC table)
   const Variant v = pop(), a = pop();
   if (a.type == kStringTable) throw VmError("Assigning into string table is illegal");
   if (a.type != kArray) throw VmError("array reference on non-array");
   heap_.elements(a.value).push_back(v);
   heap_.dispose(a);
-  pc_ = cur_pc_ + 1;
   return true;
 }
 // ==== row 0x95
 bool Vm::bcl_95() {  // BCLRemoveFromArray 0x5fd500
+  pc_ = cur_pc_ + 1;  // T2a-pc: PC first (error-PC table)
   const Variant i = pop(), a = pop();
   if (a.type == kStringTable) throw VmError("Removal from string table is illegal");
   if (a.type != kArray) throw VmError("array reference on non-array");
@@ -971,11 +982,11 @@ bool Vm::bcl_95() {  // BCLRemoveFromArray 0x5fd500
   el.erase(el.begin() + i.value);
   heap_.dispose(old);
   heap_.dispose(a);
-  pc_ = cur_pc_ + 1;
   return true;
 }
 // ==== row 0x96
 bool Vm::bcl_96() {  // BCLInsertIntoArray 0x5fd5d0: inserting at count is an error (SrOSIError)
+  pc_ = cur_pc_ + 1;  // T2a-pc: PC first (error-PC table)
   const Variant v = pop(), i = pop(), a = pop();
   if (a.type == kStringTable) throw VmError("Assigning into string table is illegal");
   if (a.type != kArray) throw VmError("array reference on non-array");
@@ -983,25 +994,24 @@ bool Vm::bcl_96() {  // BCLInsertIntoArray 0x5fd5d0: inserting at count is an er
   if (i.value >= el.size()) throw VmError("insertion outside of array bounds");
   el.insert(el.begin() + i.value, v);
   heap_.dispose(a);
-  pc_ = cur_pc_ + 1;
   return true;
 }
 
 // ==== shared: colour channels (each row passes its texts)
 bool Vm::colour_set(int shift, const char* c_msg, const char* v_msg) {
+  pc_ = cur_pc_ + 1;  // T2a-pc: PC first (error-PC table)
   const Variant v = pop(), c = pop();
   if (c.type != kColour) throw VmError(c_msg);
   if (v.type != kInt) throw VmError(v_msg);
   const uint32_t x = v.value > 255 ? 255 : v.value;  // unsigned clamp: negatives -> 255
   push(Variant{kColour, (c.value & ~(0xffu << shift)) | (x << shift)});
-  pc_ = cur_pc_ + 1;
   return true;
 }
 bool Vm::colour_get(int shift, const char* c_msg) {
+  pc_ = cur_pc_ + 1;  // T2a-pc: PC first (error-PC table)
   const Variant c = pop();
   if (c.type != kColour) throw VmError(c_msg);
   push(make_int(static_cast<int32_t>((c.value >> shift) & 0xff)));
-  pc_ = cur_pc_ + 1;
   return true;
 }
 // ==== row 0xa0
@@ -1023,14 +1033,15 @@ bool Vm::bcl_a7() { return colour_get(0, "cant access alpha value of anything bu
 
 // ==== shared: 0xb0-0xb2 (a popped without dispose, converted, then disposed) and the type tests
 bool Vm::convert_op(uint16_t target) {
+  pc_ = cur_pc_ + 1;  // T2a-pc: PC first (error-PC table)
   Variant a = pop();
   const Variant r = convert(a, target);
   heap_.dispose(a);
   push(r);
-  pc_ = cur_pc_ + 1;
   return true;
 }
 bool Vm::type_test(int which) {
+  pc_ = cur_pc_ + 1;  // T2a-pc: PC first (error-PC table)
   const Variant a = pop();
   bool r = false;
   switch (which) {
@@ -1043,7 +1054,6 @@ bool Vm::type_test(int which) {
   }
   heap_.dispose(a);
   push(make_int(r ? 1 : 0));
-  pc_ = cur_pc_ + 1;
   return true;
 }
 // ==== row 0xb0
@@ -1066,6 +1076,7 @@ bool Vm::bcl_bc() { return type_test(4); }
 bool Vm::bcl_bd() { return type_test(5); }
 // ==== row 0xbf
 bool Vm::bcl_bf() {  // BCLGetObjectClassID 0x607350
+  pc_ = cur_pc_ + 1;  // T2a-pc: PC first (error-PC table)
   const Variant o = pop();
   uint32_t r;
   if (o.type == kObject) r = heap_.class_id(o.value);
@@ -1073,13 +1084,12 @@ bool Vm::bcl_bf() {  // BCLGetObjectClassID 0x607350
   else throw VmError("Cant get classID of non object");
   heap_.dispose(o);
   push(Variant{kInt, r});
-  pc_ = cur_pc_ + 1;
   return true;
 }
 // ==== row 0xff
 bool Vm::bcl_ff() {  // BCLHalt 0x603840: pushes a nothing, Run stops
+  pc_ = cur_pc_ + 1;  // T2a-pc: PC first (error-PC table)
   push(nothing());
-  pc_ = cur_pc_ + 1;
   halted_ = true;
   return false;
 }
