@@ -606,10 +606,11 @@ def test_loadarea_swallows_a_nested_error_and_continues_with_the_next_block():
     asm = ('.function main 0\nPushConstantString "frnt"\nCallGameFunction gcareadirector.setcurrentarea 1\nReturn\n'
            '.function OnEvent 2\nDebugOn\nPushConstanti8 1\nReturn\n')
     vm, ctx, tr, log = make_vm(asm)
-    cnt1 = 0x636E7431
-    ad = _swallow_world(vm, ctx, [d.AreaObject("objects", 0xA1, cnt1), d.AreaObject("objects", 0xA2, 0x1234),
-                                  d.AreaObject("characters", 0xB1, 0x4321), d.AreaObject("hives", 0xC1, cnt1),
+    lbld = 0x6C626C64                                                            # [0x734f10]: the only id that sets up
+    ad = _swallow_world(vm, ctx, [d.AreaObject("objects", 0xA1, lbld), d.AreaObject("objects", 0xA2, 0x1234),
+                                  d.AreaObject("characters", 0xB1, 0x4321), d.AreaObject("hives", 0xC1, lbld),
                                   d.AreaObject("hives", 0xC2, 0x5)])
+    ad.main_character_id = lbld                                                 # the guard also needs id == main character
     r = vm.call("main", [])
     assert r.ok and vm.last_error is None                                       # the swallow is not an error of the call
     c = [l for l in log if l.startswith("C ")]
@@ -633,7 +634,8 @@ def test_loadarea_set_under_water_flag_picks_the_branch():
         asm = ('.function main 0\nPushConstantString "frnt"\nCallGameFunction gcareadirector.setcurrentarea 1\nReturn\n'
                '.function OnEvent 2\nPushConstanti8 1\nReturn\n')
         vm, ctx, tr, log = make_vm(asm)
-        ad = _swallow_world(vm, ctx, [d.AreaObject("objects", 0xA1, 0x636E7431)])
+        ad = _swallow_world(vm, ctx, [d.AreaObject("objects", 0xA1, 0x6C626C64)])
+        ad.main_character_id = 0x6C626C64
         ad.under_water = flag
         assert vm.call("main", []).ok
         c = [l for l in log if l.startswith("C ")]
@@ -648,6 +650,50 @@ def test_loadarea_guard_compares_the_motion_id_with_the_main_character():
     vm, ctx, tr, log = make_vm(asm)
     ad = _swallow_world(vm, ctx, [d.AreaObject("objects", 0xA1, 0x1111)])       # not 'cnt1': no SetUnderWater
     assert vm.call("main", []).ok and not any(l.startswith("C ") for l in log) and ad.set_under_water_calls == 0
+
+
+def test_loadarea_vm_reach_asm_pins(disasm, image):
+    """The ctor gate and the hive split, from the binary: 0x544065 cmp [0x734f10],edx (edx = [obj+0x80], 0x54405f) / jne
+    0x5440d3, then SetupMoveable 0x545c00 (0x54408b); the motion id [ms+0x14] takes the same field (0x543f44 -> 0x5748ec);
+    the guard 0x574eeb-0x574ef1; LoadHives 0x62623c cmp [rec+0x2c],0 / je -> ctor 0x6239b0 (0x6262fa), else 0x6236a0
+    (0x6262b5) -> 0x5432a0 (0x6236d4)."""
+    pin(disasm, 0x54405f, 0x544090, {0x54405f: "mov edx, dword ptr [edx + 0x80]", 0x544065: "cmp dword ptr [0x734f10], edx",
+                                     0x54406b: "jne 0x5440d3", 0x54408b: "call 0x545c00"})
+    pin(disasm, 0x543f3e, 0x543f4a, {0x543f44: "mov edx, dword ptr [edx + 0x80]"})
+    pin(disasm, 0x5748e3, 0x5748ef, {0x5748ec: "mov dword ptr [ebx + 0x14], edx"})
+    pin(disasm, 0x574eeb, 0x574f02, {0x574eeb: "mov ecx, dword ptr [esi + 0x14]", 0x574ef1: "cmp ecx, edx",
+                                     0x574ef3: "jne 0x574f02", 0x574efd: "call 0x589050"})
+    pin(disasm, 0x62623c, 0x626242, {0x62623c: "cmp dword ptr [edi + 0x2c], 0x0", 0x626240: "je 0x6262c0"})
+    pin(disasm, 0x6262b5, 0x6262ba, {0x6262b5: "call 0x6236a0"})
+    pin(disasm, 0x6262fa, 0x6262ff, {0x6262fa: "call 0x6239b0"})
+    pin(disasm, 0x6236d4, 0x6236d9, {0x6236d4: "call 0x5432a0"})
+    assert image.u32(0x734f10) == 0x6C626C64    # (the main character id [0x782884] is .bss, written 'cnt1' at 0x482d43: pinned elsewhere)
+    plain = disasm(0x6239b0, 0x623a00)
+    assert not any("0x5432a0" in v or "0x545c00" in v for v in plain.values())
+
+
+def test_loadarea_cnt1_does_not_fire_and_plain_hives_never_do():
+    """'cnt1' (the real main character) never reaches the VM: SetupMoveable runs only for id == 'lbld' (0x544065), and the
+    guard then needs 'lbld' == the main character. Each of the three conditions alone is not enough."""
+    d = dr()
+    lbld, cnt1 = 0x6C626C64, 0x636E7431
+    asm = ('.function main 0\nPushConstantString "frnt"\nCallGameFunction gcareadirector.setcurrentarea 1\nReturn\n'
+           '.function OnEvent 2\nPushConstanti8 1\nReturn\n')
+    cases = [
+        ([d.AreaObject("objects", 0xA1, cnt1), d.AreaObject("hives", 0xC1, cnt1),
+          d.AreaObject("characters", 0xB1, cnt1)], cnt1, 0),                        # main character cnt1: never fires
+        ([d.AreaObject("objects", 0xA1, lbld)], cnt1, 0),                           # lbld object, main character cnt1
+        ([d.AreaObject("objects", 0xA1, cnt1)], lbld, 0),                           # main character lbld, object id cnt1
+        ([d.AreaObject("hives", 0xC1, lbld, plain=True)], lbld, 0),                 # hive ctor 0x6239b0
+        ([d.AreaObject("hives", 0xC1, lbld)], lbld, 1),                             # hive ctor 0x5432a0: fires
+        ([d.AreaObject("objects", 0xA1, lbld)], lbld, 1),
+    ]
+    for objs, main, want in cases:
+        vm, ctx, tr, log = make_vm(asm)
+        ad = _swallow_world(vm, ctx, objs)
+        ad.main_character_id = main
+        assert vm.call("main", []).ok
+        assert sum(1 for l in log if l.startswith("C ")) == want == ad.set_under_water_calls, (objs, main)
 
 
 def test_cleanup_load_removes_matching_pickups_through_the_model_director():
@@ -1134,6 +1180,34 @@ def test_boolean_keys_14_16_18_set_the_quest_bytes_for_the_current_level():
         sv.level = 2
         bs.set(ctx, key, True)
     assert sv.quest[2] == 0
+
+
+def test_setquest_bounds_asm_and_model(disasm, image):
+    """SetQuest 0x5d5e20: level (cl) below 1 (cmp cl,1; jb 0x5d5e24-0x5d5e27) or above 6 (cmp cl,6; ja 0x5d5e29-0x5d5e2c) and
+    quest-1 above 2 (unsigned, 0x5d5e36-0x5d5e39) return; the stores are `[0x83b37f + level]`, so level 6 is the last
+    byte, quests[7] of the 8-byte window."""
+    pin(disasm, 0x5d5e20, 0x5d5e3c, {0x5d5e24: "cmp cl, 0x1", 0x5d5e27: "jb 0x5d5e6a", 0x5d5e29: "cmp cl, 0x6",
+                                     0x5d5e2c: "ja 0x5d5e6a", 0x5d5e33: "sub edx, 0x1", 0x5d5e36: "cmp edx, 0x2",
+                                     0x5d5e39: "ja 0x5d5e6a"})
+    pin(disasm, 0x5d5e42, 0x5d5e6b, {0x5d5e45: "or byte ptr [edx + 0x83b37f], 0x1", 0x5d5e53: "or byte ptr [edx + 0x83b37f], 0x2",
+                                     0x5d5e63: "or byte ptr [edx + 0x83b37f], 0x4"})
+    d = dr()
+    vm, ctx, tr, log = make_vm(".function main 0\nReturn\n")
+    bs, sv = ctx.subsystem(d.BetterSaverState), ctx.subsystem(d.Saver)
+    sv.level = 0                                                                # frnt's "lev0"
+    for key in (0xE, 0x10, 0x12):
+        bs.set(ctx, key, True)
+    assert sv.quest == bytearray(8)
+    sv.level = 6                                                                # the last valid level: quests[6]
+    for key in (0xE, 0x10, 0x12):
+        bs.set(ctx, key, True)
+    assert list(sv.quest) == [0, 0, 0, 0, 0, 0, 7, 0] and len(sv.quest) == 8
+    sv.level = 7
+    bs.set(ctx, 0xE, True)
+    sv.set_quest(0, 1)
+    sv.set_quest(6, 0)
+    sv.set_quest(6, 4)
+    assert list(sv.quest) == [0, 0, 0, 0, 0, 0, 7, 0]                           # level 7, level 0, quest 0 and 4: no write
 
 
 def test_save_returns_nothing_and_writes_nothing(tmp_path):

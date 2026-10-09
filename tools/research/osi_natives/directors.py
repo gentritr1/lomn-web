@@ -377,6 +377,9 @@ class AreaInfo(NamedTuple):
     otype: int = 0
 
 
+MOVEABLE_SETUP_ID = 0x6C626C64          # 'lbld' [0x734f10]
+
+
 class AreaObject(NamedTuple):
     """What an area's data loads (the seam `AreaDirector.area_source` returns): `block` is the LoadArea block that loads
     it ("objects" 0x4ff93e, "characters" 0x5002ec, "hives" 0x500c0b); `motion_id` is the id its GcMotionSystem is set up
@@ -386,6 +389,7 @@ class AreaObject(NamedTuple):
     motion_id: int
     director: str = "model"
     otype: int = 0
+    plain: bool = False     # a hive record with [rec+0x2c] == 0 (0x62623c cmp / 0x626240 je): ctor 0x6239b0, never the VM
 
 
 class AreaLoader:
@@ -482,6 +486,9 @@ class AreaDirector:
                 del loader.entries[i]
                 return
 
+    # DEFERRED (follow-up batch, unmodelled): setcurrentlevel -> RemoveArea -> CleanUpArea -> GcModelDirector::Remove ->
+    # Call("OnEvent") (0x501830 -> 0x47f680) for the characters of an area's _char.slb; only the model-director removals
+    # of `entries` below are modelled.
     def set_current_area(self, ctx, name: bytes) -> None:
         """GcAreaDirector::SetCurrentArea 0x48a540."""
         s = c_string(name)                                                       # the copy 0x48a550 (0x4f56c0)
@@ -509,7 +516,13 @@ class AreaDirector:
             for o in objs:
                 if o.block != block:
                     continue
-                if o.motion_id == self.main_character():                         # cmp ecx,edx 0x574ef1
+                # GcMoveableObj::GcMoveableObj 0x5432a0 calls SetupMoveable 0x545c00 (0x54408b) only when the id [obj+0x80]
+                # equals the .data constant 'lbld' [0x734f10] (cmp 0x544065, jne 0x54406b); that id is also the motion
+                # id [ms+0x14] (0x543f44 -> 0x5748ec), and the guard 0x574eeb-0x574ef1 needs it to equal the main
+                # character's id. 'cnt1' != 'lbld', so the guard never passes while the main character is 'cnt1'.
+                # A hive record with [rec+0x2c] == 0 uses ctor 0x6239b0 (0x6262fa) and never reaches SetupMoveable.
+                if (not o.plain and o.motion_id == MOVEABLE_SETUP_ID
+                        and o.motion_id == self.main_character()):               # cmp ecx,edx 0x574ef1
                     r = self.set_under_water(ctx, self.under_water, swallow=True)
                     if not r.ok:                                                 # swallowed: the object is not completed,
                         break                                                    # the block ends (0x4ff996 / 0x500344 / 0x500c63)
