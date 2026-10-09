@@ -8,7 +8,7 @@ Both interpreters (C++ `lomn_osi_conform`, Python `osi_vm.py --conform`) must ma
 ## 1. Format
 
 One program is `<id>.asm` plus `<id>.expect.json`. The `.asm` is assembled by `tools/osi/osiasm.py` into `<id>.osi` at
-test time; the binary is never committed. `.expect.json` files are Latin-1: no `\u` escape above `ÿ` (the C++ runner's reader is Latin-1; use ASCII in note/alternative text).
+test time; the binary is never committed. `.expect.json` files are Latin-1: no `\u` escape above `\u00ff` (the C++ runner's reader is Latin-1; use ASCII in note/alternative text).
 
 ```json
 { "id": "0x53-float-cond", "rows": ["0x53"], "falsifier": "a float 0.0 condition is an ERROR, not a branch",
