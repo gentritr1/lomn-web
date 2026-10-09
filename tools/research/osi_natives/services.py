@@ -205,7 +205,7 @@ def hook_route(name: bytes):
       current directory, which is the Root/ mapping: ("neither", "Root/" + name). Review C-1 (a shared misreading of "false").
     Case-sensitive strstr; the first occurrence decides."""
     n = cut(name)
-    if b"User/" not in n:
+    if not has_user_needle(n):
         return "original", n.decode("latin-1")
     if n.find(b"Root/") == 0:
         return "root", n.decode("latin-1")

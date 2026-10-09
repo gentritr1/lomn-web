@@ -816,3 +816,21 @@ def test_oracle_runs_setup_with_the_services_models(tmp_path, lomn_data):
     assert any(re.match(r"^\d+ scslosifileio\.doesfileexist 1 -> 0010:00000000$", l) for l in mine)
     assert any(re.match(r"^\d+ gctimer\.create 3 -> 0027:[0-9a-f]{8} G 0$", l) for l in mine)
     assert any(re.match(r"^\d+ scslosifoundation\.stringtoidentifier 1 -> 0010:66726e74$", l) for l in mine)
+
+
+def test_doesfileexist_dotdot_above_the_mount_root_is_zero(tmp_path):   # F7b item 6: both engines, decided behaviour
+    inst = make_install(tmp_path, art=["foo.tga"], loose=["data/loose.txt", "User/data/p.sav"])
+    assert exists(inst, "Root/Data/../Data/loose.txt")[0] == 1
+    assert exists(inst, "Root/../Root/Data/loose.txt")[0] == 0                  # climbs above Root/ and returns
+    assert exists(inst, "Root/Data/../../Root/Data/loose.txt")[0] == 0
+    assert exists(inst, "Data/../../install/Data/loose.txt")[0] == 0           # the neither route (no User/): same rule
+    assert exists(inst, "Root/../Root/User/data/p.sav")[0] == 0                # root route
+    assert exists(inst, "User/../Root/Data/loose.txt")[0] == 0                 # user route is false anyway
+
+
+def test_doesfileexist_hook_routes_by_has_user_needle(monkeypatch):   # review 7b n1: the helper is the one that decides
+    s = sv()
+    monkeypatch.setattr(s, "has_user_needle", lambda name: True)
+    assert s.hook_route(b"a/b")[0] == "neither"                                # forced true: no "User/" in the name at all
+    monkeypatch.setattr(s, "has_user_needle", lambda name: False)
+    assert s.hook_route(b"Root/User/x") == ("original", "Root/User/x")

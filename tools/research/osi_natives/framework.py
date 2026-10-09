@@ -16,6 +16,7 @@ the lomn::fs contract comment (engine/include/lomn/fs.h) for the VFS. Never from
 from __future__ import annotations
 
 import os
+import stat
 import struct
 import sys
 from pathlib import Path
@@ -232,17 +233,44 @@ class Vfs:
             out.append(seg)
         return "/".join(out)
 
+    @staticmethod
+    def climbs_above_mount(path: str) -> bool:
+        """True when a ".." would leave the mount root (the first segment, Root/ or User/): it pops the mount segment or
+        has nothing to pop. Such a path is refused (decided port behaviour, F7: "Root/../Root/x" is not "Root/x")."""
+        depth = 0
+        for seg in _ascii_lower(path.replace("\\", "/")).split("/"):
+            if seg in ("", "."):
+                continue
+            if seg == "..":
+                if depth <= 1:
+                    return True
+                depth -= 1
+                continue
+            depth += 1
+        return False
+
     def _resolve(self, path: str) -> Optional[Path]:
+        """The install's regular files only, as the C++ DiskFs indexes them: a symlink (to a file or to a directory) is
+        invisible and is never descended; a hard link is a regular file. The install root itself may be a link."""
+        if self.climbs_above_mount(path):
+            return None
         parts = self.normalize(path).split("/")
         if parts[0] != "root" or len(parts) < 2:
             return None
         cur = self.root
-        for seg in parts[1:]:
+        for i, seg in enumerate(parts[1:], 1):
+            last = i == len(parts) - 1
             if not cur.is_dir():
                 return None
             match = None
             for e in sorted(os.listdir(cur)):
-                if _ascii_lower(e) == seg:
+                if _ascii_lower(e) != seg:
+                    continue
+                try:
+                    mode = os.lstat(cur / e).st_mode             # lstat: a link is its own entry, not its target
+                except OSError:
+                    continue
+                if stat.S_ISREG(mode) if last else stat.S_ISDIR(mode):
                     match = e
                     break
             if match is None:

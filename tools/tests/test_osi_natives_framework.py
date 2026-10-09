@@ -816,3 +816,39 @@ def test_release_of_a_handled_object_writes_H_minus_one_then_F_g():  # m5
     assert log == ["H 0026:00000001 +1", "H 0026:00000001 -1"]
     assert tr.lines == ["A g 00000001 26", "F g 00000001"]
     assert at_delete == [(["H 0026:00000001 +1", "H 0026:00000001 -1"], "F g 00000001")]
+
+
+def test_vfs_is_regular_files_only_and_does_not_follow_links(tmp_path):   # F7b item 7: mirrors the C++ DiskFs index
+    import os
+    f = fw()
+    inst = tmp_path / "inst"
+    (inst / "Data").mkdir(parents=True)
+    (inst / "Data" / "real.bin").write_bytes(b"real")
+    os.link(inst / "Data" / "real.bin", inst / "Data" / "hard.bin")           # a hard link is a regular file: visible
+    os.symlink(inst / "Data" / "real.bin", inst / "Data" / "soft.bin")        # a symlinked file: invisible
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "inner.bin").write_bytes(b"inner")
+    os.symlink(outside, inst / "Linked")                                      # a symlinked directory: not descended
+    os.symlink(inst / "Data", inst / "DataAlias")
+    v = f.Vfs(inst)
+    assert v.exists("Root/Data/real.bin") and v.read("Root/Data/real.bin") == b"real"
+    assert v.exists("Root/Data/hard.bin") and v.read("Root/Data/hard.bin") == b"real"
+    assert not v.exists("Root/Data/soft.bin") and v.read("Root/Data/soft.bin") is None
+    assert not v.exists("Root/Linked/inner.bin") and v.read("Root/linked/INNER.bin") is None
+    assert not v.exists("Root/DataAlias/real.bin")
+    # the install root itself may be a link (it is the mount, not an entry of the index)
+    os.symlink(inst, tmp_path / "instlink")
+    assert f.Vfs(tmp_path / "instlink").exists("Root/Data/real.bin")
+
+
+def test_vfs_refuses_a_dotdot_that_climbs_above_the_mount_root(tmp_path):   # F7b item 6 (decided port behaviour)
+    f = fw()
+    (tmp_path / "Data").mkdir()
+    (tmp_path / "Data" / "a.bin").write_bytes(b"a")
+    v = f.Vfs(tmp_path)
+    assert v.exists("Root/Data/../Data/a.bin")                                # stays inside the mount: fine
+    assert not v.exists("Root/../Root/Data/a.bin") and v.read("Root/../root/Data/a.bin") is None
+    assert not v.exists("Root/Data/../../Root/Data/a.bin")                    # climbs out and comes back in
+    assert not v.exists("../Root/Data/a.bin")                                 # climbs above before the mount
+    assert not v.exists("Root/..")
