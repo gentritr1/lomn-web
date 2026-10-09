@@ -60,14 +60,14 @@ Controller-verified 2026-10-08: the page loads to the folder picker with 0 conso
 
 ### 3.2 M2a-2: native framework, Setup to the first Process (IN PROGRESS: resume here)
 **State 2026-10-09.**
-- Merged on `m2-osi-vm` @ 030db5a: Tasks 1, 2a, 2b, 3, 4, 5, 6, 7 (a+b), 11, the error-PC table, the fail-closed runners and the docs batches. Each passed a blind review and controller verification. Both engines agree byte for byte on 541 programs and, with real natives, on the 600-frame A9 run.
-- Interrupted mid-work by a network outage, with partial UNCOMMITTED work preserved: pair 8 (directors, saver, mods) in worktrees `lomn-web-m2-t8a`/`t8b`, and pair 9 (objects, model director, camera, HUD) in `lomn-web-m2-t9a`/`t9b`.
-- Remaining after the pairs:
-  - the F7 follow-up batch (ledger);
-  - Task 10, the A8–A10 gate: taint re-run with real natives, mutate_vm full re-run (incl. the S07 unit gap), wasm stack per level, swallow_count probe, event_probe with real natives;
-  - Task 12, the close-out (Opus whole-branch review).
+- Merged on `m2-osi-vm` @ a794f04: Tasks 1–9 and 11, the error-PC table, the fail-closed runners, the docs batches and the F7 follow-up batch (setammo and one saver store, the RemoveArea → OnEvent removal chain, the loader's Show/Hide of area characters, the Toa branch of MainCharacterID, setfog/setnearestmax, `..` above a mount root, the Python VFS no longer following links). Each passed a blind review and controller verification.
+- Measured on a794f04: both engines pass 541/541 programs with byte-identical traces. `make osi-a9` with real natives gives 4/4 OK: native == wasm32 == Python's own models == replay, over 600 frames. Coverage: 69 natives (tier1 35, tier2 34, stub 0, tier3 0), unregistered 0. Taint with real natives: 0 sinks. `make test-tools`: 974 passed.
+- Remaining:
+  - Task 10, the A8–A10 gate (brief ready: `task-10-brief.md` in the ledger directory): taint iterated, mutate_natives + the mutate_vm full re-run (incl. the S07 unit gap), wasm stack per level, swallow_count probe, event_probe with real natives;
+  - Task 12, the close-out (Opus whole-branch review of 94e8dcc..HEAD).
+- Open for M2a-3: the Show/Hide reference sequences of area-loaded characters are pinned only by each engine's own tests, because neither host loads area content yet. Run a 2-engine differential once the area source exists.
 - **Billing (owner, 2026-10-09): the Max plan's weekly usage is at 80%, so NO more plan usage for this project.** Run everything from a terminal `claude` session logged into the Console account (credits), in a fresh session.
-- **Credit estimate to finish M2a-2:** about $40–80 (about $195 left).
+- **Credit estimate to finish M2a-2:** about $40–80 (about $195 left). The 2026-10-09 resume run spent about $35 on pairs 8+9, and a second run spent about $35 on F7. Task 10 plus Task 12 are estimated at about $25–35.
 - Ledger with exact resume steps: `.superpowers/sdd/2026-10-09-lomn-web-m2a2/progress.md` (last section).
 Process: the controller (Opus 5.5) writes the spec and plan, Fable 5.1 reviews them once for precision, then subagent-driven development with Sonnet 5.5 / Opus 5.5 medium.
 - Generated typed stubs for every native, with real returns for the 3 copy-kind natives.
