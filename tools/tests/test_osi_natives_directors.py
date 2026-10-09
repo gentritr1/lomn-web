@@ -150,10 +150,11 @@ def pin(disasm, start, stop, expect, exe=None):
 # ===============================================================================================================
 TIER1_KEYS = sorted(["gcgame.getmainview", "gcgame.getkeymapper", "gcgame.getmp3player", "gcviewport.getcamera",
                      "gcareadirector.getcurrentlevel", "gcareadirector.setcurrentlevel", "gcareadirector.setcurrentarea",
-                     "gcareadirector.getscriptfluffstring", "gcsaver.cheatmenu", "gcsaver.getammo", "gcsaver.setenergy",
-                     "gcsaver.sethealth", "gcsaver.setmask", "bettersaver.getbooleanvalue", "bettersaver.setbooleanvalue",
+                     "gcareadirector.getscriptfluffstring", "gcsaver.cheatmenu", "gcsaver.getammo",
+                     "bettersaver.getbooleanvalue", "bettersaver.setbooleanvalue",
                      "bettersaver.save", "gchuddirector.playcinematic"])
-TIER2_KEYS = ["gckeymapper.setusecontext", "gcmp3player.play", "gcmp3player.setupforplay", "gcmp3player.stop"]
+TIER2_KEYS = ["gckeymapper.setusecontext", "gcmp3player.play", "gcmp3player.setupforplay", "gcmp3player.stop",
+              "gcsaver.setenergy", "gcsaver.sethealth", "gcsaver.setmask"]
 MOD_KEYS = ["bettersaver.getbooleanvalue", "bettersaver.save", "bettersaver.setbooleanvalue"]
 
 
@@ -669,6 +670,25 @@ def test_cleanup_load_removes_matching_pickups_through_the_model_director():
     assert [e.obj_id for e in ad.loaders[frnt].entries] == [0x12]
 
 
+def test_remove_object_removes_only_the_first_of_duplicate_ids():
+    """GcAreaLoader::RemoveObject 0x501dc0 erases the FIRST entry with the id: BetterSaver's double call removes two
+    duplicates, the exe list's single call removes one and leaves the other."""
+    d = dr()
+    asm = ('.function main 0\nPushConstantString "frnt"\nCallGameFunction gcareadirector.setcurrentarea 1\nReturn\n'
+           + _onevent_logger())
+    vm, ctx, tr, log = make_vm(asm)
+    frnt = 0x66726E74
+    ad = _swallow_world(vm, ctx, [d.AreaObject("objects", i, 1) for i in (0x11, 0x11, 0x13, 0x13, 0x15)])
+    sv = ctx.subsystem(d.Saver)
+    sv.better = [(0x11, frnt)]
+    sv.pickups_a = [(0x13, frnt)]
+    _model_world(vm, ctx, [0x11, 0x13, 0x15])
+    assert vm.call("main", []).ok
+    cs = [l.split()[4] for l in log if l.startswith("C ")]
+    assert cs == ["0010:00000011", "0010:00000013"]      # the second 0x11 entry is erased too, but its model object is already gone
+    assert [e.obj_id for e in ad.loaders[frnt].entries] == [0x13, 0x15]
+
+
 def test_cleanup_load_without_a_loader_returns_at_once():
     d = dr()
     vm, ctx, tr, log = make_vm(".function main 0\nReturn\n")
@@ -759,6 +779,18 @@ def test_fluff_edges_on_the_real_file(lomn_data):
     assert d.get_script_fluff_string(ctx, 0x66656E64, 9, 0) == b"XXX"                   # no such record
     assert d.get_script_fluff_string(ctx, 0x646F6F72, 1, 0).startswith(b"You need to collect")   # a second record
     assert d.get_script_fluff_string(ctx, 0x646F6F72, 1, 1) == b"XXX"                  # that record has 1 string
+
+
+def test_fluff_a_zero_or_b_zero_is_xxx_even_when_the_table_has_the_text():
+    """0x48ad29-0x48ad3a: a == 0 or b == 0 skips GetString. A table holding records (0, 1) and (1, 0) must still give XXX."""
+    d = dr()
+    t = make_table([(0, 1, [b"zero-a"]), (1, 0, [b"zero-b"]), (1, 1, [b"ok"])])
+    vm, ctx, tr, log = make_vm(".function main 0\nReturn\n")
+    ctx.subsystem(d.StringTables)._fluff = t
+    ctx.subsystem(d.StringTables)._tried = True
+    assert d.get_script_fluff_string(ctx, 0, 1, 0) == b"XXX"
+    assert d.get_script_fluff_string(ctx, 1, 0, 0) == b"XXX"
+    assert d.get_script_fluff_string(ctx, 1, 1, 0) == b"ok"
 
 
 def test_fluff_without_a_vfs_or_with_a_missing_file_is_xxx(tmp_path):
@@ -973,14 +1005,14 @@ def test_saver_field_asm_pins(disasm, image):
     assert image.u32(0x7474ac) == 0 and image.u32(0x7474c8) == 0 and image.u32(0x74749c) == 0x3F3F3F3F
     d = dr()
     sv = d.Saver(None)
-    assert (sv.mask, sv.glyph, sv.health, sv.energy, sv.ammo) == (0x3F3F3F3F, 0, 0, 0, 0)
+    assert sv.ammo == 0
     # ResetData does not touch these fields (it writes only 0x74748c, 0x747490, 0x747494, 0x747498, the counters and 0x8391a0)
     rows = disasm(0x5d5490, 0x5d5500)
     touched = {int(m, 16) for t in rows.values() for m in re.findall(r"\[0x([0-9a-f]{6})\]", t)}
     assert not touched & {0x7474a0, 0x7474a4, 0x7474a8, 0x7474ac, 0x7474c8}
 
 
-def test_saver_setters_store_and_getammo_reads_back():
+def test_getammo_reads_the_word_and_the_setters_are_unbound_tier2():
     d = dr()
     vm, ctx, tr, log = make_vm(".function main 0\nCallGameFunction gcsaver.getammo 0\nReturn\n")
     sv = ctx.subsystem(d.Saver)
@@ -989,29 +1021,11 @@ def test_saver_setters_store_and_getammo_reads_back():
     assert vm.call("main", []).result == Variant(0x10, 250)
     sv.ammo = 0x1FFFF
     assert vm.call("main", []).result == Variant(0x10, 0xFFFF)                  # a word (movzx word)
-    r, vm, ctx, tr, log = call_i("gcsaver.setmask", 0x12345678)
-    assert r == NOTHING and ctx.subsystem(d.Saver).mask == 0x12345678
-    for native, field in (("gcsaver.sethealth", "health"), ("gcsaver.setenergy", "energy")):
-        r, vm, ctx, tr, log = call_i(native, 60)
-        assert r == NOTHING and getattr(ctx.subsystem(d.Saver), field) == 60
-        assert log[0] == "00000000 %s 1 -> 000f:00000000" % native
-        r, vm, ctx, tr, log = call_i(native, 0x1FF)
-        assert getattr(ctx.subsystem(d.Saver), field) == 0xFF                   # a byte store: dl
-        r, vm, ctx, tr, log = call_i(native, -1)
-        assert getattr(ctx.subsystem(d.Saver), field) == 0xFF
-    r, vm, ctx, tr, log = call_i("gcsaver.setmask", -1)
-    assert ctx.subsystem(d.Saver).mask == M32
-
-
-def test_saver_setters_do_not_touch_each_other():
-    d = dr()
-    asm = (".function main 0\nPushConstanti8 60\nCallGameFunction gcsaver.sethealth 1\nPop\nPushConstanti8 40\n"
-           "CallGameFunction gcsaver.setenergy 1\nPop\nPushConstanti8 0\nCallGameFunction gcsaver.setmask 1\nPop\n"
-           "CallGameFunction gcsaver.getammo 0\nReturn\n")
-    vm, ctx, tr, log = make_vm(asm)
-    assert vm.call("main", []).ok
-    sv = ctx.subsystem(d.Saver)
-    assert (sv.health, sv.energy, sv.mask, sv.ammo, sv.glyph) == (60, 40, 0, 0, 0)
+    # setmask/sethealth/setenergy are tier2 with no bound body (fix 1): no bound native reads their stores back
+    rows = {r["key"]: r for r in json.loads(OVERRIDES.read_text())}
+    for k in ("gcsaver.setmask", "gcsaver.sethealth", "gcsaver.setenergy"):
+        assert rows[k]["tier"] == "tier2" and "default" not in rows[k] and "0x7474a4" not in rows[k]["note"], k
+        assert k not in dr().CITES
 
 
 # ===============================================================================================================

@@ -79,13 +79,6 @@ CITES = {
     "gcsaver.getammo":
         "// body 0x5d3910, method 0x5d3910 <GcSaver::GetAmmo>; asm pin: 0x5d3913 mov ax,[0x7474c8] (a word, .data 0), "
         "u16 variant 0x4183f0 (0x4183fa movzx edx,word)",
-    "gcsaver.setenergy":
-        "// body 0x5d3680, method 0x5d3680 <GcSaver::SetEnergy>; asm pin: 0x5d368b mov [0x7474ac],dl (a byte, .data 0)",
-    "gcsaver.sethealth":
-        "// body 0x5d3650, method 0x5d3650 <GcSaver::SetHealth>; asm pin: 0x5d365b mov [0x7474a8],dl (a byte, .data 0)",
-    "gcsaver.setmask":
-        "// body 0x5d35f0, method 0x5d35f0 <GcSaver::SetMask>; asm pin: 0x5d35fb mov [0x7474a0],edx (a dword, .data "
-        "0x3f3f3f3f)",
     "bettersaver.getbooleanvalue":
         "// body BetterSaver.dll 0x10001f70, method 0x10001f70 <BetterSaver::GetBooleanValue>; asm pin: "
         "0x10001f77 movzx esi,word (the u16 key), 0x10001fc8 xor al,al (absent), 0x10001fd1 setne cl, 0x10001fd8 mov "
@@ -110,6 +103,10 @@ TIER2 = {
     "gcmp3player.setupforplay": 0x5dc840,
     "gcmp3player.play": 0x5dc970,
     "gcmp3player.stop": 0x5dc9f0,
+    # the saver setters: the store is not modelled, no bound native reads it back (getmask/gethealth/getenergy are unbound)
+    "gcsaver.setmask": 0x5d35f0,
+    "gcsaver.sethealth": 0x5d3650,
+    "gcsaver.setenergy": 0x5d3680,
 }
 
 
@@ -218,10 +215,6 @@ class Saver:
     ResetData 0x5d5490, natives.md §9.1)."""
 
     def __init__(self, ctx):
-        self.mask = 0x3F3F3F3F          # [0x7474a0] dword, .data
-        self.glyph = 0                  # [0x7474a4] byte
-        self.health = 0                 # [0x7474a8] byte
-        self.energy = 0                 # [0x7474ac] byte
         self.ammo = 0                   # [0x7474c8] word
         self.level = 0                  # [0x74748c] byte: ResetData 0x5d5493
         self.area = NULL_ID             # [0x747490] dword: ResetData 0x5d549a
@@ -266,28 +259,8 @@ class Saver:
                     ad.remove_object(ctx, loader, obj_id)
 
 
-def _set_mask(ctx):
-    def fn(call):
-        ctx.subsystem(Saver).mask = call.arg(0).value & M32                    # mov [0x7474a0], edx (0x5d35fb)
-        return NOTHING                                                         # {0x0f, 0} (0x5d3601)
-    return fn
-
-
-def _set_health(ctx):
-    def fn(call):
-        ctx.subsystem(Saver).health = call.arg(0).value & 0xFF                 # mov [0x7474a8], dl (0x5d365b)
-        return NOTHING
-    return fn
-
-
-def _set_energy(ctx):
-    def fn(call):
-        ctx.subsystem(Saver).energy = call.arg(0).value & 0xFF                 # mov [0x7474ac], dl (0x5d368b)
-        return NOTHING
-    return fn
-
-
 def _get_ammo(ctx):
+    # SetAmmo 0x5d3840 (unbound, deferred) writes the same word [0x7474c8]: a script write is not read back yet
     def fn(call):
         return Variant(T_INT, ctx.subsystem(Saver).ammo & 0xFFFF)              # mov ax,[0x7474c8]; 0x4183f0 movzx word
     return fn
@@ -730,9 +703,6 @@ def bind(reg, ctx) -> None:
     reg.bind("gcareadirector.getscriptfluffstring", _get_script_fluff_string(ctx))
     reg.bind("gcsaver.cheatmenu", _cheat_menu(ctx))
     reg.bind("gcsaver.getammo", _get_ammo(ctx))
-    reg.bind("gcsaver.setenergy", _set_energy(ctx))
-    reg.bind("gcsaver.sethealth", _set_health(ctx))
-    reg.bind("gcsaver.setmask", _set_mask(ctx))
     reg.bind("bettersaver.getbooleanvalue", _get_boolean_value(ctx))
     reg.bind("bettersaver.setbooleanvalue", _set_boolean_value(ctx))
     reg.bind("bettersaver.save", _bs_save(ctx))
