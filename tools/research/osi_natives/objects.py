@@ -476,6 +476,36 @@ def show(ctx, ident: int, second: int) -> None:
         ctx.subsystem(BAGroup).set_character(ch)                         # 0x47fb42: SetCharacter 0x54b330
 
 
+def hide(ctx, ident: int) -> None:
+    """GcModelDirector::Hide 0x47fb50 (id, second) as Remove calls it (0x47f4e5), the non-environment class path 0x47fca0 (a
+    GcCharacter is not the class [0x838b44]; the environment path 0x47fbcb uses the group [0x83a9c4] and is not modelled).
+    cnt1: SetCharacter(0) (0x47fce9, before any group test), then the contains test on [0x8390a8] (0x47fd2a: not contained ->
+    return, 0x47fd31); else 0x54b180 (the BA list [0x83aabc], not modelled: nothing here fills it) and the contains test on
+    [0x83aa4c] (0x47fdd3: not contained -> return). Contained: the pointer-equal element is found (0x47fdf6-0x47fe19), SetParent(0)
+    (virtual +0x28, 0x47fe44, INFERRED) and erased (0x4197c0: the element's reference is released, the temporary pair nets 0);
+    for a plain id the shown-id list loses its first match (0x47fe60-0x47fe71) and the group [0x838778] and 0x418d00 follow
+    (not modelled: nothing here puts characters in that group). Not modelled: RemoveCollisionPhysics 0x4745f0 (ids only) and the
+    event removal 0x516050 (0x47ff3a; the list is kept for M2a-3)."""
+    md = ctx.subsystem(ModelDirector)
+    ident &= M32
+    ch = md.get(ident)                                                   # 0x47fb75
+    if ch is None:
+        return                                                           # unreachable from Remove (its Get is non-null)
+    cnt1 = ident == ID_CNT1                                              # 0x47fcdd
+    if cnt1:
+        ctx.subsystem(BAGroup).set_character(None)                       # 0x47fce9: SetCharacter 0x54b330 with null
+    group = md.group_cnt1 if cnt1 else md.group_other                    # [0x8390a8] / [0x83aa4c]
+    if not group.contains(ch.node_id):                                   # 0x47fd2a-0x47fd2d / 0x47fdd3-0x47fdd6
+        return
+    idx = next((i for i, c in enumerate(group.items) if c is ch), None)  # the find loop compares the pointers
+    if idx is not None:
+        ch.parent = None                                                 # [esi+0x28](0), 0x47fe44 (INFERRED SetParent)
+        del group.items[idx]                                             # 0x4197c0
+        ctx.release(ch)
+    if not cnt1 and ident in md.shown_ids:                               # 0x47fe54-0x47fe76 (the first match, 0x425fa0)
+        md.shown_ids.remove(ident)
+
+
 def add_toa(ctx, name: bytes, flag: int = 0) -> int:
     """GcModelDirector::AddToa 0x47e170(name, 0). Returns the inserted flag (0x47e657)."""
     md = ctx.subsystem(ModelDirector)

@@ -451,17 +451,23 @@ class ModelObjects:
 
     def add_character(self, ctx, obj_id: int) -> None:
         """GcModelDirector::AddCharacter 0x47f040 as LoadCharacters 0x53f3f0 calls it (0x53f473): a new GcCharacter (0x368 bytes)
-        for the id, Add 0x480eb0 into the map (an existing key keeps its value). The null-id rename (0x47f059 cmp [0x70a81c]
-        = 0x3f3f3f3f -> 0x480260) and the character's block-file load are not modelled."""
+        for the id, Add 0x480eb0 into the map (an existing key keeps its value: the new object is dropped and the caller's
+        Get 0x480f70 finds the old one). UNVERIFIED, not modelled: the null-id rename (0x47f059 cmp [0x70a81c] =
+        0x3f3f3f3f -> 0x480260, which keeps the id unless it is in the table at [0x83b338], whose writers were not read),
+        the per-id class branches (compares with [0x782884] 0x47f1ba, [0x838b50] 0x47f190, [0x7828a0] 0x47f23a: every created
+        character is modelled as a plain GcCharacter) and the character's block-file load."""
         from . import objects
         md = ctx.subsystem(objects.ModelDirector)
         if md.get(obj_id) is None:
-            md.add(objects.GcCharacter(objects._tid(ctx, "GcCharacter"), obj_id & M32, obj_id & M32), obj_id & M32)
+            ch = objects.GcCharacter(objects._tid(ctx, "GcCharacter"), obj_id & M32, obj_id & M32)
+            ch.node_id = obj_id & M32                                  # 0x47ec30 (the Add wrapper AddCharacter calls): [char+0x10] = [char+0x100] (0x47ec67)
+            md.add(ch, obj_id & M32)
 
     def remove(self, ctx, obj_id: int) -> None:
         """GcModelDirector::Remove 0x47f320: director not active -> return (0x47f32c); id not in the map -> return
-        (0x47f36b); else the class-specific teardown (0x47f3c2-0x47f4ba, not modelled), the map erase (0x47f50c-0x47f5a9; the
-        map's ScAutoRefPtr copy is released, INFERRED from the erase 0x4dd4f0) and unless the id is the main character's
+        (0x47f36b); else (for the main character: [0x7032b8] = 0, 0x47f4b0) the class-specific teardown (0x47f3c2-0x47f4ba,
+        not modelled), Hide 0x47fb50 (0x47f4e5; objects.hide), 0x4177c0 on the character (0x47f4ee, not modelled), the map
+        erase (0x47f50c-0x47f5a9; the map's ScAutoRefPtr copy is released, INFERRED from the erase 0x4dd4f0) and unless the id is the main character's
         ([0x782884], 0x47f5b3) the engine call OnEvent(0x2b, id): a0 is CreateVariant 0x413ed0 of the byte 0x2b (0x47f5c1),
         a1 is CreateVariant 0x407df0 of the id (0x47f5d9); a2..a9 nothing. No catch on the chain (exc.py): an error leaves
         the native."""
@@ -472,7 +478,11 @@ class ModelObjects:
         ch = md.get(obj_id)
         if ch is None:
             return
-        del md.map[obj_id & M32]
+        if obj_id & M32 == self.TOA_ID:                                          # 0x47f45d / 0x47f497
+            md.main_toa = None                                                   # 0x47f4b0 mov [0x7032b8], 0 (after 0x480aa0(&[0x782884]), not modelled)
+        # the virtual call [esi+0x50] on the character (0x47f4be) is NOT modelled: it is a possible VM entry, INFERRED not to be one
+        objects.hide(ctx, obj_id)                                                # Hide 0x47fb50 (0x47f4e5)
+        del md.map[obj_id & M32]                                                 # 0x47f511 find, 0x47f5a9 erase
         ctx.release(ch)
         if obj_id != self.TOA_ID:
             ctx.engine_call("OnEvent", [Variant(T_INT, 0x2B), Variant(T_INT, obj_id & M32)])
@@ -542,6 +552,10 @@ class AreaDirector:
                 del loader.entries[i]
                 return
 
+    # INFERRED / UNVERIFIED (F7b review I-2, I-3): "object and hive entries reach no VM" rests on tools/osi/reach.py's DIRECT-call
+    # floor (it has no virtual edges). GcAreaDirector::Remove 0x488990 holds two virtual calls (0x488a15, 0x488a9b) behind class-id
+    # compares ([0x838a84], [0x838a78]) that can destroy objects through a vtable; GcModelDirector::Remove has one on the
+    # non-environment path (0x47f4be, [esi+0x50]). None is on the A9 path.
     # F7b: the removal chain is modelled for the characters the load side creates (LoadCharacters 0x53f3f0: AddCharacter
     # 0x47f040 into the model map, an entry {id, [0x83aa9c]} pushed 0x53f514). CleanUpArea dispatches each entry on its director
     # (0x5017e6-0x501938); only the model director's Remove 0x47f320 reaches the VM among the direct calls. NOT modelled:
@@ -594,6 +608,18 @@ class AreaDirector:
                     ctx.subsystem(ModelObjects).add_character(ctx, o.obj_id)       # AddCharacter 0x47f040 (0x53f473), Get non-null
                 loader.entries.append(AreaInfo(o.obj_id, o.director or ("model" if block == "characters" else "area"),
                                                o.otype))            # {id, director} pushed by 0x4709d0 (0x53f514 / 0x626340)
+                if block == "characters":
+                    self.show_loaded_character(ctx, o.obj_id, area_id)
+
+    def show_loaded_character(self, ctx, obj_id: int, area_id: int) -> None:
+        """LoadCharacters 0x53f3f0, after the entry push (0x53f514): the show flag [ebp+0x18] is 1 on every path (SetCurrentArea
+        pushes 1 at 0x48a585, the other LoadArea caller at 0x48a721; 0x4fedd0 only reads its flag, 0x5002cf), so Show 0x47f830
+        runs for the id Get found (0x53f535). A record refused by AddCharacter (an existing key, e.g. 'cnt1' = the Toa) shows
+        the existing object. `second` ([ebp+0xc] of LoadCharacters) is the event list's second field, kept for M2a-3 and not
+        script-visible: the area id is a stand-in (UNVERIFIED). 0x4187b0 on the character (0x53f4d8) is not modelled."""
+        from . import objects
+        if ctx.subsystem(objects.ModelDirector).get(obj_id) is not None:       # 0x53f4c5-0x53f4cd: Get null -> skip the rest
+            objects.show(ctx, obj_id, area_id)
 
     def set_under_water(self, ctx, flag: int, swallow: bool = False):
         """GcMotionSystem::SetUnderWater 0x589050: both branches make the engine call OnEvent(0x36, b) with b = 1 for a
