@@ -17,6 +17,14 @@ format string read from the exe at the pushed address:
   lhs / rhs type errors (0x74f563 / 0x74f597) at 0x604787 / 0x6047a4 -> +1 each.
 - 0x75 0x604a00: `inc` at 0x604a0a, then lhs / rhs type errors at 0x604a5d / 0x604a7a and "Divide by 0" at 0x604a8e
   -> +1 each.
+M2a-2 T2b (T2a-pc review M5), hand-read the same way on 2026-10-09:
+- 0x50 0x600ae0 / 0x51 0x600c30: `inc` at 0x600aeb, 0x600af7 / 0x600c3b, 0x600c47, the Pop at 0x600b08 / 0x600c58, then
+  Error ("Internal error: Jump to non-integral address", 0x74e900) at 0x600b2b / 0x600c7b -> +2 (the jump target is
+  stored only after it).
+- 0x53 0x600df0: the Pop at 0x600e06 and Error ("Results of comparison expression is not integral", 0x74e92d) at
+  0x600e40, with no PC write before them -> +0.
+- 0x84 0x602bb0: six `inc` (0x602bc8, 0x602bda, 0x602bf5, 0x602c13, 0x602c31, 0x602c83), then the re-raise Error
+  ("Script is calling a game function directly.", 0x74ed9a) at 0x60303c after the kNoException test -> +6.
 """
 import importlib.util
 import shutil
@@ -184,10 +192,11 @@ def test_normal_exits_match_operand_sizes(result):
 
 def test_pc_write_forms(result):
     """Every PC write the walk reached is one of the four modelled forms (anything else raises UnmodelledPcWrite);
-    counted per instruction address. Reconciled by hand against a grep of every `[reg + 0x1f58]` store in the
-    linear-sweep listing: that grep finds 166, missing 6 handler incs the sweep decoded out of step (BCLHalt 0x603848,
-    the three line-number ops, 0x7b 0x605c02, 0x47 0x606848) and adding 3 that no handler reaches (the ctor 0x60b283,
-    CallWithReturn 0x60b5a5, SetPCAndArgs 0x60b623): 166 - 3 + 6 = 169."""
+    counted per instruction address. This test asserts the per-form counts only; it runs no grep. The counts were
+    reconciled BY HAND (2026-10-09, re-confirmed by the T2a-pc review) against a grep of every `[reg + 0x1f58]` store
+    in the linear-sweep listing: that grep finds 166, missing 6 handler incs the sweep decoded out of step (BCLHalt
+    0x603848, the three line-number ops, 0x7b 0x605c02, 0x47 0x606848) and adding 3 that no handler reaches (the ctor
+    0x60b283, CallWithReturn 0x60b5a5, SetPCAndArgs 0x60b623): 166 - 3 + 6 = 169."""
     forms = {}
     for f in result.pc_writes.values():
         forms[f] = forms.get(f, 0) + 1
@@ -204,6 +213,32 @@ def test_call_from_string_rethrow(result):
     non_alloc = {pc for pc, origins in rethrow.by_origin.items()
                  for o in origins if o is not None and s[o].kind != "alloc"}
     assert non_alloc == {"+4"}
+
+
+@pytest.mark.parametrize("op,site,write2", [(0x50, 0x600B2B, 0x600AF7), (0x51, 0x600C7B, 0x600C47)])
+def test_jumps_error_at_plus_two(result, op, site, write2):
+    """M5: 0x50/0x51 raise after the operand is consumed and before the jump target is stored."""
+    s = _sites(result, op)
+    assert s[site].pcs == {"+2"} and s[site].message == "Internal error: Jump to non-integral address"
+    assert not s[site].caught
+    assert result.by_op[op].writes[write2] == {"+2"}
+
+
+def test_compare_and_branch_error_at_plus_zero(result):
+    """M5: 0x53 pops and checks its condition before any PC write."""
+    s = _sites(result, 0x53)
+    err = {a: x for a, x in s.items() if x.kind == "Error"}
+    assert list(err) == [0x600E40]
+    assert err[0x600E40].pcs == {"+0"} and err[0x600E40].message == "Results of comparison expression is not integral"
+
+
+def test_call_direct_reraise_at_plus_six(result):
+    """M5: the memoised 0x82 (0x84) has advanced PC six times before anything can fail; its re-raise keeps +6."""
+    s = _sites(result, 0x84)
+    assert s[0x60303C].message == "Script is calling a game function directly." and not s[0x60303C].caught
+    assert s[0x60303C].pcs == {"+6"}                        # reached only through the catch (pad 0x602fa0)
+    assert s[0x602EFD].pcs == {"+6"} and s[0x602EFD].caught == 0x602FA0   # the native call itself
+    assert sorted(result.by_op[0x84].writes) == [0x602BC8, 0x602BDA, 0x602BF5, 0x602C13, 0x602C31, 0x602C83]
 
 
 def test_document_block_is_current(result):
