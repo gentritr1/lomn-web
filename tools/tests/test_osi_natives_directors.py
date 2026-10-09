@@ -46,7 +46,7 @@ def fw():
 
 
 # ----------------------------------------------------------------------------------------------- harness
-def make_vm(asm, install=None, deterministic=True, with_log=True, skip_video=True):
+def make_vm(asm, install=None, deterministic=True, with_log=True, skip_video=True, groups=("directors",)):
     """The oracle VM with the real native registry and only this group bound."""
     f, d = fw(), dr()
     image, _ = osiasm.assemble(asm)
@@ -58,6 +58,9 @@ def make_vm(asm, install=None, deterministic=True, with_log=True, skip_video=Tru
     vfs = f.Vfs(install) if install is not None else None
     ctx = f.HostContext(vm, heap, vfs, f.HostFlags(deterministic=deterministic, skip_video=skip_video), log)
     d.bind(reg, ctx)
+    if "objects" in groups:
+        from osi_natives import objects
+        objects.bind(reg, ctx)
     return vm, ctx, tr, log
 
 
@@ -145,15 +148,28 @@ def pin(disasm, start, stop, expect, exe=None):
         "%#x: %r vs %r" % (a, e, g) for a, (e, g) in sorted(bad.items()))
 
 
+def raw_refs(image, addr):
+    """Every 4-byte little-endian occurrence of `addr` in .text (0x401000-0x665fff), as the VA of the operand. A raw scan,
+    because a linear disassembly sweep of the whole section loses sync at data between functions (F7b: it hid 0x5d36b4)."""
+    pat = struct.pack("<I", addr)
+    buf = image.read(0x401000, 0x666000 - 0x401000)
+    out, i = [], buf.find(pat)
+    while i >= 0:
+        out.append(0x401000 + i)
+        i = buf.find(pat, i + 1)
+    return out
+
+
 # ===============================================================================================================
 # 0. registration, citations and the overrides rows
 # ===============================================================================================================
 TIER1_KEYS = sorted(["gcgame.getmainview", "gcgame.getkeymapper", "gcgame.getmp3player", "gcviewport.getcamera",
                      "gcareadirector.getcurrentlevel", "gcareadirector.setcurrentlevel", "gcareadirector.setcurrentarea",
-                     "gcareadirector.getscriptfluffstring", "gcsaver.cheatmenu", "gcsaver.getammo",
+                     "gcareadirector.getscriptfluffstring", "gcareadirector.getnearestmax", "gcareadirector.setnearestmax",
+                     "gcsaver.cheatmenu", "gcsaver.getammo", "gcsaver.gettoa", "gcsaver.setammo",
                      "bettersaver.getbooleanvalue", "bettersaver.setbooleanvalue",
                      "bettersaver.save", "gchuddirector.playcinematic"])
-TIER2_KEYS = ["gckeymapper.setusecontext", "gcmp3player.play", "gcmp3player.setupforplay", "gcmp3player.stop",
+TIER2_KEYS = ["gcareadirector.setfog", "gckeymapper.setusecontext", "gcmp3player.play", "gcmp3player.setupforplay", "gcmp3player.stop",
               "gcsaver.setenergy", "gcsaver.sethealth", "gcsaver.setmask"]
 MOD_KEYS = ["bettersaver.getbooleanvalue", "bettersaver.save", "bettersaver.setbooleanvalue"]
 
@@ -513,12 +529,15 @@ def _onevent_logger():
 
 
 def _model_world(vm, ctx, ids, toa=False):
+    """Put real characters into the ONE model-director map (objects.ModelDirector.map) for entries that carry an explicit
+    director="model" and so are not created by the load side."""
+    from osi_natives import objects
     d = dr()
     mo = ctx.subsystem(d.ModelObjects)
-    for i in ids:
-        mo.objects[i] = object()
-    if toa:
-        mo.objects[d.ModelObjects.TOA_ID] = object()
+    md = ctx.subsystem(objects.ModelDirector)
+    tid = objects._tid(ctx, "GcCharacter")
+    for i in list(ids) + ([d.ModelObjects.TOA_ID] if toa else []):
+        md.add(objects.GcCharacter(tid, i, i), i)
     return mo
 
 
@@ -533,8 +552,8 @@ def test_setcurrentlevel_with_area_and_level_set_removes_the_area_through_the_mo
     vm, ctx, tr, log = make_vm(asm)
     ids = [0x6F626A31, 0x6F626A32, d.ModelObjects.TOA_ID, 0x6F626A33]
     ad = ctx.subsystem(d.AreaDirector)
-    ad.area_source = lambda aid: [d.AreaObject("objects", ids[0], 1), d.AreaObject("characters", ids[1], 1),
-                                  d.AreaObject("objects", ids[2], 1), d.AreaObject("hives", ids[3], 1, director="area")]
+    ad.area_source = lambda aid: [d.AreaObject("objects", ids[0], 1, director="model"), d.AreaObject("characters", ids[1], 1, director="model"),
+                                  d.AreaObject("objects", ids[2], 1, director="model"), d.AreaObject("hives", ids[3], 1, director="area")]
     mo = _model_world(vm, ctx, ids[:3])
     r = vm.call("main", [])
     assert r.ok and r.result == Variant(0x10, 0x6C657631)
@@ -563,7 +582,7 @@ def test_removal_guards_each_branch():
         mo = ctx.subsystem(d.ModelObjects)
         mo.active = active
         if in_map:
-            mo.objects[0x6F626A31] = object()
+            _model_world(vm, ctx, [0x6F626A31])
         if not level_set:
             pass
         assert vm.call("main", []).ok
@@ -705,7 +724,7 @@ def test_cleanup_load_removes_matching_pickups_through_the_model_director():
            + _onevent_logger())
     vm, ctx, tr, log = make_vm(asm)
     frnt = 0x66726E74
-    ad = _swallow_world(vm, ctx, [d.AreaObject("objects", i, 1) for i in (0x11, 0x12, 0x13, 0x14)])
+    ad = _swallow_world(vm, ctx, [d.AreaObject("objects", i, 1, director="model") for i in (0x11, 0x12, 0x13, 0x14)])
     sv = ctx.subsystem(d.Saver)
     sv.better = [(0x11, frnt), (0x99, frnt), (0x12, 0x1)]
     sv.pickups_a = [(0x13, frnt)]
@@ -725,7 +744,7 @@ def test_remove_object_removes_only_the_first_of_duplicate_ids():
            + _onevent_logger())
     vm, ctx, tr, log = make_vm(asm)
     frnt = 0x66726E74
-    ad = _swallow_world(vm, ctx, [d.AreaObject("objects", i, 1) for i in (0x11, 0x11, 0x13, 0x13, 0x15)])
+    ad = _swallow_world(vm, ctx, [d.AreaObject("objects", i, 1, director="model") for i in (0x11, 0x11, 0x13, 0x13, 0x15)])
     sv = ctx.subsystem(d.Saver)
     sv.better = [(0x11, frnt)]
     sv.pickups_a = [(0x13, frnt)]
@@ -1361,8 +1380,38 @@ def test_a9_path_with_the_directors_models(tmp_path, lomn_data):
         a, b, c = (int(t.split(":")[1], 16) for t in tok[4:7])
         want = read_fluff_independently(inst, a, b, c) or b"XXX"
         assert l.endswith(" S %d %s" % (len(want), want.hex())), (n_line, l)
-    # no error on the path; after the pair-9 merge the objects group's C/H lines (addtoa, show) are on it too, and the
-    # whole log is checked byte for byte against the C++ engine by `make osi-a9` (cmp 3/4, 4/4)
+    # no error record on the path; the C/H records are ATTRIBUTED by native key (F7b item 8): a `C <seq>` belongs to the
+    # native of that seq, an `H` to the native whose result line follows it (natives.md 3.1: records precede the line).
+    seqkey = {}
+    for l in log:
+        m = re.match(r"^([0-9a-f]{8}) (\S+) \d+ -> ", l)
+        if m:
+            seqkey[int(m.group(1), 16)] = m.group(2)
+    recs, pend = {}, []
+    for l in log:
+        if l.startswith("C "):
+            k = seqkey[int(l.split()[1], 16)]
+            recs.setdefault(k, {}).setdefault("C", 0)
+            recs[k]["C"] += 1
+        elif l.startswith(("H ", "X ")):
+            pend.append(l[0])
+        else:
+            m = re.match(r"^[0-9a-f]{8} (\S+) \d+ -> ", l)
+            if m:
+                for r in pend:
+                    recs.setdefault(m.group(1), {}).setdefault(r, 0)
+                    recs[m.group(1)][r] += 1
+                pend = []
+    assert pend == []
+    d = dr()
+    mine = set(d.CITES) | set(d.TIER2)                       # every native of this group
+    assert not [k for k in recs if k in mine], {k: recs[k] for k in recs if k in mine}    # this group: no C, H or X line
+    # the records of the other groups on the path, from this run (600 frames; counts measured with the same command): the
+    # HUD items' references, the Toa's OnEvent calls and Show's four references (objects.py module docstring)
+    assert recs == {"gchuddirector.addbigsprite": {"H": 135}, "sctextobject.create": {"H": 8},
+                    "gchuddirector.addtextobject": {"H": 7}, "gcmodeldirector.addtoa": {"C": 1},
+                    "gcmodeldirector.show": {"H": 4}, "gccharacter.setupmoveable": {"C": 1},
+                    "gclegocamera.setcameraspline": {"H": 1}}, recs
     assert not any(l.startswith("X ") for l in log)
 
 
@@ -1372,3 +1421,277 @@ def test_a9_path_is_deterministic(tmp_path, lomn_data):
     a = _a9(tmp_path / "a", lomn_data)
     b = _a9(tmp_path / "b", lomn_data)
     assert a[1] == b[1] and a[2].read_text() == b[2].read_text()
+
+
+# ===============================================================================================================
+# F7 item 1: gcsaver.setammo (body 0x5d3840) and the ONE saver store [0x7474c8] / [0x74749c]
+# ===============================================================================================================
+def test_setammo_asm_pins_and_every_reference_to_the_two_fields(disasm, image):
+    pin(disasm, 0x5d3840, 0x5d3862, {
+        0x5d3840: "push ebx", 0x5d3841: "mov ebx, dword ptr [esp + 0x8]", 0x5d3845: "lea edx, [esp + 0x10]",
+        0x5d3849: "mov dx, word ptr [edx]", 0x5d384c: "mov word ptr [0x7474c8], dx",
+        0x5d3853: "mov word ptr [ebx], 0xf", 0x5d3858: "mov dword ptr [ebx + 0x4], 0x0"})
+    # the .text census of both fields (EXECUTED raw scan, F7b): operand addresses of every reference. [0x7474c8]: the Toa
+    # ctor 0x56898b, AddAmmo-class code 0x56b2xx-0x56b8xx / 0x56e520 / 0x5d19ca, setammo 0x5d384c, getammo 0x5d3913, the
+    # save/load pushes 0x5d3fed / 0x5d459e, 0x62d4b8 (HUD). [0x74749c]: AddToa 0x47e221, gcsaver.gettoa 0x5d36b3, save/load.
+    assert raw_refs(image, 0x7474C8) == [0x56898E, 0x56B214, 0x56B228, 0x56B49D, 0x56B4B9, 0x56B816, 0x56B827, 0x56E522,
+                                         0x5D19CC, 0x5D384F, 0x5D3915, 0x5D3FEE, 0x5D459F, 0x62D4BB]
+    assert raw_refs(image, 0x74749C) == [0x47E223, 0x5D36B4, 0x5D3C33, 0x5D40F3]
+    pin(disasm, 0x47e221, 0x47e227, {0x47e221: "mov dword ptr [0x74749c], edx"})
+    pin(disasm, 0x5d36b0, 0x5d36cb, {0x5d36b3: "mov eax, dword ptr [0x74749c]", 0x5d36bd: "call 0x407960"})
+    pin(disasm, 0x407960, 0x407975, {0x407965: "mov word ptr [ebx], 0x10", 0x40796a: "mov edx, dword ptr [esp + 0xc]"})
+    assert image.u32(0x74749c) == 0x3F3F3F3F                                       # .data: the saver toa id is the null id
+
+
+def test_setammo_then_getammo_through_one_store_with_word_truncation():
+    d = dr()
+    src = ".function main 0\nPushConstanti32 %d\nCallGameFunction gcsaver.setammo 1\nCallGameFunction gcsaver.getammo 0\nReturn\n"
+    for v, want in ((5, 5), (0, 0), (0x1FFFF, 0xFFFF), (0x10000, 0), (-1, 0xFFFF)):
+        r, vm, ctx, tr, log = run_main(src % v)
+        assert r == Variant(0x10, want), v
+        assert ctx.subsystem(d.Saver).ammo == want                               # the word store [0x7474c8] (0x5d384c)
+    # setammo returns nothing {0xf, 0} (0x5d3853 / 0x5d3858)
+    r, *_ = run_main(".function main 0\nPushConstanti32 7\nCallGameFunction gcsaver.setammo 1\nReturn\n")
+    assert r == NOTHING
+
+
+def test_addtoa_and_setammo_and_getammo_share_the_saver_store():
+    ONEV = ".function OnEvent 2\nPushConstanti8 1\nReturn\n"
+    d = dr()
+    src = ('.function main 0\nPushConstantString "onua"\nCallGameFunction gcmodeldirector.addtoa 1\nPop\n'
+           'CallGameFunction gcsaver.getammo 0\nReturn\n') + ONEV
+    r, vm, ctx, tr, log = run_main(src, groups=("objects",))
+    assert r == Variant(0x10, 250)                                                # the toa's ammo (0xfa, 0x56898b)
+    sv = ctx.subsystem(d.Saver)
+    assert sv.ammo == 250 and sv.toa_id == 0x6F6E7561                              # [0x74749c] = the toa name id (0x47e221)
+    src = ('.function main 0\nPushConstantString "onua"\nCallGameFunction gcmodeldirector.addtoa 1\nPop\n'
+           'PushConstanti32 9\nCallGameFunction gcsaver.setammo 1\nCallGameFunction gcsaver.getammo 0\nReturn\n') + ONEV
+    r, *_ = run_main(src, groups=("objects",))
+    assert r == Variant(0x10, 9)                                                  # setammo after addtoa wins
+    src = ('.function main 0\nPushConstanti32 9\nCallGameFunction gcsaver.setammo 1\n'
+           'PushConstantString "onua"\nCallGameFunction gcmodeldirector.addtoa 1\nPop\n'
+           'CallGameFunction gcsaver.getammo 0\nReturn\n') + ONEV
+    r, *_ = run_main(src, groups=("objects",))
+    assert r == Variant(0x10, 250)                                                # the ctor store overwrites it
+
+
+# ===============================================================================================================
+# F7 item 3: gcareadirector.setfog (body 0x487090) and setnearestmax (body 0x486fe0), the last two A9 stubs
+# ===============================================================================================================
+def test_setfog_and_setnearestmax_asm_pins_and_readers(disasm, image):
+    pin(disasm, 0x486fe0, 0x487001, {
+        0x486fe5: "lea edx, [esp + 0x10]", 0x486fe9: "mov dl, byte ptr [edx]", 0x486feb: "mov byte ptr [0x70b37c], dl",
+        0x486ff1: "mov word ptr [ebx], 0xf"})
+    pin(disasm, 0x487010, 0x48702b, {0x487013: "mov al, byte ptr [0x70b37c]", 0x48701d: "call 0x47d250"})
+    pin(disasm, 0x47d250, 0x47d266, {0x47d255: "mov word ptr [ebx], 0x10", 0x47d25a: "movzx edx, byte ptr [esp + 0xc]"})
+    assert image.read(0x70b37c, 1) == b"\x04"                                       # .data: 4 until a script or Cinema writes it
+    # setfog: four argument reads, one call to the method 0x48a7a0, which negates arguments 1 and 2 (the constant-true
+    # branch 0x48a7a7 mov al,1) and stores through 0x5e5450 into 0x74a344 / 0x74a338 / 0x74a33c / 0x74a340
+    pin(disasm, 0x487090, 0x4870cc, {
+        0x487099: "lea esi, [ebp + 0x10]", 0x48709c: "lea ebx, [ebp + 0x14]", 0x48709f: "lea ecx, [ebp + 0x18]",
+        0x4870a2: "lea edx, [ebp + 0x1c]", 0x4870ae: "call 0x48a7a0", 0x4870b6: "mov word ptr [edi], 0xf"})
+    pin(disasm, 0x48a7a0, 0x48a7df, {0x48a7a7: "mov al, 0x1", 0x48a7b6: "fchs", 0x48a7bf: "fchs",
+                                     0x48a7d1: "call 0x5e5450", 0x48a7de: "ret"})
+    pin(disasm, 0x5e5450, 0x5e5479, {0x5e5454: "mov dword ptr [0x74a344], edx", 0x5e545e: "fstp dword ptr [0x74a338]",
+                                     0x5e5468: "fstp dword ptr [0x74a33c]", 0x5e5472: "fstp dword ptr [0x74a340]",
+                                     0x5e5478: "ret"})
+    # the readers: the fog fields are read only by GcGraphicsOptions::SetFog 0x5e5090 (render state); no VM call in 0x5e5450
+    assert [a for f in (0x74A338, 0x74A33C, 0x74A340, 0x74A344) for a in raw_refs(image, f)] == [
+        0x5E5120, 0x5E51BD, 0x5E5460, 0x5E5138, 0x5E51D5, 0x5E546A, 0x5E5150, 0x5E51ED, 0x5E5474,
+        0x5E5110, 0x5E51AD, 0x5E5456]                        # the store 0x5e5450 and the two reads of GcGraphicsOptions::SetFog
+    assert raw_refs(image, 0x70B37C) == [0x486FED, 0x487014, 0x488162, 0x593D4A, 0x593D5C, 0x5941CF]
+    # set 0x486feb, getnearestmax 0x487013, GcAreaDirector::GetNearest 0x488160 (the camera's Process), GcCinemaEngine Play
+    # 0x593d48 / 0x593d5a (save, then 0x32) and Stop 0x5941cd (restore)
+
+
+def test_setnearestmax_stores_a_byte_that_getnearestmax_reads_back():
+    d = dr()
+    r, vm, ctx, tr, log = call0("gcareadirector.getnearestmax")
+    assert r == Variant(0x10, 4)                                                       # the .data byte [0x70b37c]
+    src = ".function main 0\nPushConstanti32 %d\nCallGameFunction gcareadirector.setnearestmax 1\nCallGameFunction gcareadirector.getnearestmax 0\nReturn\n"
+    for v, want in ((50, 50), (0x1FF, 0xFF), (0, 0), (-1, 0xFF)):
+        r, vm, ctx, tr, log = run_main(src % v)
+        assert r == Variant(0x10, want), v                                             # a byte (0x486fe9 / 0x47d25a)
+        assert ctx.subsystem(d.AreaDirector).nearest_max == want
+    r, *_ = run_main(".function main 0\nPushConstanti32 7\nCallGameFunction gcareadirector.setnearestmax 1\nReturn\n")
+    assert r == NOTHING                                                                # {0xf, 0} (0x486ff1)
+
+
+def test_setfog_is_tier2_no_bound_native_reads_it_and_it_makes_no_engine_call():
+    rows = {r["key"]: r for r in json.loads(OVERRIDES.read_text())}
+    row = rows["gcareadirector.setfog"]
+    assert row["tier"] == "tier2" and "default" not in row
+    assert "0x487090" in row["cite"] and "0x48a7a0" in row["cite"] and "0x74a344" in row["cite"]
+    assert "gcareadirector.setfog" not in dr().CITES
+    assert rows["gcareadirector.setnearestmax"]["tier"] == "tier1" and rows["gcareadirector.getnearestmax"]["tier"] == "tier1"
+
+
+def test_gcsaver_gettoa_reads_the_one_saver_toa_id_that_addtoa_writes():     # F7 item 1: "any reader of [0x74749c]"
+    ONEV = ".function OnEvent 2\nPushConstanti8 1\nReturn\n"
+    r, vm, ctx, tr, log = call0("gcsaver.gettoa")
+    assert r == Variant(0x10, 0x3F3F3F3F)                                          # .data, a dword (0x5d36b3, 0x407960)
+    src = ('.function main 0\nPushConstantString "%s"\nCallGameFunction gcmodeldirector.addtoa 1\nPop\n'
+           'CallGameFunction gcsaver.gettoa 0\nReturn\n') + ONEV
+    for name, want in (("onua", 0x6F6E7561), ("tahu", 0x74616875)):
+        r, *_ = run_main(src % name, groups=("objects",))
+        assert r == Variant(0x10, want), name
+
+
+# ===============================================================================================================
+# F7 item 2: RemoveArea -> CleanUpArea -> GcModelDirector::Remove -> OnEvent for the characters the load side created
+# ===============================================================================================================
+CHR1, CHR2, CNT1, OBJ1, HIVE1 = 0x63687231, 0x63687232, 0x636E7431, 0x6F626A31, 0x68697631
+LEVEL_AREA_LEVEL = ('.function main 0\nPushConstantString "lev0"\nCallGameFunction gcareadirector.setcurrentlevel 1\nPop\n'
+                    'PushConstantString "frnt"\nCallGameFunction gcareadirector.setcurrentarea 1\nPop\n'
+                    'PushConstantString "lev1"\nCallGameFunction gcareadirector.setcurrentlevel 1\nPop\n'
+                    'CallGameFunction gcareadirector.getcurrentlevel 0\nReturn\n')
+
+
+def _char_world(vm, ctx, recs):
+    d = dr()
+    ad = ctx.subsystem(d.AreaDirector)
+    ad.area_source = lambda aid: recs
+    return ad
+
+
+def test_removal_chain_asm_pins_from_the_binary(disasm, image):
+    """Re-derived F7b. SetCurrentLevel: the guard 0x489ab4-0x489ace, RemoveArea 0x489add (call 0x489560), no catch record at
+    that call (exc.py: the catches of 0x489a60 are the three SLK loads, pads 0x489c54.. 0x489e20.. 0x48a356..); RemoveArea
+    0x489560: Get 0x48a810, CleanUpArea 0x5017d0 (0x489589), map erase (0x48959c), [0x83b0b4] = null (0x4895a1); CleanUpArea:
+    the entry list [this+0x10] (12-byte entries {id, director, type}, count [this+0xc]), each entry's director compared with
+    the singletons [0x83a518] (-> 0x488990), [0x83aa9c] (the model director -> Remove 0x47f320, pushes &id and &[this+0x14]),
+    [0x83873c], [0x83aa24], [0x83a530], [0x7b6f8c], [0x838cdc], [0x83aa7c]; LoadCharacters 0x53f3f0 pushes {id,
+    [0x83aa9c]} (0x53f4f6-0x53f502, push_back 0x4709d0 at 0x53f514) after AddCharacter 0x47f040 (0x53f473) and a non-null Get
+    (0x53f4c5-0x53f4cd); LoadHives 0x6261c0 pushes {id, [0x83a518]} (0x626328, push_back 0x626340); ~GcHive 0x623b70 calls Remove for each child id
+    ([hive+0x261] ids at [hive+0x2a8], 0x623bb9)."""
+    pin(disasm, 0x489ab4, 0x489af7, {0x489ab4: "mov edx, dword ptr [0x83902c]", 0x489af6: "mov dword ptr [0x83902c], edx"})
+    pin(disasm, 0x489560, 0x4895d0, {0x489589: "call 0x5017d0", 0x4895a1: "mov dword ptr [0x83b0b4], 0x3f3f3f3f"})
+    pin(disasm, 0x5017d0, 0x501990, {
+        0x5017db: "mov esi, dword ptr [edi + 0x10]", 0x5017e6: "mov edx, dword ptr [0x83a518]", 0x5017ee: "jne 0x501810",
+        0x501803: "call 0x488990", 0x501813: "mov edx, dword ptr [0x83aa9c]", 0x50181d: "mov edx, dword ptr [edi + 0x14]",
+        0x501830: "call 0x47f320", 0x501843: "mov edx, dword ptr [0x83873c]", 0x501873: "mov edx, dword ptr [0x83aa24]",
+        0x501894: "mov edx, dword ptr [0x83a530]", 0x5018c3: "mov edx, dword ptr [0x7b6f8c]",
+        0x50191a: "mov edx, dword ptr [0x838cdc]", 0x501938: "mov edx, dword ptr [0x83aa7c]",
+        0x501976: "add esi, 0xc", 0x50197c: "imul edx, edx, 0xc"})
+    pin(disasm, 0x53f3f0, 0x53f540, {
+        0x53f473: "call 0x47f040", 0x53f4c5: "call 0x480f70", 0x53f4cd: "je 0x53f53c", 0x53f4fc: "mov edx, dword ptr [0x83aa9c]",
+        0x53f514: "call 0x4709d0", 0x53f535: "call 0x47f830"})
+    pin(disasm, 0x62631c, 0x626345, {0x626321: "cmp eax, 0x83a518", 0x626328: "mov edx, dword ptr [0x83a518]",
+                                     0x626340: "call 0x4709d0"})
+    pin(disasm, 0x623b70, 0x623bd0, {0x623bb9: "call 0x47f320", 0x623bc6: "cmp al, byte ptr [edi + 0x261]"})
+    # which directors reach the VM: only GcModelDirector::Remove 0x47f320 (reach.py: GcAreaDirector::Remove 0x488990 and the
+    # other six director removals have no direct path to Call 0x60b320/0x60b450); ~GcHive reaches it through Remove.
+
+
+def test_exc_has_no_catch_on_the_removal_chain():
+    """tools/osi/exc.py: RemoveArea 0x489560, CleanUpArea 0x5017d0 (short record), Remove 0x47f320 and RemoveObject 0x501dc0
+    have no catch record, and SetCurrentLevel's call sites 0x489add (RemoveArea) is not a catch site: an error inside the
+    removed OnEvent leaves the native."""
+    import exc, os
+    img = exc.Image.from_file(Path(os.environ["LOMN_DATA"]) / "reference" / "LEGOBionicle.exe")
+    idx = exc.load_index(img)
+    caught = exc.caught_calls(img, idx)
+    assert {c["func"] for c in caught} & {0x489560, 0x5017d0, 0x47f320, 0x501dc0} == set()
+    sites = {s["call"] for s in exc.decode_function(img, 0x489a60, idx)["sites"]}
+    assert 0x489add not in sites                                                  # the RemoveArea call has no action chain at all
+    assert {c["call"] for c in caught if c["func"] == 0x489a60} == {
+        0x489be0, 0x489c18, 0x489c4f, 0x489da5, 0x489ddd, 0x489e14, 0x48a2d2, 0x48a30a, 0x48a339, 0x48a34f}   # the SLK loads only
+
+
+def test_characters_created_by_the_load_are_removed_by_setcurrentlevel_with_onevent_in_list_order():
+    d = dr()
+    vm, ctx, tr, log = make_vm(LEVEL_AREA_LEVEL + _onevent_logger(), groups=("objects",))
+    ad = _char_world(vm, ctx, [d.AreaObject("objects", OBJ1, 1), d.AreaObject("characters", CHR1, 1),
+                               d.AreaObject("characters", CNT1, 1), d.AreaObject("characters", CHR2, 1),
+                               d.AreaObject("hives", HIVE1, 1)])
+    from osi_natives import objects
+    md = ctx.subsystem(objects.ModelDirector)
+    r = vm.call("main", [])
+    assert r.ok and r.result == Variant(0x10, 0x6C657631)
+    cs = [l for l in log if l.startswith("C ")]
+    # the characters block, in list order; the main character (id == [0x782884], 0x47f5b3) is erased with no OnEvent; the
+    # object and the hive entries go to the area-side director (0x488990), which makes no engine call
+    assert [l.split()[:5] for l in cs] == [["C", "00000002", "OnEvent", "0010:0000002b", "0010:%08x" % CHR1],
+                                           ["C", "00000002", "OnEvent", "0010:0000002b", "0010:%08x" % CHR2]]
+    assert all(" ".join(l.split()[5:]) == " ".join(["000f:00000000"] * 8) for l in cs)
+    assert md.map == {} and ad.loaders == {} and ad.area == NULL_ID and ad.level == 0x6C657631
+    assert not any(l.startswith(("H ", "X ")) for l in log)
+
+
+def test_the_load_side_registers_the_characters_in_the_model_director_map():
+    d = dr()
+    asm = ('.function main 0\nPushConstantString "frnt"\nCallGameFunction gcareadirector.setcurrentarea 1\nReturn\n')
+    vm, ctx, tr, log = make_vm(asm, groups=("objects",))
+    ad = _char_world(vm, ctx, [d.AreaObject("objects", OBJ1, 1), d.AreaObject("characters", CHR1, 1),
+                               d.AreaObject("characters", CNT1, 1)])
+    from osi_natives import objects
+    assert vm.call("main", []).ok
+    md = ctx.subsystem(objects.ModelDirector)
+    assert sorted(md.map) == sorted([CHR1, CNT1])                              # AddCharacter 0x47f040 -> Add 0x480eb0
+    assert all(c.engine_refs == 1 for c in md.map.values())                    # the map's copy
+    assert [(e.obj_id, e.director) for e in ad.loaders[0x66726E74].entries] == [(OBJ1, "area"), (CHR1, "model"), (CNT1, "model")]
+    assert not any(l.startswith(("C ", "H ", "X ")) for l in log)
+
+
+def test_an_error_inside_the_removed_onevent_leaves_setcurrentlevel_with_the_partial_state():
+    """No catch on the chain (exc.py): the error propagates out of the native, which ends with the script error; the first
+    character is already erased (0x47f5a9 precedes the call 0x47f680), the second is still in the map and the loader."""
+    d = dr()
+    bad = ".function OnEvent 2\n.byte 0x85\nReturn\n"                          # BCLUnused: an error in the nested call
+    vm, ctx, tr, log = make_vm(LEVEL_AREA_LEVEL + bad, groups=("objects",))
+    ad = _char_world(vm, ctx, [d.AreaObject("characters", CHR1, 1), d.AreaObject("characters", CHR2, 1)])
+    from osi_natives import objects
+    md = ctx.subsystem(objects.ModelDirector)
+    r = vm.call("main", [])
+    assert not r.ok and "Script is calling gcareadirector.setcurrentlevel" in vm.last_error.message
+    cs = [l for l in log if l.startswith("C ")]
+    assert len(cs) == 1 and cs[0].split()[4] == "0010:%08x" % CHR1                # the second character is never reached
+    assert not any(l.startswith("X ") for l in log) and vm.swallowed == []        # nothing swallows it
+    assert sorted(md.map) == [CHR2]
+    assert 0x66726E74 in ad.loaders and ad.area == 0x66726E74 and ad.level == 0x6C657630    # 0x4895a1 / 0x489af6 not reached
+
+
+def test_objects_and_hives_entries_reach_the_area_director_not_the_model_director():
+    d = dr()
+    vm, ctx, tr, log = make_vm(LEVEL_AREA_LEVEL + _onevent_logger(), groups=("objects",))
+    _char_world(vm, ctx, [d.AreaObject("objects", OBJ1, 1), d.AreaObject("hives", HIVE1, 1),
+                          d.AreaObject("hives", 0x68697632, 1, plain=True)])
+    assert vm.call("main", []).ok
+    assert not any(l.startswith("C ") for l in log)                              # only characters reach OnEvent (0x2b)
+
+
+# ===============================================================================================================
+# F7 item 4 (8b m-3): GcGame::MainCharacterID 0x43af90 and the SetupMoveable guard 0x574ef1
+# ===============================================================================================================
+def test_main_character_id_asm_pins_all_three_exits(disasm):
+    pin(disasm, 0x43af90, 0x43aff0, {
+        0x43af91: "cmp dword ptr [0x7032b8], 0x0", 0x43af98: "jne 0x43afb2",              # no Toa -> [0x7796f4]
+        0x43af9e: "mov edx, dword ptr [0x7796f4]",
+        0x43afb2: "mov edx, dword ptr [0x7032b8]", 0x43afb8: "cmp dword ptr [edx + 0x1d0], 0x0", 0x43afbf: "je 0x43afe0",
+        0x43afc1: "mov edx, dword ptr [edx + 0x1d0]", 0x43afcb: "mov edx, dword ptr [edx + 0x100]",   # attached -> its id
+        0x43afe4: "mov edx, dword ptr [0x7796f4]"})                                        # Toa without an attachment
+
+
+def test_the_loadarea_guard_follows_the_toa_branch_of_main_character_id():
+    from osi_natives import objects
+    d = dr()
+    ATT = 0x61746368
+    asm = ('.function main 0\nPushConstantString "frnt"\nCallGameFunction gcareadirector.setcurrentarea 1\nReturn\n'
+           '.function OnEvent 2\nPushConstanti8 1\nReturn\n')
+
+    def run(toa, attached, motion):
+        vm, ctx, tr, log = make_vm(asm, groups=("objects",))
+        ad = _char_world(vm, ctx, [d.AreaObject("characters", 0xB1, motion)])
+        md = ctx.subsystem(objects.ModelDirector)
+        if toa:
+            t = objects.GcToa(objects._tid(ctx, "GcToa"), 0x6F6E7561)
+            if attached:
+                t.attached = objects.GcCharacter(objects._tid(ctx, "GcCharacter"), ATT, ATT)
+            md.main_toa = t
+        assert vm.call("main", []).ok
+        assert ad.main_character(ctx) == (ATT if toa and attached else CNT1)
+        return ad.set_under_water_calls
+
+    assert run(False, False, CNT1) == 1 and run(False, False, ATT) == 0       # no Toa: [0x7796f4] ('cnt1')
+    assert run(True, False, CNT1) == 1 and run(True, False, ATT) == 0         # Toa without +0x1d0: still [0x7796f4]
+    assert run(True, True, ATT) == 1 and run(True, True, CNT1) == 0           # attached: [[toa+0x1d0]+0x100]

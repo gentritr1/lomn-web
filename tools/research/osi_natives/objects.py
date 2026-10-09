@@ -27,7 +27,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from . import framework, services
+from . import directors, framework, services
 from .framework import GameObject, register_group
 import osi_vm
 from osi_vm import NOTHING, T_INT, Variant, VmError
@@ -292,8 +292,8 @@ class RenderGroup(RefVector):
 # --------------------------------------------------------------------------------------------------------------
 class ModelDirector:
     """GcModelDirector's statics: the identifier map 0x782a04 (id -> ScAutoRefPtr<GcCharacter>), the two render groups,
-    the shown-id list [0x83a9c0], the main Toa [0x7032b8]. The saver's toa id and ammo are written by addtoa (0x47e221,
-    0x56898b) and belong to the saver model: they are kept here, for it to read."""
+    the shown-id list [0x83a9c0], the main Toa [0x7032b8]. The saver's toa id and ammo, which addtoa writes (0x47e221,
+    0x56898b), are the fields of directors.Saver (one store, read by getammo)."""
 
     def __init__(self, ctx):
         self.ctx = ctx
@@ -302,8 +302,6 @@ class ModelDirector:
         self.group_other = RenderGroup()         # [0x83aa4c]
         self.shown_ids: list = []                # [0x83a9c0], count [0x83a9bc]
         self.main_toa: Optional[GcToa] = None    # [0x7032b8]
-        self.saver_toa_id: Optional[int] = None  # [0x74749c]
-        self.saver_ammo: Optional[int] = None    # [0x7474c8]
         self.toa_index: Optional[int] = None     # GcStaticSoundsPtrArray::SetCurrentToa
         self.events: list = []                   # 0x515f80 (id, second, mode), kept for M2a-3
 
@@ -392,10 +390,11 @@ def toa_index(ident: int) -> int:
 def main_character_id(ctx) -> int:
     """GcGame::MainCharacterID 0x43af90: 'cnt1' ([0x7796f4], 0x43c193) while there is no main Toa; else the id [+0x100] of
     the character the Toa has attached at +0x1d0 (0x43afb8-0x43afcb), 'cnt1' if none (0x43afe4)."""
+    base = ctx.subsystem(directors.AreaDirector).main_character_id           # [0x7796f4], 'cnt1' (0x43c193)
     t = ctx.subsystem(ModelDirector).main_toa
-    if t is None or t.attached is None:
-        return ID_CNT1
-    return t.attached.char_id if t.attached.char_id is not None else 0x3F3F3F3F
+    if t is None or t.attached is None:                                        # 0x43af91 / 0x43afb8
+        return base
+    return t.attached.char_id if t.attached.char_id is not None else 0x3F3F3F3F   # [[toa+0x1d0]+0x100] (0x43afc1-0x43afcb)
 
 
 def set_under_water(ctx, flag: int) -> None:
@@ -483,7 +482,8 @@ def add_toa(ctx, name: bytes, flag: int = 0) -> int:
     name = services.c_string(name)
     ident = services.convert_string_to_id(name)                          # 0x47e194 -> 0x617810 -> ConvertStringToID
     toa = GcToa(_tid(ctx, "GcToa"), ident)                               # 0x47e1ac new 0x430, ctor 0x47e1d0
-    md.saver_ammo = toa.ammo                                             # 0x56898b: [0x7474c8] = [toa+0x380]
+    saver = ctx.subsystem(directors.Saver)
+    saver.ammo = toa.ammo & 0xFFFF                                       # 0x56898b: [0x7474c8] = [toa+0x380] (a word)
     # INI-gated block 0x568a5e -> 0x5d4e40 ([Cheat] Urinate == "Pohatu", body 0x568a6b-0x568c02): modelled as INI-absent
     # (false) until M2a-3, so it is skipped here.
     ctx.engine_call("OnEvent", [Variant(T_INT, 0x32), Variant(T_INT, toa.ammo & 0xFFFF)])   # 0x568a59, unconditional
@@ -491,7 +491,7 @@ def add_toa(ctx, name: bytes, flag: int = 0) -> int:
     slots = ctx.subsystem(services.BlockFileSlots)
     saved = slots.current                                                # 0x47e1f1: GetCurBlockFile
     slots.current = _character_block(ctx, ident)                         # 0x47e1fe: LoadCharBlockHeader 0x419330 sets it
-    md.saver_toa_id = ident                                              # 0x47e221: [0x74749c] = id
+    saver.toa_id = ident & M32                                           # 0x47e221: [0x74749c] = id
     if not md.add(toa, ID_CNT1):                                         # 0x47e4bd Add; 0x47e4ca: return 0 with no restore
         return 0
     toa.collision_group = object()                                       # 0x47e522 InitializeCollisionPhysics 0x56c270

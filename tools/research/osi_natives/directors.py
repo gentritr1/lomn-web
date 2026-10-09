@@ -15,10 +15,11 @@ What is NOT modelled, and why:
   host has none, so `AreaDirector.area_source` is the seam (default: no objects). With no object loaded, the chains of
   natives.md §4 make no engine call, which is the A9 path. The chain itself (the SetupMoveable guard 0x574ef1 ->
   SetUnderWater 0x589050 -> `Call`; RemoveArea -> CleanUpArea -> GcModelDirector::Remove -> `Call`) is modelled and tested
-  with an injected source.
+  with an injected source (the characters it creates enter the model director's map, objects.ModelDirector.map).
 - SetCurrentLevel's three SLK loads (material.slb, the texture table, the level text table): their errors are swallowed
   (the catch flags are written only with 0, like LoadArea's, natives.md §5.2) and no native of this group reads them.
-- GcModelDirector::Remove's class-specific teardown (0x47f3c2-0x47f4ba): only what reaches the VM is kept.
+- GcModelDirector::Remove's class-specific teardown (0x47f3c2-0x47f4ba): only what reaches the VM and the map erase are kept.
+- A hive's child characters (~GcHive 0x623b70 -> Remove): see the comment above AreaDirector.set_current_area.
 - BetterSaver's debug output (OutputDebugString) and the save routine 0x10002b00 (saves are M4).
 - The cinematic player (Bink): D1 completes the call instantly, so nothing of the video is modelled.
 """
@@ -79,6 +80,20 @@ CITES = {
     "gcsaver.getammo":
         "// body 0x5d3910, method 0x5d3910 <GcSaver::GetAmmo>; asm pin: 0x5d3913 mov ax,[0x7474c8] (a word, .data 0), "
         "u16 variant 0x4183f0 (0x4183fa movzx edx,word)",
+    "gcsaver.gettoa":
+        "// body 0x5d36b0, method 0x5d36b0 <GcSaver::GetToa>; asm pin: 0x5d36b3 mov eax,[0x74749c] (a dword, .data "
+        "0x3f3f3f3f; written by AddToa 0x47e221), int variant 0x407960 (0x407965 type 0x10, the dword)",
+    "gcareadirector.setnearestmax":
+        "// body 0x486fe0, method 0x486fe0 <GcAreaDirector::SetNearestMax (inline)>; asm pin: 0x486fe9 mov dl,[edx] (the "
+        "low byte of argument 0), 0x486feb mov [0x70b37c],dl, 0x486ff1 {0xf, 0} (returns nothing); read by getnearestmax "
+        "0x487013, GcAreaDirector::GetNearest 0x488160, GcCinemaEngine::Play 0x593d48 / Stop 0x5941cd",
+    "gcareadirector.getnearestmax":
+        "// body 0x487010, method 0x487010 <GcAreaDirector::GetNearestMax (inline)>; asm pin: 0x487013 mov al,[0x70b37c] "
+        "(a byte, .data 4), CreateVariant 0x47d250 (0x47d255 type 0x10, 0x47d25a movzx byte)",
+    "gcsaver.setammo":
+        "// body 0x5d3840, method 0x5d3840 <GcSaver::SetAmmo>; asm pin: 0x5d3845 lea edx,[esp+0x10] (argument 0), 0x5d3849 "
+        "mov dx,[edx], 0x5d384c mov [0x7474c8],dx (a word; the field getammo reads at 0x5d3913), 0x5d3853 {0xf, 0} "
+        "(returns nothing)",
     "bettersaver.getbooleanvalue":
         "// body BetterSaver.dll 0x10001f70, method 0x10001f70 <BetterSaver::GetBooleanValue>; asm pin: "
         "0x10001f77 movzx esi,word (the u16 key), 0x10001fc8 xor al,al (absent), 0x10001fd1 setne cl, 0x10001fd8 mov "
@@ -99,6 +114,10 @@ CITES = {
 
 # The tier2 rows (taint-safe on the A9 path; no model): body addresses per natives.md §7.1.
 TIER2 = {
+    # GcAreaDirector::SetFog: 0x487090 -> 0x48a7a0 -> 0x5e5450 stores [0x74a344] (the mode dword) and [0x74a338] / [0x74a33c]
+    # (arguments 1 and 2 negated, the constant-true branch 0x48a7a7) / [0x74a340]; read only by the render-state function
+    # GcGraphicsOptions::SetFog 0x5e5090 (0x5e510f-0x5e51eb); no native reads it, no VM call: render state -> M2a-3
+    "gcareadirector.setfog": 0x487090,
     "gckeymapper.setusecontext": 0x5ceed0,
     "gcmp3player.setupforplay": 0x5dc840,
     "gcmp3player.play": 0x5dc970,
@@ -215,7 +234,8 @@ class Saver:
     ResetData 0x5d5490, natives.md §9.1)."""
 
     def __init__(self, ctx):
-        self.ammo = 0                   # [0x7474c8] word
+        self.ammo = 0                   # [0x7474c8] word: the ONE store (setammo 0x5d384c, the Toa ctor 0x56898b, getammo 0x5d3913)
+        self.toa_id = NULL_ID           # [0x74749c] dword: AddToa 0x47e221 (.data 0x3f3f3f3f; no script native reads it)
         self.level = 0                  # [0x74748c] byte: ResetData 0x5d5493
         self.area = NULL_ID             # [0x747490] dword: ResetData 0x5d549a
         self.conditions = 0             # [0x8391a0] dword: ResetData 0x5d54ec
@@ -259,8 +279,18 @@ class Saver:
                     ad.remove_object(ctx, loader, obj_id)
 
 
+def _set_ammo(ctx):
+    def fn(call):
+        ctx.subsystem(Saver).ammo = call.arg(0).value & 0xFFFF                  # mov dx,[edx]; mov [0x7474c8],dx (0x5d3849/0x5d384c)
+        return NOTHING                                                         # {0xf, 0} (0x5d3853-0x5d3858)
+    return fn
+
+
+def _get_toa(ctx):
+    return lambda call: Variant(T_INT, ctx.subsystem(Saver).toa_id & M32)      # mov eax,[0x74749c] 0x5d36b3; 0x407960 (dword)
+
+
 def _get_ammo(ctx):
-    # SetAmmo 0x5d3840 (unbound, deferred) writes the same word [0x7474c8]: a script write is not read back yet
     def fn(call):
         return Variant(T_INT, ctx.subsystem(Saver).ammo & 0xFFFF)              # mov ax,[0x7474c8]; 0x4183f0 movzx word
     return fn
@@ -387,8 +417,8 @@ class AreaObject(NamedTuple):
     block: str
     obj_id: int
     motion_id: int
-    director: str = "model"
-    otype: int = 0
+    director: str = ""      # "" = the block's director in the binary: characters "model" ([0x83aa9c], 0x53f4fc), objects and
+    otype: int = 0          # hives "area" ([0x83a518], 0x626328; objects may also use back/nolight/trans, none reach the VM)
     plain: bool = False     # a hive record with [rec+0x2c] == 0 (0x62623c cmp / 0x626240 je): ctor 0x6239b0, never the VM
 
 
@@ -401,25 +431,49 @@ class AreaLoader:
 
 class ModelObjects:
     """The slice of GcModelDirector that Remove 0x47f320 reads: the active flag [0x83aa4c] (non-null after the director's
-    init 0x47d46d), the model map 0x782a04 (id -> object) and the main character's id [0x782884] ('cnt1', written by the
+    init 0x47d46d), the model map 0x782a04 (id -> object: the ONE map, objects.ModelDirector.map, which addtoa fills and
+    AddCharacter 0x47f040 fills for an area's characters) and the main character's id [0x782884] ('cnt1', written by the
     static init 0x482d43)."""
 
     TOA_ID = 0x636E7431
 
     def __init__(self, ctx):
+        self.ctx = ctx
         self.active = True
-        self.objects: dict[int, object] = {}
+
+    @property
+    def objects(self) -> dict:
+        from . import objects
+        return self._ctx_model(objects).map
+
+    def _ctx_model(self, objects):
+        return self.ctx.subsystem(objects.ModelDirector)
+
+    def add_character(self, ctx, obj_id: int) -> None:
+        """GcModelDirector::AddCharacter 0x47f040 as LoadCharacters 0x53f3f0 calls it (0x53f473): a new GcCharacter (0x368 bytes)
+        for the id, Add 0x480eb0 into the map (an existing key keeps its value). The null-id rename (0x47f059 cmp [0x70a81c]
+        = 0x3f3f3f3f -> 0x480260) and the character's block-file load are not modelled."""
+        from . import objects
+        md = ctx.subsystem(objects.ModelDirector)
+        if md.get(obj_id) is None:
+            md.add(objects.GcCharacter(objects._tid(ctx, "GcCharacter"), obj_id & M32, obj_id & M32), obj_id & M32)
 
     def remove(self, ctx, obj_id: int) -> None:
         """GcModelDirector::Remove 0x47f320: director not active -> return (0x47f32c); id not in the map -> return
-        (0x47f36b); else the class-specific teardown (not modelled), the map erase (0x47f50c-0x47f5a9), and unless the id
-        is the main character's ([0x782884], 0x47f5b3) the engine call OnEvent(0x2b, id): a0 is CreateVariant 0x413ed0 of
-        the byte 0x2b (0x47f5c1), a1 is CreateVariant 0x407df0 of the id (0x47f5d9); a2..a9 nothing."""
+        (0x47f36b); else the class-specific teardown (0x47f3c2-0x47f4ba, not modelled), the map erase (0x47f50c-0x47f5a9; the
+        map's ScAutoRefPtr copy is released, INFERRED from the erase 0x4dd4f0) and unless the id is the main character's
+        ([0x782884], 0x47f5b3) the engine call OnEvent(0x2b, id): a0 is CreateVariant 0x413ed0 of the byte 0x2b (0x47f5c1),
+        a1 is CreateVariant 0x407df0 of the id (0x47f5d9); a2..a9 nothing. No catch on the chain (exc.py): an error leaves
+        the native."""
         if not self.active:
             return
-        if obj_id not in self.objects:
+        from . import objects
+        md = ctx.subsystem(objects.ModelDirector)
+        ch = md.get(obj_id)
+        if ch is None:
             return
-        del self.objects[obj_id]
+        del md.map[obj_id & M32]
+        ctx.release(ch)
         if obj_id != self.TOA_ID:
             ctx.engine_call("OnEvent", [Variant(T_INT, 0x2B), Variant(T_INT, obj_id & M32)])
 
@@ -437,10 +491,12 @@ class AreaDirector:
         self.under_water = 0                                # the byte [0x73c5a8]: 0 in .data, written only by 0x589264
         self.main_character_id = 0x636E7431                 # [0x7796f4] ('cnt1', static init 0x43c193); [0x7032b8] is 0 until AddToa
         self.set_under_water_calls = 0
+        self.nearest_max = 4                                # the byte [0x70b37c]: 4 in .data (setnearestmax 0x486feb, getnearestmax 0x487013)
 
-    # --- GcGame::MainCharacterID 0x43af90 (no Toa: [0x7796f4])
-    def main_character(self) -> int:
-        return self.main_character_id
+    # --- GcGame::MainCharacterID 0x43af90: one implementation, objects.main_character_id (the Toa branch 0x43afb2-0x43afcb)
+    def main_character(self, ctx) -> int:
+        from . import objects
+        return objects.main_character_id(ctx)
 
     def set_current_level(self, ctx, name: bytes) -> None:
         """GcAreaDirector::SetCurrentLevel 0x489a60 (see CITES)."""
@@ -486,9 +542,12 @@ class AreaDirector:
                 del loader.entries[i]
                 return
 
-    # DEFERRED (follow-up batch, unmodelled): setcurrentlevel -> RemoveArea -> CleanUpArea -> GcModelDirector::Remove ->
-    # Call("OnEvent") (0x501830 -> 0x47f680) for the characters of an area's _char.slb; only the model-director removals
-    # of `entries` below are modelled.
+    # F7b: the removal chain is modelled for the characters the load side creates (LoadCharacters 0x53f3f0: AddCharacter
+    # 0x47f040 into the model map, an entry {id, [0x83aa9c]} pushed 0x53f514). CleanUpArea dispatches each entry on its director
+    # (0x5017e6-0x501938); only the model director's Remove 0x47f320 reaches the VM among the direct calls. NOT modelled:
+    # a hive's children. ~GcHive 0x623b70 calls Remove for each id of [hive+0x261] at [hive+0x2a8] (0x623bb9) and the hive
+    # entry's director is [0x83a518] (-> GcAreaDirector::Remove 0x488990, which makes no direct call to the VM); whether that
+    # removal drops the hive's last reference is not established (UNVERIFIED), and the hive's children are not created here.
     def set_current_area(self, ctx, name: bytes) -> None:
         """GcAreaDirector::SetCurrentArea 0x48a540."""
         s = c_string(name)                                                       # the copy 0x48a550 (0x4f56c0)
@@ -527,11 +586,14 @@ class AreaDirector:
                 # 0x574b80 with no 'lbld' check: a character record fires when its id equals the main character's.
                 gated = block != "characters"
                 if (not o.plain and (o.motion_id == MOVEABLE_SETUP_ID or not gated)
-                        and o.motion_id == self.main_character()):               # cmp ecx,edx 0x574ef1
+                        and o.motion_id == self.main_character(ctx)):               # cmp ecx,edx 0x574ef1
                     r = self.set_under_water(ctx, self.under_water, swallow=True)
                     if not r.ok:                                                 # swallowed: the object is not completed,
                         break                                                    # the block ends (0x4ff996 / 0x500344 / 0x500c63)
-                loader.entries.append(AreaInfo(o.obj_id, o.director, o.otype))
+                if block == "characters" and not o.director:
+                    ctx.subsystem(ModelObjects).add_character(ctx, o.obj_id)       # AddCharacter 0x47f040 (0x53f473), Get non-null
+                loader.entries.append(AreaInfo(o.obj_id, o.director or ("model" if block == "characters" else "area"),
+                                               o.otype))            # {id, director} pushed by 0x4709d0 (0x53f514 / 0x626340)
 
     def set_under_water(self, ctx, flag: int, swallow: bool = False):
         """GcMotionSystem::SetUnderWater 0x589050: both branches make the engine call OnEvent(0x36, b) with b = 1 for a
@@ -540,6 +602,17 @@ class AreaDirector:
         self.set_under_water_calls += 1
         b = 1 if (flag & 0xFF) else 0
         return ctx.engine_call("OnEvent", [Variant(T_INT, 0x36), Variant(T_INT, b)], swallow=swallow)
+
+
+def _set_nearest_max(ctx):
+    def fn(call):
+        ctx.subsystem(AreaDirector).nearest_max = call.arg(0).value & 0xFF     # mov dl,[edx]; mov [0x70b37c],dl (0x486fe9/0x486feb)
+        return NOTHING                                                         # {0xf, 0} (0x486ff1-0x486ff6)
+    return fn
+
+
+def _get_nearest_max(ctx):
+    return lambda call: Variant(T_INT, ctx.subsystem(AreaDirector).nearest_max & 0xFF)   # mov al,[0x70b37c] 0x487013; 0x47d250 movzx byte
 
 
 def _get_current_level(ctx):
@@ -721,6 +794,10 @@ def bind(reg, ctx) -> None:
     reg.bind("gcareadirector.getscriptfluffstring", _get_script_fluff_string(ctx))
     reg.bind("gcsaver.cheatmenu", _cheat_menu(ctx))
     reg.bind("gcsaver.getammo", _get_ammo(ctx))
+    reg.bind("gcsaver.setammo", _set_ammo(ctx))
+    reg.bind("gcsaver.gettoa", _get_toa(ctx))
+    reg.bind("gcareadirector.setnearestmax", _set_nearest_max(ctx))
+    reg.bind("gcareadirector.getnearestmax", _get_nearest_max(ctx))
     reg.bind("bettersaver.getbooleanvalue", _get_boolean_value(ctx))
     reg.bind("bettersaver.setbooleanvalue", _set_boolean_value(ctx))
     reg.bind("bettersaver.save", _bs_save(ctx))
