@@ -347,9 +347,12 @@ TEST_CASE("osi vm primitives: JSON reader and TypeTable / NativeRegistry over da
   const NativeEntry* stf = reg.find("gcscripttools", "stringtofloat");
   REQUIRE(stf);
   CHECK(stf->sets_fpu_pc64);
-  const NativeEntry* gb = reg.find("bettersaver", "getbooleanvalue");
+  const NativeEntry* gb = reg.find("bettersaver", "getintegervalue");  // a mod row no override names (T8a: getbooleanvalue is tier1)
   REQUIRE(gb);
   CHECK(gb->tier == Tier::Mod);
+  const NativeEntry* gbv = reg.find("bettersaver", "getbooleanvalue");
+  REQUIRE(gbv);
+  CHECK(gbv->tier == Tier::Implemented);  // the merged override (natives.md §7.2) loads as tier1
   CHECK(reg.find("gclegosounddirector", "play") == nullptr);
   bool threw = false;
   try {

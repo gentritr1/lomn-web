@@ -41,6 +41,18 @@ def mods():
     return json.loads((DATA / "natives_beta150.json").read_text())
 
 
+def _unmerged(table, key, mod=False):
+    """The committed table before the committed override of `key` was merged: the test re-merges that key (M2a-2 T8a
+    committed rows for gcsaver.cheatmenu and bettersaver.getbooleanvalue; an exe row then has no tier, a mod row "mod")."""
+    out = copy.deepcopy(table)
+    for r in out:
+        if r["key"] == key:
+            r.pop("tier", None)
+            if mod:
+                r["tier"] = "mod"
+    return out
+
+
 def _ok_row(**kw):
     # gcsaver.cheatmenu: body 0x5d35b0 (natives.md §9.1), a decided default of int 0 (Decision 9)
     row = {"key": "gcsaver.cheatmenu", "tier": "tier2", "default": {"type": "0x10", "value": 0},
@@ -116,6 +128,7 @@ def test_empty_overrides_change_no_byte(reg, rows, mods):
 
 
 def test_merge_touches_only_the_named_winner_row(reg, rows, mods):
+    rows = _unmerged(rows, "gcsaver.cheatmenu")
     over = [_ok_row()]
     r2, m2 = reg.apply_overrides(copy.deepcopy(rows), copy.deepcopy(mods), over)
     changed = [i for i, (a, b) in enumerate(zip(rows, r2)) if a != b]
@@ -138,6 +151,7 @@ def test_merge_without_default_keeps_the_generated_default(reg, rows, mods):
 
 
 def test_mod_key_merges_into_the_mod_table(reg, rows, mods):
+    mods = _unmerged(mods, "bettersaver.getbooleanvalue", mod=True)
     over = [{"key": "bettersaver.getbooleanvalue", "tier": "tier1", "note": "empty map -> int 0",
              "cite": "// body BetterSaver.dll 0x10001f70, method 0x10005ab0 <std::map find>; asm pin: 0x10001fd1 setne"}]
     r2, m2 = reg.apply_overrides(copy.deepcopy(rows), copy.deepcopy(mods), over)

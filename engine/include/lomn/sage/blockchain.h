@@ -32,6 +32,10 @@ class BlockChain {
   bool open_second(std::string_view path, std::string* err);    // e.g. LoadLevelBlockHeader (0x0048bd10)
   void clear_current() { current_ = BlockFile(); current_path_.clear(); }
   void clear_second() { second_ = BlockFile(); second_path_.clear(); }
+  // M2a-2 T8a: the slot points at a block header object that is closed or failed to open (ScBlockFile::Close 0x60ff70
+  // zeroes the entry count, 0x60ffdb): the slot counts as set (SrBlockFileExists skips FileExists, 0x54ddf7) but Find
+  // gives -1 for every name (0x60fedb). `tag` is the path() reported for the slot.
+  void set_unloaded(Source s, std::string_view tag);
   // Area entry as GcAreaLoader::LoadArea (0x004fedd0) sets it up: second = <lev>.blk, current = <area>.blk.
   bool enter_area(std::string_view level, std::string_view area, std::string* err);
 
