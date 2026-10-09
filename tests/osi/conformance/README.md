@@ -6,6 +6,35 @@ group `b/` (stack, push, compare, logic/bitwise, inc/dec, game-var, native calls
 hold `<id>.asm` + `<id>.expect.json`; `.osi` files are assembled at test time and never committed.
 Coverage: `.venv/bin/python tools/osi/conformance_report.py tests/osi/conformance/<group> --group <group> --missing`.
 
+## Group `n/` (M2a-2 Task 2b): the native framework
+
+The fields are in `docs/osi/conformance.md` §1 ("Native-framework fields") and §6 rules 17–20. Every expectation was
+derived by hand from `docs/osi/natives.md`, D13–D16 and the error-PC table in `docs/osi/opcodes.md`, and each `note`
+shows the derivation. Neither engine was run.
+
+**Pending Tasks 3/4.** A program with a `pending` key needs runner features that Tasks 3 (C++) and 4 (oracle) add. It
+is expected to FAIL on both runners until then, and it is not a gate. `conformance_report.py DIR --list` prints each
+program with its status.
+
+| program | status | needs |
+|---|---|---|
+| `n-game-engine-ref-survives` | pending | `engine_refs` |
+| `n-game-engine-ref-zero` | active | (control: `engine_refs` 0 is today's behaviour) |
+| `n-game-identity` | pending | `engine_refs`, `returns.object` |
+| `n-reenter-depth3` | pending | `calls.depth` |
+| `n-reenter-nested-error-propagates` | active | (`pc_after` and `then` are extra comparisons) |
+| `n-reenter-nested-error-swallowed` | pending | `swallow`, `swallowed`, `expect.top`, `pc_after`, `then` |
+| `n-onevent-args` | active | — |
+| `n-swallow-continue` | pending | D16: `swallow`, `swallowed`, `expect.top`, `pc_after`, `then` |
+| `n-swallow-reerror` | pending | D16: `swallow`, `swallowed`, `pc_after`, `then` |
+| `n-swallow-pops` | pending | D16: `swallow`, `swallowed`, `expect.top`, `pc_after`, `then` |
+| `n-swallow-writes` | pending | D16: `swallow`, `swallowed`, `expect.top`, `pc_after`, `then` |
+| `n-name-256` | pending | the 255-character name bound (kOutOfRange), `pc_after` |
+| `n-name-255` | active | (the boundary control for `n-name-256`; `pc_after` and `then` are extra comparisons) |
+
+"Active" means that a runner which ignores the new comparison keys should already pass. That is INFERRED from the rules,
+not run: authoring rule 3 forbids running an engine to check an expectation.
+
 ## Authoring rules (copied from docs/osi/conformance.md §2; that file wins if they ever differ)
 
 1. The author reads **only** `docs/osi/opcodes.md`, `docs/osi/types.md`, this file, `docs/osi/trace.md`,

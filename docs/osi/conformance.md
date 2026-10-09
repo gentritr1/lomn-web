@@ -60,6 +60,46 @@ test time; the binary is never committed.
 - `fpu_pc` (optional in `expect`, `expect_error`) is the precision state after the call; after any error it is 64 (D8′/D10).
   `reset_after_error()` does not change `fpu_pc`, so a second entry point (`main2`) called after an error runs at 64.
 
+### Native-framework fields (M2a-2, Task 2b; runners implement them in Tasks 3 and 4)
+
+These fields serve corpus group `n` (`tests/osi/conformance/n/`). The rules they follow are §6 rules 17–20.
+
+**Test natives:**
+- `returns: {"game": "<Class>", "engine_refs": k}`: a game object that the host also holds k times (D13, `natives.md`
+  §2). The heap stores total = k + 1 (the returned variant). `engine_refs` omitted is 0, which is today's
+  `{"game": …}`.
+- `returns: {…, "object": "<name>"}`: the native returns the host object called `<name>`. The first return that names
+  it creates the object (with its `engine_refs`) and mints its handle (`A g`). Every later return that names it while
+  it is live returns **the same handle** with one more variant reference and writes no `A g` (D13 identity per object).
+  If the object was freed (its count reached 0), the next return that names it creates a new object. `game` may differ
+  between two returns of one object: the variant's type is the declared class, the handle is the object's
+  (`natives.md` §2.3).
+- `calls: {"entry": …, "args": […], "depth": d}` (rule 6.1 plus `depth`): the nested call is made only while the VM's
+  `context_depth` (the engine calls in flight, the outermost one included) is **below** d when the native runs. When it
+  is not made, the native just returns its `returns`. `depth` omitted means no limit (the port's nesting cap of 64
+  still applies).
+- `swallow: true` (D16, rule 17): if the `calls` nested call raises, the runner catches the error inside the native,
+  writes its `E` line there, then applies the native's `writes` and returns its `returns`.
+- A test native's `{"text": …}` return is not bounded: a string of 256 bytes or more is created as written. The
+  original cannot hold one (`natives.md` §8.3); `n-name-256` uses one to reach the name-copy bound.
+
+**Expectations:**
+- `expect.top`: the top slot after the call, after the host has disposed the result; `null` means depth 0. It is
+  written like `expect_error.top`.
+- `pc_after` (in `expect`, `expect_error`, `then` and `swallowed` entries): `snapshot().pc`, compared under rule 15. It
+  is an absolute file offset: an integer, a label `"@L"`, or a label plus a decimal byte count, `"@L+k"`.
+- `swallowed`: a list, in order, of the errors swallowed during the call. Each entry is `{message, pc, op, depth, top}`,
+  with the meanings of `expect_error`, taken at the throw (D16 rule 2). It holds exactly the swallowed errors, so an
+  empty list (or no key) means none.
+- `then: {"entry", "args", "ok", "result", "depth", "top", "context_depth", "pc_after"}`: a second engine call on the
+  same VM, made after the first call has been compared (rule 19). The fields present are compared like `expect`.
+
+**Metadata:**
+- `pending`: a list naming the runner features of Tasks 3/4 that the program needs before it can pass (for example
+  `"swallow"`, `"engine_refs"`, `"calls.depth"`, `"pc_after"`). A pending program is expected to fail on both runners
+  until those tasks land, and it is not a gate (`tests/osi/conformance/README.md`). The key is removed when the program
+  passes on both.
+
 ### Coverage metadata (read by `tools/osi/conformance_report.py`, which reads nothing else)
 
 | field | meaning |
@@ -221,29 +261,78 @@ Both runners (`lomn_osi_conform`, `osi_vm.py --conform`) implement these. They c
     - (d) A test native's by-ref `writes` overwrite the slot without disposing the old value. The following Pop(true) disposes the new value (0x601c5f).
     - (e) ConvertStringIDToDynamicString on a string of 255 or more characters throws before any `A s` line, with message `kOutOfRange` (0x60b95c–0x60b970), in the same style as kLenTooLong.
     - (f) Engine-protocol programs with no opcode row may use `"rows": []` and must name the opcodes.md section ("Engine calls") in `note`.
-15. **`snapshot().pc` after an error** (amended 2026-10-09, M2a-2 T2a-pc; it was "unspecified and never compared").
-    `snapshot().pc` is the failing instruction's address plus the PC its handler has written at the throw. The values
-    are in opcodes.md "Error PC (the PC at the throw), per handler", which was derived from the asm. The rule applies to
-    every error, not only to swallowed ones (D16):
+15. **`snapshot().pc` after an error** (amended 2026-10-09, M2a-2 T2a-pc; it was "unspecified and never compared";
+    wording fixed in M2a-2 T2b after the T2a-pc review, minors M2, M6 and M7).
+    `snapshot().pc` is the failing instruction's address plus the PC its handler has written at the throw, **except in
+    case (b)**, where it is the address of the inner instruction that raised first plus that instruction's own delta.
+    The values are in opcodes.md "Error PC (the PC at the throw), per handler", which was derived from the asm. The rule
+    applies to every error, not only to swallowed ones (D16):
     - (a) **An error the original raises:** the "PC at throw" of its row. In short, every handler is at
-      +(1 + operand bytes), except: +0 for BCLUnused, 0x41 and 0x53; +2 for 0x50/0x51; 0x82 +5 for "Call to
-      unregistered Game Function" and +6 for everything after the lookup; 0x83 +3 for "Invalid member type…" and +4
-      for its "Script is calling" re-raise; a memoised 0x82 site (the original's 0x84) +6.
+      +(1 + operand bytes), the PC past its whole instruction. 0x50/0x51 (+2) follow that rule too; only their normal
+      exit differs (a jump target). The exceptions:
+      - +0 for BCLUnused, 0x41 and 0x53;
+      - 0x82: +5 for "Call to unregistered Game Function", and +6 for everything after the lookup;
+      - 0x83: +3 for "Invalid member type…" and for the kOutOfRange name copies (0x60226a, 0x602299), and +4 for its
+        "Script is calling" re-raise;
+      - a memoised 0x82 site (the original's 0x84): +6.
     - (b) **A "Script is calling…" re-raise after a native whose nested engine call raised** keeps the PC that the
-      nested error left in the inner function, because `CallWithReturn`'s restore (0x60b5a2) never runs. Both engines
-      already rethrow the nested error without touching `pc`. For each instruction this is case (a).
+      nested error left in the inner function, because `CallWithReturn`'s restore (0x60b5a2) never runs (CITED by the
+      T2a-pc review: 0x60b450 has no catch record). Both engines already rethrow the nested error without touching
+      `pc`. So `snapshot().pc` is the inner instruction's address plus its case-(a) delta, while the `E` line keeps the
+      outer 0x82 / 0x83 / 0x84's own address.
     - (c) **The port's own errors** take the PC the original handler holds at the operation they stand for:
-      - stack underflow and overflow: the "PC at its ScOSIStack calls" column;
+      - stack underflow and overflow at a ScOSIStack call: the "PC at its ScOSIStack calls" column. For 0x83 the name
+        pop (0x6021c9) is +3 and every later stack operation is +4;
+      - a stack error at an access that is not a ScOSIStack call takes the handler's normal-exit PC. These are 0x35
+        (the port's `top()` underflow; its column value happens to agree), and 0x7a and 0x7b, which read
+        `[VM+0x1f50]−8` directly after their `inc` (0x605be8 / 0x605c08), so their column is "—". All three give +1;
       - any other error raised inside a handler body (an "Undefined: …" index, type or operand check, INT_MIN / −1,
         more native arguments than stack slots): +0 for 0x52/0x53, +2 for 0x50/0x51, +5 / +6 for 0x82 before / after
         the lookup, +3 / +4 for 0x83 before / after the n byte, and the normal-exit PC for every other handler;
       - the engine-call nesting cap: the PC of the native call that re-entered;
       - a literal 0x84 in the file: +0;
       - SetPCAndArgs argc > 10: the entry point's offset (rule 5).
-    - (d) **Unspecified, never compared:** an operand that runs past the end of the script image and a PC outside the
-      image. The original reads past its buffer there, and the two engines check at different moments.
+    - (d) **Unspecified, never compared:** an operand that runs past the end of the script image, a PC outside the
+      image, and the C++ VM's "Undefined: host exception…" (a `std::exception` from host code). The original reads
+      past its buffer in the first two, the two engines check at different moments, and the third has no original
+      counterpart.
 
-    The `E` line and `expect_error.pc` stay the instruction's own address. A runner compares `snapshot().pc` when an
-    `expect_error` carries `"pc_after"` (written like `pc`; field name proposed for M2a-2 Tasks 3/4), and every
-    `swallow` program (D16) carries it.
+    The `E` line and `expect_error.pc` stay the instruction's own address. `pc_after` is absolute, like `pc` (§1). A
+    runner compares `snapshot().pc` when an expectation carries `"pc_after"`, and every `swallow` program (D16)
+    carries it.
 16. **0x74 float^float uses the host `pow`** in both implementations. That is not bit-reproducible for inexact powers, so corpus programs use exact powers only (rule 4). Base.osi never executes 0x74.
+17. **Swallowing test natives (D16, M2a-2 T2b).** A native with `"swallow": true` follows D16 (spec §4; `natives.md`
+    §5.4). It mirrors the three `GcAreaLoader::LoadArea` blocks, the only swallowing call sites in the exe.
+    - (a) The nested call's error leaves the VM as at the throw: the inner marker, the arguments and the partial frame
+      stay; `context_depth` stays raised; `pc` is the error PC (rule 15, including case (b) for a re-raise); `fpu_pc`
+      becomes 64. Nothing is reset.
+    - (b) The runner writes the error's `E` line at that point (pc and op of the failing instruction, depth at the
+      throw), followed by `P <pc> 64` if `fpu_pc` was 24. It does not set the outer call's error, does not reset and
+      ends no engine call. It records the error for `swallowed`.
+    - (c) The native then applies its `writes` to its **original** argument slots, the ones the handler addressed
+      before the native ran. It returns its `returns`.
+    - (d) The calling handler pops n slots with dispose **from the current top** (the inner leftovers), pushes the
+      result and leaves `pc` alone. Dispatch continues in the inner function at the error PC. The `N` line prints the
+      arguments as they were converted before the native ran (what the native received); the `F` lines of the pops are
+      the leftovers'.
+    - (e) The first `0x52` that meets an `0xff` marker stops the running `Run`. The engine call that owns that loop
+      pops the result, pops with dispose to the first `0xff` marker (the inner one), decrements `context_depth`,
+      rescans `frame_ptr` if `context_depth` is not 0, sets `pc` from that marker and returns the value.
+    - (f) After a later error, `reset_after_error()` pops down to and including **the outermost call's own marker**
+      (the slot at the depth that call recorded at its entry), through any inner markers left by a swallow, and
+      restores `context_depth`, `frame_ptr` and `pc` to their values at that entry.
+    - If the nested call does not raise, `swallow` changes nothing.
+18. **Engine references and identity (D13, M2a-2 T2b).** A `{"game": …}` return goes through the host's
+    `CreateVariant`: +1 reference, and the handle is minted (`A g`) only when the object first passes through it. The
+    count is the host's `engine_refs` plus the variants' references. `Dispose` takes 1; at 0 the runner writes `F g` and
+    deletes the host object. `heap.live.g` counts objects whose total is above 0, so an object the host still holds is
+    live after the call. The host's references are never released by the program (the corpus has no host release).
+19. **`then`, a second engine call.** After the first call's expectation has been compared:
+    - if the first call raised, the runner calls `reset_after_error()` first, as §4 does for `main2`;
+    - if it did not, nothing is reset: the second call runs above whatever the first one left (D16 rule 5).
+
+    Then it calls `then.entry` with `then.args` and compares the fields given. `then` replaces the implicit `main2`
+    check of §4 for the programs that carry it.
+20. **Pending programs.** A program with a `pending` list (§1) needs runner features that Tasks 3/4 add. Its
+    expectations are hand-derived like every other's. They are not adjusted to whatever a runner does, and they are not
+    a gate until the list is empty.

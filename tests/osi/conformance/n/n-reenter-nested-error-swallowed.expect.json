@@ -1,0 +1,95 @@
+{
+  "id": "n-reenter-nested-error-swallowed",
+  "rows": [
+    "0x82"
+  ],
+  "falsifier": "D16 with the swallowed error being a 0x82 re-raise one level down: the swallowed E line is \"Script is calling t.inner\" (the inner DebugOn text is overwritten), its PC is the deepest function's, and dispatch continues there, so the deep function's 0x52 ends main's Run with T's result",
+  "alternative": "the nested call resets on error: main continues after T -> result int 1, depth 0, context_depth 0; or PC restored from the markers: continues at @c+6, result int 1; or the swallowed line carries the inner message \"Debugger not enabled! but encountered DebugOn\"",
+  "pending": [
+    "swallow",
+    "swallowed",
+    "expect.top",
+    "pc_after",
+    "then"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [
+    {
+      "cls": "t",
+      "name": "sw",
+      "min": 0,
+      "max": 0,
+      "types": [],
+      "returns": {
+        "type": "0x10",
+        "value": 5
+      },
+      "swallow": true,
+      "calls": {
+        "entry": "mid",
+        "args": []
+      }
+    },
+    {
+      "cls": "t",
+      "name": "inner",
+      "min": 0,
+      "max": 0,
+      "types": [],
+      "returns": {
+        "type": "0x10",
+        "value": 6
+      },
+      "calls": {
+        "entry": "deep",
+        "args": []
+      }
+    }
+  ],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 5
+    },
+    "depth": 4,
+    "top": {
+      "type": "0x10",
+      "value": 22
+    },
+    "context_depth": 2,
+    "fpu_pc": 64,
+    "pc_after": "@after_ci",
+    "swallowed": [
+      {
+        "message": "Script is calling t.inner",
+        "pc": "@ci",
+        "op": "0x82",
+        "depth": 6,
+        "top": {
+          "type": "0x10",
+          "value": 33
+        }
+      }
+    ]
+  },
+  "then": {
+    "entry": "main2",
+    "args": [],
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 9
+    },
+    "depth": 4,
+    "top": {
+      "type": "0x10",
+      "value": 22
+    },
+    "context_depth": 2,
+    "pc_after": "@after_ci"
+  },
+  "note": "call(main): M0 {0xff,0} slot 0, context_depth 1. Push 11 (slot 1). 0x82 t.sw at @c (0x50): PC 0x56; t.sw calls vm.call(mid): M1 {0xff,0x56} slot 2, context_depth 2. Push 22 (slot 3). 0x82 t.inner at @ci (0x5c): PC 0x62; t.inner calls vm.call(deep): M2 {0xff,0x62} slot 4, context_depth 3. Push 33 (slot 5, depth 6). DebugOn at @bad (0x68): PC 0x69, Error. deep's CallWithReturn has no catch (no PC restore); t.inner does not swallow; the 0x82 at @ci re-raises \"Script is calling t.inner\" (0x601dd3) with PC still 0x69 (rule 15(b)). mid's CallWithReturn has no catch either. t.sw swallows (D16 rule 1): state as at the throw, depth 6, top int 33, context_depth 3, PC 0x69, fpu_pc 64; the runner writes the one E line there (rule 2: pc @ci, op 0x82, depth 6). t.sw returns 5: the 0x82 at @c pops n = 0, pushes 5 (slot 6, depth 7), leaves PC 0x69 (rule 3). Run continues in deep: 0x52 at 0x69 pops r = 5, disposes 33, meets M2 (0xff): pushes M2 and 5, Run stops (rule 4). main's call pops the result 5, pops to the first 0xff (M2), context_depth 3 -> 2, rescans frame_ptr (top: 22, then M1 -> 3), PC = 0x62 = @after_ci. Result int 5; depth 4 [M0, 11, M1, 22], top int 22, context_depth 2. then main2: pushes {0xff, 0x62}, returns 9, pops it: depth 4, context_depth 2, PC 0x62."
+}

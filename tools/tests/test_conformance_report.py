@@ -26,12 +26,19 @@ _NON_VALUE_FORMS = ("text", "hex", "game")   # docs/osi/conformance.md §1: thes
 
 
 def _value_specs(doc):
-    """(where, spec) for every value expectation: expect.result, expect.globals.<name>, expect_error.top."""
-    ok, err = doc.get("expect") or {}, doc.get("expect_error") or {}
+    """(where, spec) for every value expectation: expect.result, expect.globals.<name>, expect_error.top, and the
+    native-framework fields of M2a-2 T2b: expect.top, then.result, then.top, <expect|expect_error>.swallowed[i].top."""
+    ok, err, then = doc.get("expect") or {}, doc.get("expect_error") or {}, doc.get("then") or {}
     out = [("expect.result", ok["result"])] if "result" in ok else []
     out += [("expect.globals." + name, spec) for name, spec in (ok.get("globals") or {}).items()]
+    if "top" in ok:
+        out.append(("expect.top", ok["top"]))
     if "top" in err:
         out.append(("expect_error.top", err["top"]))
+    out += [("then." + k, then[k]) for k in ("result", "top") if k in then]
+    for where, block in (("expect", ok), ("expect_error", err)):
+        out += [("%s.swallowed[%d].top" % (where, i), s["top"]) for i, s in enumerate(block.get("swallowed") or [])
+                if "top" in s]
     return out
 
 
@@ -75,6 +82,15 @@ def test_corpus_value_expectations_have_value_or_bits_and_no_found():
     ({"expect": {"result": {"type": "0x10", "value": 0}}}, []),
     ({"expect": {"result": {"type": "0x12", "bits": "3f800000"}}}, []),
     ({"expect": {"result": {"text": "abc"}}, "expect_error": {"top": {"game": "GcTimer"}}}, []),
+    # M2a-2 T2b (conformance.md §1 "Native-framework fields"): the new value expectations follow the same rule
+    ({"expect": {"top": {"type": "0x10"}}}, ["expect.top has neither value nor bits"]),
+    ({"expect": {"top": None}}, []),
+    ({"then": {"result": {"type": "0x10"}}}, ["then.result has neither value nor bits"]),
+    ({"then": {"top": {"type": "0xff"}}}, ["then.top has neither value nor bits"]),
+    ({"expect": {"swallowed": [{"top": {"type": "0x10", "value": 4}}, {"top": {"type": "0x10"}}]}},
+     ["expect.swallowed[1].top has neither value nor bits"]),
+    ({"expect_error": {"swallowed": [{"top": {"type": "0xff"}}]}},
+     ["expect_error.swallowed[0].top has neither value nor bits"]),
 ])
 def test_guard_flags_a_value_expectation_without_value_or_bits(doc, want):
     assert _problems(doc) == want
@@ -110,6 +126,16 @@ def test_counts_from_metadata_only(cr, tmp_path):
     assert r["pairs"] == (2, 111)            # 0x60 rhs (formats match any text) and 0x82 "Script is calling %s.%s"
     assert r["falsifiers"] == (2, 31) and r["argc"] == (1, 20)
     assert "0x30" not in r["missing_handlers"] and "0x40" in r["missing_handlers"]
+
+
+def test_list_prints_each_program_with_its_status(cr, tmp_path, capsys):
+    """--list (M2a-2 T2b): one line per program, sorted by id, `pending: <features>` or `active`."""
+    (tmp_path / "x").mkdir()
+    for k, v in {"n-b": {"id": "n-b", "pending": ["swallow", "pc_after"]}, "n-a": {"id": "n-a"}}.items():
+        (tmp_path / "x" / (k + ".expect.json")).write_text(json.dumps(v))
+    assert cr.main([str(tmp_path), "--list"]) == 0
+    out = capsys.readouterr().out.splitlines()
+    assert out[1:] == ["program n-a active", "program n-b pending: swallow, pc_after"]
 
 
 def test_readme_repeats_the_authoring_rules():

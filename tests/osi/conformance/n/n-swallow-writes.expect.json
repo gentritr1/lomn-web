@@ -1,0 +1,94 @@
+{
+  "id": "n-swallow-writes",
+  "rows": [
+    "0x82"
+  ],
+  "falsifier": "D16 rule 3: a by-ref write after a swallow lands in the slot the handler addressed BEFORE the nested call (slot = top - (n - i) at 0x601804-0x601819), and the pop then disposes the inner leftover",
+  "alternative": "the write addressed from the top after the nested call lands on onevent's int 4, the pop removes the 9, and the top after the call is int 3",
+  "pending": [
+    "swallow",
+    "swallowed",
+    "expect.top",
+    "pc_after",
+    "then"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [
+    {
+      "cls": "t",
+      "name": "sw",
+      "min": 1,
+      "max": 1,
+      "types": [
+        "byref"
+      ],
+      "returns": {
+        "type": "0x10",
+        "value": 5
+      },
+      "swallow": true,
+      "calls": {
+        "entry": "onevent",
+        "args": [
+          {
+            "type": "0x10",
+            "value": 4
+          }
+        ]
+      },
+      "writes": [
+        {
+          "arg": 0,
+          "type": "0x10",
+          "value": 9
+        }
+      ]
+    }
+  ],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 7
+    },
+    "depth": 2,
+    "top": {
+      "type": "0x10",
+      "value": 9
+    },
+    "context_depth": 1,
+    "fpu_pc": 64,
+    "pc_after": "@after_c",
+    "swallowed": [
+      {
+        "message": "Debugger not enabled! but encountered DebugOn",
+        "pc": "@ev",
+        "op": "0x02",
+        "depth": 4,
+        "top": {
+          "type": "0x10",
+          "value": 4
+        }
+      }
+    ]
+  },
+  "then": {
+    "entry": "main2",
+    "args": [],
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 9
+    },
+    "depth": 2,
+    "top": {
+      "type": "0x10",
+      "value": 9
+    },
+    "context_depth": 1,
+    "pc_after": "@after_c"
+  },
+  "note": "call(main): M0 slot 0. Push 3 (slot 1, depth 2). 0x82 t.sw 1 at @c (0x42): PC 0x48; parameter 0 is 0x200, so the native gets the address of slot 1 (box {0x200, &slot1}, 0x60185d). vm.call(onevent, 4): M1 {0xff,0x48} slot 2, 4 slot 3 (depth 4, context_depth 2). DebugOn at @ev (0x4c): PC 0x4d, Error, swallowed (E pc @ev op 0x02 depth 4 top int 4). Then T's write: slot 1 <- int 9 (the old int 3 is not disposed, rule 14(d)). T returns 5: the handler pops 1 from the current top = slot 3 (int 4), pushes 5 (depth 4: [M0, 9, M1, 5]). Run continues at 0x4d: push 7; 0x52 pops r = 7, disposes 5, meets M1: pushes M1, 7; stops. main's call pops 7, pops M1 (depth 2), context_depth 1, PC 0x48. Result int 7, top int 9 in T's argument slot."
+}

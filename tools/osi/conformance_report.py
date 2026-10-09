@@ -12,8 +12,10 @@
   argc violations  docs/osi/types.md "Argument-count violations" rows expanded per site ("key/argc#i", i = 1..sites);
                    a program covers one by naming it in "argc_violation";
   programs         the number of .expect.json files.
+--list (M2a-2 T2b) adds one line per program, sorted by id: `program <id> active`, or `program <id> pending: <features>`
+from the program's `pending` key (docs/osi/conformance.md §1; such a program is not a gate).
 
-Usage: conformance_report.py DIR [--opcodes docs/osi/opcodes.md] [--types docs/osi/types.md] [--group a|b]
+Usage: conformance_report.py DIR [--opcodes docs/osi/opcodes.md] [--types docs/osi/types.md] [--group a|b] [--list]
 Exit status 0 always (the report is a measurement; acceptance is read from its numbers)."""
 from __future__ import annotations
 
@@ -140,6 +142,7 @@ def main(argv=None) -> int:
     ap.add_argument("--types", default=str(REPO / "docs" / "osi" / "types.md"))
     ap.add_argument("--group", choices=sorted(GROUPS))
     ap.add_argument("--missing", action="store_true", help="also list what is not covered")
+    ap.add_argument("--list", action="store_true", help="also list every program with its status (active / pending)")
     a = ap.parse_args(argv)
     r = report(Path(a.dir), Path(a.opcodes), Path(a.types), a.group)
     print("handlers ≥2: %d/%d, row×message pairs: %d/%d, falsifiers: %d/%d, argc violations: %d/%d, programs: %d"
@@ -148,6 +151,11 @@ def main(argv=None) -> int:
         for k in ("missing_handlers", "missing_pairs", "missing_falsifiers", "missing_argc"):
             for x in r[k]:
                 print("%s: %s" % (k[8:], x))
+    if a.list:
+        for p in sorted((json.loads(f.read_text()) for f in Path(a.dir).rglob("*.expect.json")),
+                        key=lambda p: p.get("id", "")):
+            pend = p.get("pending")
+            print("program %s %s" % (p.get("id"), ("pending: " + ", ".join(pend)) if pend else "active"))
     return 0
 
 

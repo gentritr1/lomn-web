@@ -1,0 +1,63 @@
+{
+  "id": "n-reenter-depth3",
+  "rows": [
+    "0x82"
+  ],
+  "falsifier": "calls.depth d makes the nested call only while context_depth (engine calls in flight, the outermost included) is below d, and every frame's locals survive 3 levels",
+  "alternative": "depth counted as nested calls only (context_depth - 1 < 3): inner runs 3 times, g = 3; no depth support: unbounded re-entry ends at the 64-call nesting cap with an error",
+  "pending": [
+    "calls.depth"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [
+    {
+      "cls": "t",
+      "name": "re",
+      "min": 0,
+      "max": 0,
+      "types": [],
+      "returns": {
+        "type": "0x10",
+        "value": 7
+      },
+      "calls": {
+        "entry": "inner",
+        "args": [],
+        "depth": 3
+      }
+    }
+  ],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 11
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24,
+    "globals": {
+      "g": {
+        "type": "0x10",
+        "value": 2
+      }
+    },
+    "heap": {
+      "live": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      },
+      "allocs": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      }
+    }
+  },
+  "note": "main (context_depth 1): g = int 0 (0x45, 0x22 global); pushes 11, 22; t.re at 0x49: 1 < 3 -> vm.call(inner) (context_depth 2): g = 1 (0x24 in place); push 1000; t.re at 0x58: 2 < 3 -> vm.call(inner) (context_depth 3): g = 2; push 1000; t.re: 3 is not < 3 -> no call, returns 7. Innermost inner: [.. M, 1000, 7], Pull 2 copies 1000, Return -> 1000, which the host disposes (int). The middle t.re returns 7, its inner does the same. main: [M0, 11, 22, 7], Pull 3 copies 11 (top-3), Return -> int 11; 0x52 disposes 7, 22, 11 and leaves {0xff, 0}, popped by the call: depth 0, context_depth 0. globals g = int 2 (exactly two nested calls)."
+}

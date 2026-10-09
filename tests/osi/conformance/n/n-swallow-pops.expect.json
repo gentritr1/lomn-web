@@ -1,0 +1,92 @@
+{
+  "id": "n-swallow-pops",
+  "rows": [
+    "0x82"
+  ],
+  "falsifier": "D16 rule 3: after a swallow the handler's n pops come from the CURRENT top (the inner leftovers), never from T's argument slots",
+  "alternative": "pops remove T's arguments 11 and 22: the result is still 5 but depth 1, top M0 {0xff, 0}",
+  "pending": [
+    "swallow",
+    "swallowed",
+    "expect.top",
+    "pc_after",
+    "then"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [
+    {
+      "cls": "t",
+      "name": "sw",
+      "min": 2,
+      "max": 2,
+      "types": [
+        "int",
+        "int"
+      ],
+      "returns": {
+        "type": "0x10",
+        "value": 5
+      },
+      "swallow": true,
+      "calls": {
+        "entry": "onevent",
+        "args": [
+          {
+            "type": "0x10",
+            "value": 33
+          },
+          {
+            "type": "0x10",
+            "value": 44
+          }
+        ]
+      }
+    }
+  ],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 5
+    },
+    "depth": 3,
+    "top": {
+      "type": "0x10",
+      "value": 22
+    },
+    "context_depth": 1,
+    "fpu_pc": 64,
+    "pc_after": "@after_c",
+    "swallowed": [
+      {
+        "message": "Debugger not enabled! but encountered DebugOn",
+        "pc": "@ev",
+        "op": "0x02",
+        "depth": 6,
+        "top": {
+          "type": "0x10",
+          "value": 44
+        }
+      }
+    ]
+  },
+  "then": {
+    "entry": "main2",
+    "args": [],
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 9
+    },
+    "depth": 3,
+    "top": {
+      "type": "0x10",
+      "value": 22
+    },
+    "context_depth": 1,
+    "pc_after": "@after_c"
+  },
+  "note": "call(main): M0 slot 0. Push 11 (slot 1), 22 (slot 2). 0x82 t.sw 2 at @c (0x44): PC 0x4a; both arguments are already int (no conversion). vm.call(onevent, 33, 44): M1 {0xff,0x4a} slot 3, 33 slot 4, 44 slot 5 (depth 6, context_depth 2). DebugOn at @ev (0x4e): PC 0x4f, Error: swallowed (E pc @ev op 0x02 depth 6 top int 44). T returns 5. The handler pops 2 with dispose from the current top: 44, 33 (depth 4); pushes 5 (depth 5: [M0, 11, 22, M1, 5]). Run continues at 0x4f: 0x52 pops r = 5, meets M1: pushes M1, 5; stops. main's call pops 5, pops M1 (depth 3), context_depth 1, frame_ptr rescanned to 1, PC 0x4a. Result int 5 (onevent returned T's result); depth 3, top int 22: T's arguments are the bottom of the leftover region. main2: depth 3 again."
+}

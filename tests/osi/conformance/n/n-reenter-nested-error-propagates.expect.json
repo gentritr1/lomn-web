@@ -1,0 +1,53 @@
+{
+  "id": "n-reenter-nested-error-propagates",
+  "rows": [
+    "0x82"
+  ],
+  "falsifier": "a nested engine call's error propagates through the calling 0x82 (no swallow): one E line, re-reported as \"Script is calling t.re\", with the inner function's PC and the inner leftovers in place (rule 15(b))",
+  "alternative": "CallWithReturn restores PC on the error path: pc_after = @c+6 (0x46); or the nested call resets its own frame: depth 2, top int 11, context_depth 1",
+  "entry": "main",
+  "args": [],
+  "natives": [
+    {
+      "cls": "t",
+      "name": "re",
+      "min": 0,
+      "max": 0,
+      "types": [],
+      "returns": {
+        "type": "0x10",
+        "value": 7
+      },
+      "calls": {
+        "entry": "inner",
+        "args": []
+      }
+    }
+  ],
+  "registry": "none",
+  "expect_error": {
+    "message": "Script is calling t.re",
+    "pc": "@c",
+    "op": "0x82",
+    "depth": 4,
+    "top": {
+      "type": "0x10",
+      "value": 33
+    },
+    "context_depth": 2,
+    "fpu_pc": 64,
+    "pc_after": "@after_bad"
+  },
+  "then": {
+    "entry": "main2",
+    "args": [],
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 9
+    },
+    "depth": 0,
+    "context_depth": 0
+  },
+  "note": "Fresh VM: call(main) pushes M0 {0xff, 0} (depth 1, context_depth 1). Push 11 (depth 2). 0x82 t.re at @c (0x40) advances PC to 0x46 (six incs, 0x6015c6-0x601780), then the native calls vm.call(inner): marker M1 {0xff, 0x46} (depth 3, context_depth 2), PC = inner. Push 33 (depth 4). DebugOn at @bad (0x49): PC + 1 = 0x4a (inc 0x6038a6), Error (0x6038b4). The nested CallWithReturn has no catch, so no epilogue runs (its PC restore 0x60b5a2 is skipped). The 0x82 catch (pad 0x601c94) re-raises Error(\"Script is calling %s.%s\", \"t\", \"re\") at 0x601dd3, which changes no PC (opcodes.md error-PC table: +6, or the inner PC after a nested error). The outermost call writes the one E line: pc @c, op 0x82, depth 4, top int 33, context_depth 2, fpu_pc 64 (fninit); snapshot().pc = 0x4a = @after_bad (rule 15(b)). reset_after_error() pops down to and including M0 (D16 rule 6): depth 0, context_depth 0; main2 then returns int 9 at depth 0."
+}

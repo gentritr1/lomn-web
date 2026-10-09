@@ -1,0 +1,86 @@
+{
+  "id": "n-swallow-continue",
+  "rows": [
+    "0x82"
+  ],
+  "falsifier": "D16: after a swallowed nested error dispatch continues in the inner function at the error PC (0x02 is +1), and its 0x52 ends the OUTER Run with the inner value",
+  "alternative": "resume in the outer function after T (the nested call cleaned up): result int 1, g = int 2, depth 0, context_depth 0; or resume at the failing 0x02 (+0): it errors again, ok = false",
+  "pending": [
+    "swallow",
+    "swallowed",
+    "expect.top",
+    "pc_after",
+    "then"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [
+    {
+      "cls": "t",
+      "name": "sw",
+      "min": 0,
+      "max": 0,
+      "types": [],
+      "returns": {
+        "type": "0x10",
+        "value": 5
+      },
+      "swallow": true,
+      "calls": {
+        "entry": "onevent",
+        "args": []
+      }
+    }
+  ],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 7
+    },
+    "depth": 1,
+    "top": {
+      "type": "0xff",
+      "value": 0
+    },
+    "context_depth": 1,
+    "fpu_pc": 64,
+    "pc_after": "@after_c",
+    "globals": {
+      "g": {
+        "type": "0x10",
+        "value": 1
+      }
+    },
+    "swallowed": [
+      {
+        "message": "Debugger not enabled! but encountered DebugOn",
+        "pc": "@ev",
+        "op": "0x02",
+        "depth": 2,
+        "top": {
+          "type": "0xff",
+          "value": 78
+        }
+      }
+    ]
+  },
+  "then": {
+    "entry": "main2",
+    "args": [],
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 9
+    },
+    "depth": 1,
+    "top": {
+      "type": "0xff",
+      "value": 0
+    },
+    "context_depth": 1,
+    "pc_after": "@after_c"
+  },
+  "note": "call(main): M0 {0xff,0} (depth 1, context_depth 1). W1: g = 1. 0x82 t.sw at @c (0x48): PC 0x4e; t.sw calls vm.call(onevent): M1 {0xff,0x4e} (depth 2, context_depth 2), PC = @ev. DebugOn at @ev (0x57): PC 0x58 (inc 0x6038a6), Error. Swallowed (D16 rule 1/2): one E line written inside T: pc @ev, op 0x02, depth 2, top M1; P follows (fpu_pc was 24) -> 64. T returns 5: n = 0 pops, push 5 (depth 3), PC stays 0x58 (rule 3). Run continues at 0x58: push 7 (depth 4); 0x52: r = 7, pops 5, meets M1: pushes M1 and 7, stops (rule 4). main's call: pops 7, pops to the first 0xff (M1, depth 1), context_depth 2 -> 1, rescans frame_ptr (M0 -> 1), PC = 0x4e = @after_c. W2 never runs: g = int 1. Result int 7, depth 1, top M0 {0xff, 0}, context_depth 1 (rule 5). then main2 above the leftovers: pushes {0xff, 0x4e}, returns 9, pops it: depth 1, context_depth 1, PC 0x4e."
+}

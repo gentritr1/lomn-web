@@ -1,0 +1,109 @@
+{
+  "id": "n-onevent-args",
+  "rows": [
+    "0x82",
+    "0x21"
+  ],
+  "falsifier": "a host-source stand-in delivers the cited OnEvent tuple (natives.md \u00a74, gcmodeldirector.addtoa: (int 0x32, int 250), then nothing x 8) into a 10-argument onevent: arguments are framePtr[0..9]",
+  "alternative": "arguments in reverse order (a0 on top): e0 = nothing, e1 = nothing, e9 = int 0x32",
+  "entry": "main",
+  "args": [],
+  "natives": [
+    {
+      "cls": "t",
+      "name": "addtoa",
+      "min": 0,
+      "max": 0,
+      "types": [],
+      "returns": {
+        "type": "0x10",
+        "value": 1
+      },
+      "calls": {
+        "entry": "onevent",
+        "args": [
+          {
+            "type": "0x10",
+            "value": 50
+          },
+          {
+            "type": "0x10",
+            "value": 250
+          },
+          {
+            "type": "0x0f",
+            "value": 0
+          },
+          {
+            "type": "0x0f",
+            "value": 0
+          },
+          {
+            "type": "0x0f",
+            "value": 0
+          },
+          {
+            "type": "0x0f",
+            "value": 0
+          },
+          {
+            "type": "0x0f",
+            "value": 0
+          },
+          {
+            "type": "0x0f",
+            "value": 0
+          },
+          {
+            "type": "0x0f",
+            "value": 0
+          },
+          {
+            "type": "0x0f",
+            "value": 0
+          }
+        ]
+      }
+    }
+  ],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 1
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24,
+    "globals": {
+      "e0": {
+        "type": "0x10",
+        "value": 50
+      },
+      "e1": {
+        "type": "0x10",
+        "value": 250
+      },
+      "e9": {
+        "type": "0x0f",
+        "value": 0
+      }
+    },
+    "heap": {
+      "live": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      },
+      "allocs": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      }
+    }
+  },
+  "note": "The tuple is CITED in natives.md \u00a74: 0x32 from CreateVariant 0x413ed0 (byte), 250 = [toa+0x380] = 0xfa (0x567e27) through CreateVariant 0x4183f0, the 8 others the literal {0x0f, 0}. onevent declares 10 (as Base.osi does), so SetPCAndArgs pushes all 10 in index order (0x60b644-0x60b838): framePtr[0] = 50, [1] = 250, [9] = nothing. GetVariableValue k duplicates framePtr[k] (0x21); SetVariableValue global:eN stores it (0x22). onevent returns nothing; 0x52 disposes the 10 arguments; the host disposes the nothing result. t.addtoa then returns int 1 (its own value is not part of the citation); main returns it: depth 0, context_depth 0, fpu_pc 24."
+}

@@ -1,0 +1,55 @@
+{
+  "id": "n-game-identity",
+  "rows": [
+    "0x82",
+    "0x60"
+  ],
+  "falsifier": "the same live engine object returned twice is ONE handle (D13 identity per object, natives.md \u00a72.3)",
+  "alternative": "a fresh handle per return: A g 1 and A g 2, 0x60 compares different pointers -> 0, allocs.g 2, live.g 2",
+  "pending": [
+    "engine_refs",
+    "returns.object"
+  ],
+  "entry": "main",
+  "args": [],
+  "natives": [
+    {
+      "cls": "t",
+      "name": "get",
+      "min": 0,
+      "max": 0,
+      "types": [],
+      "returns": {
+        "game": "GcTimer",
+        "engine_refs": 1,
+        "object": "timer1"
+      }
+    }
+  ],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 1
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24,
+    "heap": {
+      "live": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 1
+      },
+      "allocs": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 1
+      }
+    }
+  },
+  "note": "First t.get: host object timer1 is created with engine_refs 1; CreateVariant mints handle 1 (A g 1), total 1 + 1 = 2. Second t.get: the same live object, so the same handle, no A g, total 3. EqualTo (0x60, both game types 0x20..0xfe -> same type AND same pointer, 0x6052d0-0x605310) -> int 1; both operands disposed on that path -> total 1 (the engine's). Result int 1, heap.allocs.g 1, heap.live.g 1, depth 0, context_depth 0."
+}
