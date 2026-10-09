@@ -169,24 +169,18 @@ std::set<std::string> compared_keys() {
   for (const char* f : {"message", "pc", "op", "depth"}) s.insert(std::string("expect_error.") + f);
   add_value(s, "expect_error.top", true);
   add_state(s, "expect_error");
-  // M2a-2 T3: the native-framework fields of conformance.md §1 (Task 2b), every one compared or honoured
-  s.insert("natives[*].returns.engine_refs");
-  s.insert("natives[*].returns.object");
-  s.insert("natives[*].calls.depth");
-  s.insert("natives[*].swallow");
-  add_value(s, "expect.top", true);
-  for (const char* x : {"expect", "expect_error"}) {
-    const std::string b = x;
-    s.insert(b + ".pc_after");
-    s.insert(b + ".swallowed");
-    for (const char* f : {"message", "pc", "op", "depth"}) s.insert(b + ".swallowed[*]." + f);
-    add_value(s, b + ".swallowed[*].top", true);
-  }
-  s.insert("then");
-  for (const char* f : {"entry", "args", "ok", "depth", "context_depth", "pc_after"}) s.insert(std::string("then.") + f);
-  add_value(s, "then.args[*]", false);
-  add_value(s, "then.result", true);
-  add_value(s, "then.top", true);
+  // M2a-2 T3 (controller ruling): exactly the 38 key paths the group-n programs use (conformance.md §1 "Native-framework
+  // fields"), no value-form variants beyond them; the oracle's list is the same set (--list-keys must be byte-identical).
+  for (const char* k : {"natives[*].calls.depth", "natives[*].returns.engine_refs", "natives[*].returns.object",
+                        "natives[*].swallow", "expect.pc_after", "expect.top", "expect.top.type", "expect.top.value",
+                        "expect_error.pc_after", "then", "then.args", "then.context_depth", "then.depth", "then.entry",
+                        "then.ok", "then.pc_after", "then.result", "then.result.type", "then.result.value", "then.top",
+                        "then.top.type", "then.top.value"})
+    s.insert(k);
+  for (const char* x : {"expect", "expect_error"})
+    for (const char* f : {".swallowed", ".swallowed[*].depth", ".swallowed[*].message", ".swallowed[*].op", ".swallowed[*].pc",
+                          ".swallowed[*].top", ".swallowed[*].top.type", ".swallowed[*].top.value"})
+      s.insert(std::string(x) + f);
   return s;
 }
 

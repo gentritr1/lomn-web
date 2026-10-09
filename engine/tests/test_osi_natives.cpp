@@ -616,3 +616,62 @@ TEST_CASE("osi natives T3: subsystem<T>() is one lazily built instance per conte
   CHECK(r.ctx->flags().skip_video);
   CHECK(r.ctx->vfs() == nullptr);
 }
+
+// ============================== D15: the cap counts engine calls in flight, not context_depth ==============================
+
+namespace {
+int g_cap_left = 0;
+uint32_t g_cap_max_context = 0;
+std::string g_cap_inner_err;
+Variant nat_cap_sw(NativeCall&, void*) {
+  g_ctx->engine_call_swallowing("bad", {});
+  return make_int(5);
+}
+Variant nat_cap_deep(NativeCall& c, void*) {
+  if (c.vm.snapshot().context_depth > g_cap_max_context) g_cap_max_context = c.vm.snapshot().context_depth;
+  if (g_cap_left-- > 0) {
+    try {
+      g_ctx->engine_call("deep", {});
+    } catch (const VmError& e) {
+      if (g_cap_inner_err.empty()) g_cap_inner_err = e.message;
+      throw;
+    }
+  }
+  return make_int(1);
+}
+}  // namespace
+
+TEST_CASE("osi natives T3 D15 (controller ruling): after a swallow the cap of 64 counts calls in flight, not context_depth") {
+  // main -> t.sw swallows bad's DebugOn: context_depth stays 2 while 1 call is in flight; dispatch goes on in bad, whose
+  // t.deep re-enters `deep` g_cap_left times. Calls in flight = 1 + the nested deep calls; context_depth is one higher.
+  auto run = [](int left, Rig& r, Asm& a) {
+    a.fn("main", 0).call("t", "sw", 0).ret();
+    a.fn("bad", 0).op(0x02).call("t", "deep", 0).ret();
+    a.fn("deep", 0).call("t", "deep", 0).ret();
+    r.load(a);
+    r.reg.add(nentry("t", "sw", 0, 0, {}, nat_cap_sw, nullptr));
+    r.reg.add(nentry("t", "deep", 0, 0, {}, nat_cap_deep, nullptr));
+    g_ctx = r.ctx.get();
+    g_cap_left = left;
+    g_cap_max_context = 0;
+    g_cap_inner_err.clear();
+    return r.vm->call("main", {});
+  };
+  {
+    Rig r;
+    Asm a;
+    CallResult c = run(63, r, a);  // in flight: main + 63 deep = 64, the cap; context_depth reaches 65
+    CHECK_MESSAGE(c.ok, (r.vm->last_error() ? r.vm->last_error()->message : std::string()));
+    CHECK(g_cap_inner_err.empty());
+    CHECK(r.vm->swallowed().size() == 1);
+    CHECK(r.vm->max_nesting() == 64);
+    CHECK(g_cap_max_context == 65);  // a context_depth cap would have refused this run
+  }
+  Rig r;
+  Asm a;
+  CallResult c = run(64, r, a);  // the 65th call in flight is refused
+  CHECK_FALSE(c.ok);
+  CHECK(g_cap_inner_err == "Undefined: engine-call nesting limit (64)");
+  CHECK(r.vm->last_error()->message == "Script is calling t.deep");
+  CHECK(r.vm->max_nesting() == 64);
+}
