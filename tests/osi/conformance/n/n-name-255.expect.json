@@ -5,6 +5,7 @@
   ],
   "falsifier": "the bound is strictly greater than 255 (seta, 0x4f5c27): a 255-byte name passes the copy and fails only at the lookup",
   "alternative": "a `>=` bound (as ConvertStringIDToDynamicString's setae 0x60b95f): kOutOfRange at +3",
+  "pending": "T3/T4",
   "entry": "main",
   "args": [],
   "natives": [],

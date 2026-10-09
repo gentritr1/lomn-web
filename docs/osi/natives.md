@@ -32,8 +32,8 @@ Decision text differs from a ruling in §2–§9, the ruling here wins. The diff
 7. **Taint sinks:** §7.3.
 8. **The engine → VM sources of the headless frame** are those of the A6 frame: the KEYSPEC `Input` calls, then the
    `Process` passes with the re-run and skip rules. §6.2 found no started timer and no other host-originated call on the
-   600-frame front-end path except the Toa process path, which is a documented gap (§6.3, D8). So `C -1` and `H` (§3)
-   stay reserved.
+   600-frame front-end path except the Toa process path, which is a documented gap (§6.3, D8). So `C -1` (§3) stays
+   reserved, and no host-side `H` record is written in M2a-2 (`H` inside natives is written, fix 1).
 9. **Saver, INI, `doesfileexist`, mods** (corrected): the values are those of §8.2 and §9, not the plan's. The saver
    bytes are `[0x7474a0]` (mask, a dword), `[0x7474a4]` (glyph), `[0x7474a8]` (health), `[0x7474ac]` (energy).
    `doesfileexist` checks `Art.blk` (0x83b0b8) first, then the two block-file slots, and with both slots 0 at Setup it
@@ -70,9 +70,11 @@ What a native body in either engine sees and may do. The original's ABI is the 0
 - **Reference counts.** `add_ref` / `release` change the engine's references on an object. A release that reaches 0
   writes `F g` and deletes the host object. Each engine reference a native takes or drops is cited from the asm (for
   example `GcBAGroup::SetCharacter` +1 at 0x54b344, §2.4).
-- **Nested engine calls.** `engine_call(name, args)` is `Call(name, a0..a9)`: it writes the `C <seq>` record of §3,
+  Each change on an object that has a handle writes an `H` record (§3.1) at that event.
+- **Nested engine calls.** `engine_call(name, args)` is `Call(name, a0..a9)`: it writes the `C <seq>` record of §3 (with the query `name`),
   runs the call, and disposes the call's result. An error inside it propagates out of the native, unless the native
   is one that swallows (D16). A native swallows only where the original catches: the three `LoadArea` blocks (§5.2).
+  A swallow writes the `X N` record (§3.1) at the swallow point.
 - **Order inside one native:** nested `C` calls, then `W` writes, then the return.
 - **Sequence numbers** are assigned at native entry (Vm `native_seq()`), so a nested native has a higher number than
   the native that called it, while its log line comes first (§3).
@@ -97,10 +99,13 @@ Every implemented native carries one citation comment, in both engines, in this 
   result, when that is not the method itself.
 - `asm pin` is the instruction address whose immediate or data constant the native's asm-pin test checks (plan Review
   focus 1). The value is read from `objdump` at that address, never from the decomp alone.
-- Example: `// body 0x00617700, method 0x617810 <ScSLOSIFoundation::StringToIdentifier> → 0x5fb060 <ScOSISystem::ConvertStringToID>; asm pin: 0x5fb093/0x5fb09e/0x5fb0a9/0x5fb0b2 shift immediates (first character in the high byte)`
+- Example: `// body 0x617700, method 0x617810 <ScSLOSIFoundation::StringToIdentifier> → 0x5fb060 <ScOSISystem::ConvertStringToID>; asm pin: 0x5fb093/0x5fb09e/0x5fb0a9/0x5fb0b2 shift immediates (first character in the high byte)`
   (calls at 0x61771d and 0x617868).
   The pin's test gives `stringtoidentifier("frnt")` = 0x66726e74.
 - A mod native cites the DLL: `// body BetterSaver.dll 0x10001f70, …`.
+- **Hex widths (review m-5):** every address is written in its shortest lowercase hex form (`0x617700`, `0x5fb060`),
+  the body included, although the registry prints bodies with 8 digits (`0x00617700`). Tools compare addresses as
+  numbers (the overrides check of §7.2 does), so the width never matters to a check.
 
 ## §2 Game objects (D13)
 
@@ -177,7 +182,7 @@ Example on the A9 path:
 
 ### 2.4 Initial engine reference counts
 
-`G` (D14) is the number of references the engine holds when the native returns, not counting the new variant.
+`G` (D14, §3.1) is the number of references the engine holds on the object at the record's event (a native's return, or the start of a `C` call), excluding every variant reference. Later engine changes are `H` records (§3.1).
 
 **Classes constructed by the native** (G = 0).
 - The base `SxReferenceCountable` ctors 0x4f2b80 and 0x4f2b90 store 0 at +4 (0x4f2b88, 0x4f2b98).
@@ -207,56 +212,89 @@ Example on the A9 path:
 **Engine references added later on the path.**
 - **`gcmodeldirector.show('cnt1')`** (Setup) → `GcModelDirector::Show` 0x47f830 → `GcBAGroup::SetCharacter` (0x47fb42) adds **+1** to the Toa (0x54b344) and stores it in `[0x83903c]` (0x54b364). CITED.
 - **The first `ScProcessManager::Process`** applies the Toa's queued `AddProcess`: +1 (INFERRED).
-- **Natives that store a game argument** (for example `gchuddirector.addbigsprite` 0x47afe0, `gchuddirector.addtextobject` 0x47b010) take engine references. Each one's tier-1 citation (Tasks 3 and 4) states its +1.
+- **Natives that store a game argument** (for example `gchuddirector.addbigsprite` 0x47afe0, `gchuddirector.addtextobject` 0x47b010) take engine references. Each one's tier-1 citation (Tasks 3 and 4) states its +1, and it is logged as an `H` record (§3.1).
 
 ## §3 natives.log v2 (D14)
 
-`natives.log` is the native-return replay log of `docs/osi/trace.md` §6. Version 2 adds three records and keeps every
-v1 line byte for byte. The trace format itself does not change.
+`natives.log` is the native-return replay log of `docs/osi/trace.md` §6. Version 2 adds five records (`G`, `H`, `C`,
+`X`, `K`) and keeps every v1 line byte for byte. The trace format itself does not change. Fix 1 of Task 2b (controller
+ruling) made `H` the authoritative record of every engine-side reference change, and `G` a snapshot that the replay
+checks.
 
 ### 3.1 Records
 
 | record | exact format (C `printf`) | meaning |
 |---|---|---|
 | call (v1) | `%08d <cls>.<fn> %d -> <r>[ S %d <hex>][ G %d][ W %d <v>[ S %d <hex>][ G %d]]…` | native seq N returned `<r>`; ` W` writes in argument index order |
-| ` G %d` (new) | after every game value: a result, a `W` value, or a `C` argument | the references **the engine** holds on that object after the native returns, not counting this variant. The heap stores total = engine + variants |
-| `C` (new) | `C %08d <name> <a0> <a1> … <a9>` | native seq N starts an engine → script call here. `<name>` is a name token; the 10 arguments use the `<v>` notation, each 0x16 followed by ` S %d <hex>` and each game value by ` G %d` |
-| `K` (new) | `K %6d` | the start of frame N (the trace's `K` frame number). Setup has no `K` |
+| ` G %d` | after every game value: a result, a ` W` value, or a `C` argument | **a snapshot**: the references the engine holds on that object at the record's event, excluding **every** variant reference (all script variants of the object, the logged one included). The event is the native's return for a result or a ` W` value, and the start of the call for a `C` argument. The heap stores total = engine + variants |
+| `H` | `H %04x:%08x %+d` (`H <type>:<handle> %+d`) | **authoritative**: the engine's references on a script-visible game object (one that has a live handle) change by `%+d`, here, in event order. Inside a native or outside any native (the host). `<type>` is the game type under which the handle was minted (its `A g` line), so one object always prints one type |
+| `C` | `C %08d <name> <a0> <a1> … <a9>` | native seq N starts an engine → script call here. `<name>` is a name token of **the query name the engine passed to `Call`**, not the function-table entry that `FindFunction`'s prefix match chose (opcodes.md "Engine calls"; controller ruling, review m-6; this rules `natives.log` only, the trace's `C` line keeps its trace.md §2 definition). The 10 arguments use the `<v>` notation, each 0x16 followed by ` S %d <hex>` and each game value by ` G %d` |
+| `X` | `X %08d` | native seq N swallowed the error of its last nested call here (D16; only the three `LoadArea` blocks swallow, §5.2). Written at the swallow point, where the trace has the swallowed `E` line |
+| `K` | `K %6d` | the start of frame N (the trace's `K` frame number), written for every frame, also for one that calls no native. Setup has no `K` |
 | `C -1` (reserved) | `C -1 <name> <a0> … <a9>` | a host-originated engine call, outside any native |
-| `H` (reserved) | `H <type>:<handle> %+d` | a host-side reference change, outside any native |
 
-**`C -1` and `H` are reserved.** No M2a-2 code writes them: §6.2 found no host source on the 600-frame path. Their rules
-are fixed now so they are not invented later.
+**What writes `H`.** Every engine-side `AddRef`/`Release` on an object that has a live handle, whoever makes it:
+- *inside a native:* for example `gcmodeldirector.show('cnt1')` +1 on the Toa (`GcBAGroup::SetCharacter`, 0x54b344),
+  which is neither its argument nor its result; `gchuddirector.addbigsprite` / `addtextobject` +1 on their game
+  **argument**, which they do not return (§2.4). Each tier-1 native's citation states its `H` changes;
+- *outside any native (the host):* for example the first `ScProcessManager::Process` applying the Toa's queued
+  `AddProcess` (+1, §2.4, INFERRED). A host writes such an `H` only if it models that holder; in M2a-2 the Toa process
+  path is the documented D8 gap (§6.3), so neither engine models or writes it.
+
+An object that has no handle yet (never passed through `CreateVariant`) is not script-visible: its engine references are
+carried by the `G` of the record that mints its handle. An `H` that takes the total to 0 frees the object: `F g` in the
+trace, at that event.
+
+`C -1` stays reserved: §6.2 found no host-originated engine call on the 600-frame path.
 
 ### 3.2 Order
 
 - Sequence numbers are assigned at native **entry**. Lines are written in **event order**, so a native's own line is
   written at its return, after everything it caused.
-- Inside one native: its `C` lines, each followed by the lines of the nested call's own natives, then its own line.
-  That line carries the result and, after it, the ` W` writes. The writes happen before the return (the order of
-  events), but they are printed after `-> <r>` (the v1 layout).
-- A `K` line is written before the first native call of its frame, so a frame that calls no native still has its `K`.
+- Inside one native: its `H` and `C` lines in the order they happened, each `C` followed by the lines of the nested
+  call's own natives (and an `X N` if native N swallowed that call's error), then its own line. That line carries the
+  result and, after it, the ` W` writes. The writes happen before the return (the order of events), but they are
+  printed after `-> <r>` (the v1 layout).
+- A `K` line is written before anything else of its frame.
+- **Attribution.** An `H` line carries no sequence number: it belongs to the innermost native that is executing at that
+  point of the event stream, or to the host when none is. The replay recovers this by reading the log as one stream in
+  its own execution order (§3.3). A `C` and an `X` carry N and are checked against it.
+- A native whose nested call raised and did not swallow writes no line of its own: the error ends the engine call, and
+  the log ends with the nested call's records. (On the A9 path any such error is already a failure.)
 
 ### 3.3 Replay rules (I6)
 
+The replay reads `natives.log` as a single stream with one cursor, in the order its own VM executes.
 - **Order:** on call seq N, the replay asserts that `cls.fn/argc` matches the log, as in v1.
-- **Identity:** if the logged handle is live, the replay returns it with one more variant reference and writes no
-  `A g`. Otherwise the logged handle must equal the heap's next game handle, and it is minted with `G` engine
-  references.
-- **`C N` records:** the replay performs the nested call at that point, inside native N, with the logged arguments.
-- **`C -1` and `H` records:** the replay never performs them. Host-originated calls are host behaviour, implemented in
-  both engines. The replay asserts that its own host's next call (or reference change) matches the next record, the
-  same way it asserts `cls.fn/argc`.
-- **v1 logs** (no `G`, no `C`, no `K`) still replay: a missing `G` means 0 engine references.
+- **Inside replayed native N** it consumes records until N's own line: each `H` is **applied** to the object's engine
+  count (a count reaching 0 frees it: `F g`); each `C N` is performed at that point with the logged arguments (the
+  nested call consumes its own natives' records); `X N` is handled below. A `C M` with M ≠ N, or N's own line arriving
+  before a record the replay expected, is `ReplayDesync`.
+- **Identity and `G`:** for each logged game value (result, ` W` value, `C` argument):
+  - if the logged handle is live, the replay uses it (one more variant reference, no `A g`) and **checks** that its
+    engine count, computed from the minting `G` and every `H` applied since, equals `G`. A mismatch raises
+    `ReplayDesync("G check at seq N: handle h, engine count c, logged G g")`;
+  - otherwise the logged handle must equal the heap's next game handle, and it is minted with `G` engine references
+    (the only place where `G` sets a count).
+- **Swallowing natives (`X N`, review m-2):** if a `C N` nested call raises during the replay and the next record is
+  `X N`, the replay applies D16 rules 1–3 at that point (the state stays as at the throw, it writes the swallowed `E`
+  line) and continues native N. If the call raises and the next record is not `X N`, the error propagates out of
+  native N (as in the original). If the call does not raise but the next record is `X N`, that is `ReplayDesync`.
+- **Host records:** `H` outside any native and `C -1` are never performed by the replay. Host behaviour is implemented
+  in both engines; the replay asserts that its own host's next reference change or host call matches the next record,
+  the same way it asserts `cls.fn/argc`.
+- **v1 logs** (no `G`, `H`, `C`, `X` or `K`) still replay: a missing `G` means 0 engine references at minting, and
+  nothing is checked.
 
 ### 3.4 Worked example
 
-The example is illustrative. These are not lines from the real `Base.osi` log. Assume Setup calls `gcgame.getkeymapper`,
-`gctimer.create(0, 0, 5.0)` and `gcmodeldirector.addtoa("onua")`. Inside `addtoa`, the engine calls
-`OnEvent(int 0x32, int 250)` (§4), and that `OnEvent` calls `sctextobject.setstring`. Then Setup calls
-`gcmodeldirector.gettoa()` and `gcmodeldirector.getcharacter('cnt1')`, which reach the same Toa (§2.3). Frame 0 calls
-`gcsaver.getmask()`. The type ids are those of `data/osi/types.json` (GcKeyMapper 0x3e, GcTimer 0x27, GcToa 0x37,
-GcCharacter 0x22).
+The example is illustrative. These are not lines from the real `Base.osi` log. Assume Setup calls, in order:
+`gcgame.getkeymapper`; `gctimer.create(0, 0, 5.0)`; `gcmodeldirector.addtoa("onua")`, inside which the engine calls
+`OnEvent(int 0x32, int 250)` (§4), and that `OnEvent` calls `sctextobject.setstring`; `gcmodeldirector.gettoa()`;
+`gcmodeldirector.show('cnt1', 0)`; `gcmodeldirector.getcharacter('cnt1')`, which reaches the same Toa (§2.3);
+`gcbigsprite.loadhudsprite(…)` (5 arguments); and `gchuddirector.addbigsprite(s)` on the sprite just loaded. Frame 0
+calls `gcsaver.getmask()`. The type ids are those of `data/osi/types.json` (GcKeyMapper 0x3e, GcTimer 0x27, GcBigSprite
+0x26, GcToa 0x37, GcCharacter 0x22).
 
 ```
 00000000 gcgame.getkeymapper 0 -> 003e:00000001 G 1
@@ -265,19 +303,32 @@ C 00000002 OnEvent 0010:00000032 0010:000000fa 000f:00000000 000f:00000000 000f:
 00000003 sctextobject.setstring 2 -> 000f:00000000
 00000002 gcmodeldirector.addtoa 1 -> 0010:00000001
 00000004 gcmodeldirector.gettoa 0 -> 0037:00000003 G 1
-00000005 gcmodeldirector.getcharacter 1 -> 0022:00000003 G 1
+H 0037:00000003 +1
+00000005 gcmodeldirector.show 2 -> 000f:00000000
+00000006 gcmodeldirector.getcharacter 1 -> 0022:00000003 G 2
+00000007 gcbigsprite.loadhudsprite 5 -> 0026:00000004 G 0
+H 0026:00000004 +1
+00000008 gchuddirector.addbigsprite 1 -> 000f:00000000
 K      0
-00000006 gcsaver.getmask 0 -> 0010:3f3f3f3f
+00000009 gcsaver.getmask 0 -> 0010:3f3f3f3f
 ```
 
 - Line 1: the key mapper is held once by the global `ScAutoRefPtr` (§2.4), so `G 1`. The heap stores 1 + 1 = 2.
 - Line 2: a timer constructed by the native: `G 0`. It is freed when the script drops its last variant.
-- Lines 3–5: `addtoa` is seq 2 (numbered at entry). Its `C 00000002` line comes first. The nested `OnEvent`'s own
-  native is seq 3, and its line comes next. `addtoa`'s line is written at its return, last.
-- Lines 6–7: the same Toa, once as `GcToa` and once as `GcCharacter`: one handle (3), two type tags. `G 1` both times
-  is the model-director map's reference (§2.4); the first variant is a variant reference, not an engine one. The
-  replay mints handle 3 at line 6 and, at line 7, returns the live handle 3 with one more variant reference.
-- Line 8: frame 0 starts. Line 9: an int result needs no `G`.
+- Lines 3–5: `addtoa` is seq 2 (numbered at entry). Its `C 00000002` line comes first, with the query name `OnEvent`.
+  The nested `OnEvent`'s own native is seq 3, and its line comes next. `addtoa`'s line is written at its return, last.
+- Line 6: `gettoa` mints the Toa as handle 3 under type 0x37 with `G 1` (the model-director map, §2.4).
+- Lines 7–8: `show` (seq 5) adds an engine reference to the Toa, which is neither its argument nor its result
+  (0x54b344). The `H` line is written at that event, before `show`'s own line, and prints the minting type 0x37. The
+  replay, executing seq 5, applies it: engine count 1 → 2.
+- Line 9: the same Toa as `GcCharacter` (type tag 0x22, handle 3). `G 2` is the snapshot: the map and `SetCharacter`,
+  no variant counted. The replay finds handle 3 live, adds a variant reference and checks 2 = 1 + 1 (G at minting
+  plus the `H`).
+- Lines 10–12: `loadhudsprite` mints the sprite as handle 4 with `G 0`. `addbigsprite` (seq 8) stores its **argument**
+  and takes a reference: `H 0026:00000004 +1`, then its own line (it returns nothing). The replay, executing seq 8,
+  applies the `H`: engine count 0 → 1. If the script later drops its last variant of handle 4, both engines keep the
+  sprite (total 1), and neither writes `F g`. Without the `H` line the replay would free it there, and C++ would not.
+- Line 13: frame 0 starts. Line 14: an int result needs no `G`.
 
 **Header hash (C1).** Merging overrides changes `natives.json`, so the `natives=` hash in the trace header and the
 digest's `T` line change, while the trace does not. Digest guards therefore compare `D` lines only:
@@ -551,8 +602,8 @@ until Tasks 5 and 7–9 add rows. `tools/tests/test_native_overrides.py` checks 
 |---|---|---|
 | `key` | yes | a winner key of `natives.json` or `natives_beta150.json` (lower case `cls.fn`); each key once |
 | `tier` | yes | `tier1`, `tier2` or `tier3` |
-| `default` | no | `{"type": "0xNN", "value": u32}` or `{"type": "0x12", "bits": "8 hex"}`, the stub's return; not allowed on `tier1` (its body decides the result) |
-| `cite` | yes | names the row's `body` address (for example `body 0x005d35b0, …`); a `tier1` row uses the §1.3 format |
+| `default` | no | the stub's return, a scalar: `{"type": "0x10" / "0x14" / "0x15", "value": u32}`, `{"type": "0x0f", "value": 0}`, or a float as `{"type": "0x12", "bits": "8 hex"}` (never `value`). Heap and game types (0x01, 0x05, 0x16, 0x20–0xfe) are refused. Not allowed on `tier1` (its body decides the result) |
+| `cite` | yes | names the row's `body` address, in any width (for example `body 0x5d35b0, …`); a `tier1` row has the §1.3 shape: `// body 0x…, method 0x… <…>[ → 0x… <…>]…; asm pin: …` |
 | `note` | yes | one line, for example `"ini → M2a-3"` |
 
 No other field is allowed.

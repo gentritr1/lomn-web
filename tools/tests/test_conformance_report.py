@@ -2,6 +2,7 @@
 the denominators were measured by running it on an empty corpus on 2026-10-08."""
 import importlib.util
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -139,12 +140,26 @@ def test_list_prints_each_program_with_its_status(cr, tmp_path, capsys):
     assert out[1:] == ["program n-a active", "program n-b pending T3/T4"]
 
 
-def test_pending_field_is_a_task_id_string():
-    """The runners skip a program whose `pending` names a task (controller ruling, M2a-2 T2b); the field is a string."""
-    pend = {p.name: json.loads(p.read_text())["pending"] for p in CORPUS.glob("*/*.expect.json")
-            if "pending" in json.loads(p.read_text())}
-    assert len(pend) == 9
-    assert set(pend.values()) == {"T3/T4"}
+TASK_IDS = re.compile(r"T\d+[ab]?(/T\d+[ab]?)*$")      # e.g. "T3/T4": the task(s) whose runner features are missing
+
+
+def _readme_status():
+    """{program id: "pending" | "active"} from the group-n table of tests/osi/conformance/README.md."""
+    text = (CORPUS / "README.md").read_text()
+    return dict(re.findall(r"^\| `(n-[a-z0-9-]+)` \| (pending|active) \|", text, re.M))
+
+
+def test_pending_marks_are_task_ids_and_match_the_readme():
+    """Fix 1 (review m-4): no hardcoded count. Every `pending` value is a task-id string, and the README's group-n
+    status table agrees with the files program by program, so Tasks 3/4 only remove keys and README rows change."""
+    files = {}
+    for p in sorted(CORPUS.glob("*/*.expect.json")):
+        doc = json.loads(p.read_text())
+        if "pending" in doc:
+            assert isinstance(doc["pending"], str) and TASK_IDS.match(doc["pending"]), (p.name, doc["pending"])
+        if p.parent.name == "n":
+            files[doc["id"]] = "pending" if "pending" in doc else "active"
+    assert files and _readme_status() == files
 
 
 def test_readme_repeats_the_authoring_rules():

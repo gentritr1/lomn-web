@@ -42,9 +42,9 @@ def mods():
 
 
 def _ok_row(**kw):
-    # gcsaver.cheatmenu: body 0x005d35b0 (natives.md §9.1), a decided default of int 0 (Decision 9)
+    # gcsaver.cheatmenu: body 0x5d35b0 (natives.md §9.1), a decided default of int 0 (Decision 9)
     row = {"key": "gcsaver.cheatmenu", "tier": "tier2", "default": {"type": "0x10", "value": 0},
-           "cite": "body 0x005d35b0 -> GcSaver::CheatMenu 0x5d4fc0 (natives.md §9.1)", "note": "ini -> M2a-3"}
+           "cite": "body 0x5d35b0 -> GcSaver::CheatMenu 0x5d4fc0 (natives.md §9.1)", "note": "ini -> M2a-3"}
     row.update(kw)
     return row
 
@@ -57,7 +57,7 @@ def test_committed_overrides_file_is_a_valid_list(reg, rows, mods):
 
 def test_a_valid_row_passes(reg, rows, mods):
     assert reg.check_overrides([_ok_row()], rows, mods) == []
-    tier1 = _ok_row(tier="tier1", cite="// body 0x005d35b0, method 0x5d4fc0 <GcSaver::CheatMenu>; asm pin: 0x5d502c cmp")
+    tier1 = _ok_row(tier="tier1", cite="// body 0x5d35b0, method 0x5d4fc0 <GcSaver::CheatMenu>; asm pin: 0x5d502c cmp")
     del tier1["default"]
     assert reg.check_overrides([tier1], rows, mods) == []
     mod = {"key": "bettersaver.getbooleanvalue", "tier": "tier1", "note": "empty map -> 0",
@@ -75,6 +75,16 @@ def test_a_valid_row_passes(reg, rows, mods):
     (_ok_row(default={"type": "0x12", "bits": "3F800000"}), "default"),
     (_ok_row(default={"type": "0x10", "value": -1}), "default"),
     (_ok_row(default={"text": ""}), "default"),
+    # fix 1 (review m-3): floats are bits only; only scalar types can be a stub default
+    (_ok_row(default={"type": "0x12", "value": 0}), "default"),
+    (_ok_row(default={"type": "0x27", "value": 1}), "default"),        # a game type
+    (_ok_row(default={"type": "0x16", "value": 1}), "default"),        # a dynamic string handle
+    (_ok_row(default={"type": "0x01", "value": 1}), "default"),        # a script object
+    (_ok_row(default={"type": "0x0f", "value": 7}), "default"),        # nothing carries 0
+    (dict({k: v for k, v in _ok_row().items() if k != "default"}, tier="tier1",
+          cite="body 0x5d35b0 -> GcSaver::CheatMenu 0x5d4fc0"), "cite"),   # tier1: the §1.3 shape
+    (dict({k: v for k, v in _ok_row().items() if k != "default"}, tier="tier1",
+          cite="// body 0x5d35b0, method 0x5d4fc0 <GcSaver::CheatMenu>"), "cite"),   # no asm pin
     (_ok_row(cite="GcSaver::CheatMenu 0x5d4fc0"), "cite"),    # does not name the row's body
     (_ok_row(cite=""), "cite"),
     (_ok_row(note=""), "note"),
@@ -88,8 +98,11 @@ def test_schema_rejects(reg, rows, mods, bad, problem):
 
 def test_duplicate_and_unsorted_keys_are_rejected(reg, rows, mods):
     a = _ok_row()
-    b = _ok_row(key="gcsaver.getmask", cite="body 0x005d36d0", default={"type": "0x10", "value": 0x3F3F3F3F})
+    b = _ok_row(key="gcsaver.getmask", cite="body 0x5d36d0", default={"type": "0x10", "value": 0x3F3F3F3F})
     assert reg.check_overrides([a, b], rows, mods) == []           # "gcsaver.cheatmenu" < "gcsaver.getmask"
+    ok = [_ok_row(default={"type": d, "value": 0}) for d in ("0x0f", "0x10", "0x14", "0x15")]
+    ok.append(_ok_row(default={"type": "0x12", "bits": "3f800000"}))
+    assert all(reg.check_overrides([o], rows, mods) == [] for o in ok)
     assert any("sorted" in p for p in reg.check_overrides([b, a], rows, mods))
     assert any("duplicate" in p for p in reg.check_overrides([a, a], rows, mods))
     assert reg.check_overrides({"gcsaver.cheatmenu": a}, rows, mods) == ["the overrides file must be a JSON list"]
@@ -118,7 +131,7 @@ def test_merge_touches_only_the_named_winner_row(reg, rows, mods):
 
 def test_merge_without_default_keeps_the_generated_default(reg, rows, mods):
     over = [{"key": "scslosifileio.loadosiobject", "tier": "tier3", "note": "copy kind: D11 stub is wrong (§8.1)",
-             "cite": "body 0x00615990 -> ScSLOSIFileIO::LoadOSIObject 0x615f10"}]
+             "cite": "body 0x615990 -> ScSLOSIFileIO::LoadOSIObject 0x615f10"}]
     r2, _ = reg.apply_overrides(copy.deepcopy(rows), copy.deepcopy(mods), over)
     row = next(r for r in r2 if r["key"] == "scslosifileio.loadosiobject" and r["winner"])
     assert row["tier"] == "tier3" and row["default"] == {"type": "0x0f", "value": 0}
@@ -126,7 +139,7 @@ def test_merge_without_default_keeps_the_generated_default(reg, rows, mods):
 
 def test_mod_key_merges_into_the_mod_table(reg, rows, mods):
     over = [{"key": "bettersaver.getbooleanvalue", "tier": "tier1", "note": "empty map -> int 0",
-             "cite": "// body BetterSaver.dll 0x10001f70, method 0x10005ab0; asm pin: 0x10001fd1 setne"}]
+             "cite": "// body BetterSaver.dll 0x10001f70, method 0x10005ab0 <std::map find>; asm pin: 0x10001fd1 setne"}]
     r2, m2 = reg.apply_overrides(copy.deepcopy(rows), copy.deepcopy(mods), over)
     assert r2 == rows
     row = next(m for m in m2 if m["key"] == "bettersaver.getbooleanvalue")

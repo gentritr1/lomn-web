@@ -1354,12 +1354,21 @@ _BITS = re.compile(r"[0-9a-f]{8}$")
 _ADDR = re.compile(r"0x0*([0-9a-fA-F]+)")
 
 
+# A stub default is a scalar the stub can return without an allocation (fix 1, review m-3): nothing (value 0), int,
+# colour16, colour with `value`; float only as `bits`. Heap and game types (0x01, 0x05, 0x16, 0x20..0xfe) are refused.
+_VALUE_TYPES = {"0x0f", "0x10", "0x14", "0x15"}
+# docs/osi/natives.md §1.3, the shape of a tier1 cite (addresses in any hex width; a mod body names its DLL first)
+_TIER1_CITE = re.compile(r"^// body (\S+\.dll )?0x[0-9a-fA-F]+, method 0x[0-9a-fA-F]+ <[^>]+>"
+                         r"( → 0x[0-9a-fA-F]+ <[^>]+>)*; asm pin: \S")
+
+
 def _default_ok(d) -> bool:
     if not isinstance(d, dict) or not isinstance(d.get("type"), str) or not _HEX_TYPE.match(d["type"]):
         return False
-    if set(d) == {"type", "value"}:
+    if set(d) == {"type", "value"} and d["type"] in _VALUE_TYPES:
         v = d["value"]
-        return isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= 0xFFFFFFFF
+        return (isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= 0xFFFFFFFF
+                and (d["type"] != "0x0f" or v == 0))
     return set(d) == {"type", "bits"} and d["type"] == "0x12" and isinstance(d["bits"], str) and bool(_BITS.match(d["bits"]))
 
 
@@ -1407,7 +1416,8 @@ def check_overrides(overrides, rows: list[dict], mods: list[dict] = ()) -> list[
             if o.get("tier") == "tier1":
                 problems.append("%s: a tier1 row has no default (its body decides the result)" % where)
             elif not _default_ok(o["default"]):
-                problems.append("%s: default %r is not {type, value u32} or {type 0x12, bits}" % (where, o["default"]))
+                problems.append("%s: default %r is not {type 0x0f/0x10/0x14/0x15, value u32} or {type 0x12, bits}"
+                                % (where, o["default"]))
         kind, i = win[key]
         body = (rows if kind == "exe" else mods)[i]["body"]
         want = int(body, 16)
@@ -1416,6 +1426,9 @@ def check_overrides(overrides, rows: list[dict], mods: list[dict] = ()) -> list[
             problems.append("%s: empty cite" % where)
         elif want not in {int(m.group(1), 16) for m in _ADDR.finditer(cite)}:
             problems.append("%s: cite does not name the row's body %s" % (where, body))
+        elif o.get("tier") == "tier1" and not _TIER1_CITE.match(cite):
+            problems.append("%s: a tier1 cite needs the natives.md §1.3 shape "
+                            "(// body 0x…, method 0x… <Class::Method> [→ 0x… <…>]; asm pin: …)" % where)
         if "note" in o and (not isinstance(o["note"], str) or not o["note"].strip()):
             problems.append("%s: empty note" % where)
     return problems

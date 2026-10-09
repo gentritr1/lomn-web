@@ -103,7 +103,18 @@ TERM instead of NUL, as a hostile file can (`n-name-256`; `natives.md` §8.3).
   pending program of group `n` carries `"T3/T4"`: both runners). Both runners skip such a program: they do not run it,
   they print `PENDING <id> (<task>)`, and their summary line shows the pending count. The feature each program needs
   is listed in `tests/osi/conformance/README.md`. The key is removed when the program passes on both runners. The
-  M2a-2 gate (Task 10) requires the pending count to be 0.
+  M2a-2 gate (Task 10) requires the pending count to be 0 **and** the mutated-key check below.
+
+**Fail-closed keys (controller ruling, M2a-2 T2b fix 1).** Each runner keeps an explicit list of the keys it compares
+or honours: the expectation keys (`expect.*`, `expect_error.*`, `then.*`, `swallowed[].*`) and the test-native keys
+(`returns.*`, `calls.*`, `swallow`, `writes`, …). A program **without** `pending` that carries any key outside that list
+FAILS with `uncompared key <path>` (for example `uncompared key expect_error.pc_after`). Metadata keys (`id`, `rows`,
+`falsifier`, `alternative`, `falsifier_id`, `argc_violation`, `note`, `pending`) are not expectations and are always
+allowed. So a key that a runner silently ignores can never make a program pass. A program that uses a key today's
+runners do not compare carries `"pending": "T3/T4"` until both runners compare it. **Mutated-key check (Task 10 gate):**
+each key added by Task 2b (`pc_after`, `then`, `swallowed`, `expect.top`, `returns.object`, `returns.engine_refs`,
+`calls.depth`, `swallow`), corrupted once in a copy of a program that uses it, must make that program fail on both
+runners.
 
 ### Coverage metadata (read by `tools/osi/conformance_report.py`, which reads nothing else)
 

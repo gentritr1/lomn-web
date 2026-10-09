@@ -191,24 +191,33 @@ the replay path is used anyway so that A9 (M2a-2, real natives) needs no new mec
 
 ### Version 2 (D14, M2a-2)
 
-The full contract, with a worked example, is `docs/osi/natives.md` §3. In short:
-- **` G %d`** follows every game value: a result, a ` W` value, or a `C` argument. It is the number of references the
-  engine holds on that object after the native returns, not counting this variant. The heap stores total = engine +
-  variants. A v1 line is a v2 line with no game value, or with `G` absent, which means 0.
-- **`C %08d <name> <a0> … <a9>`**, its own line: native seq N starts an engine → script call at this point. The 10
-  arguments use the `<v>` notation, a 0x16 is followed by ` S %d <hex>` and a game value by ` G %d`.
-- **`K %6d`**, its own line, at the start of each frame (the trace's `K` frame number), before that frame's first
-  native line. It is written for every frame, also for a frame that calls no native.
+The full contract, with a worked example, is `docs/osi/natives.md` §3. In short (fix 1 of Task 2b: `H` is
+authoritative, `G` is a checked snapshot):
+- **`H %04x:%08x %+d`**, its own line: an engine-side reference change on a game object that has a live handle, in
+  event order, **inside a native or outside any native** (the host). `<type>` is the game type under which the handle
+  was minted. It is the authoritative record of every engine reference change after minting. An `H` belongs to the
+  innermost native executing at that point of the stream, or to the host when none is.
+- **` G %d`** follows every game value: a result, a ` W` value, or a `C` argument. It is a **snapshot**: the engine's
+  references on that object at the record's event (the native's return; the start of the call for a `C` argument),
+  excluding every variant reference. The replay sets the count from `G` only when it mints the handle; for a live
+  handle it **checks** its count (minting `G` plus the `H` records applied since) against `G`, and a mismatch is a
+  replay error. A v1 line has no `G`: 0 at minting, nothing checked.
+- **`C %08d <name> <a0> … <a9>`**, its own line: native seq N starts an engine → script call at this point. `<name>` is
+  the **query name the engine passed to `Call`**, not the function-table entry that the prefix match chose (controller
+  ruling, review m-6; this rules `natives.log` only, the trace's `C` line keeps its §2 definition). The 10 arguments use the `<v>` notation, a 0x16 is followed by ` S %d <hex>`
+  and a game value by ` G %d`.
+- **`X %08d`**, its own line: native seq N swallowed the error of its last nested call here (D16). The replay applies
+  the swallow only when the record is there.
+- **`K %6d`**, its own line, at the start of each frame (the trace's `K` frame number), before anything else of that
+  frame. It is written for every frame, also for a frame that calls no native.
 - **` W` after `-> <r>`.** A native's by-reference writes happen before its return, but they are printed after the
   result, in the v1 layout: `%08d <cls>.<fn> %d -> <r>[ S …][ G …][ W %d <v>[ S …][ G …]]…`.
-- **Reserved:** `C -1 <name> <a0> … <a9>` (a host-originated call) and `H <type>:<handle> %+d` (a host-side reference
-  change). No M2a-2 code writes them.
+- **Reserved:** `C -1 <name> <a0> … <a9>` (a host-originated call). No M2a-2 code writes it.
 - **Order.** Sequence numbers are assigned at native entry, and lines are written in event order. So a native's own
-  line is written at its return, after its `C` lines and the lines of the natives they caused.
-- **Replay (I6).** The order assertion is as in v1. A live logged handle is returned with one more variant reference
-  and no `A g`; otherwise the logged handle must equal the next handle, and it is minted with `G` engine references.
-  The replay performs each `C N` call inside native N. It never performs `C -1` or `H`, and it asserts that its own
-  host's next call or reference change matches them.
+  line is written at its return, after its `H` and `C` lines and the lines of the natives they caused.
+- **Replay (I6).** One cursor, in the replay's own execution order. The order assertion is as in v1. Inside replayed
+  native N, `H` records are applied, `C N` calls are performed, `X N` decides a swallow; then N's own line. A host `H`
+  or `C -1` is never performed; the replay asserts that its own host's next change or call matches it.
 
 **The merge (controller ruling, M2a-2 T2b, accepted as proposed; `natives.md` §7.2):** an override sets `tier`, and
 `default` when it has one, on the **winner row** of its key only (exe keys in `natives.json`, mod keys in

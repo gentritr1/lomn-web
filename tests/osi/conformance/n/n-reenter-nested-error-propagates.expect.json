@@ -5,6 +5,7 @@
   ],
   "falsifier": "a nested engine call's error propagates through the calling 0x82 (no swallow): one E line, re-reported as \"Script is calling t.re\", with the inner function's PC and the inner leftovers in place (rule 15(b))",
   "alternative": "CallWithReturn restores PC on the error path: pc_after = @c+6 (0x46); or the nested call resets its own frame: depth 2, top int 11, context_depth 1",
+  "pending": "T3/T4",
   "entry": "main",
   "args": [],
   "natives": [
