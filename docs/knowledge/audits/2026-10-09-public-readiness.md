@@ -23,3 +23,8 @@ Scope: every commit on `main` (330 commits, through 3ee7700), the current tree, 
 3. **README screenshots:** keep the 3 renders, or replace them with a diagram or our own UI.
 4. **Optional:** a heads-up to the LOMN community (TheLegendOfMataNui).
 5. **Then:** push, and switch the repository's visibility to public.
+
+## Owner decisions (2026-10-09)
+- Licence: **GPL-3.0**, added as `LICENSE`, with the README updated.
+- History: **rewrite once**. The author email becomes the GitHub no-reply address, the old scratch path is removed, and one force-push follows before the repo goes public.
+- README screenshots: **keep**.

@@ -95,4 +95,4 @@ make check
 
 ## Licence
 
-Not chosen yet. A licence for this project's own code will be added before the repository goes public. The game's content is never covered by it.
+This project's own code and documentation are licensed under the [GNU General Public License v3.0](LICENSE). Third-party components keep their own licences ([THIRD_PARTY.md](THIRD_PARTY.md)). The game's content (data files, executable, art, music and text) belongs to the LEGO Group and its licensors. It is not covered by this licence and is never distributed here: every player supplies their own copy.
