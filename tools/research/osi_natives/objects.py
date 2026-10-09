@@ -390,10 +390,11 @@ def toa_index(ident: int) -> int:
 def main_character_id(ctx) -> int:
     """GcGame::MainCharacterID 0x43af90: 'cnt1' ([0x7796f4], 0x43c193) while there is no main Toa; else the id [+0x100] of
     the character the Toa has attached at +0x1d0 (0x43afb8-0x43afcb), 'cnt1' if none (0x43afe4)."""
+    base = ctx.subsystem(directors.AreaDirector).main_character_id           # [0x7796f4], 'cnt1' (0x43c193)
     t = ctx.subsystem(ModelDirector).main_toa
-    if t is None or t.attached is None:
-        return ID_CNT1
-    return t.attached.char_id if t.attached.char_id is not None else 0x3F3F3F3F
+    if t is None or t.attached is None:                                        # 0x43af91 / 0x43afb8
+        return base
+    return t.attached.char_id if t.attached.char_id is not None else 0x3F3F3F3F   # [[toa+0x1d0]+0x100] (0x43afc1-0x43afcb)
 
 
 def set_under_water(ctx, flag: int) -> None:

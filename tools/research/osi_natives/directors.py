@@ -15,10 +15,11 @@ What is NOT modelled, and why:
   host has none, so `AreaDirector.area_source` is the seam (default: no objects). With no object loaded, the chains of
   natives.md §4 make no engine call, which is the A9 path. The chain itself (the SetupMoveable guard 0x574ef1 ->
   SetUnderWater 0x589050 -> `Call`; RemoveArea -> CleanUpArea -> GcModelDirector::Remove -> `Call`) is modelled and tested
-  with an injected source.
+  with an injected source (the characters it creates enter the model director's map, objects.ModelDirector.map).
 - SetCurrentLevel's three SLK loads (material.slb, the texture table, the level text table): their errors are swallowed
   (the catch flags are written only with 0, like LoadArea's, natives.md §5.2) and no native of this group reads them.
-- GcModelDirector::Remove's class-specific teardown (0x47f3c2-0x47f4ba): only what reaches the VM is kept.
+- GcModelDirector::Remove's class-specific teardown (0x47f3c2-0x47f4ba): only what reaches the VM and the map erase are kept.
+- A hive's child characters (~GcHive 0x623b70 -> Remove): see the comment above AreaDirector.set_current_area.
 - BetterSaver's debug output (OutputDebugString) and the save routine 0x10002b00 (saves are M4).
 - The cinematic player (Bink): D1 completes the call instantly, so nothing of the video is modelled.
 """
@@ -416,8 +417,8 @@ class AreaObject(NamedTuple):
     block: str
     obj_id: int
     motion_id: int
-    director: str = "model"
-    otype: int = 0
+    director: str = ""      # "" = the block's director in the binary: characters "model" ([0x83aa9c], 0x53f4fc), objects and
+    otype: int = 0          # hives "area" ([0x83a518], 0x626328; objects may also use back/nolight/trans, none reach the VM)
     plain: bool = False     # a hive record with [rec+0x2c] == 0 (0x62623c cmp / 0x626240 je): ctor 0x6239b0, never the VM
 
 
@@ -430,25 +431,49 @@ class AreaLoader:
 
 class ModelObjects:
     """The slice of GcModelDirector that Remove 0x47f320 reads: the active flag [0x83aa4c] (non-null after the director's
-    init 0x47d46d), the model map 0x782a04 (id -> object) and the main character's id [0x782884] ('cnt1', written by the
+    init 0x47d46d), the model map 0x782a04 (id -> object: the ONE map, objects.ModelDirector.map, which addtoa fills and
+    AddCharacter 0x47f040 fills for an area's characters) and the main character's id [0x782884] ('cnt1', written by the
     static init 0x482d43)."""
 
     TOA_ID = 0x636E7431
 
     def __init__(self, ctx):
+        self.ctx = ctx
         self.active = True
-        self.objects: dict[int, object] = {}
+
+    @property
+    def objects(self) -> dict:
+        from . import objects
+        return self._ctx_model(objects).map
+
+    def _ctx_model(self, objects):
+        return self.ctx.subsystem(objects.ModelDirector)
+
+    def add_character(self, ctx, obj_id: int) -> None:
+        """GcModelDirector::AddCharacter 0x47f040 as LoadCharacters 0x53f3f0 calls it (0x53f473): a new GcCharacter (0x368 bytes)
+        for the id, Add 0x480eb0 into the map (an existing key keeps its value). The null-id rename (0x47f059 cmp [0x70a81c]
+        = 0x3f3f3f3f -> 0x480260) and the character's block-file load are not modelled."""
+        from . import objects
+        md = ctx.subsystem(objects.ModelDirector)
+        if md.get(obj_id) is None:
+            md.add(objects.GcCharacter(objects._tid(ctx, "GcCharacter"), obj_id & M32, obj_id & M32), obj_id & M32)
 
     def remove(self, ctx, obj_id: int) -> None:
         """GcModelDirector::Remove 0x47f320: director not active -> return (0x47f32c); id not in the map -> return
-        (0x47f36b); else the class-specific teardown (not modelled), the map erase (0x47f50c-0x47f5a9), and unless the id
-        is the main character's ([0x782884], 0x47f5b3) the engine call OnEvent(0x2b, id): a0 is CreateVariant 0x413ed0 of
-        the byte 0x2b (0x47f5c1), a1 is CreateVariant 0x407df0 of the id (0x47f5d9); a2..a9 nothing."""
+        (0x47f36b); else the class-specific teardown (0x47f3c2-0x47f4ba, not modelled), the map erase (0x47f50c-0x47f5a9; the
+        map's ScAutoRefPtr copy is released, INFERRED from the erase 0x4dd4f0) and unless the id is the main character's
+        ([0x782884], 0x47f5b3) the engine call OnEvent(0x2b, id): a0 is CreateVariant 0x413ed0 of the byte 0x2b (0x47f5c1),
+        a1 is CreateVariant 0x407df0 of the id (0x47f5d9); a2..a9 nothing. No catch on the chain (exc.py): an error leaves
+        the native."""
         if not self.active:
             return
-        if obj_id not in self.objects:
+        from . import objects
+        md = ctx.subsystem(objects.ModelDirector)
+        ch = md.get(obj_id)
+        if ch is None:
             return
-        del self.objects[obj_id]
+        del md.map[obj_id & M32]
+        ctx.release(ch)
         if obj_id != self.TOA_ID:
             ctx.engine_call("OnEvent", [Variant(T_INT, 0x2B), Variant(T_INT, obj_id & M32)])
 
@@ -468,9 +493,10 @@ class AreaDirector:
         self.set_under_water_calls = 0
         self.nearest_max = 4                                # the byte [0x70b37c]: 4 in .data (setnearestmax 0x486feb, getnearestmax 0x487013)
 
-    # --- GcGame::MainCharacterID 0x43af90 (no Toa: [0x7796f4])
-    def main_character(self) -> int:
-        return self.main_character_id
+    # --- GcGame::MainCharacterID 0x43af90: one implementation, objects.main_character_id (the Toa branch 0x43afb2-0x43afcb)
+    def main_character(self, ctx) -> int:
+        from . import objects
+        return objects.main_character_id(ctx)
 
     def set_current_level(self, ctx, name: bytes) -> None:
         """GcAreaDirector::SetCurrentLevel 0x489a60 (see CITES)."""
@@ -516,9 +542,12 @@ class AreaDirector:
                 del loader.entries[i]
                 return
 
-    # DEFERRED (follow-up batch, unmodelled): setcurrentlevel -> RemoveArea -> CleanUpArea -> GcModelDirector::Remove ->
-    # Call("OnEvent") (0x501830 -> 0x47f680) for the characters of an area's _char.slb; only the model-director removals
-    # of `entries` below are modelled.
+    # F7b: the removal chain is modelled for the characters the load side creates (LoadCharacters 0x53f3f0: AddCharacter
+    # 0x47f040 into the model map, an entry {id, [0x83aa9c]} pushed 0x53f514). CleanUpArea dispatches each entry on its director
+    # (0x5017e6-0x501938); only the model director's Remove 0x47f320 reaches the VM among the direct calls. NOT modelled:
+    # a hive's children. ~GcHive 0x623b70 calls Remove for each id of [hive+0x261] at [hive+0x2a8] (0x623bb9) and the hive
+    # entry's director is [0x83a518] (-> GcAreaDirector::Remove 0x488990, which makes no direct call to the VM); whether that
+    # removal drops the hive's last reference is not established (UNVERIFIED), and the hive's children are not created here.
     def set_current_area(self, ctx, name: bytes) -> None:
         """GcAreaDirector::SetCurrentArea 0x48a540."""
         s = c_string(name)                                                       # the copy 0x48a550 (0x4f56c0)
@@ -557,11 +586,14 @@ class AreaDirector:
                 # 0x574b80 with no 'lbld' check: a character record fires when its id equals the main character's.
                 gated = block != "characters"
                 if (not o.plain and (o.motion_id == MOVEABLE_SETUP_ID or not gated)
-                        and o.motion_id == self.main_character()):               # cmp ecx,edx 0x574ef1
+                        and o.motion_id == self.main_character(ctx)):               # cmp ecx,edx 0x574ef1
                     r = self.set_under_water(ctx, self.under_water, swallow=True)
                     if not r.ok:                                                 # swallowed: the object is not completed,
                         break                                                    # the block ends (0x4ff996 / 0x500344 / 0x500c63)
-                loader.entries.append(AreaInfo(o.obj_id, o.director, o.otype))
+                if block == "characters" and not o.director:
+                    ctx.subsystem(ModelObjects).add_character(ctx, o.obj_id)       # AddCharacter 0x47f040 (0x53f473), Get non-null
+                loader.entries.append(AreaInfo(o.obj_id, o.director or ("model" if block == "characters" else "area"),
+                                               o.otype))            # {id, director} pushed by 0x4709d0 (0x53f514 / 0x626340)
 
     def set_under_water(self, ctx, flag: int, swallow: bool = False):
         """GcMotionSystem::SetUnderWater 0x589050: both branches make the engine call OnEvent(0x36, b) with b = 1 for a
