@@ -460,6 +460,340 @@ without their epilogues, so the state at exit is as follows.
 A port that chooses to keep running after a script error is outside what the original defines. It must reset these
 four itself, and conformance tests must not depend on behaviour after an error.
 
+## Error PC (the PC at the throw), per handler
+
+**What this is.** The VM PC (`[VM+0x1f58]`) that each handler has written when it raises, given relative to the start
+of the instruction being executed (+0 = not advanced, +1 = past the opcode byte, and so on). D10 leaves the VM state
+"as at the throw", and D16 continues dispatch at exactly this PC after a swallowed nested error, so both engines must
+leave it. Conformance rule 15 (`docs/osi/conformance.md` §6) points here.
+
+**How it was derived** (EXECUTED 2026-10-09, `tools/osi/error_pc.py`, test `tools/tests/test_osi_error_pc.py`). The
+exe is read as data: `objdump -d` on `.text`, the handler table through `tools/osi/opcodes.py`, the `.exc` tables
+through `tools/osi/exc.py`. From each of the 97 distinct handlers the pass walks every path with a small abstract
+interpreter that follows `this` (the VM, `ecx` at entry) through registers and frame slots.
+- **PC writes.** It counts the PC as a delta from the instruction start. Every PC write reached is one of four forms:
+  `inc [this+0x1f58]` (161 instructions), `add [this+0x1f58], imm` (4), `add [this+0x1f58], reg` (1, 0x54's s16
+  branch offset) and `mov [this+0x1f58], reg` (3: the 0x50/0x51 jump targets and 0x52's return address). Any other
+  store to that address, or a store at displacement 0x1f58 through a base the pass lost track of, stops the pass with
+  an error. A grep of every `[reg+0x1f58]` store in the linear-sweep listing of `.text` finds writes outside the
+  handlers only in the constructor (0x60b283), `CallWithReturn` (0x60b5a5) and `SetPCAndArgs` (0x60b623). That grep
+  misses 6 handler writes, which the sweep decodes out of step; `test_pc_write_forms` reconciles the two counts.
+- **Raises.** `Error` (vtable +0xc) and direct calls to `SrOSIError` 0x5faee0, `SrThrow` 0x4d91f0 and `___throw`
+  0x657260 end a path. Calls to VM methods (the vtable, `ConvertVariant`, `ConvertStringIDToDynamicString`,
+  `ConstructObject`) are followed inline with the current PC. Every other direct call is scanned, with its own direct
+  callees, for those throwers. The indirect calls (natives, landing-pad cleanups, the dead game-variable accessors)
+  are classified by hand in the script, which refuses one it does not know.
+- **Catches.** A raise at a call site with a catch record (kind 0x10, `!ScCatchMessage!` or catch-all) continues at
+  the landing pad with the PC unchanged. The CodeWarrior retry and rethrow byte flags (written only with 0) and the
+  `kNoException` identity test after each try are evaluated. Every other branch is taken both ways. So a row reached
+  only through an impossible branch could appear. The "caught" exits are reported apart and never counted as normal
+  exits.
+- **Self-check.** Every handler that falls through leaves PC at 1 + its operand bytes on every normal exit (osi.py
+  `OPS`, test `test_normal_exits_match_operand_sizes`), and the pinned rows were read by hand from objdump.
+- **The oracle agrees (EXECUTED):** the 178 corpus programs that expect an error were run through
+  `tools/research/osi_vm.py`. `snapshot().pc − pc` equals this table for all 173 whose error the original raises
+  (168 `Error`/`SrOSIError` rows, 3 `FindMethod` "Call to undefined member method", 2 kLenTooLong). The 2 stack-cap
+  programs match the ScOSIStack column. The remaining 3 are port and engine rules (a literal 0x84, argc > 10 and the
+  nesting cap; conformance rule 15). The C++ VM was **not** run for this. It sets PC at the end of most handlers, and
+  its differences are listed in the M2a-2 T2a-pc report (from reading the source).
+
+**The result in words.** Almost every handler advances PC past its whole instruction at entry, before any pop or
+check, so its errors are at **+(1 + operand bytes)**. The exceptions:
+- **+0:** BCLUnused (160 ops) and 0x41 never write the PC. 0x53 pops and checks before it writes the PC: its error and
+  its pop are at +0, and only then is the PC set (+3, or through 0x54 inlined to +3 + offset). 0x52 raises nothing; its
+  pops are at +0.
+- **0x50 / 0x51: +2.** The operand is consumed, and the error comes before the jump target is stored.
+- **0x82: +5, then +6.** The map miss (`SrOSIError` at 0x601725, outside the try) is raised before the sixth `inc`
+  (0x601780). Every error after it, and the re-raise "Script is calling %s.%s" at 0x601dd3, is at +6.
+- **0x83: +3, then +4.** "Invalid member type…" (0x6022c3) is at +3. The n byte is read (`inc` 0x60237c) inside the
+  try before the lookup, so every caught OSI error is re-raised at 0x602b24 with +4. +3 reaches that re-raise only
+  after an allocation failure.
+- **0x84 (the self-patched 0x82): +6** for the whole body, and for its re-raise "Script is calling a game function
+  directly." at 0x60303c.
+- **A native's own error** is raised with the PC the handler had at the native call (+6 for 0x82/0x84, +4 for 0x83).
+  If the native made a nested engine call and **that** raised, the nested `CallWithReturn` never restores the PC
+  (opcodes.md "After an error"). The error then carries the inner handler's PC at its throw, by this same table, and
+  the outer re-raise keeps it. INFERRED from the asm of `CallWithReturn`; D16 depends on it.
+
+Not listed per row: 73 allocation failures (`operator new` / `new[]` throwing error object 0x83aa0c, std
+`length_error` in the containers), which the port does not model, and 5 cleanup calls in landing pads. Each table
+counts them per handler. The "PC at its errors" column of the first table is the PC at every listed raise of that
+handler on a direct (not caught) path. The "PC at its ScOSIStack calls" column is the PC at each `Pop`/`Push`/
+`PushInto`/`Insert` call. Rule 15 uses it for the port's own stack errors.
+
+<!-- BEGIN error-pc (generated: tools/osi/error_pc.py --markdown) -->
+
+Generated by `tools/osi/error_pc.py --markdown` from the canonical exe: 97 handlers, 272 raise sites (73 allocation failures and 5 landing-pad cleanup calls are counted, not listed), 164 rows below. PC writes reached from the handlers: add imm 4, add reg 1, inc 161, mov reg 3.
+
+| op | handler | PC writes (instruction → PC after it) | PC at its errors | PC at its ScOSIStack calls | normal exit | allocation-failure sites |
+|---|---|---|---|---|---|---|
+| 0x00 | 0x603830 | 0x603832 → +1 | no error | — | +1 | 0 |
+| 160 unused ops (0x01, 0x07, …, 0xfe) | 0x60be60 | none | +0 | — | never returns | 0 |
+| 0x02 | 0x6038a0 | 0x6038a6 → +1 | +1 | — | never returns | 0 |
+| 0x03 | 0x6038d0 | 0x6038d6 → +1 | +1 | — | never returns | 0 |
+| 0x04 | 0x603870 | 0x603872 → +5 | no error | — | +5 | 0 |
+| 0x05 | 0x603880 | 0x603882 → +5 | no error | — | +5 | 0 |
+| 0x06 | 0x603890 | 0x603892 → +5 | no error | — | +5 | 0 |
+| 0x10 | 0x5fe610 | 0x5fe61f → +1, 0x5fe62e → +2, 0x5fe646 → +3 | +3 | pop +3 | +3 | 4 |
+| 0x11 | 0x5fe9a0 | 0x5fe9af → +1, 0x5fe9be → +2, 0x5fe9d3 → +3 | +3 | pop +3; push +3 | +3 | 4 |
+| 0x12 | 0x5fe590 | 0x5fe59a → +1, 0x5fe5a6 → +2, 0x5fe5b5 → +3 | +3 | pop +3; push +3 | +3 | 0 |
+| 0x13 | 0x5fe530 | 0x5fe53a → +1, 0x5fe546 → +2, 0x5fe555 → +3 | no error | push +3 | +3 | 2 |
+| 0x14 | 0x5feb90 | 0x5feb9b → +1, 0x5feba7 → +2 | +2 | push +2 | +2 | 0 |
+| 0x15 | 0x5fec10 | 0x5fec1f → +1, 0x5fec2e → +2, 0x5fec40 → +3 | +3 | pop +3 | +3 | 0 |
+| 0x16 | 0x5fecf0 | 0x5fecff → +1, 0x5fed0e → +2, 0x5fed20 → +3 | +3 | push +3 | +3 | 0 |
+| 0x17 | 0x5fedb0 | 0x5fedbb → +1, 0x5fedc7 → +2, 0x5fedd9 → +3 | +3 | push +3 | +3 | 0 |
+| 0x18 | 0x5fee40 | 0x5fee58 → +1 | +1 | pop +1; push +1 | +1 | 4 |
+| 0x19 | 0x5ff210 | 0x5ff21e → +1 | +1 | pop +1; push +1 | +1 | 0 |
+| 0x1a | 0x5ff3a0 | 0x5ff3b8 → +1 | +1 | pop +1 | +1 | 4 |
+| 0x21 | 0x607c50 | 0x607c5a → +1, 0x607c66 → +2, 0x607c75 → +3 | +3 | push +3 | +3 | 1 |
+| 0x22 | 0x607b50 | 0x607b59 → +1, 0x607b65 → +2, 0x607b77 → +3 | no error | pop +3; push +3 | +3 | 1 |
+| 0x23 | 0x607b00 | 0x607b09 → +1, 0x607b15 → +2 | no error | push +2 | +2 | 0 |
+| 0x24 | 0x607cf0 | 0x607cf8 → +1, 0x607d04 → +2, 0x607d13 → +3 | +3 | — | +3 | 1 |
+| 0x25 | 0x607d90 | 0x607d98 → +1, 0x607da4 → +2, 0x607db3 → +3 | +3 | — | +3 | 1 |
+| 0x30 | 0x606310 | 0x606318 → +1 | no error | pop +1 | +1 | 0 |
+| 0x31 | 0x606340 | 0x606349 → +1, 0x606355 → +2 | no error | pop +2 | +2 | 0 |
+| 0x32 | 0x606390 | 0x606399 → +1 | no error | pop +1; push +1 | +1 | 0 |
+| 0x33 | 0x606420 | 0x606429 → +1, 0x606435 → +2 | +2 | push +2 | +2 | 0 |
+| 0x34 | 0x6064b0 | 0x6064ba → +1, 0x6064c6 → +2 | +2 | push +2 | +2 | 0 |
+| 0x35 | 0x606470 | 0x606479 → +1 | +1 | push +1 | +1 | 0 |
+| 0x40 | 0x606600 | 0x606609 → +1, 0x606615 → +2, 0x606624 → +3, 0x606638 → +4, 0x60664c → +5 | no error | push +5 | +5 | 0 |
+| 0x41 | 0x6065e0 | none | +0 | — | never returns | 0 |
+| 0x42 | 0x606580 | 0x60658a → +1, 0x606596 → +2, 0x6065a5 → +3 | no error | push +3 | +3 | 0 |
+| 0x43 | 0x606540 | 0x606549 → +1, 0x606555 → +2 | no error | push +2 | +2 | 0 |
+| 0x44 | 0x606680 | 0x606689 → +1, 0x606695 → +2, 0x6066a4 → +3, 0x6066b8 → +4, 0x6066cc → +5 | no error | push +5 | +5 | 0 |
+| 0x45 | 0x606510 | 0x606518 → +1 | no error | push +1 | +1 | 0 |
+| 0x46 | 0x606700 | 0x60670a → +1, 0x606716 → +2, 0x606725 → +3 | no error | push +3 | +3 | 0 |
+| 0x47 | 0x606840 | 0x606848 → +1 | no error | push +1 | +1 | 0 |
+| 0x48 | 0x6067c0 | 0x6067c9 → +1, 0x6067d5 → +2, 0x6067e4 → +3, 0x6067f8 → +4, 0x60680c → +5 | no error | push +5 | +5 | 0 |
+| 0x49 | 0x606760 | 0x60676a → +1, 0x606776 → +2, 0x606785 → +3 | no error | push +3 | +3 | 0 |
+| 0x50 | 0x600ae0 | 0x600aeb → +1, 0x600af7 → +2, 0x600b58 → jump target (mov at 0x600b58) | +2 | pop +2; push +2 | jump target (mov at 0x600b58) | 0 |
+| 0x51 | 0x600c30 | 0x600c3b → +1, 0x600c47 → +2, 0x600ca2 → jump target (mov at 0x600ca2) | +2 | pop +2; push +2 | jump target (mov at 0x600ca2) | 0 |
+| 0x52 | 0x600cf0 | 0x600dac → jump target (mov at 0x600dac) | no error | pop +0; push +0 | +0 / jump target (mov at 0x600dac) | 0 |
+| 0x53 | 0x600df0 | 0x600e55 → +3, 0x600e73 → +1, 0x600e7f → +2, 0x600e8e → +3, 0x600e9f → +3 + s16 operand (add at 0x600e9f) | +0 | pop +0 | +3 / +3 + s16 operand (add at 0x600e9f) | 0 |
+| 0x54 | 0x600e70 | 0x600e73 → +1, 0x600e7f → +2, 0x600e8e → +3, 0x600e9f → +3 + s16 operand (add at 0x600e9f) | no error | — | +3 + s16 operand (add at 0x600e9f) | 0 |
+| 0x60 | 0x605180 | 0x60518e → +1 | +1 | pop +1; push +1 | +1 | 2 |
+| 0x61 | 0x604fd0 | 0x604fdb → +1 | +1 | pop +1; push +1 | +1 | 0 |
+| 0x62 | 0x604e30 | 0x604e3b → +1 | +1 | pop +1; push +1 | +1 | 0 |
+| 0x63 | 0x604c80 | 0x604c8b → +1 | +1 | pop +1; push +1 | +1 | 0 |
+| 0x64 | 0x604ad0 | 0x604adb → +1 | +1 | pop +1; push +1 | +1 | 0 |
+| 0x6a | 0x6055b0 | 0x6055ba → +1 | +1 | pop +1; push +1 | +1 | 0 |
+| 0x6b | 0x605670 | 0x60567a → +1 | +1 | pop +1; push +1 | +1 | 0 |
+| 0x6c | 0x605b40 | 0x605b4a → +1 | +1 | pop +1; push +1 | +1 | 0 |
+| 0x6d | 0x605730 | 0x60573a → +1 | +1 | pop +1; push +1 | +1 | 0 |
+| 0x6e | 0x6057e0 | 0x6057ea → +1 | +1 | pop +1; push +1 | +1 | 0 |
+| 0x6f | 0x605890 | 0x60589a → +1 | +1 | pop +1; push +1 | +1 | 0 |
+| 0x70 | 0x603ff0 | 0x603ffe → +1 | +1 | pop +1; push +1 | +1 | 2 |
+| 0x71 | 0x6042b0 | 0x6042ba → +1 | +1 | pop +1; push +1 | +1 | 0 |
+| 0x72 | 0x604450 | 0x60445a → +1 | +1 | pop +1; push +1 | +1 | 0 |
+| 0x73 | 0x6045f0 | 0x6045fa → +1 | +1 | pop +1; push +1 | +1 | 0 |
+| 0x74 | 0x6047f0 | 0x6047fa → +1 | +1 | pop +1; push +1 | +1 | 0 |
+| 0x75 | 0x604a00 | 0x604a0a → +1 | +1 | pop +1; push +1 | +1 | 0 |
+| 0x76 | 0x605aa0 | 0x605aaa → +1 | +1 | pop +1; push +1 | +1 | 0 |
+| 0x77 | 0x605940 | 0x60594a → +1 | +1 | pop +1; push +1 | +1 | 0 |
+| 0x78 | 0x6059f0 | 0x6059fa → +1 | +1 | pop +1; push +1 | +1 | 0 |
+| 0x7a | 0x605be0 | 0x605be2 → +1 | no error | — | +1 | 0 |
+| 0x7b | 0x605c00 | 0x605c02 → +1 | no error | — | +1 | 0 |
+| 0x80 | 0x6020d0 | 0x6020da → +1, 0x6020e6 → +2, 0x6020f5 → +3, 0x60211c → +4, 0x60212b → +5 | no error | — | +5 | 2 |
+| 0x81 | 0x602040 | 0x60204a → +1, 0x602056 → +2, 0x602065 → +3, 0x60208c → +4, 0x60209b → +5 | no error | — | +5 | 2 |
+| 0x82 | 0x6015a0 | 0x6015c6 → +1, 0x6015d8 → +2, 0x6015f3 → +3, 0x601611 → +4, 0x60162c → +5, 0x601780 → +6 | +5 / +6 | pop +6; push +6 | +6 | 9 |
+| 0x83 | 0x602160 | 0x602178 → +1, 0x60218a → +2, 0x6021a5 → +3, 0x60237c → +4 | +3 / +4 | pop +3 / +4; push +4 | +4 | 9 |
+| 0x84 | 0x602bb0 | 0x602bc8 → +1, 0x602bda → +2, 0x602bf5 → +3, 0x602c13 → +4, 0x602c31 → +5, 0x602c83 → +6 | +6 | pop +6; push +6 | +6 | 6 |
+| 0x90 | 0x5fd070 | 0x5fd07a → +1 | no error | push +1 | +1 | 1 |
+| 0x91 | 0x5fd0f0 | 0x5fd0ff → +1 | +1 | pop +1; push +1 | +1 | 1 |
+| 0x92 | 0x5fd2d0 | 0x5fd2db → +1 | +1 | pop +1; push +1 | +1 | 0 |
+| 0x93 | 0x5fd360 | 0x5fd36b → +1 | +1 | pop +1 | +1 | 0 |
+| 0x94 | 0x5fd450 | 0x5fd45a → +1 | +1 | pop +1 | +1 | 1 |
+| 0x95 | 0x5fd500 | 0x5fd50b → +1 | +1 | pop +1 | +1 | 0 |
+| 0x96 | 0x5fd5d0 | 0x5fd5db → +1 | +1 | pop +1 | +1 | 1 |
+| 0xa0 | 0x5fff30 | 0x5fff3a → +1 | +1 | pop +1; push +1 | +1 | 0 |
+| 0xa1 | 0x5ffff0 | 0x5ffffa → +1 | +1 | pop +1; push +1 | +1 | 0 |
+| 0xa2 | 0x6000b0 | 0x6000ba → +1 | +1 | pop +1; push +1 | +1 | 0 |
+| 0xa3 | 0x600170 | 0x60017a → +1 | +1 | pop +1; push +1 | +1 | 0 |
+| 0xa4 | 0x600230 | 0x60023a → +1 | +1 | pop +1; push +1 | +1 | 0 |
+| 0xa5 | 0x6002a0 | 0x6002aa → +1 | +1 | pop +1; push +1 | +1 | 0 |
+| 0xa6 | 0x600310 | 0x60031a → +1 | +1 | pop +1; push +1 | +1 | 0 |
+| 0xa7 | 0x600380 | 0x60038a → +1 | +1 | pop +1; push +1 | +1 | 0 |
+| 0xb0 | 0x606f60 | 0x606f69 → +1 | +1 | pop +1; push +1 | +1 | 5 |
+| 0xb1 | 0x606fe0 | 0x606fe9 → +1 | +1 | pop +1; push +1 | +1 | 5 |
+| 0xb2 | 0x607060 | 0x607069 → +1 | +1 | pop +1; push +1 | +1 | 5 |
+| 0xb8 | 0x6070e0 | 0x6070e9 → +1 | no error | pop +1; push +1 | +1 | 0 |
+| 0xb9 | 0x607140 | 0x607149 → +1 | no error | pop +1; push +1 | +1 | 0 |
+| 0xba | 0x6071a0 | 0x6071a9 → +1 | no error | pop +1; push +1 | +1 | 0 |
+| 0xbb | 0x607220 | 0x607229 → +1 | no error | pop +1; push +1 | +1 | 0 |
+| 0xbc | 0x607280 | 0x607289 → +1 | no error | pop +1; push +1 | +1 | 0 |
+| 0xbd | 0x6072f0 | 0x6072f9 → +1 | no error | pop +1; push +1 | +1 | 0 |
+| 0xbf | 0x607350 | 0x60735a → +1 | +1 | pop +1; push +1 | +1 | 0 |
+| 0xff | 0x603840 | 0x603848 → +1 | no error | push +1 | +1 | 0 |
+
+| opcode | handler addr | error site addr | message | PC at throw |
+|---|---|---|---|---|
+| 160 unused ops (0x01, 0x07, …, 0xfe) | 0x60be60 | 0x60be6e | "Call of undefined instruction" (Error) | +0 |
+| 0x02 | 0x6038a0 | 0x6038b4 | "Debugger not enabled! but encountered DebugOn" (Error) | +1 |
+| 0x03 | 0x6038d0 | 0x6038e4 | "Debugger not enabled! but encountered DebugOff" (Error) | +1 |
+| 0x10 | 0x5fe610 | 0x5fe778 | "Reference to unregistered Game Variable" (SrOSIError) | +3 |
+| 0x10 | 0x5fe610 | 0x5fe793 | registered game-variable accessor (dead: the RegisteredVariable map is never populated), +0xc | +3; dead code ("The game-variable map") |
+| 0x10 | 0x5fe610 | 0x5fe7bd | registered game-variable accessor (dead: the RegisteredVariable map is never populated), +0x10 | +3; dead code ("The game-variable map") |
+| 0x10 | 0x5fe610 | 0x5fe7eb | "Member property of non member variable" (Error) | +3 |
+| 0x10 | 0x5fe610 | 0x5fe845 | "Reference to non-existant member property "%s"" (Error) | +3 |
+| 0x11 | 0x5fe9a0 | 0x5feb01 | "Reference to unregistered Game Variable" (SrOSIError) | +3 |
+| 0x11 | 0x5fe9a0 | 0x5feb1c | registered game-variable accessor (dead: the RegisteredVariable map is never populated), +0xc | +3; dead code ("The game-variable map") |
+| 0x11 | 0x5fe9a0 | 0x5feb29 (ScOSIVariant::Duplicate) | kOutOfRange (non-OSI ScError): SrThrow at 0x46dee0 | +3; INFERRED reachable only with a string the 255-byte buffer cannot hold |
+| 0x11 | 0x5fe9a0 | 0x5feb62 (ScOSIVariant::Duplicate) | kOutOfRange (non-OSI ScError): SrThrow at 0x46dee0 | +3; INFERRED reachable only with a string the 255-byte buffer cannot hold |
+| 0x12 | 0x5fe590 | 0x5fe5e1 | ScOSIObject::FindMethod → "Call to undefined member method" (SrOSIError at 0x60867c) | +3 |
+| 0x14 | 0x5feb90 | 0x5febd9 | "Too many arguments to method" (Error) | +2 |
+| 0x15 | 0x5fec10 | 0x5fec6d | "Member property of non member variable" (Error) | +3 |
+| 0x15 | 0x5fec10 | 0x5fecc1 | "Reference to non-existant member property "%s"" (Error) | +3 |
+| 0x16 | 0x5fecf0 | 0x5fed4d | "Member property of non member variable" (Error) | +3 |
+| 0x16 | 0x5fecf0 | 0x5fed83 | "Reference to non-existant member property "%s"" (Error) | +3 |
+| 0x16 | 0x5fecf0 | 0x5fed8f (ScOSIVariant::Duplicate) | kOutOfRange (non-OSI ScError): SrThrow at 0x46dee0 | +3; INFERRED reachable only with a string the 255-byte buffer cannot hold |
+| 0x17 | 0x5fedb0 | 0x5fedff | "Member method of non member variable" (Error) | +3 |
+| 0x17 | 0x5fedb0 | 0x5fee0c | ScOSIObject::FindMethod → "Call to undefined member method" (SrOSIError at 0x60867c) | +3 |
+| 0x18 | 0x5fee40 | 0x5fef3b (ScFixedString::operator=) | kOutOfRange (non-OSI ScError): SrThrow at 0x4f5c38 | +1; INFERRED reachable only with a string the 255-byte buffer cannot hold |
+| 0x18 | 0x5fee40 | 0x5fef69 (ScFixedString::operator=) | kOutOfRange (non-OSI ScError): SrThrow at 0x4f5b27 | +1; INFERRED reachable only with a string the 255-byte buffer cannot hold |
+| 0x18 | 0x5fee40 | 0x5fef93 | "Invalid type for member access (must be a string)" (Error) | +1 |
+| 0x18 | 0x5fee40 | 0x5ff0e1 | "Reference to unregistered Game Variable" (SrOSIError) | +1 |
+| 0x18 | 0x5fee40 | 0x5ff105 | registered game-variable accessor (dead: the RegisteredVariable map is never populated), +0xc | +1; dead code ("The game-variable map") |
+| 0x18 | 0x5fee40 | 0x5ff115 (ScOSIVariant::Duplicate) | kOutOfRange (non-OSI ScError): SrThrow at 0x46dee0 | +1; INFERRED reachable only with a string the 255-byte buffer cannot hold |
+| 0x18 | 0x5fee40 | 0x5ff171 | "Member property of non member variable" (Error) | +1 |
+| 0x18 | 0x5fee40 | 0x5ff1b9 | "Reference to non-existant member property "%s"" (Error) | +1 |
+| 0x18 | 0x5fee40 | 0x5ff1c5 (ScOSIVariant::Duplicate) | kOutOfRange (non-OSI ScError): SrThrow at 0x46dee0 | +1; INFERRED reachable only with a string the 255-byte buffer cannot hold |
+| 0x19 | 0x5ff210 | 0x5ff2c2 | "Member method of non member variable" (Error) | +1 |
+| 0x19 | 0x5ff210 | 0x5ff2e7 (ScFixedString::operator=) | kOutOfRange (non-OSI ScError): SrThrow at 0x4f5c38 | +1; INFERRED reachable only with a string the 255-byte buffer cannot hold |
+| 0x19 | 0x5ff210 | 0x5ff313 (ScFixedString::operator=) | kOutOfRange (non-OSI ScError): SrThrow at 0x4f5b27 | +1; INFERRED reachable only with a string the 255-byte buffer cannot hold |
+| 0x19 | 0x5ff210 | 0x5ff338 | "Invalid method type for function call (must be a string)" (Error) | +1 |
+| 0x19 | 0x5ff210 | 0x5ff350 | ScOSIObject::FindMethod → "Call to undefined member method" (SrOSIError at 0x60867c) | +1 |
+| 0x1a | 0x5ff3a0 | 0x5ff49b (ScFixedString::operator=) | kOutOfRange (non-OSI ScError): SrThrow at 0x4f5c38 | +1; INFERRED reachable only with a string the 255-byte buffer cannot hold |
+| 0x1a | 0x5ff3a0 | 0x5ff4c9 (ScFixedString::operator=) | kOutOfRange (non-OSI ScError): SrThrow at 0x4f5b27 | +1; INFERRED reachable only with a string the 255-byte buffer cannot hold |
+| 0x1a | 0x5ff3a0 | 0x5ff4f3 | "Invalid type for member set (must be a string)" (Error) | +1 |
+| 0x1a | 0x5ff3a0 | 0x5ff641 | "Reference to unregistered Game Variable" (SrOSIError) | +1 |
+| 0x1a | 0x5ff3a0 | 0x5ff665 | registered game-variable accessor (dead: the RegisteredVariable map is never populated), +0xc | +1; dead code ("The game-variable map") |
+| 0x1a | 0x5ff3a0 | 0x5ff69b | registered game-variable accessor (dead: the RegisteredVariable map is never populated), +0x10 | +1; dead code ("The game-variable map") |
+| 0x1a | 0x5ff3a0 | 0x5ff6e2 | "Member property of non object variable" (Error) | +1 |
+| 0x1a | 0x5ff3a0 | 0x5ff751 | "Reference to non-existant member property "%s"" (Error) | +1 |
+| 0x21 | 0x607c50 | 0x607cd3 (ScOSIVariant::Duplicate) | kOutOfRange (non-OSI ScError): SrThrow at 0x46dee0 | +3; INFERRED reachable only with a string the 255-byte buffer cannot hold |
+| 0x24 | 0x607cf0 | 0x607d4b | "increment of non-integral type" (Error) | +3 |
+| 0x24 | 0x607cf0 | 0x607d6f | "increment of non-integral type" (Error) | +3 |
+| 0x25 | 0x607d90 | 0x607deb | "increment of non-integral type" (Error) | +3 |
+| 0x25 | 0x607d90 | 0x607e0f | "decrement of non-integral type" (Error) | +3 |
+| 0x33 | 0x606420 | 0x606452 (ScOSIVariant::Duplicate) | kOutOfRange (non-OSI ScError): SrThrow at 0x46dee0 | +2; INFERRED reachable only with a string the 255-byte buffer cannot hold |
+| 0x34 | 0x6064b0 | 0x6064eb (ScOSIVariant::Duplicate) | kOutOfRange (non-OSI ScError): SrThrow at 0x46dee0 | +2; INFERRED reachable only with a string the 255-byte buffer cannot hold |
+| 0x35 | 0x606470 | 0x60648c (ScOSIVariant::Duplicate) | kOutOfRange (non-OSI ScError): SrThrow at 0x46dee0 | +1; INFERRED reachable only with a string the 255-byte buffer cannot hold |
+| 0x41 | 0x6065e0 | 0x6065ee | "unwritten instruction BCL_PushConstanti24 called" (Error) | +0 |
+| 0x50 | 0x600ae0 | 0x600b2b | "Internal error: Jump to non-integral address" (Error) | +2 |
+| 0x51 | 0x600c30 | 0x600c7b | "Internal error: Jump to non-integral address" (Error) | +2 |
+| 0x53 | 0x600df0 | 0x600e40 | "Results of comparison expression is not integral" (Error) | +0 |
+| 0x60 | 0x605180 | 0x605552 | "Invalid operand to operator '=' (lhs) (type:%02.2X)" (Error) | +1 |
+| 0x60 | 0x605180 | 0x605572 | "Invalid operand to operator '=' (rhs) (type:%02.2X)" (Error) | +1 |
+| 0x60 | 0x605180 | call at 0x605369 (ConvertStringIDToDynamicString); inner calls 0x60b8b7 | kOutOfRange (non-OSI ScError): SrThrow at 0x60b970 | +1; INFERRED reachable only with a string the 255-byte buffer cannot hold |
+| 0x60 | 0x605180 | call at 0x605397 (ConvertStringIDToDynamicString); inner calls 0x60b8b7 | kOutOfRange (non-OSI ScError): SrThrow at 0x60b970 | +1; INFERRED reachable only with a string the 255-byte buffer cannot hold |
+| 0x61 | 0x604fd0 | 0x605128 | "Invalid operand to operator '<' (lhs) (type:%02.2X)" (Error) | +1 |
+| 0x61 | 0x604fd0 | 0x605145 | "Invalid operand to operator '<' (rhs) (type:%02.2X)" (Error) | +1 |
+| 0x62 | 0x604e30 | 0x604f7f | "Invalid operand to operator '>' (lhs) (type:%02.2X)" (Error) | +1 |
+| 0x62 | 0x604e30 | 0x604f9c | "Invalid operand to operator '>' (rhs) (type:%02.2X)" (Error) | +1 |
+| 0x63 | 0x604c80 | 0x604ddd | "Invalid operand to operator '<=' (lhs) (type:%02.2X)" (Error) | +1 |
+| 0x63 | 0x604c80 | 0x604dfa | "Invalid operand to operator '<=' (rhs) (type:%02.2X)" (Error) | +1 |
+| 0x64 | 0x604ad0 | 0x604c27 | "Invalid operand to operator '>=' (lhs) (type:%02.2X)" (Error) | +1 |
+| 0x64 | 0x604ad0 | 0x604c44 | "Invalid operand to operator '>=' (rhs) (type:%02.2X)" (Error) | +1 |
+| 0x6a | 0x6055b0 | 0x60560d | "Invalid operand to operator 'and' (lhs) (type:%02.2X)" (Error) | +1 |
+| 0x6a | 0x6055b0 | 0x60562a | "Invalid operand to operator 'and' (rhs) (type:%02.2X)" (Error) | +1 |
+| 0x6b | 0x605670 | 0x6056cd | "Invalid operand to operator 'or' (lhs) (type:%02.2X)" (Error) | +1 |
+| 0x6b | 0x605670 | 0x6056ea | "Invalid operand to operator 'or' (rhs) (type:%02.2X)" (Error) | +1 |
+| 0x6c | 0x605b40 | 0x605baf | "Invalid operand to operator 'not' (type:%02.2X)" (Error) | +1 |
+| 0x6d | 0x605730 | 0x60578d | "Invalid operand to operator '&' (lhs) (type:%02.2X)" (Error) | +1 |
+| 0x6d | 0x605730 | 0x6057aa | "Invalid operand to operator '&' (rhs) (type:%02.2X)" (Error) | +1 |
+| 0x6e | 0x6057e0 | 0x60583d | "Invalid operand to operator '\|' (lhs) (type:%02.2X)" (Error) | +1 |
+| 0x6e | 0x6057e0 | 0x60585a | "Invalid operand to operator '\|' (rhs) (type:%02.2X)" (Error) | +1 |
+| 0x6f | 0x605890 | 0x6058ed | "Invalid operand to operator '@' (lhs) (type:%02.2X)" (Error) | +1 |
+| 0x6f | 0x605890 | 0x60590a | "Invalid operand to operator '@' (rhs) (type:%02.2X)" (Error) | +1 |
+| 0x70 | 0x603ff0 | 0x6040bf | ScFixedString::append → kLenTooLong (non-OSI ScError, SrThrow at 0x4f5ca9) | +1 |
+| 0x70 | 0x603ff0 | 0x604114 | "Invalid operand to string operator '+' (rhs) (type:%02.2X)" (Error) | +1 |
+| 0x70 | 0x603ff0 | 0x60413b | "Invalid operand to string operator '+' (lhs) (type:%02.2X)" (Error) | +1 |
+| 0x70 | 0x603ff0 | 0x604257 | "Invalid operand to operator '+' (lhs) (type:%02.2X)" (Error) | +1 |
+| 0x70 | 0x603ff0 | 0x604277 | "Invalid operand to operator '+' (rhs) (type:%02.2X)" (Error) | +1 |
+| 0x70 | 0x603ff0 | call at 0x604053 (ConvertStringIDToDynamicString); inner calls 0x60b8b7 | kOutOfRange (non-OSI ScError): SrThrow at 0x60b970 | +1; INFERRED reachable only with a string the 255-byte buffer cannot hold |
+| 0x70 | 0x603ff0 | call at 0x60407e (ConvertStringIDToDynamicString); inner calls 0x60b8b7 | kOutOfRange (non-OSI ScError): SrThrow at 0x60b970 | +1; INFERRED reachable only with a string the 255-byte buffer cannot hold |
+| 0x71 | 0x6042b0 | 0x6043f7 | "Invalid operand to operator '-' (lhs) (type:%02.2X)" (Error) | +1 |
+| 0x71 | 0x6042b0 | 0x604414 | "Invalid operand to operator '-' (rhs) (type:%02.2X)" (Error) | +1 |
+| 0x72 | 0x604450 | 0x604597 | "Invalid left-hand-side operand to operator '*' (type:%02.2X)" (Error) | +1 |
+| 0x72 | 0x604450 | 0x6045b4 | "Invalid operand to operator '*' (rhs) (type:%02.2X)" (Error) | +1 |
+| 0x73 | 0x6045f0 | 0x604668 | "Divide by 0" (Error) | +1 |
+| 0x73 | 0x6045f0 | 0x6046d7 | "Divide by 0" (Error) | +1 |
+| 0x73 | 0x6045f0 | 0x604733 | "Divide by 0" (Error) | +1 |
+| 0x73 | 0x6045f0 | 0x604787 | "Invalid operand to operator '/' (lhs) (type:%02.2X)" (Error) | +1 |
+| 0x73 | 0x6045f0 | 0x6047a4 | "Invalid operand to operator '/' (rhs) (type:%02.2X)" (Error) | +1 |
+| 0x73 | 0x6045f0 | 0x6047b8 | "Divide by 0" (Error) | +1 |
+| 0x74 | 0x6047f0 | 0x60499a | "Invalid operand to operator '^' (lhs) (type:%02.2X)" (Error) | +1 |
+| 0x74 | 0x6047f0 | 0x6049b7 | "Invalid operand to operator '^' (rhs) (type:%02.2X)" (Error) | +1 |
+| 0x75 | 0x604a00 | 0x604a5d | "Invalid operand to operator '%' (lhs) (type:%02.2X)" (Error) | +1 |
+| 0x75 | 0x604a00 | 0x604a7a | "Invalid operand to operator '%' (rhs) (type:%02.2X)" (Error) | +1 |
+| 0x75 | 0x604a00 | 0x604a8e | "Divide by 0" (Error) | +1 |
+| 0x76 | 0x605aa0 | 0x605b0f | "Invalid operand to operator '~' (type:%02.2X)" (Error) | +1 |
+| 0x77 | 0x605940 | 0x60599d | "Invalid operand to operator '<<' (lhs) (type:%02.2X)" (Error) | +1 |
+| 0x77 | 0x605940 | 0x6059ba | "Invalid operand to operator '<<' (rhs) (type:%02.2X)" (Error) | +1 |
+| 0x78 | 0x6059f0 | 0x605a4d | "Invalid operand to operator '>>' (lhs) (type:%02.2X)" (Error) | +1 |
+| 0x78 | 0x6059f0 | 0x605a6a | "Invalid operand to operator '>>' (rhs) (type:%02.2X)" (Error) | +1 |
+| 0x82 | 0x6015a0 | 0x601725 | "Call to unregistered Game Function" (SrOSIError) | +5 |
+| 0x82 | 0x6015a0 | 0x6017ac | "Too many parameters passed to game function" (Error); caught (pad 0x601c94), then raised again at 0x601dd3 with this PC | +6 |
+| 0x82 | 0x6015a0 | 0x6017d5 | "Too few parameters passed to game function" (Error); caught (pad 0x601c94), then raised again at 0x601dd3 with this PC | +6 |
+| 0x82 | 0x6015a0 | 0x601af5 | the native (RegisteredFunction +0x8); caught (pad 0x601b10), then raised again at 0x601be5 → 0x601dd3 with this PC | +6; INFERRED: when the native's nested engine call raised, that inner error's PC (D16) |
+| 0x82 | 0x6015a0 | 0x601be5 | re-throw of the native's error from the inner catch (pad 0x601b10); caught (pad 0x601c94), then raised again at 0x601dd3 with this PC | +6 |
+| 0x82 | 0x6015a0 | 0x601dd3 | "Script is calling %s.%s" (Error) | +6: the PC of the caught error; after a native whose nested engine call raised, that inner error's PC (D16; INFERRED) |
+| 0x82 | 0x6015a0 | call at 0x6018db (ConvertVariant); inner calls 0x60b8b7, 0x60ba4c, 0x60bb0a, 0x60bb78 | kOutOfRange (non-OSI ScError): SrThrow at 0x46dee0, 0x60b970; caught (pad 0x601c94), then raised again at 0x601dd3 with this PC | +6; INFERRED reachable only with a string the 255-byte buffer cannot hold |
+| 0x82 | 0x6015a0 | 0x60bdc3 (in an inlined VM method, called at 0x6018db) | "Requested variant conversion unimplimented.  Recompile to debug for types" (Error); caught (pad 0x601c94), then raised again at 0x601dd3 with this PC | +6 |
+| 0x83 | 0x602160 | 0x60226a (ScFixedString::operator=) | kOutOfRange (non-OSI ScError): SrThrow at 0x4f5c38 | +3; INFERRED reachable only with a string the 255-byte buffer cannot hold |
+| 0x83 | 0x602160 | 0x602299 (ScFixedString::operator=) | kOutOfRange (non-OSI ScError): SrThrow at 0x4f5b27 | +3; INFERRED reachable only with a string the 255-byte buffer cannot hold |
+| 0x83 | 0x602160 | 0x6022c3 | "Invalid member type for function call (must be a string)" (Error) | +3 |
+| 0x83 | 0x602160 | 0x602431 | "Call to unregistered Game Function" (SrOSIError); caught (pad 0x6029f6), then raised again at 0x602b24 with this PC | +4 |
+| 0x83 | 0x602160 | 0x60246d | "Too many parameters passed to game function" (Error); caught (pad 0x6029f6), then raised again at 0x602b24 with this PC | +4 |
+| 0x83 | 0x602160 | 0x602496 | "Too few parameters passed to game function" (Error); caught (pad 0x6029f6), then raised again at 0x602b24 with this PC | +4 |
+| 0x83 | 0x602160 | 0x602738 | "Argument type mismatch in call to game function (argument %d [zero based])" (Error); caught (pad 0x6029f6), then raised again at 0x602b24 with this PC | +4 |
+| 0x83 | 0x602160 | 0x602938 | the native (RegisteredFunction +0x8); caught (pad 0x6029f6), then raised again at 0x602b24 with this PC | +4; INFERRED: when the native's nested engine call raised, that inner error's PC (D16) |
+| 0x83 | 0x602160 | 0x602b24 | "Script is calling %s.%s" (Error) | +4: the PC of the caught error (+3 only after an allocation failure); after a native whose nested engine call raised, that inner error's PC (D16; INFERRED) |
+| 0x83 | 0x602160 | call at 0x6025c3 (ConvertVariant); inner calls 0x60b8b7, 0x60ba4c, 0x60bb0a, 0x60bb78 | kOutOfRange (non-OSI ScError): SrThrow at 0x46dee0, 0x60b970; caught (pad 0x602620), then raised again at 0x602738 → 0x602b24 with this PC | +4; INFERRED reachable only with a string the 255-byte buffer cannot hold |
+| 0x83 | 0x602160 | 0x60bdc3 (in an inlined VM method, called at 0x6025c3) | "Requested variant conversion unimplimented.  Recompile to debug for types" (Error); caught (pad 0x602620), then raised again at 0x602738 → 0x602b24 with this PC | +4 |
+| 0x84 | 0x602bb0 | 0x602efd | the native (RegisteredFunction +0x8, from the self-patched pointer); caught (pad 0x602fa0), then raised again at 0x60303c with this PC | +6; INFERRED: when the native's nested engine call raised, that inner error's PC (D16) |
+| 0x84 | 0x602bb0 | 0x60303c | "Script is calling a game function directly." (Error) | +6: the PC of the caught error; after a native whose nested engine call raised, that inner error's PC (D16; INFERRED) |
+| 0x84 | 0x602bb0 | call at 0x602d76 (ConvertVariant); inner calls 0x60b8b7, 0x60ba4c, 0x60bb0a, 0x60bb78 | kOutOfRange (non-OSI ScError): SrThrow at 0x46dee0, 0x60b970; caught (pad 0x602fa0), then raised again at 0x60303c with this PC | +6; INFERRED reachable only with a string the 255-byte buffer cannot hold |
+| 0x84 | 0x602bb0 | 0x60bdc3 (in an inlined VM method, called at 0x602d76) | "Requested variant conversion unimplimented.  Recompile to debug for types" (Error); caught (pad 0x602fa0), then raised again at 0x60303c with this PC | +6 |
+| 0x91 | 0x5fd0f0 | 0x5fd164 | "Reference beyond end of string table" (Error) | +1 |
+| 0x91 | 0x5fd0f0 | 0x5fd1ba (ScFixedString::Init) | kOutOfRange (non-OSI ScError): SrThrow at 0x4018a8 | +1; INFERRED reachable only with a string the 255-byte buffer cannot hold |
+| 0x91 | 0x5fd0f0 | 0x5fd203 | "Reference beyond start/end of array" (Error) | +1 |
+| 0x91 | 0x5fd0f0 | 0x5fd215 (ScOSIVariant::Duplicate) | kOutOfRange (non-OSI ScError): SrThrow at 0x46dee0 | +1; INFERRED reachable only with a string the 255-byte buffer cannot hold |
+| 0x91 | 0x5fd0f0 | 0x5fd23d | "array reference on non-array" (Error) | +1 |
+| 0x92 | 0x5fd2d0 | 0x5fd32b | "array reference on non-array" (Error) | +1 |
+| 0x93 | 0x5fd360 | 0x5fd3d3 | "Assigning into string table is illegal" (Error) | +1 |
+| 0x93 | 0x5fd360 | 0x5fd3fc | "Access beyond end of array" (Error) | +1 |
+| 0x93 | 0x5fd360 | 0x5fd42e | "array reference on non-array" (Error) | +1 |
+| 0x94 | 0x5fd450 | 0x5fd4a7 | "Assigning into string table is illegal" (Error) | +1 |
+| 0x94 | 0x5fd450 | 0x5fd4e9 | "array reference on non-array" (Error) | +1 |
+| 0x95 | 0x5fd500 | 0x5fd558 | "Removal from string table is illegal" (Error) | +1 |
+| 0x95 | 0x5fd500 | 0x5fd57c | "removal outside of array bounds" (Error) | +1 |
+| 0x95 | 0x5fd500 | 0x5fd5af | "array reference on non-array" (Error) | +1 |
+| 0x96 | 0x5fd5d0 | 0x5fd643 | "Assigning into string table is illegal" (Error) | +1 |
+| 0x96 | 0x5fd5d0 | 0x5fd675 | "insertion outside of array bounds" (SrOSIError) | +1 |
+| 0x96 | 0x5fd5d0 | 0x5fd6c0 | "array reference on non-array" (Error) | +1 |
+| 0xa0 | 0x5fff30 | 0x5fff87 | "cant access red value of anything but a color" (Error) | +1 |
+| 0xa0 | 0x5fff30 | 0x5fff9d | "cant set red to a non-integral value" (Error) | +1 |
+| 0xa1 | 0x5ffff0 | 0x600047 | "cant access green value of anything but a color" (Error) | +1 |
+| 0xa1 | 0x5ffff0 | 0x60005d | "cant set green to a non-integral value" (Error) | +1 |
+| 0xa2 | 0x6000b0 | 0x600107 | "cant access blue value of anything but a color" (Error) | +1 |
+| 0xa2 | 0x6000b0 | 0x60011d | "cant set blue to a non-integral value" (Error) | +1 |
+| 0xa3 | 0x600170 | 0x6001c7 | "cant access alpha value of anything but a color" (Error) | +1 |
+| 0xa3 | 0x600170 | 0x6001dd | "cant set alpha to a non-integral value" (Error) | +1 |
+| 0xa4 | 0x600230 | 0x60026c | "cant access red value of anything but a color" (Error) | +1 |
+| 0xa5 | 0x6002a0 | 0x6002dc | "cant access green value of anything but a color" (Error) | +1 |
+| 0xa6 | 0x600310 | 0x60034c | "cant access blue value of anything but a color" (Error) | +1 |
+| 0xa7 | 0x600380 | 0x6003bc | "cant access alpha value of anything but a color" (Error) | +1 |
+| 0xb0 | 0x606f60 | call at 0x606f96 (ConvertVariant); inner calls 0x60b8b7, 0x60ba4c, 0x60bb0a, 0x60bb78 | kOutOfRange (non-OSI ScError): SrThrow at 0x46dee0, 0x60b970 | +1; INFERRED reachable only with a string the 255-byte buffer cannot hold |
+| 0xb0 | 0x606f60 | 0x60bdc3 (in an inlined VM method, called at 0x606f96) | "Requested variant conversion unimplimented.  Recompile to debug for types" (Error) | +1 |
+| 0xb1 | 0x606fe0 | call at 0x607016 (ConvertVariant); inner calls 0x60b8b7, 0x60ba4c, 0x60bb0a, 0x60bb78 | kOutOfRange (non-OSI ScError): SrThrow at 0x46dee0, 0x60b970 | +1; INFERRED reachable only with a string the 255-byte buffer cannot hold |
+| 0xb1 | 0x606fe0 | 0x60bdc3 (in an inlined VM method, called at 0x607016) | "Requested variant conversion unimplimented.  Recompile to debug for types" (Error) | +1 |
+| 0xb2 | 0x607060 | call at 0x607096 (ConvertVariant); inner calls 0x60b8b7, 0x60ba4c, 0x60bb0a, 0x60bb78 | kOutOfRange (non-OSI ScError): SrThrow at 0x46dee0, 0x60b970 | +1; INFERRED reachable only with a string the 255-byte buffer cannot hold |
+| 0xb2 | 0x607060 | 0x60bdc3 (in an inlined VM method, called at 0x607096) | "Requested variant conversion unimplimented.  Recompile to debug for types" (Error) | +1 |
+| 0xbf | 0x607350 | 0x6073fb | "Cant get classID of non object" (Error) | +1 |
+
+<!-- END error-pc -->
+
 ## Trace format (M2a-1)
 
 The differential runs (native, wasm32, Python) and the conformance runners write the fixed-format text trace specified

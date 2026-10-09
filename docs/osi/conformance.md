@@ -221,5 +221,29 @@ Both runners (`lomn_osi_conform`, `osi_vm.py --conform`) implement these. They c
     - (d) A test native's by-ref `writes` overwrite the slot without disposing the old value. The following Pop(true) disposes the new value (0x601c5f).
     - (e) ConvertStringIDToDynamicString on a string of 255 or more characters throws before any `A s` line, with message `kOutOfRange` (0x60b95c–0x60b970), in the same style as kLenTooLong.
     - (f) Engine-protocol programs with no opcode row may use `"rows": []` and must name the opcodes.md section ("Engine calls") in `note`.
-15. **`snapshot().pc` after an error is unspecified and never compared.** Several handlers advance PC before their checks (0x14 +2 at 0x5feba7; 0x51 +2; 0x60/0x70/0x78/0x91 +1 at entry; 0x82's map miss at PC+5), and implementations need not copy that internal state. The `E` line and `expect_error.pc` are the instruction's own address, as before.
+15. **`snapshot().pc` after an error** (amended 2026-10-09, M2a-2 T2a-pc; it was "unspecified and never compared").
+    `snapshot().pc` is the failing instruction's address plus the PC its handler has written at the throw. The values
+    are in opcodes.md "Error PC (the PC at the throw), per handler", which was derived from the asm. The rule applies to
+    every error, not only to swallowed ones (D16):
+    - (a) **An error the original raises:** the "PC at throw" of its row. In short, every handler is at
+      +(1 + operand bytes), except: +0 for BCLUnused, 0x41 and 0x53; +2 for 0x50/0x51; 0x82 +5 for "Call to
+      unregistered Game Function" and +6 for everything after the lookup; 0x83 +3 for "Invalid member type…" and +4
+      for its "Script is calling" re-raise; a memoised 0x82 site (the original's 0x84) +6.
+    - (b) **A "Script is calling…" re-raise after a native whose nested engine call raised** keeps the PC that the
+      nested error left in the inner function, because `CallWithReturn`'s restore (0x60b5a2) never runs. Both engines
+      already rethrow the nested error without touching `pc`. For each instruction this is case (a).
+    - (c) **The port's own errors** take the PC the original handler holds at the operation they stand for:
+      - stack underflow and overflow: the "PC at its ScOSIStack calls" column;
+      - any other error raised inside a handler body (an "Undefined: …" index, type or operand check, INT_MIN / −1,
+        more native arguments than stack slots): +0 for 0x52/0x53, +2 for 0x50/0x51, +5 / +6 for 0x82 before / after
+        the lookup, +3 / +4 for 0x83 before / after the n byte, and the normal-exit PC for every other handler;
+      - the engine-call nesting cap: the PC of the native call that re-entered;
+      - a literal 0x84 in the file: +0;
+      - SetPCAndArgs argc > 10: the entry point's offset (rule 5).
+    - (d) **Unspecified, never compared:** an operand that runs past the end of the script image and a PC outside the
+      image. The original reads past its buffer there, and the two engines check at different moments.
+
+    The `E` line and `expect_error.pc` stay the instruction's own address. A runner compares `snapshot().pc` when an
+    `expect_error` carries `"pc_after"` (written like `pc`; field name proposed for M2a-2 Tasks 3/4), and every
+    `swallow` program (D16) carries it.
 16. **0x74 float^float uses the host `pow`** in both implementations. That is not bit-reproducible for inexact powers, so corpus programs use exact powers only (rule 4). Base.osi never executes 0x74.
