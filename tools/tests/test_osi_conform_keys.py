@@ -35,7 +35,32 @@ def test_the_two_runners_compare_the_same_key_set():
     for kind, keys in (("compared", osi_vm.COMPARED_KEYS), ("ignored", osi_vm.IGNORED_KEYS)):
         py += ["%s %s" % (kind, k) for k in sorted(keys)]
     assert cpp.stdout.splitlines() == py
-    assert len(osi_vm.COMPARED_KEYS) == 105      # a change to the list must be a visible change to this number
+    assert len(osi_vm.COMPARED_KEYS) == 143      # a change to the list must be a visible change to this number
+
+
+# M2a-2 T4: the keys group n uses (natives.md §5.4, conformance.md "Native-framework fields" and rules 15-19), exactly the
+# paths a program needs (rule 22). Computed by running osi_vm._key_paths over tests/osi/conformance/n/*.expect.json and
+# keeping the paths outside the M2a-1 list of 105: 38 paths, 105 + 38 = 143. Both runners' lists must hold all of them.
+GROUP_N_KEYS = sorted(
+    ["natives[*].swallow", "natives[*].calls.depth", "natives[*].returns.engine_refs", "natives[*].returns.object",
+     "expect.top", "expect.top.type", "expect.top.value", "expect.pc_after", "expect_error.pc_after"]
+    + [p + ".swallowed" + k for p in ("expect", "expect_error")
+       for k in ("", "[*].message", "[*].pc", "[*].op", "[*].depth", "[*].top", "[*].top.type", "[*].top.value")]
+    + ["then", "then.entry", "then.args", "then.ok", "then.result", "then.result.type", "then.result.value", "then.depth",
+       "then.top", "then.top.type", "then.top.value", "then.context_depth", "then.pc_after"])
+
+
+def test_the_group_n_keys_are_compared_and_every_group_n_program_is_covered():
+    assert len(GROUP_N_KEYS) == 38 and set(GROUP_N_KEYS) <= osi_vm.COMPARED_KEYS
+    files = sorted((REPO / "tests" / "osi" / "conformance" / "n").glob("*.expect.json"))
+    assert len(files) == 13
+    used = set()
+    for f in files:                                  # pending ones included: they are run once un-pended at the merge
+        spec = json.loads(f.read_text())
+        spec.pop("pending", None)
+        assert osi_vm.uncompared_keys(spec) == [], f.name
+        used |= {pp for _, pp in osi_vm._key_paths(spec)}
+    assert set(GROUP_N_KEYS) <= used                 # every added key has a program that needs it
 
 
 def test_the_ignored_list_is_exactly_the_descriptive_keys():
@@ -54,14 +79,14 @@ def test_the_existing_corpus_has_no_uncompared_key():
 # (where the key is planted, the document edit, the reported path)
 def _plant(doc, where):
     d = json.loads(json.dumps(doc))
-    if where == "expect.pc_after":
-        d["expect"]["pc_after"] = 5
-    elif where == "top.then":
-        d["then"] = []
+    if where == "expect.swallowed[*].frob":
+        d["expect"]["swallowed"] = [{"message": "x", "frob": 1}]
+    elif where == "then.frob":
+        d["then"] = {"entry": "main", "frob": 1}
     elif where == "expect.result.object":
         d["expect"]["result"]["object"] = 1
-    elif where == "expect.top":
-        d["expect"]["top"] = {"type": "0x10", "value": 3}
+    elif where == "expect.top.frob":
+        d["expect"]["top"] = {"type": "0x10", "value": 3, "frob": 1}
     elif where == "expect.globals.g.frob":
         d["expect"]["globals"] = {"g": {"type": "0x10", "value": 1, "frob": 2}}
     elif where == "expect.heap.live.x":
@@ -70,20 +95,23 @@ def _plant(doc, where):
         d["args"] = [{"type": "0x10", "value": 1, "swallowed": True}]
     elif where == "natives[*].frob":
         d["natives"] = [{"cls": "t", "name": "f", "min": 0, "max": 0, "types": [], "frob": 1}]
-    elif where == "natives[*].returns.object":
-        d["natives"] = [{"cls": "t", "name": "f", "min": 0, "max": 0, "types": [], "returns": {"object": 1}}]
+    elif where == "natives[*].calls.frob":
+        d["natives"] = [{"cls": "t", "name": "f", "min": 0, "max": 0, "types": [], "calls": {"entry": "main", "frob": 1}}]
     elif where == "expect.found":
         d["expect"]["found"] = True
-    elif where == "expect_error.pc_after":
-        d["expect_error"] = {"message": "x", "pc_after": 1}
+    elif where == "expect_error.swallowed[*].frob":
+        d["expect_error"] = {"message": "x", "swallowed": [{"frob": 1}]}
         del d["expect"]
     return d
 
 
-WHERES = ["expect.pc_after", "top.then", "expect.result.object", "expect.top", "expect.globals.g.frob", "expect.heap.live.x",
-          "args[*].swallowed", "natives[*].frob", "natives[*].returns.object", "expect.found", "expect_error.pc_after"]
-PATHS = {"top.then": "then", "expect.globals.g.frob": "expect.globals.g.frob", "args[*].swallowed": "args[*].swallowed",
-         "natives[*].frob": "natives[*].frob", "natives[*].returns.object": "natives[*].returns.object"}
+# M2a-2 T4: pc_after, then, expect.top and returns.object are compared now (GROUP_N_KEYS); each planted case uses a key
+# that neither runner compares, under those same parents.
+WHERES = ["expect.swallowed[*].frob", "then.frob", "expect.result.object", "expect.top.frob", "expect.globals.g.frob",
+          "expect.heap.live.x", "args[*].swallowed", "natives[*].frob", "natives[*].calls.frob", "expect.found",
+          "expect_error.swallowed[*].frob"]
+PATHS = {"expect.globals.g.frob": "expect.globals.g.frob", "args[*].swallowed": "args[*].swallowed",
+         "natives[*].frob": "natives[*].frob"}
 
 
 def _write(root, rel, doc, asm=ASM):
@@ -115,7 +143,7 @@ def test_an_unknown_key_fails_on_both_runners_and_leaves_no_trace(tmp_path, wher
     assert not list(tmp_path.glob("t*/**/*.trace"))          # failed closed before running
 
 
-@pytest.mark.parametrize("where", ["expect.pc_after", "expect.top", "top.then"])
+@pytest.mark.parametrize("where", ["expect.swallowed[*].frob", "expect.top.frob", "then.frob"])
 def test_the_same_program_marked_pending_is_reported_pending(tmp_path, where):
     doc = _plant(BASE, where)
     doc["pending"] = "T3"

@@ -800,7 +800,8 @@ def test_replay_log_round_trip(tmp_path):                            # trace.md 
     reg.return_log = []
     t1 = osi_vm.ListTrace()
     osi_vm.Vm(image, reg, osi_vm.Heap(t1), t1).call("main", [])
-    assert reg.return_log == ["00000000 t.s 0 -> 0016:00000001 S 2 00ff", "00000001 t.o 0 -> 0027:00000001"]
+    # v2 (natives.md §3.1, M2a-2 T4): a game value is followed by ` G <engine references>`, 0 for a fresh stub object
+    assert reg.return_log == ["00000000 t.s 0 -> 0016:00000001 S 2 00ff", "00000001 t.o 0 -> 0027:00000001 G 0"]
     log = tmp_path / "natives.log"
     log.write_text("\n".join(reg.return_log) + "\n")
     reg2 = osi_vm.NativeRegistry(TYPES)

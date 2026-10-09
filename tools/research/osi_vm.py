@@ -21,7 +21,17 @@ CLI:
   osi_vm.py --conform DIR [--trace-dir D]     every <id>.asm/<id>.expect.json under DIR; "conformance: N/N pass, P pending"
                                               (a program with "pending": "<task>" prints PENDING and is not run)
   osi_vm.py --run BASE.osi --natives N --mods M --types T --frames 600 --keys KEYSPEC [--replay natives.log]
-            [--trace out.trace] [--digest out.digest]
+            [--trace out.trace] [--digest out.digest] [--log-out natives.log] [--real-natives [--install DIR]]
+            [--overrides native_overrides.json]
+
+M2a-2 T4 (the native framework, docs/osi/natives.md): game objects with engine references (D13; Heap.new_game /
+add_ref / release, the free hook, the handle wrap guard), natives.log v2 with its replay rules (D14: G H C X K records,
+one cursor, G checked, H applied, C performed, X decides a swallow; v1 logs still replay), the swallowed nested error
+(D16: Vm.swallow_error, reset_after_error to the outermost call's entry), the nesting high-water (D15: max_nesting), the
+255-byte name bound of 0x18/0x19/0x1a/0x83 (natives.md §8.3; string-table entries are read as C strings at the entry,
+as the original's pointer table does), the error PCs of the opcodes.md table (rule 15) and the runner keys of group n
+(pc_after, then, swallowed, expect.top, returns.engine_refs/object, calls.depth, swallow). The host side natives use is
+tools/research/osi_natives/framework.py.
 """
 from __future__ import annotations
 
@@ -39,6 +49,10 @@ from typing import NamedTuple, Optional
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "tools" / "osi"))
+if str(Path(__file__).resolve().parent) not in sys.path:   # the osi_natives package sits next to this file
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+if __name__ == "__main__":                 # one module object: osi_natives.framework imports `osi_vm`
+    sys.modules.setdefault("osi_vm", sys.modules[__name__])
 from expect_calc import f32_bits as _f32_bits_fraction, round_p  # noqa: E402  (allowed helpers)
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -252,6 +266,9 @@ class DigestTrace(TraceSink):
 # Heap (D7: per-kind monotonic handles from 1, never reused; explicit refcounts; A/F trace events)
 # ---------------------------------------------------------------------------------------------------------------
 
+HANDLE_LIMIT = 0xFFFFFFFF      # D7: a per-kind u32 counter; reaching it is an error, never a wrap (parked N4)
+
+
 class Heap:
     KINDS = ("o", "a", "s", "g")
 
@@ -260,9 +277,11 @@ class Heap:
         self.objects: dict[int, list] = {}   # id -> [refcount, class_id, props(list[Variant]), class_syms]
         self.arrays: dict[int, list] = {}    # id -> [refcount, elements(list[Variant])]
         self.strings: dict[int, bytearray] = {}
-        self.games: dict[int, list] = {}     # id -> [refcount, type]
+        # id -> [total, minting type, engine]: total = engine references + variant references (D13, natives.md §2.4)
+        self.games: dict[int, list] = {}
         self.next = {k: 1 for k in self.KINDS}
         self.allocs = {k: 0 for k in self.KINDS}
+        self.free_hook = None                # called with the handle after a game object's `F g` (the host delete)
 
     def _t(self, s):
         if self.trace is not None:
@@ -270,6 +289,8 @@ class Heap:
 
     def _new(self, kind):
         h = self.next[kind]
+        if h >= HANDLE_LIMIT:
+            raise VmError("Undefined: handle space exhausted")
         self.next[kind] += 1
         self.allocs[kind] += 1
         return h
@@ -296,11 +317,45 @@ class Heap:
         self._t("A s %08x %3d" % (h, len(text)))
         return h
 
-    def new_game(self, type_id: int) -> int:
+    def new_game(self, type_id: int, engine_refs: int = 0) -> int:
+        """Mint a game handle (A g) for an object the engine holds `engine_refs` times, returned in one variant:
+        total = engine_refs + 1 (D13). engine_refs 0 is M2a-1's new_game(type)."""
         h = self._new("g")
-        self.games[h] = [1, type_id]
+        self.games[h] = [engine_refs + 1, type_id, engine_refs]
         self._t("A g %08x %02x" % (h, type_id))
         return h
+
+    # --- engine-side references on a game object (D13; natives.md §1.2 Reference counts, §3.1 H)
+    def _game(self, h: int) -> list:
+        try:
+            return self.games[h]
+        except KeyError:
+            raise VmError("Undefined behaviour: game handle %08x is not live" % h) from None
+
+    def engine(self, h: int) -> int:
+        return self._game(h)[2]
+
+    def game_type(self, h: int) -> int:
+        """The game type under which the handle was minted (its A g line)."""
+        return self._game(h)[1]
+
+    def add_ref(self, h: int) -> None:
+        r = self._game(h)
+        r[0] += 1
+        r[2] += 1
+
+    def release(self, h: int) -> None:
+        r = self._game(h)
+        r[0] -= 1
+        r[2] -= 1
+        if r[0] <= 0:
+            self._free_game(h)
+
+    def _free_game(self, h: int) -> None:
+        del self.games[h]
+        self._t("F g %08x" % h)                       # Dispose 0x60a94c dec, Free 0x60a957 -> the deleting dtor
+        if self.free_hook is not None:
+            self.free_hook(h)
 
     def text(self, h: int) -> bytes:
         try:
@@ -353,8 +408,7 @@ class Heap:
             r = self._rec(self.games, v)
             r[0] -= 1
             if r[0] <= 0:
-                del self.games[v.value]
-                self._t("F g %08x" % v.value)
+                self._free_game(v.value)
         elif t == T_STRING:
             if v.value not in self.strings:
                 raise VmError("Undefined behaviour: string handle %d is not live" % v.value)
@@ -417,8 +471,9 @@ class NativeCall:
     """What a native sees: the VM, its registry row, the call-site pc and exactly argc stack-slot indices (deepest
     first). A by-reference (0x200) parameter is the slot itself (0x60198c-0x601abc: the native gets the slot address)."""
 
-    def __init__(self, vm, entry, site_pc, slots):
+    def __init__(self, vm, entry, site_pc, slots, seq: int = -1):
         self.vm, self.entry, self.site_pc, self.slots = vm, entry, site_pc, slots
+        self.seq = seq                                  # the native sequence number, assigned at entry (natives.md §1.2)
         self.writes: list[tuple[int, Variant]] = []
 
     def arg(self, i: int) -> Variant:
@@ -435,7 +490,8 @@ class NativeRegistry:
         self.types = types
         self.entries: dict[tuple[int, int], NativeEntry] = {}
         self.replay: Optional[list] = None
-        self.replay_seq = 0
+        self.replay_pos = 0                       # the one cursor of the replay (natives.md §3.3)
+        self.replay_v2 = False
         self.return_log: Optional[list] = None   # when a list: natives.log lines are appended (trace.md §6)
 
     @staticmethod
@@ -503,13 +559,20 @@ class NativeRegistry:
             return heap.duplicate(call.arg(0)) if call.slots else NOTHING
         return NOTHING
 
-    # --- the replay log (trace.md §6)
+    # --- the replay log (trace.md §6; v2 = natives.md §3, D14)
     def replay_from(self, log_path) -> None:
         recs = []
         for ln in Path(log_path).read_text(encoding="ascii").splitlines():
             if ln.strip():
-                recs.append(parse_log_line(ln))
-        self.replay, self.replay_seq = recs, 0
+                recs.append(parse_log_record(ln))
+        self.replay, self.replay_pos = recs, 0
+        # a v1 log has native lines only and no G (natives.md §3.3: it still replays; a missing G is 0, nothing checked)
+        self.replay_v2 = any(r["kind"] != "n" or r["ret_g"] is not None or any(w[3] is not None for w in r["writes"])
+                             for r in recs)
+
+    @property
+    def replay_seq(self) -> int:                    # M2a-1 name, kept for the probes
+        return self.replay_pos
 
     def invoke(self, call: NativeCall) -> Variant:
         vm, entry = call.vm, call.entry
@@ -521,63 +584,165 @@ class NativeRegistry:
             r = self.stub_return(entry, vm.heap, call)
         return r if r is not None else NOTHING
 
-    def _replay_one(self, call: NativeCall) -> Variant:
-        vm, heap = call.vm, call.vm.heap
-        seq = self.replay_seq
-        got = "%s.%s/%d" % (call.cls_text.decode("latin-1"), call.fn_text.decode("latin-1"), len(call.slots))
-        if seq >= len(self.replay):
-            raise ReplayDesync("replay desync at seq %d: expected end of log, got %s" % (seq, got))
-        rec = self.replay[seq]
-        exp = "%s/%d" % (rec["name"], rec["argc"])
-        if exp.lower() != got.lower():
-            raise ReplayDesync("replay desync at seq %d: expected %s, got %s" % (seq, exp, got))
-        self.replay_seq += 1
-        for i, v, text in rec["writes"]:
-            call.write(i, self._materialise(heap, v, text, seq))
-        return self._materialise(heap, rec["ret"], rec["ret_text"], seq)
+    def _peek(self):
+        return self.replay[self.replay_pos] if self.replay_pos < len(self.replay) else None
 
-    @staticmethod
-    def _materialise(heap: Heap, v: Variant, text, seq) -> Variant:
+    def replay_frame(self, frame: int) -> None:
+        """The host's frame start: a v2 log has `K %6d` here, before anything else of the frame (natives.md §3.2)."""
+        if not self.replay_v2:
+            return
+        rec = self._peek()
+        if rec is None or rec["kind"] != "K" or rec["frame"] != frame:
+            raise ReplayDesync("replay desync at frame %d: expected K %6d, got %s"
+                               % (frame, frame, rec["raw"] if rec else "end of log"))
+        self.replay_pos += 1
+
+    def _replay_one(self, call: NativeCall) -> Variant:
+        """One cursor in the replay's own execution order (natives.md §3.3, I6). Inside replayed native N: H records are
+        applied, C N calls are performed (their natives consume their own records), X N decides a swallow; then N's own
+        line. Host-level H and C -1 are never performed: met here they are not native N's and are a desync."""
+        vm, heap = call.vm, call.vm.heap
+        seq = call.seq
+        got = "%s.%s/%d" % (call.cls_text.decode("latin-1"), call.fn_text.decode("latin-1"), len(call.slots))
+        while True:
+            rec = self._peek()
+            if rec is None:
+                raise ReplayDesync("replay desync at seq %d: expected end of log, got %s" % (seq, got))
+            kind = rec["kind"]
+            if kind == "n":
+                if self.replay_v2 and rec["seq"] != seq:
+                    raise ReplayDesync("replay desync at seq %d: the log has seq %d (%s/%d) here, got %s"
+                                       % (seq, rec["seq"], rec["name"], rec["argc"], got))
+                exp = "%s/%d" % (rec["name"], rec["argc"])
+                if exp.lower() != got.lower():
+                    raise ReplayDesync("replay desync at seq %d: expected %s, got %s" % (seq, exp, got))
+                self.replay_pos += 1
+                for i, v, text, g in rec["writes"]:
+                    call.write(i, self._materialise(heap, v, text, g, seq))
+                return self._materialise(heap, rec["ret"], rec["ret_text"], rec["ret_g"], seq)
+            if kind == "H":
+                self.replay_pos += 1
+                if rec["handle"] not in heap.games:
+                    raise ReplayDesync("replay desync at seq %d: %s on a handle that is not live" % (seq, rec["raw"]))
+                if rec["delta"] == 1:
+                    heap.add_ref(rec["handle"])
+                elif rec["delta"] == -1:
+                    heap.release(rec["handle"])               # 0 frees it: F g at this event
+                else:
+                    raise ReplayDesync("replay desync at seq %d: %s is not +1/-1" % (seq, rec["raw"]))
+                continue
+            if kind == "C":
+                if rec["seq"] != seq:
+                    raise ReplayDesync("replay desync at seq %d: %s (another native's call)" % (seq, rec["raw"]))
+                self.replay_pos += 1
+                args = [self._materialise(heap, v, text, g, seq) for v, text, g in rec["args"]]
+                raised = None
+                try:
+                    vm.call(rec["name"], args)
+                except VmError as e:
+                    raised = e
+                nxt = self._peek()
+                swallowed = nxt is not None and nxt["kind"] == "X" and nxt["seq"] == seq
+                if raised is not None:
+                    if not swallowed:
+                        raise raised                           # as in the original: out of native N
+                    self.replay_pos += 1
+                    vm.swallow_error(raised, None)             # D16 rules 1-2 at this point (review m-2)
+                elif swallowed:
+                    raise ReplayDesync("replay desync at seq %d: %s after a nested call that did not raise"
+                                       % (seq, nxt["raw"]))
+                continue
+            raise ReplayDesync("replay desync at seq %d: expected %s, got %s" % (seq, got, rec["raw"]))
+
+    def _materialise(self, heap: Heap, v: Variant, text, g, seq) -> Variant:
+        """A logged value as a live variant. A game value (natives.md §3.3 Identity and G): a live handle gets one more
+        variant reference and its engine count is CHECKED against G; otherwise it must be the heap's next handle and is
+        minted with G engine references (the only place G sets a count; a v1 line has no G: 0)."""
         if v.type == T_STRING:
             return Variant(T_STRING, heap.new_string(text or b""))
-        if is_game(v.type) or v.type in (T_OBJECT, T_ARRAY):
-            table = heap.games if is_game(v.type) else (heap.objects if v.type == T_OBJECT else heap.arrays)
-            kind = "g" if is_game(v.type) else ("o" if v.type == T_OBJECT else "a")
-            if is_game(v.type) and v.value == heap.next["g"]:
-                h = heap.new_game(v.type)
-                return Variant(v.type, h)
+        if is_game(v.type):
+            if v.value in heap.games:
+                if g is not None and heap.engine(v.value) != g:
+                    raise ReplayDesync("G check at seq %d: handle %d, engine count %d, logged G %d"
+                                       % (seq, v.value, heap.engine(v.value), g))
+                return heap.duplicate(v)
+            if v.value == heap.next["g"]:
+                return Variant(v.type, heap.new_game(v.type, g or 0))
+            raise ReplayDesync("replay desync at seq %d: handle %04x:%08x is neither the next g handle (%d) nor live"
+                               % (seq, v.type, v.value, heap.next["g"]))
+        if v.type in (T_OBJECT, T_ARRAY):
+            table, kind = (heap.objects, "o") if v.type == T_OBJECT else (heap.arrays, "a")
             if v.value in table:
                 return heap.duplicate(v)
-            raise ReplayDesync("replay desync at seq %d: handle %s:%08x is neither the next %s handle (%d) nor live"
-                               % (seq, "%04x" % v.type, v.value, kind, heap.next[kind]))
+            raise ReplayDesync("replay desync at seq %d: handle %04x:%08x is neither the next %s handle (%d) nor live"
+                               % (seq, v.type, v.value, kind, heap.next[kind]))
         return v
 
 
-def parse_log_line(ln: str) -> dict:
-    """`%08d <cls>.<fn> %d -> <r>[ S %d <hex>][ W %d <v>[ S %d <hex>]]...`"""
-    tok = ln.split(" ")
-    rec = {"seq": int(tok[0]), "name": _unescape_name(tok[1]), "argc": int(tok[2])}
-    assert tok[3] == "->", ln
-    i = 4
-    rec["ret"] = _parse_v(tok[i])
+def apply_overrides(reg: "NativeRegistry", path) -> None:
+    """natives.md §7.2 at load time (--overrides F): on the winner row of each key, set `tier` and, when the override has
+    one, replace `default`. `cite` and `note` stay in the file. An unknown key stops it (LookupError)."""
+    rows = json.loads(Path(path).read_text())
+    for row in rows:
+        c, f = row["key"].split(".", 1)
+        k = reg._key(c, f)
+        if k not in reg.entries:
+            raise LookupError("unknown native key %r in %s" % (row["key"], path))
+        e = reg.entries[k]
+        e = e._replace(tier=row["tier"])
+        if "default" in row:
+            e = e._replace(default=parse_variant_spec(row["default"]))
+        reg.entries[k] = e
+
+
+def _parse_value(tok: list, i: int):
+    """`<v>[ S %d <hex>][ G %d]` at tok[i]: (variant, text or None, G or None, next index)."""
+    v = _parse_v(tok[i])
     i += 1
-    rec["ret_text"] = None
+    text = g = None
     if i < len(tok) and tok[i] == "S":
         n = int(tok[i + 1])
-        rec["ret_text"] = bytes.fromhex(tok[i + 2]) if n else b""
+        text = bytes.fromhex(tok[i + 2]) if n else b""
         i += 3 if n else 2
+    if i < len(tok) and tok[i] == "G":
+        g = int(tok[i + 1])
+        i += 2
+    return v, text, g, i
+
+
+def parse_log_record(ln: str) -> dict:
+    """One natives.log line (trace.md §6, natives.md §3.1): a native line (kind "n"), or an H / C / X / K record."""
+    tok = ln.split(" ")
+    head = tok[0]
+    if head == "H":
+        t, h = tok[1].split(":")
+        return {"kind": "H", "type": int(t, 16), "handle": int(h, 16), "delta": int(tok[2]), "raw": ln}
+    if head == "C":
+        rec = {"kind": "C", "seq": int(tok[1]), "name": _unescape_name(tok[2]), "args": [], "raw": ln}
+        i = 3
+        while i < len(tok):
+            v, text, g, i = _parse_value(tok, i)
+            rec["args"].append((v, text, g))
+        return rec
+    if head == "X":
+        return {"kind": "X", "seq": int(tok[1]), "raw": ln}
+    if head == "K":
+        return {"kind": "K", "frame": int(ln[1:]), "raw": ln}
+    rec = {"kind": "n", "seq": int(tok[0]), "name": _unescape_name(tok[1]), "argc": int(tok[2]), "raw": ln}
+    assert tok[3] == "->", ln
+    rec["ret"], rec["ret_text"], rec["ret_g"], i = _parse_value(tok, 4)
     rec["writes"] = []
     while i < len(tok):
         assert tok[i] == "W", ln
-        idx, v = int(tok[i + 1]), _parse_v(tok[i + 2])
-        i += 3
-        text = None
-        if i < len(tok) and tok[i] == "S":
-            n = int(tok[i + 1])
-            text = bytes.fromhex(tok[i + 2]) if n else b""
-            i += 3 if n else 2
-        rec["writes"].append((idx, v, text))
+        idx = int(tok[i + 1])
+        v, text, g, i = _parse_value(tok, i + 2)
+        rec["writes"].append((idx, v, text, g))
     return rec
+
+
+def parse_log_line(ln: str) -> dict:
+    """M2a-1 name: a native line (`%08d <cls>.<fn> %d -> <r>[ S %d <hex>][ G %d][ W %d <v>…]…`)."""
+    return parse_log_record(ln)
 
 
 def _unescape_name(s: str) -> str:
@@ -634,9 +799,11 @@ class Script:
             p += n
             return d[p - n:p]
 
-        def strtab():
+        def strtab(offsets=None):
             out = []
             for _ in range(u16()):
+                if offsets is not None:
+                    offsets.append(p)
                 n = u8()
                 out.append(take(n))
                 take(1)
@@ -645,7 +812,11 @@ class Script:
         if take(4) != b"OSI\0":
             raise ValueError("bad magic")
         self.version = (u16(), u16())
-        self.strings = strtab()
+        # ScOSIScript::ScOSIScript 0x609570 keeps a pointer per entry, table[i] = table[i-1] + length byte + 2
+        # (0x60964e-0x60966c), and never checks the terminator byte; the VM reads an entry as the C string at table[i]+1.
+        self.string_offsets: list[int] = []
+        self.symbol_offsets: list[int] = []
+        self.strings = strtab(self.string_offsets)
         self.globals = strtab()
         self.functions = []                 # (name bytes, offset, argc)
         for _ in range(u16()):
@@ -662,23 +833,31 @@ class Script:
             n = u8()
             c[0] = take(n)
             take(1)
-        self.symbols = strtab()
+        self.symbols = strtab(self.symbol_offsets)
         self.sources = strtab()
         self.code_start = p
         self.member_cache: list[tuple[bytes, int]] = []   # FindMemberID's per-script cache (0x609c16, +0x48)
 
+    def _c_string_at(self, off: int) -> bytes:
+        """The C string at file offset off: up to the first NUL of the FILE, so an entry whose terminator byte is not
+        NUL runs on into the next entry (natives.md §8.3: strlen 0x6573c0 at 0x4f5c13 on table[i]+1). Past the end of
+        the image is not specified (rule 15(d)); the read stops there."""
+        end = self.data.find(b"\0", off)
+        return self.data[off:] if end < 0 else self.data[off:end]
+
     def string_text(self, idx: int) -> bytes:
-        """String-table entry `idx & 0xffff` as the VM reads it: entry+1 up to the first NUL."""
+        """String-table entry `idx & 0xffff` as the VM reads it: the C string at entry+1 (see _c_string_at)."""
         idx &= 0xFFFF
         if idx >= len(self.strings):
             raise VmError("Undefined behaviour: string-table index %d out of range" % idx)
-        return cstr(self.strings[idx])
+        return self._c_string_at(self.string_offsets[idx] + 1)
 
     def symbol_text(self, idx: int) -> bytes:
+        """Symbol entry idx: the C string at entry+1 (FindMemberID walks the same length+2 table, 0x609c70-0x609c7e)."""
         idx &= 0xFFFF
         if idx >= len(self.symbols):
             raise VmError("Undefined behaviour: symbol index %d out of range" % idx)
-        return cstr(self.symbols[idx])
+        return self._c_string_at(self.symbol_offsets[idx] + 1)
 
     def find_function(self, name: bytes):
         """FindFunction (0x609ce0): first entry whose name __strnicmp-matches the query over the entry's length."""
@@ -709,9 +888,9 @@ class Script:
                 raise UndefinedBehaviour("Undefined behaviour: FindMemberID cache holds a null symbol pointer")
             if t == q:
                 return i
-        found, last = 0xFFFF, None
-        for i, s in enumerate(self.symbols):
-            last = cstr(s)
+        found, last = 0xFFFF, None                    # esi = 0 (0x609c57): no symbols leaves a null pointer
+        for i in range(len(self.symbols)):
+            last = self.symbol_text(i)
             if last == q:
                 found = i
                 break
@@ -912,8 +1091,13 @@ class Vm:
         self.halted = False
         self.last_error: Optional[VmError] = None
         self._nest = 0
+        self.max_nesting = 0                  # D15: the high-water of engine calls in flight (the outermost included)
         self._outer_marker = None
         self._outer_saved_pc = 0
+        self._outer_entry = (0, 0, 0)         # (context_depth, frame, refcount) at the outermost call's entry (D16 r6)
+        self._seq_stack: list[int] = []       # sequence numbers of the natives executing, innermost last
+        self.swallowed: list[VmError] = []    # errors swallowed by a native (D16 rule 2), in order
+        self.host = None                      # the HostContext of osi_natives.framework, when one is attached
         self._ipc, self._iop = 0, 0
         self._sha = hashlib.sha256(self.image).hexdigest()
         self.pcs_seen: Optional[set] = None
@@ -1012,10 +1196,13 @@ class Vm:
         if self._nest >= MAX_ENGINE_NESTING:                    # port cap (D10): never the outermost call
             raise self._err(ERR["nest_cap"])
         self._nest += 1
+        if self._nest > self.max_nesting:
+            self.max_nesting = self._nest
         outer = self._nest == 1
         if outer:
             self._outer_marker = self.depth
             self._outer_saved_pc = self.pc        # the value CallWithReturn's {0xff, PC} marker gets (0x60b484)
+            self._outer_entry = (self.context_depth, self.frame, self.refcount)
         try:
             return self._call_with_return(nb, args)
         except VmError as e:
@@ -1030,19 +1217,71 @@ class Vm:
             self._nest -= 1
 
     def reset_after_error(self) -> None:
-        """Our host behaviour (D10): refcount and context depth to 0, pop (with dispose) to and including the failed
-        outermost call's 0xff marker, PC = the marker's value (the PC that call saved, 0x60b484 / restored at 0x60b5a2),
-        even when the script itself already popped the marker. fpu_pc stays 64."""
+        """Our host behaviour (D10; D16 rule 6): pop (with dispose) from the top down to and including the failed
+        outermost call's own marker, the slot at the depth it recorded at its entry, THROUGH any inner 0xff markers a
+        swallow left (n-swallow-reerror), even when the script itself already popped that marker. Then context_depth,
+        frame_ptr, PC (the marker's value: 0x60b484, restored at 0x60b5a2) and the VM refcount go back to their values
+        at that call's entry; leftovers below that depth, left by an earlier successful call, stay. fpu_pc stays 64."""
         m = self._outer_marker if self._outer_marker is not None else 0
         while self.depth > m:
             v = self.stack[self.depth - 1]
             self.depth -= 1
             self.heap.dispose(v)
         self.pc = self._outer_saved_pc
-        self.refcount = 0
-        self.context_depth = 0
-        self.frame = self.scan_frame()          # "After an error": framePtr pointed into the failed frame (M4)
+        self.context_depth, self.frame, self.refcount = self._outer_entry
         self.last_error = None
+
+    # ------------------------------------------------------------------ the native framework's VM side (M2a-2)
+    def native_seq(self) -> int:
+        """The sequence number of the innermost native executing (-1 outside any native: the host)."""
+        return self._seq_stack[-1] if self._seq_stack else -1
+
+    def swallow_error(self, e: VmError, seq: Optional[int]) -> None:
+        """D16 rules 1-2, at the swallow point of a native's catch: the VM stays exactly as the throw left it; the E line
+        of the swallowed error is written here (pc/op of the failing instruction, depth and top at the throw), then
+        `P <pc> 64` if fpu_pc was 24 (the catch pad's fninit 0x657245). No last_error, no reset, no engine call ends.
+        natives.log gets `X <seq>` (natives.md §3.1) when the native has a sequence number and a log is kept."""
+        e.top = self.top()
+        e.pc_after = self.pc
+        self._t('E %08x %02x %4d "%s"' % (e.pc, e.op, e.depth, msg_escape(e.message_bytes)))
+        self._set_pc64(e.pc)
+        self.swallowed.append(e)
+        if seq is not None and seq >= 0:
+            self.log_x(seq)
+
+    # natives.log v2 (natives.md §3; trace.md §6): lines in event order, written only while a log is kept
+    def _log(self, line: str) -> None:
+        log = self.natives.return_log
+        if log is not None:
+            log.append(line)
+
+    def log_value(self, v: Variant) -> str:
+        """`<v>`, then ` S %d <hex>` after a 0x16 and ` G %d` after a game value (the engine's references, no variant)."""
+        s = fmt_v(v)
+        if v.type == T_STRING:
+            t = self.heap.text(v.value)
+            s += (" S %d %s" % (len(t), t.hex())) if t else " S 0"
+        elif is_game(v.type) and v.value in self.heap.games:
+            s += " G %d" % self.heap.engine(v.value)
+        return s
+
+    def log_h(self, h: int, delta: int) -> None:
+        self._log("H %04x:%08x %+d" % (self.heap.game_type(h), h, delta))
+
+    def log_c(self, seq: int, name, args) -> None:
+        nb = name.encode("latin-1") if isinstance(name, str) else bytes(name)
+        args = list(args) + [NOTHING] * (10 - len(args))
+        self._log("C %08d %s %s" % (seq, name_token(nb), " ".join(self.log_value(a) for a in args)))
+
+    def log_x(self, seq: int) -> None:
+        self._log("X %08d" % seq)
+
+    def begin_frame(self, frame: int) -> None:
+        """The host's frame start: `K %6d` in natives.log (live), or the replay's check of that record."""
+        if self.natives.replay is not None:
+            self.natives.replay_frame(frame)
+        else:
+            self._log("K %6d" % frame)
 
     # ------------------------------------------------------------------ CallWithReturn (0x60b450)
     def _call_with_return(self, nb: bytes, args: list) -> CallResult:
@@ -1183,7 +1422,7 @@ class Vm:
         rec = self._obj(o)
         i = self._get_property_index(rec, m)
         if i is None:
-            raise self._err(ERR["no_prop"] % self.script.symbol_text(m))
+            raise self._err(ERR["no_prop"] % self._symbol_text(m))
         self.heap.dispose(rec[2][i])
         rec[2][i] = v
         self.heap.dispose(o)
@@ -1246,7 +1485,7 @@ class Vm:
         rec = self._obj(this)
         i = self._get_property_index(rec, m)
         if i is None:
-            raise self._err(ERR["no_prop"] % self.script.symbol_text(m))
+            raise self._err(ERR["no_prop"] % self._symbol_text(m))
         self.heap.dispose(rec[2][i])
         rec[2][i] = v
         return True
@@ -1260,7 +1499,7 @@ class Vm:
         rec = self._obj(this)
         i = self._get_property_index(rec, m)
         if i is None:
-            raise self._err(ERR["no_prop"] % self.script.symbol_text(m))
+            raise self._err(ERR["no_prop"] % self._symbol_text(m))
         self.push(self.heap.duplicate(rec[2][i]))
         return True
 
@@ -1280,8 +1519,30 @@ class Vm:
         except UndefinedBehaviour as e:
             raise self._err(str(e)) from None
 
+    def _string_text(self, idx: int) -> bytes:
+        try:
+            return self.script.string_text(idx)
+        except VmError as e:                                          # a port error at this instruction (rule 15(c))
+            raise self._err(e.message_bytes) from None
+
+    def _symbol_text(self, idx: int) -> bytes:
+        try:
+            return self.script.symbol_text(idx)
+        except VmError as e:
+            raise self._err(e.message_bytes) from None
+
     def _name_text(self, s: Variant) -> bytes:
-        return self.script.string_text(s.value) if s.type == T_SID else self.heap.text(s.value)
+        return self._string_text(s.value) if s.type == T_SID else self.heap.text(s.value)
+
+    def _name_copy(self, s: Variant) -> bytes:
+        """The 0x18/0x19/0x1a/0x83 name copy into a local ScFixedString of capacity 0xff (natives.md §8.3):
+        operator=(const char*) 0x4f5c00 for a 0x11 (the C string at the entry, strlen 0x6573c0 at 0x4f5c13) or
+        operator=(const ScFixedString&) 0x4f5b00 for a 0x16. Both throw kOutOfRange when len > capacity (`seta` at
+        0x4f5c27 / 0x4f5b16, SrThrow 0x4f5c38 / 0x4f5b27): 255 passes, 256 throws, at the handler's PC then."""
+        text = self._name_text(s)
+        if len(text) > 255:
+            raise self._err(b"kOutOfRange")
+        return text
 
     def op_get_member_str(self):                                      # 0x18
         self.pc += 1
@@ -1289,11 +1550,11 @@ class Vm:
         o = self.pop()
         if s.type not in (T_SID, T_STRING):
             raise self._err(b"Invalid type for member access (must be a string)")
+        text = self._name_copy(s)                                     # 0x5fef3b / 0x5fef69, before the object checks
         if is_game(o.type):
             raise self._game_type_error()
         if o.type != T_OBJECT:
             raise self._err(ERR["non_member"])
-        text = self._name_text(s)
         rec = self._obj(o)
         i = self._get_property_index(rec, self._find_member_id(text))
         if i is None:
@@ -1311,8 +1572,9 @@ class Vm:
             raise self._err(ERR["method_non_member"])
         if s.type not in (T_SID, T_STRING):
             raise self._err(b"Invalid method type for function call (must be a string)")
+        text = self._name_copy(s)                                     # 0x5ff2e7 / 0x5ff313, after the object check
         rec = self._obj(o)
-        off = self._find_method(rec, self._find_member_id(self._name_text(s)))
+        off = self._find_method(rec, self._find_member_id(text))
         self.push(Variant(T_INT, off))
         self.heap.dispose(o)
         self.heap.dispose(s)
@@ -1324,12 +1586,12 @@ class Vm:
         o = self.pop()
         if s.type not in (T_SID, T_STRING):
             raise self._err(b"Invalid type for member set (must be a string)")
+        text = self._name_copy(s)                                     # 0x5ff49b / 0x5ff4c9, before the object checks
         if is_game(o.type):
             raise self._game_type_error()
         if o.type != T_OBJECT:
             raise self._err(ERR["non_object"])
         v = self.pop()
-        text = self._name_text(s)
         rec = self._obj(o)
         i = self._get_property_index(rec, self._find_member_id(text))
         if i is None:
@@ -1716,7 +1978,7 @@ class Vm:
     def _sid_to_dyn(self, idx: int) -> int:
         """ConvertStringIDToDynamicString (0x60b880): a new 0x16 from entry idx (strlen); >= 255 chars throws
         kOutOfRange from the string ctor 0x60b8d0 (0x60b970), before the string exists."""
-        text = self.script.string_text(idx)
+        text = self._string_text(idx)
         if len(text) >= 255:
             raise self._err(b"kOutOfRange")
         return self.heap.new_string(text)
@@ -2106,10 +2368,15 @@ class Vm:
                 r, v2 = self._convert(v, t)
                 self.heap.dispose(v2)                                 # PushInto 0x601edc
                 self.stack[slots[i]] = r
-        call = NativeCall(self, entry, site, slots)
+        seq = self.native_calls                                       # assigned at native entry (natives.md §3.2)
+        call = NativeCall(self, entry, site, slots, seq)
         call.cls_text, call.fn_text = cls_text, fn_text
         self.native_calls += 1
-        res = self.natives.invoke(call)
+        self._seq_stack.append(seq)
+        try:
+            res = self.natives.invoke(call)
+        finally:
+            self._seq_stack.pop()
         if entry.sets_fpu_pc64:
             self._set_pc64(site)
         args = [self.stack[s] for s in slots]
@@ -2123,9 +2390,8 @@ class Vm:
             parts.append("0200:%08x" % slots[i] if byref[i] else fmt_v(a))
         parts.append("-> " + fmt_v(res))
         self._t(" ".join(parts))
-        log = self.natives.return_log
-        if log is not None:
-            log.append(self._log_line(len(log), cls_text, fn_text, n, res, call.writes))
+        if self.natives.return_log is not None:                      # N's own line, at its return (event order)
+            self._log(self._log_line(seq, cls_text, fn_text, n, res, call.writes))
         for _ in range(n):                                            # n Pops WITH dispose, 0x601c5f
             self.pop_dispose()
         return res
@@ -2135,31 +2401,24 @@ class Vm:
         self._t(("S %08x %3d %s" % (h, len(t), t.hex())) if t else ("S %08x %3d" % (h, 0)))
 
     def _log_line(self, seq, cls_text, fn_text, n, res, writes) -> str:
-        def sv(v):
-            s = fmt_v(v)
-            if v.type == T_STRING:
-                t = self.heap.text(v.value)
-                s += (" S %d %s" % (len(t), t.hex())) if t else " S 0"
-            return s
-        out = "%08d %s.%s %d -> %s" % (seq, name_token(cls_text), name_token(fn_text), n, sv(res))
+        out = "%08d %s.%s %d -> %s" % (seq, name_token(cls_text), name_token(fn_text), n, self.log_value(res))
         for i, v in writes:
-            out += " W %d %s" % (i, sv(v))
+            out += " W %d %s" % (i, self.log_value(v))
         return out
 
     def op_call_native(self):                                         # 0x82
         site = self.pc
         ci, fi, n = self._u16(site + 1), self._u16(site + 3), self._u8(site + 5)
-        C, F = self.script.string_text(ci), self.script.string_text(fi)
+        self.pc += 5                                                  # 5 incs 0x6015c6-0x60162c before the lookup
+        C, F = self._string_text(ci), self._string_text(fi)           # a bad index is a port error at +5 (rule 15(c))
         memo = self.memo.get(site)
         if memo is None:
-            self.pc += 5
             entry = self.natives.find(C, F)
             if entry is None:
                 raise self._err(ERR["unreg_fn"])                     # SrOSIError 0x601725, outside every try
         else:
-            self.pc += 5
             entry = memo
-        self.pc += 1
+        self.pc += 1                                                  # the sixth inc, 0x601780
         saved = (self._ipc, self._iop)
         try:
             if memo is None:
@@ -2181,11 +2440,11 @@ class Vm:
         site = self.pc
         ci = self._u16(site + 1)
         self.pc += 3
-        s = self.pop()
+        s = self.pop()                                                # 0x6021c9, without dispose
         if s.type not in (T_SID, T_STRING):
-            raise self._err(b"Invalid member type for function call (must be a string)")
-        C = self.script.string_text(ci)
-        F = cstr(self._name_text(s))
+            raise self._err(b"Invalid member type for function call (must be a string)")   # 0x6022c3, +3
+        F = cstr(self._name_copy(s))                                  # 0x60226a / 0x602299, before the try: +3
+        C = self._string_text(ci)
         saved = (self._ipc, self._iop)
         try:
             entry = self.natives.find(C, F)
@@ -2270,17 +2529,25 @@ def host_variant(vm_or_heap, spec, types: TypeTable) -> Variant:
 
 
 def test_native_entry(spec: dict, types: TypeTable, reg: NativeRegistry) -> NativeEntry:
-    """A declarative test native (conformance.md §1 and §6.1)."""
+    """A declarative test native (conformance.md §1, §6.1 and the native-framework fields; rules 17 and 18), built on
+    the native framework (osi_natives.framework.HostContext), as a native model would be:
+    - `calls` {entry, args, depth}: the nested call (`engine_call`), made only while context_depth < depth;
+    - `swallow`: the nested call's error is swallowed (D16 rules 1-2), then the writes and the return as usual;
+    - `writes`: by-reference writes into the argument slots the handler addressed before the call (D16 rule 3);
+    - `returns` {game, engine_refs, object}: a host object the engine holds engine_refs times, through create_variant
+      (the first return of a named object creates it; later returns while it is live give the same handle)."""
     tys = list(spec.get("types", []))
     mx = spec.get("max", len(tys))
     tys = [types.id(t) for t in tys] + [T_NOTHING] * (10 - len(tys))
 
     def fn(call: NativeCall) -> Variant:
+        from osi_natives.framework import GameObject, HostContext
         vm = call.vm
+        ctx = HostContext.of(vm)
         nested = spec.get("calls")
-        if nested is not None:
+        if nested is not None and ("depth" not in nested or vm.context_depth < int(nested["depth"])):
             nargs = [host_variant(vm, a, types) for a in nested.get("args", [])]
-            vm.call(nested["entry"], nargs)
+            ctx.engine_call(nested["entry"], nargs, swallow=bool(spec.get("swallow", False)))
         for w in spec.get("writes", []):
             call.write(int(w["arg"]), host_variant(vm, w, types))
         ret = spec.get("returns")
@@ -2288,6 +2555,16 @@ def test_native_entry(spec: dict, types: TypeTable, reg: NativeRegistry) -> Nati
             return NOTHING
         if "arg" in ret:
             return vm.heap.duplicate(call.arg(int(ret["arg"])))
+        if "game" in ret:
+            t = types.id(ret["game"])
+            k = int(ret.get("engine_refs", 0))
+            name = ret.get("object")
+            obj = ctx.test_objects.get(name) if name is not None else None
+            if obj is None or obj.deleted:
+                obj = GameObject(t, k)
+                if name is not None:
+                    ctx.test_objects[name] = obj
+            return ctx.create_variant(obj, t)
         return host_variant(vm, ret, types)
 
     return NativeEntry(spec["cls"], spec["name"], (spec["cls"] + "." + spec["name"]).lower(), spec.get("min", 0), mx,
@@ -2328,6 +2605,11 @@ def run_program(asm_path: Path, trace_dir: Optional[Path] = None, *, natives_p=D
     bad = uncompared_keys(spec)
     if bad:                                           # fail closed: a field nobody compares must not pass unexamined
         return ["uncompared key " + k for k in bad]
+    shape = [k for k, want in (("then", dict),) if k in spec and not isinstance(spec[k], want)]
+    shape += ["%s.swallowed" % e for e in ("expect", "expect_error")
+              if isinstance(spec.get(e), dict) and "swallowed" in spec[e] and not isinstance(spec[e]["swallowed"], list)]
+    if shape:
+        return ["malformed key " + k for k in shape]
     try:
         image, info = osiasm.assemble(asm_path.read_text(encoding="latin-1"))
     except osiasm.AsmError as e:
@@ -2362,6 +2644,7 @@ def run_program(asm_path: Path, trace_dir: Optional[Path] = None, *, natives_p=D
         heap.dispose = orig_dispose
         snap = vm.snapshot()
         labels = info["labels"]
+        text_of_live = lambda v: heap.text(v.value) if v.value in heap.strings else None   # noqa: E731
         if "expect" in spec:
             ex = spec["expect"]
             if not res.ok:
@@ -2374,7 +2657,13 @@ def run_program(asm_path: Path, trace_dir: Optional[Path] = None, *, natives_p=D
                     d = _spec_eq(vm, res.result, ex["result"], lambda v: texts.get(v.value))
                     if d:
                         fails.append("result: " + d)
+            if "top" in ex:                                    # after the host disposed the result (M2a-2 T2b)
+                d = _spec_eq(vm, snap.top, ex["top"], text_of_live)
+                if d:
+                    fails.append("top: " + d)
             _cmp_state(vm, ex, snap, fails)
+            _cmp_pc_after(ex, snap, labels, fails)
+            _cmp_swallowed(vm, ex.get("swallowed", []), labels, fails)
         else:
             ex = spec["expect_error"]
             if res.ok:
@@ -2384,11 +2673,7 @@ def run_program(asm_path: Path, trace_dir: Optional[Path] = None, *, natives_p=D
                 if "message" in ex and e.message_bytes != ex["message"].encode("latin-1"):
                     fails.append("message: expected %r, got %r" % (ex["message"], e.message))
                 if "pc" in ex:
-                    want = ex["pc"]
-                    if isinstance(want, str) and want.startswith("@"):
-                        want = labels.get(want[1:])
-                    elif isinstance(want, str):
-                        want = int(want, 0)
+                    want = _pc_spec(ex["pc"], labels)
                     if want != e.pc:
                         fails.append("pc: expected %s, got %08x" % (want if want is None else "%08x" % want, e.pc))
                 if "op" in ex:
@@ -2398,16 +2683,21 @@ def run_program(asm_path: Path, trace_dir: Optional[Path] = None, *, natives_p=D
                 if "depth" in ex and ex["depth"] != e.depth:
                     fails.append("depth: expected %d, got %d" % (ex["depth"], e.depth))
                 if "top" in ex:
-                    d = _spec_eq(vm, e.top, ex["top"], lambda v: heap.text(v.value) if v.value in heap.strings else None)
+                    d = _spec_eq(vm, e.top, ex["top"], text_of_live)
                     if d:
                         fails.append("top: " + d)
                 _cmp_state(vm, ex, snap, fails, error=True)
+                _cmp_pc_after(ex, snap, labels, fails)
+            _cmp_swallowed(vm, ex.get("swallowed", []), labels, fails)
+            if not res.ok and "then" not in spec:
                 # D10: snapshot taken; reset, then the VM must be usable again (our behaviour)
                 vm.reset_after_error()
                 if any(f[0].lower() == b"main2" for f in vm.script.functions):
                     r2 = vm.call("main2", [])
                     if not r2.ok:
                         fails.append("main2 after reset: %s" % vm.last_error.message)
+        if "then" in spec:                                     # rule 19: a second engine call on the same VM
+            _run_then(vm, spec["then"], res, types, labels, fails)
         sha_after = hashlib.sha256(vm.image).hexdigest()
         if sha_after != hashlib.sha256(image).hexdigest():
             fails.append("tripwire: the script image changed")
@@ -2421,6 +2711,91 @@ def run_program(asm_path: Path, trace_dir: Optional[Path] = None, *, natives_p=D
         if trace is not None:
             trace.close()
     return fails
+
+
+def _pc_spec(want, labels) -> Optional[int]:
+    """An absolute file offset: an integer, "0x…", a label "@L" or "@L+k" (k decimal; conformance.md §1)."""
+    if isinstance(want, int):
+        return want
+    if isinstance(want, str) and want.startswith("@"):
+        m = re.fullmatch(r"@([^+]+)(?:\+([0-9]+))?", want)
+        if not m or m.group(1) not in labels:
+            return None
+        return labels[m.group(1)] + int(m.group(2) or 0)
+    return int(want, 0)
+
+
+def _cmp_pc_after(ex: dict, snap: VmState, labels, fails: list, what: str = "pc_after") -> None:
+    """snapshot().pc, compared under conformance rule 15 (opcodes.md error-PC table)."""
+    if "pc_after" in ex:
+        want = _pc_spec(ex["pc_after"], labels)
+        if want != snap.pc:
+            fails.append("%s: expected %s, got %08x" % (what, "?" if want is None else "%08x" % want, snap.pc))
+
+
+def _cmp_swallowed(vm: Vm, want: list, labels, fails: list) -> None:
+    """The errors swallowed during the call, in order (D16 rule 2): exactly these, so [] (or no key) means none."""
+    got = vm.swallowed
+    if len(got) != len(want):
+        fails.append("swallowed: expected %d, got %d (%s)" % (len(want), len(got), "; ".join(
+            '"%s" at %08x' % (e.message, e.pc) for e in got)))
+        return
+    for i, (w, e) in enumerate(zip(want, got)):
+        if "message" in w and e.message_bytes != w["message"].encode("latin-1"):
+            fails.append("swallowed[%d].message: expected %r, got %r" % (i, w["message"], e.message))
+        if "pc" in w and _pc_spec(w["pc"], labels) != e.pc:
+            fails.append("swallowed[%d].pc: expected %s, got %08x" % (i, w["pc"], e.pc))
+        if "op" in w:
+            op = int(w["op"], 0) if isinstance(w["op"], str) else w["op"]
+            if op != e.op:
+                fails.append("swallowed[%d].op: expected %02x, got %02x" % (i, op, e.op))
+        if "depth" in w and w["depth"] != e.depth:
+            fails.append("swallowed[%d].depth: expected %d, got %d" % (i, w["depth"], e.depth))
+        if "top" in w:
+            d = _spec_eq(vm, e.top, w["top"], lambda v: vm.heap.text(v.value) if v.value in vm.heap.strings else None)
+            if d:
+                fails.append("swallowed[%d].top: %s" % (i, d))
+        if "pc_after" in w and _pc_spec(w["pc_after"], labels) != e.pc_after:
+            fails.append("swallowed[%d].pc_after: expected %s, got %08x" % (i, w["pc_after"], e.pc_after))
+
+
+def _run_then(vm: Vm, th: dict, first: CallResult, types: TypeTable, labels, fails: list) -> None:
+    """Conformance rule 19: after the first call's comparison, reset only if it raised (else the second call runs above
+    whatever the first left, D16 rule 5); then call then.entry and compare the fields given, like `expect`."""
+    if not first.ok:
+        vm.reset_after_error()
+    heap = vm.heap
+    args = [host_variant(vm, a, types) for a in th.get("args", [])]
+    texts = {}
+    orig_dispose = heap.dispose
+
+    def capture(v):
+        if v.type == T_STRING and v.value in heap.strings:
+            texts[v.value] = bytes(heap.strings[v.value])
+        orig_dispose(v)
+    heap.dispose = capture
+    try:
+        r = vm.call(th.get("entry", "main2"), args)
+    finally:
+        heap.dispose = orig_dispose
+    snap = vm.snapshot()
+    want_ok = th.get("ok", True)
+    if r.ok is not want_ok:
+        fails.append("then.ok: expected %r, got %r%s" % (want_ok, r.ok, (' ("%s")' % vm.last_error.message)
+                                                         if not r.ok else ""))
+    if "result" in th and r.ok:
+        d = _spec_eq(vm, r.result, th["result"], lambda v: texts.get(v.value))
+        if d:
+            fails.append("then.result: " + d)
+    if "depth" in th and th["depth"] != snap.depth:
+        fails.append("then.depth: expected %d, got %d" % (th["depth"], snap.depth))
+    if "top" in th:
+        d = _spec_eq(vm, snap.top, th["top"], lambda v: heap.text(v.value) if v.value in heap.strings else None)
+        if d:
+            fails.append("then.top: " + d)
+    if "context_depth" in th and th["context_depth"] != snap.context_depth:
+        fails.append("then.context_depth: expected %d, got %d" % (th["context_depth"], snap.context_depth))
+    _cmp_pc_after(th, snap, labels, fails, "then.pc_after")
 
 
 def _cmp_state(vm: Vm, ex: dict, snap: VmState, fails: list, error: bool = False) -> None:
@@ -2472,7 +2847,15 @@ COMPARED_KEYS = frozenset(
     + ["natives[*].returns.arg"] + _value_keys("natives[*].returns")[1:]
     + ["expect.ok", "expect.depth"] + _value_keys("expect.result") + _state_keys("expect")[1:]
     + ["expect_error.message", "expect_error.pc", "expect_error.op", "expect_error.depth"] + _value_keys("expect_error.top")
-    + _state_keys("expect_error")[1:])
+    + _state_keys("expect_error")[1:]
+    # M2a-2 T4: every key group n uses (tests/osi/conformance/n; conformance.md "Native-framework fields", rules 15-19).
+    # Exactly the paths a program needs (rule 22), no unused value forms: 38 keys, 105 -> 143.
+    + ["natives[*].swallow", "natives[*].calls.depth", "natives[*].returns.engine_refs", "natives[*].returns.object"]
+    + ["expect.top", "expect.top.type", "expect.top.value", "expect.pc_after", "expect_error.pc_after"]
+    + [p + ".swallowed" + k for p in ("expect", "expect_error")
+       for k in ("", "[*].message", "[*].pc", "[*].op", "[*].depth", "[*].top", "[*].top.type", "[*].top.value")]
+    + ["then", "then.entry", "then.args", "then.ok", "then.result", "then.result.type", "then.result.value", "then.depth",
+       "then.top", "then.top.type", "then.top.value", "then.context_depth", "then.pc_after"])
 # descriptive keys no runner compares (the coverage report reads some of them): listed so that nothing else passes unexamined
 IGNORED_KEYS = frozenset(["id", "rows", "note", "alternative", "falsifier", "falsifier_id", "argc_violation", "pending"])
 
@@ -2553,6 +2936,8 @@ def run_base(a) -> int:
     script = Path(a.run).read_bytes()
     types = TypeTable.load(a.types)
     reg = NativeRegistry.load(a.natives, a.mods, types)
+    if a.overrides:
+        apply_overrides(reg, a.overrides)
     if a.replay:
         reg.replay_from(a.replay)
     else:
@@ -2568,6 +2953,11 @@ def run_base(a) -> int:
         trace.line(header_line(script, a.natives, a.mods, a.types, extra))
     heap = Heap(trace)
     vm = Vm(script, reg, heap, trace)
+    if a.real_natives:                    # the models of the registered groups (Tasks 7b-9b); the rest stay stubs (D11)
+        from osi_natives import framework
+        vfs = framework.Vfs(a.install) if a.install else None
+        ctx = framework.HostContext(vm, heap, vfs, framework.HostFlags(), reg.return_log)
+        framework.bind_natives(reg, ctx)
     vm.pcs_seen = set()
     stop = "none"
     per_frame = []
@@ -2587,6 +2977,7 @@ def run_base(a) -> int:
                 tb, db = f32_bits(time), f32_bits(dt)
                 if trace is not None:
                     trace.line("K %6d %08x %08x %08x" % (k, tb, db, k))
+                vm.begin_frame(k)                 # natives.log `K %6d` before anything else of the frame (or its replay check)
                 i0, n0 = vm.instructions, vm.native_calls
                 vm.pcs_seen = set()
                 err = None
@@ -2648,6 +3039,7 @@ def run_base(a) -> int:
           % (sum(pass_counts), len(pass_counts), max(pass_counts, default=0), len(rerun),
              (" (first: %s)" % " ".join("%d:%d" % x for x in rerun[:5])) if rerun else "", len(skipped),
              (" (first: %s)" % " ".join(str(i) for i in skipped[:5])) if skipped else ""))
+    print("engine-call nesting: max %d (cap %d)" % (vm.max_nesting, MAX_ENGINE_NESTING))
     print("stop: %s" % stop)
     print("script sha256 unchanged: %s" % (hashlib.sha256(vm.image).hexdigest() == hashlib.sha256(script).hexdigest()))
     return 0
@@ -2667,7 +3059,11 @@ def main(argv=None) -> int:
     ap.add_argument("--replay")
     ap.add_argument("--trace")
     ap.add_argument("--digest")
-    ap.add_argument("--log-out", help="write the natives.log of this run (stub returns)")
+    ap.add_argument("--log-out", help="write the natives.log (v2, natives.md §3) of this run")
+    ap.add_argument("--real-natives", action="store_true",
+                    help="bind the registered native models (osi_natives groups); the other rows stay typed stubs")
+    ap.add_argument("--install", help="the install directory the native models read (Root/ of the VFS)")
+    ap.add_argument("--overrides", help="apply a native_overrides.json (tier, default) at load (natives.md §7.2)")
     a = ap.parse_args(argv)
     if a.list_keys:
         for kind, keys in (("compared", COMPARED_KEYS), ("ignored", IGNORED_KEYS)):
