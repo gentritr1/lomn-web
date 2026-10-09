@@ -274,7 +274,14 @@ def test_a9_stub_report(base_osi, tmp_path):
     """The stub run of the A9 path (600 frames, the A9 keys, an empty overrides list): measured values (D6), pinned so
     that a change to the pass shows up; the per-native verdicts are in docs/knowledge/measurements.md."""
     (tmp_path / "ov.json").write_text("[]")
-    rep = osi_taint.run_base(base_osi, frames=600, keys=A9_KEYS, overrides=tmp_path / "ov.json")
+    # the committed natives.json carries the merged `tier` of every overridden row (T7a onward); the all-stub baseline reads a
+    # copy without them, so that this pin does not move when a native group lands
+    rows = json.loads(osi_vm.DEFAULT_NATIVES.read_text())
+    for r in rows:
+        r.pop("tier", None)
+    (tmp_path / "natives.json").write_text(json.dumps(rows))
+    rep = osi_taint.run_base(base_osi, frames=600, keys=A9_KEYS, overrides=tmp_path / "ov.json",
+                             natives=tmp_path / "natives.json")
     assert rep.stop == "none" and rep.frames == 600 and rep.instructions == 390706   # the A6 total (measurements.md)
     assert rep.lines()[0] == A9_HEAD
     assert sorted(k for k, v in rep.verdicts().items() if v.startswith("UNSAFE")) == A9_UNSAFE

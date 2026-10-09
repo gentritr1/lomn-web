@@ -33,6 +33,25 @@ def _run(exe, *args, timeout=100):
     return subprocess.run([str(exe), *map(str, args)], capture_output=True, text=True, timeout=timeout)
 
 
+def _declared_tier(key):
+    """The tier the committed tables declare for a native (natives.md 7.1): a winner row's `tier` key (the merged overrides),
+    `stub` when it has none, `mod` for a Beta 1.5.0 row. The smoke script's expected report is derived from it, so a native
+    group that lands (a new tier1 override) does not break the hand-computed counts."""
+    for name in ("natives.json", "natives_beta150.json"):
+        for r in json.loads((REPO / "data" / "osi" / name).read_text()):
+            if r["key"] == key and r.get("winner", True):
+                return r.get("tier", "stub")
+    raise KeyError(key)
+
+
+def _coverage_head(keys):
+    """`coverage: natives distinct N (tier1 .., tier2 .., stub .., mod .., tier3 ..)` for these keys, from the tables."""
+    n = {t: 0 for t in ("tier1", "tier2", "stub", "mod", "tier3")}
+    for k in keys:
+        n[_declared_tier(k)] += 1
+    return "(tier1 %d, tier2 %d, stub %d, mod %d, tier3 %d)" % (n["tier1"], n["tier2"], n["stub"], n["mod"], n["tier3"])
+
+
 def _coverage_lines(stdout):
     return [l for l in stdout.splitlines() if l.startswith("coverage: ") or l.startswith("native ")]
 
@@ -140,7 +159,8 @@ def test_smoke_coverage_equals_coverage_py(smoke, tmp_path):
     cov = _coverage_lines(r.stdout)
     assert cov == _coverage_py(log)
     # the hand-computed report of osi_a9_smoke.asm (its header comment)
-    assert cov[0] == "coverage: natives distinct 4 (tier1 0, tier2 0, stub 3, mod 1, tier3 0), calls 9, unregistered 0"
+    smoke_keys = ["gcgame.getresolutionwidth", "gcsaver.clearcinema", "gcgame.getresolutionheight", "gcsaver.cheatmenu"]
+    assert cov[0] == "coverage: natives distinct 4 %s, calls 9, unregistered 0" % _coverage_head(smoke_keys)
     assert [l.split()[1] for l in cov[1:]] == ["gcgame.getresolutionwidth", "gcsaver.clearcinema",
                                                  "gcgame.getresolutionheight", "gcsaver.cheatmenu"]
     lines = r.stdout.splitlines()
@@ -202,7 +222,7 @@ def test_unregistered_native_is_counted_and_stops_the_run(tmp_path):
     v = _run(VIEW, "--install", tmp_path / "install", "--script", "1", "--natives", "stub", "--trace", tmp_path / "t.trace")
     assert v.returncode == 4, (v.stdout, v.stderr)
     cov = _coverage_lines(v.stdout)
-    assert cov[0] == "coverage: natives distinct 1 (tier1 0, tier2 0, stub 1, mod 0, tier3 0), calls 1, unregistered 1"
+    assert cov[0] == "coverage: natives distinct 1 %s, calls 1, unregistered 1" % _coverage_head(["gcgame.getresolutionwidth"])
     t = subprocess.run([sys.executable, str(COVERAGE), "--trace", str(tmp_path / "t.trace")], capture_output=True,
                        text=True, timeout=60)
     assert t.returncode == 0 and cov == t.stdout.splitlines(), t.stdout
@@ -403,7 +423,7 @@ TABLE_CASES = {
     "types.json malformed": ("types.json", "{\"a\":"),
     "overrides: unknown key": ("native_overrides.json", '[{"key": "no.such", "tier": "tier1"}]'),
     "overrides: tier disagrees with the merged table": (
-        "native_overrides.json", '[{"key": "gcgame.getresolutionwidth", "tier": "tier1"}]'),
+        "native_overrides.json", '[{"key": "gcgame.getresolutionwidth", "tier": "tier3"}]'),  # the merged tier is tier1 (T7a)
     "overrides malformed": ("native_overrides.json", "[{"),
 }
 

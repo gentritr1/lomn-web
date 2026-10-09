@@ -4,6 +4,7 @@
 // No frame-hook API (C3): a host source is added only when natives.md §6 names one on the path.
 #pragma once
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <string>
@@ -55,6 +56,9 @@ class ScriptHost {
     HostFlags flags;
     std::string keys;
     bool real_natives = false;  // bind every registered native group (bind_natives); otherwise all typed stubs
+    // M2a-2 T7a: the real-time clock in seconds (GetTime(1) 0x4fa460 = timeGetTime() * 0.001). Read only when the host is
+    // not deterministic and the script has switched UseRealDeltaTime on (natives.md D3); empty = std::chrono::steady_clock.
+    std::function<double()> clock;
   };
   // The tables are the JSON texts of data/osi (natives.json, natives_beta150.json, types.json, native_overrides.json;
   // overrides may be empty). Throws std::runtime_error on a malformed table, a bad KEYSPEC or an override that disagrees

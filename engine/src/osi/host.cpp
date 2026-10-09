@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <chrono>
 #include <climits>
 #include <cmath>
 #include <cstdint>
@@ -23,6 +24,7 @@
 #include <stdexcept>
 
 #include "lomn/osi/json.h"
+#include "lomn/osi/services.h"
 
 namespace lomn::osi {
 
@@ -109,6 +111,11 @@ double fadd_pc(double a, double b, int pc) {
 }
 
 namespace {
+// GetTime(1) 0x4fa460: timeGetTime() (a DWORD of milliseconds, 0x4fa475) * [0x728038] = 0.001 (0x4fa48d)
+double steady_seconds() {
+  const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+  return static_cast<double>(static_cast<uint32_t>(ms)) * 0.001;
+}
 constexpr int32_t kController1 = 0x636e7431;  // 'cnt1'
 // the double at 0x712d68 (read from the exe as data: 0x3f7b4e81c0000000)
 double time_step() {
@@ -204,7 +211,7 @@ ScriptHost::ScriptHost(const sage::OsiFile& script, std::string_view natives_jso
   ctx_ = std::make_unique<HostContext>(*vm_, *heap_, vfs, opt_.flags, log_);
   if (opt_.real_natives) {  // fails closed (review I-1): never a silent stub run
     const BindReport rep = bind_natives(reg_, *ctx_);
-    if (rep.bodies == 0)
+    if (rep.game_bodies == 0)  // R-1 (M2a-2 T7a): the selftest group's body does not satisfy the check
       throw std::runtime_error("real natives: no native group binds a body (" + std::to_string(native_group_count()) +
                                " game-native groups linked, " + std::to_string(rep.groups) + " groups run)");
     std::string missing;
@@ -249,8 +256,17 @@ bool ScriptHost::frame() {
   const long k = frame_;
   current_frame_ = k;
   static const double C = time_step();
-  const float dt = static_cast<float>(C);
-  time_ = fadd_pc(time_, C, vm_->fpu_pc());
+  double dt_d = C;
+  if (!opt_.flags.deterministic && ctx_->subsystem<RealDeltaTime>().effective) {
+    // UseRealDeltaTime(1) outside --deterministic (D3): the real-time branch of ScProcessManager::Process (0x4a9200-0x4a92f2).
+    // GetTime(1) is the real clock; the process time becomes that clock (fstp [pm+8], 0x4a92c0-0x4a92e3) and dt the smoothed value.
+    const double now = opt_.clock ? opt_.clock() : steady_seconds();
+    dt_d = ctx_->subsystem<RealDeltaTime>().step(now);
+    time_ = now;
+  } else {
+    time_ = fadd_pc(time_, C, vm_->fpu_pc());  // the original's fake-time path: time += 0.0066667 (0x4a92c8-0x4a92e3)
+  }
+  const float dt = static_cast<float>(dt_d);
   const float t = static_cast<float>(time_);
   char kb[64];
   std::snprintf(kb, sizeof kb, "K %6ld %08x %08x %08x", k, f32_bits(t), f32_bits(dt), counter_);

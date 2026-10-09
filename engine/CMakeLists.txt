@@ -39,7 +39,8 @@ target_compile_options(lomn_sage PRIVATE -Wall -Wextra)
 # native == wasm32.
 add_library(lomn_osi STATIC src/osi/heap.cpp src/osi/convert.cpp src/osi/registry.cpp src/osi/trace.cpp src/osi/vm.cpp
             src/osi/vm_handlers.cpp src/osi/natives/framework.cpp src/osi/natives/groups.cpp src/osi/natives/selftest.cpp
-            src/osi/host.cpp)  # M2a-2 T3: the native framework (groups: the explicit list, fix 1 I-1), ScriptHost
+            src/osi/natives/services.cpp
+            src/osi/host.cpp)  # M2a-2 T3: the native framework (groups: the explicit list, fix 1 I-1), ScriptHost; T7a: services
 target_link_libraries(lomn_osi PUBLIC lomn_sage)
 target_compile_options(lomn_osi PRIVATE -Wall -Wextra)
 if(EMSCRIPTEN)
@@ -328,7 +329,7 @@ add_executable(lomn_tests tests/test_main.cpp tests/test_fs.cpp tests/test_rhi_n
                tests/test_rhi_mesh.cpp tests/test_view_mips.cpp tests/test_view_area.cpp tests/test_d3d.cpp tests/test_sage_osi.cpp
                tests/test_area_states.cpp tests/test_sage_frame.cpp tests/test_view_texture_cache.cpp tests/test_fuzz_fragments.cpp
                tests/test_rhi_destroy.cpp tests/test_prefetch_fs.cpp tests/test_fly_camera.cpp  # M1b
-               tests/test_osi_vm.cpp tests/test_osi_natives.cpp)  # M2a-1, M2a-2 T3
+               tests/test_osi_vm.cpp tests/test_osi_natives.cpp tests/test_osi_services.cpp)  # M2a-1, M2a-2 T3, T7a
 # wasm32 stack for the OSI VM (I2): a native re-entering the VM costs 1,648 bytes of C++ stack per engine call
 # (measured 2026-10-09, Vm::call -> call_impl -> run -> dispatch -> 0x82 -> native -> Vm::call), 116,240 bytes in use at
 # the 65th call's nesting-cap throw in lomn_osi_conform. 512 KiB = 4.5x that (the default 64 KiB runs out near level 33:
@@ -337,7 +338,7 @@ add_executable(lomn_tests tests/test_main.cpp tests/test_fs.cpp tests/test_rhi_n
 set(LOMN_OSI_WASM_STACK -sSTACK_OVERFLOW_CHECK=2)
 target_link_libraries(lomn_tests PRIVATE lomn_area lomn_osi)
 target_include_directories(lomn_tests PRIVATE "${LOMN_TOOLCHAIN_DIR}/include")
-target_compile_definitions(lomn_tests PRIVATE "LOMN_TESTS_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/tests\"")  # test_fuzz_fragments.cpp scans fuzz_fragments.h and xfile.cpp (native and wasm32 via NODERAWFS)
+target_compile_definitions(lomn_tests PRIVATE "LOMN_TESTS_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/tests\"" "LOMN_OSI_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/../data/osi\"")  # test_fuzz_fragments.cpp scans fuzz_fragments.h and xfile.cpp (native and wasm32 via NODERAWFS)
 if(EMSCRIPTEN)
   target_link_options(lomn_tests PRIVATE -sNODERAWFS=1 -sALLOW_MEMORY_GROWTH=1 ${LOMN_OSI_WASM_STACK})
 endif()
@@ -356,14 +357,25 @@ if(NOT EMSCRIPTEN)
                  tests/test_osi_vm.cpp src/osi/heap.cpp src/osi/convert.cpp src/osi/registry.cpp src/osi/trace.cpp
                  src/osi/vm.cpp src/osi/vm_handlers.cpp  # M2a-1: the VM's unit cases under ASan + UBSan
                  tests/test_osi_natives.cpp src/osi/natives/framework.cpp src/osi/natives/groups.cpp
-                 src/osi/natives/selftest.cpp src/osi/host.cpp)  # M2a-2 T3: the native framework
+                 src/osi/natives/selftest.cpp src/osi/natives/services.cpp src/osi/host.cpp
+                 tests/test_osi_services.cpp src/fs/memory_fs.cpp src/fs/disk_fs.cpp)  # M2a-2 T3: the native framework; T7a: services
   target_include_directories(lomn_tests_asan PRIVATE include "${LOMN_TOOLCHAIN_DIR}/include")
-  target_compile_definitions(lomn_tests_asan PRIVATE "LOMN_TESTS_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/tests\"")
+  target_compile_definitions(lomn_tests_asan PRIVATE "LOMN_TESTS_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/tests\"" "LOMN_OSI_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/../data/osi\"")
   target_compile_options(lomn_tests_asan PRIVATE -Wall -Wextra -ffp-contract=off -O1 -g -fno-omit-frame-pointer
                          -fsanitize=address,undefined -fno-sanitize-recover=all)
   target_link_options(lomn_tests_asan PRIVATE -fsanitize=address,undefined)
   add_test(NAME unit_asan COMMAND lomn_tests_asan)
   set_tests_properties(unit_asan PROPERTIES TIMEOUT 120)
+endif()
+# M2a-2 T7a: scslosifileio.doesfileexist finds every Art.blk entry name that the independent table reader
+# (tools/research/blk.py, through tools/osi/art_names.py) lists, folded and not, and no name with one byte more. 77 = skip
+# without LOMN_DATA. Native only.
+if(NOT EMSCRIPTEN)  # fs::open_disk is not linked into the wasm32 unit tests
+  add_test(NAME osi_services_art_names COMMAND sh -c
+           "if [ -z \"$LOMN_DATA\" ]; then echo 'SKIPPED (no LOMN_DATA)'; exit 77; fi; timeout 120 python3 \"$2\" \"$LOMN_DATA/install/data/Art/Art.blk\" > \"$1\" || exit 1; LOMN_ART_NAMES=\"$1\" timeout 300 $3 \"$0\" -tc='osi services doesfileexist: every Art.blk*'"
+           $<TARGET_FILE:lomn_tests> ${CMAKE_CURRENT_BINARY_DIR}/osi_services_art_names.txt
+           ${CMAKE_CURRENT_SOURCE_DIR}/../tools/osi/art_names.py "${CMAKE_CROSSCOMPILING_EMULATOR}")
+  set_tests_properties(osi_services_art_names PROPERTIES SKIP_RETURN_CODE 77)
 endif()
 # M2a-1 T1: the conformance runner (docs/osi/conformance.md). The corpus's .asm files are assembled at test time into the
 # build dir (tools/osi/conform_assemble.py: <id>.osi + <id>.labels, never committed), then every .expect.json is checked.
@@ -424,7 +436,7 @@ endforeach()
 foreach(mode smoke real)
   add_test(NAME osi_a9_${mode} COMMAND ${CMAKE_COMMAND} "-DRUNNER=${CMAKE_CROSSCOMPILING_EMULATOR}" -DEXE=$<TARGET_FILE:lomn_view>
            -DOSIRUN=$<TARGET_FILE:lomn_osi_run> -DMODE=${mode} -DFRAMES=600 "-DKEYSPEC=${LOMN_OSI_A6_KEYS}" -DPY=python3
-           -DOSIASM=${CMAKE_CURRENT_SOURCE_DIR}/../tools/osi/osiasm.py -DCOVERAGE=${CMAKE_CURRENT_SOURCE_DIR}/../tools/osi/coverage.py
+           -DTABLES=${CMAKE_CURRENT_SOURCE_DIR}/../data/osi -DOSIASM=${CMAKE_CURRENT_SOURCE_DIR}/../tools/osi/osiasm.py -DCOVERAGE=${CMAKE_CURRENT_SOURCE_DIR}/../tools/osi/coverage.py
            -DASM=${CMAKE_CURRENT_SOURCE_DIR}/tests/data/osi_a9_smoke.asm -DOUT=${CMAKE_CURRENT_BINARY_DIR}/osi_a9_${mode}
            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/osi_a9.cmake)
   set_tests_properties(osi_a9_${mode} PROPERTIES SKIP_REGULAR_EXPRESSION "SKIPPED \\(no LOMN_DATA\\)" TIMEOUT 600)

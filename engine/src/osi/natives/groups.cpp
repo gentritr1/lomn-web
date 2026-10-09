@@ -7,10 +7,12 @@
 namespace lomn::osi {
 
 void bind_selftest_group(NativeRegistry& reg, HostContext& ctx);  // natives/selftest.cpp
+void bind_services_group(NativeRegistry& reg, HostContext& ctx);  // natives/services.cpp (M2a-2 T7a)
 
 const std::vector<NativeGroup>& native_groups() {
   static const std::vector<NativeGroup> g = {
       {"selftest", bind_selftest_group, true},
+      {"services", bind_services_group, false},  // M2a-2 T7a: strings, file-exists, GcTimer.create, time, resolution
   };
   return g;
 }

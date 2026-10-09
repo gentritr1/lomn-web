@@ -172,6 +172,10 @@ BindReport bind_natives(NativeRegistry& reg, HostContext& ctx) {
       }
     rep.bodies += bound;
     rep.groups_binding += bound ? 1 : 0;
+    if (!g.selftest) {  // R-1: the framework's link probe is no game native
+      rep.game_bodies += bound;
+      rep.game_groups_binding += bound ? 1 : 0;
+    }
   }
   return rep;
 }

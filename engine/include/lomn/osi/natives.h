@@ -163,8 +163,12 @@ const std::vector<NativeGroup>& native_groups();  // the explicit list, in bind 
 size_t native_group_count();                      // the groups that are not selftest
 struct BindReport {
   size_t groups = 0;          // groups run
-  size_t groups_binding = 0;  // groups that bound at least one body
-  size_t bodies = 0;          // rows whose body a group bound
+  size_t groups_binding = 0;  // groups that bound at least one body (the selftest group included)
+  size_t bodies = 0;          // rows whose body a group bound (the selftest group included)
+  // M2a-2 T7a (R-1): the same two counts over the groups that are NOT the framework's selftest. The fail-closed check of
+  // --real-natives reads these: the selftest body must never satisfy it.
+  size_t game_groups_binding = 0;
+  size_t game_bodies = 0;
 };
 // Runs every listed group against the registry (each binds its natives with `user` = &ctx) and sets Tier::Implemented
 // on every row a group bound.

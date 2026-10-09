@@ -5,7 +5,7 @@
 //                [--print-keys] [--real-natives] [--list-natives] [--coverage]
 // --list-natives prints every registry row (`native <key> tier <t> bound yes|no`, sorted by key) after binding and exits;
 // --coverage prints, after the run, every native hit with its declared tier AND whether a body was bound (fix 1, I-1:
-// a tier1 row run as its stub shows `bound no`). --real-natives fails at startup (exit 2) when no group binds a body or
+// a tier1 row run as its stub shows `bound no`). --real-natives fails at startup (exit 2) when no game-native group binds a body (the selftest group does not count, R-1) or
 // a tier1 row has none.
 //
 // The run: Setup(); then for frame k = 0..frames-1: the fake time advances, the `K` record, that frame's key Input calls

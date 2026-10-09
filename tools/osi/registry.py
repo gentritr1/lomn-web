@@ -1359,7 +1359,7 @@ _ADDR = re.compile(r"0x0*([0-9a-fA-F]+)")
 _VALUE_TYPES = {"0x0f", "0x10", "0x14", "0x15"}
 # docs/osi/natives.md §1.3, the shape of a tier1 cite (addresses in any hex width; a mod body names its DLL first)
 _TIER1_CITE = re.compile(r"^// body (\S+\.dll )?0x[0-9a-fA-F]+, method 0x[0-9a-fA-F]+ <[^>]+>"
-                         r"( → 0x[0-9a-fA-F]+ <[^>]+>)*; asm pin: \S")
+                         r"( (?:→|->) 0x[0-9a-fA-F]+ <[^>]+>)*; asm pin: \S")  # the arrow may be written -> (pure-ASCII overrides file)
 
 
 def _default_ok(d) -> bool:

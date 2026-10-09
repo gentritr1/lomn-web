@@ -175,7 +175,12 @@ def test_default_files_are_the_committed_tables(tmp_path):
                                  None)
     assert len(reg) == 1049 + 19
     assert sum(1 for v in reg.values() if v["tier"] == "mod") == 19
-    assert sum(1 for v in reg.values() if v["tier"] == "stub") == 1049
+    # derived from the committed overrides (natives.md 7.2): every overridden winner has its merged tier, the rest are stubs
+    import json
+    ov = json.loads((REPO / "data" / "osi" / "native_overrides.json").read_text())
+    for t in ("tier1", "tier2", "tier3"):
+        assert sum(1 for v in reg.values() if v["tier"] == t) == sum(1 for o in ov if o["tier"] == t)
+    assert sum(1 for v in reg.values() if v["tier"] == "stub") == 1049 - len(ov)
 
 
 def test_name_token_unescape_decodes_backslash_first_class(files):

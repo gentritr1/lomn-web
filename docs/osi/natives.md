@@ -102,6 +102,7 @@ Every implemented native carries one citation comment, in both engines, in this 
 - Example: `// body 0x617700, method 0x617810 <ScSLOSIFoundation::StringToIdentifier> → 0x5fb060 <ScOSISystem::ConvertStringToID>; asm pin: 0x5fb093/0x5fb09e/0x5fb0a9/0x5fb0b2 shift immediates (first character in the high byte)`
   (calls at 0x61771d and 0x617868).
   The pin's test gives `stringtoidentifier("frnt")` = 0x66726e74.
+- In `data/osi/native_overrides.json` (pure ASCII, §7.2) the arrow is written `->`; the check accepts both spellings.
 - A mod native cites the DLL: `// body BetterSaver.dll 0x10001f70, …`.
 - **Hex widths (review m-5):** every address is written in its shortest lowercase hex form (`0x617700`, `0x5fb060`),
   the body included, although the registry prints bodies with 8 digits (`0x00617700`). Tools compare addresses as

@@ -555,6 +555,9 @@ namespace {
 // natives/selftest.cpp's row: present only in a test registry, so the selftest group binds nothing in a real run
 const char* const kSelftestRow =
     R"({"cls": "T3SelfTest", "name": "Ping", "min": 0, "max": 0, "types": [], "ret": "int", "winner": true})";
+// a row the services group (natives/services.cpp, M2a-2 T7a) binds: the first game native that satisfies the check
+const char* const kWidthRow =
+    R"({"cls": "GcGame", "name": "GetResolutionWidth", "min": 0, "max": 0, "types": [], "ret": "float", "winner": true})";
 std::string rows(std::initializer_list<const char*> r) {
   std::string s = "[";
   for (const char* x : r) s += std::string(s.size() > 1 ? "," : "") + x;
@@ -578,7 +581,9 @@ TEST_CASE("osi natives T3 fix1 I-1: the explicit group list reaches the link thr
   StringTrace tr;
   ScriptHost::Options real;
   real.real_natives = true;
-  ScriptHost host(file, rows({kSelftestRow}), "", R"({"types": []})", "", nullptr, &tr, nullptr, real);
+  // T7a R-1: the selftest body alone no longer satisfies the fail-closed check, so the registry also holds a game native
+  // (a services-group row) that a listed group binds
+  ScriptHost host(file, rows({kSelftestRow, kWidthRow}), "", R"({"types": []})", "", nullptr, &tr, nullptr, real);
   const NativeEntry* e = host.registry().find("t3selftest", "ping");
   REQUIRE(e);
   CHECK(e->fn != nullptr);
@@ -613,11 +618,15 @@ TEST_CASE("osi natives T3 fix1 I-1: real_natives fails closed (no group binds a 
   };
   // the selftest group binds nothing without its row: no group binds a body -> a hard error, not a stub run
   CHECK(error_of(rows({mask})).find("no native group binds a body") != std::string::npos);
+  // R-1 (T7a): the selftest body alone is no game native: still a hard error
+  CHECK(error_of(rows({mask, kSelftestRow})).find("no native group binds a body") != std::string::npos);
+  CHECK(error_of(rows({mask1, kSelftestRow})).find("no native group binds a body") != std::string::npos);
   // a tier1 row whose body no group bound
-  const std::string e2 = error_of(rows({mask1, kSelftestRow}));
+  const std::string e2 = error_of(rows({mask1, kSelftestRow, kWidthRow}));
   CHECK(e2.find("tier1 without a bound body") != std::string::npos);
   CHECK(e2.find("gcsaver.getmask") != std::string::npos);
-  CHECK(error_of(rows({mask, kSelftestRow})) == "<no error>");
+  CHECK(error_of(rows({mask, kSelftestRow, kWidthRow})) == "<no error>");
+  CHECK(error_of(rows({mask, kWidthRow})) == "<no error>");
   // a stub run is allowed, and reports the row's tier and that no body is bound
   ScriptHost stubs(file, rows({mask1}), "", R"({"types": []})", "", nullptr, &tr, nullptr, ScriptHost::Options{});
   REQUIRE(stubs.setup().ok);

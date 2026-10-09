@@ -573,7 +573,9 @@ def test_duplicate_winner_branch_bytes(res, canonical_exe):
 
 
 def test_types_md_is_current_and_cites_the_evidence(res, reg):
-    text = reg.render_types(res)
+    # the committed doc carries the overrides summary line (natives.md 7.2): render it from the committed overrides file
+    overrides = json.loads((REPO / "data" / "osi" / "native_overrides.json").read_text())
+    text = reg.render_types(res, overrides)
     assert DOC.exists() and DOC.read_text() == text
     for fact in ("0x5fab30", "0x5fb290", "0x5fae00", "0x65f530", "0x5fa750", "0x74d66c", "**Winner:",
                  "## Duplicates", "## Not statically determinable", "0x20 upward", "static-init order"):
@@ -583,13 +585,20 @@ def test_types_md_is_current_and_cites_the_evidence(res, reg):
 
 def test_cli_writes_rows_and_doc(reg, canonical_exe, lomn_data, gen_decomp, res, tmp_path):
     out_json, out_md = tmp_path / "osi" / "natives.json", tmp_path / "types.md"
+    # with the committed overrides, as `make osi-tables` runs it (they add `tier` to the winner rows and the summary line
+    # to the doc, and nothing else)
+    ov = ["--overrides", str(REPO / "data" / "osi" / "native_overrides.json")]
     rc = reg.main(["--exe", str(canonical_exe), "--osi", str(lomn_data / "install" / "data" / "Base.osi"),
-                   "--corpus", str(gen_decomp), "--out-json", str(out_json), "--out-types", str(out_md)])
+                   "--corpus", str(gen_decomp), "--out-json", str(out_json), "--out-types", str(out_md), *ov])
     assert rc == 0
-    assert json.loads(out_json.read_text()) == res["rows"]
+    written = json.loads(out_json.read_text())
+    for r in written:
+        r.pop("tier", None)
+    assert written == res["rows"]
     assert out_md.read_text() == DOC.read_text()
     assert reg.main(["--exe", str(canonical_exe), "--osi", str(lomn_data / "install" / "data" / "Base.osi"),
-                     "--corpus", str(gen_decomp), "--out-json", str(out_json), "--out-types", str(out_md), "--check"]) == 0
+                     "--corpus", str(gen_decomp), "--out-json", str(out_json), "--out-types", str(out_md), *ov,
+                     "--check"]) == 0
 
 
 def test_non_canonical_exe_is_refused(reg, gen_decomp, tmp_path):

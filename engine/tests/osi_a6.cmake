@@ -100,10 +100,17 @@ elseif(MODE STREQUAL "rerun")
   if(NOT last_out MATCHES "\nnative gcsaver\.getmask +tier stub  bound no\n" OR NOT last_out MATCHES "\nnatives: [0-9]+ rows, 0 bound\n")
     message(FATAL_ERROR "--list-natives does not report the bound state:\n${last_out}")
   endif()
-  execute_process(COMMAND ${RUNNER} ${EXE} ${OUT}/rerun.osi --data-dir ${DATA} --real-natives --frames 1
+  # M2a-2 T7a (R-1): data/osi now holds rows that a group binds, so the fail-closed case needs its own tables: one native no
+  # group binds (gcsaver.getmask) and, as a second tripwire, the selftest group's row, whose body must NOT satisfy the check.
+  set(FIX ${OUT}/fail_closed_tables)
+  file(MAKE_DIRECTORY ${FIX})
+  file(COPY ${DATA}/types.json DESTINATION ${FIX})
+  file(WRITE ${FIX}/natives_beta150.json "[]\n")
+  file(WRITE ${FIX}/natives.json "[{\"cls\": \"GcSaver\", \"name\": \"GetMask\", \"min\": 0, \"max\": 0, \"types\": [], \"ret\": \"int\", \"winner\": true},\n {\"cls\": \"T3SelfTest\", \"name\": \"Ping\", \"min\": 0, \"max\": 0, \"types\": [], \"ret\": \"int\", \"winner\": true}]\n")
+  execute_process(COMMAND ${RUNNER} ${EXE} ${OUT}/rerun.osi --data-dir ${FIX} --real-natives --frames 1
                   RESULT_VARIABLE rc OUTPUT_VARIABLE o ERROR_VARIABLE e TIMEOUT 120)
   if(NOT rc EQUAL 2 OR NOT "${o}${e}" MATCHES "no native group binds a body")
-    message(FATAL_ERROR "--real-natives with no group body must fail at startup (exit 2), got ${rc}:\n${o}${e}")
+    message(FATAL_ERROR "--real-natives with no game group body must fail at startup (exit 2), got ${rc}:\n${o}${e}")
   endif()
   run("lomn_osi_run --coverage" ${RUNNER} ${EXE} ${OUT}/rerun.osi --data-dir ${DATA} --frames 1 --coverage)
   if(NOT last_out MATCHES "coverage: natives distinct [0-9]+, bound 0, calls [0-9]+")
