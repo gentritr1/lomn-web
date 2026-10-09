@@ -599,3 +599,185 @@ def test_block_files_on_the_install(lomn_data):                      # natives.m
     assert len(frnt) == 16 and b.find("Root/Data/Levels/lev0/frnt.blk", "FRNT_HIVE.slb") is None
     assert b.entries("Root/Data/Art/Art.blk") is not None
     assert b.find("Root/Data/Art/Art.blk", "AreaViewer.txt") is None
+
+
+# =========================================================================================== fix round 1 (review)
+def _spec_vm(asm, specs, log=None):
+    reg = osi_vm.NativeRegistry(TYPES)
+    for sp in specs:
+        reg.add(osi_vm.test_native_entry(sp, TYPES, reg))
+    vm, heap, tr, info = _vm(asm, reg)
+    if log is not None:
+        reg.return_log = log
+    _ctx(vm, log)
+    return vm, heap, tr, info
+
+
+SW_SPEC = {"cls": "t", "name": "sw", "min": 0, "max": 0, "types": [], "returns": {"type": "0x10", "value": 5},
+           "swallow": True, "calls": {"entry": "onevent", "args": []}}
+
+
+def test_d15_cap_counts_engine_calls_in_flight_not_context_depth():  # I1(a); controller ruling on D15
+    """Three swallows leave context_depth at 3 for good (D16 rule 5). An unbounded re-entrant chain must still reach
+    64 engine calls IN FLIGHT before the nesting-cap error; a cap on context_depth would stop it at 61."""
+    asm = """.function onevent 0 @ev
+.function inner 0 @inner
+.function main 0
+    CallGameFunction t.sw 0
+    Return
+inner:
+    CallGameFunction t.re 0
+    Return
+ev:
+    DebugOn
+    PushConstanti8 7
+    Return
+"""
+    re_spec = {"cls": "t", "name": "re", "min": 0, "max": 0, "types": [], "returns": {"type": "0x10", "value": 1},
+               "calls": {"entry": "inner", "args": []}}
+    vm, heap, tr, info = _spec_vm(asm, [SW_SPEC, re_spec])
+    for _ in range(3):
+        assert vm.call("main", []).ok
+    assert vm.context_depth == 3 and vm.max_nesting == 2
+    i0 = len(tr.lines)
+    r = vm.call("inner", [])
+    chain = tr.lines[i0:]
+    assert not r.ok and vm.last_error.message == "Script is calling t.re"
+    assert vm.max_nesting == 64                                       # the 65th call is refused before it starts
+    assert sum(1 for l in chain if l.startswith("C inner ")) == 64
+    assert vm.context_depth == 3 + 64
+    assert sum(1 for l in chain if l.startswith("E ")) == 1
+
+
+def test_d16_rule6_reset_restores_the_outermost_entry_state_over_leftovers():   # I1(b); D16 rule 6
+    """n-swallow-writes leaves [M0, int 9] and context_depth 1. A second call then errors; reset_after_error() must
+    pop only that call's own region and restore ITS entry state, not M2a-1's (context_depth 0, rescan, refcount 0)."""
+    asm = (GROUP_N / "n-swallow-writes.asm").read_text().replace(
+        ".function main2 0 @m2", ".function boom 0 @boom\n.function main2 0 @m2") + "boom:\n    PushConstanti8 4\n    DebugOff\n    Return\n"
+    spec = json.loads((GROUP_N / "n-swallow-writes.expect.json").read_text())
+    vm, heap, tr, info = _spec_vm(asm, spec["natives"])
+    assert vm.call("main", []).ok
+    assert (vm.depth, vm.top(), vm.context_depth, vm.pc, vm.frame) == (2, I(9), 1, info["labels"]["after_c"], 1)
+    r = vm.call("boom", [])
+    assert not r.ok and vm.last_error.message == "Debugger not enabled! but encountered DebugOff"
+    assert vm.depth == 4 and vm.context_depth == 2
+    vm.reset_after_error()
+    assert (vm.depth, vm.top(), vm.context_depth, vm.pc, vm.frame) == (2, I(9), 1, info["labels"]["after_c"], 1)
+
+
+def test_host_level_engine_call_writes_the_literal_minus_one_seq():  # m1; natives.md §3.1 reserved C -1 / X -1
+    vm, heap, tr, info = _vm(SWALLOW_ASM)
+    log = []
+    ctx = _ctx(vm, log)
+    assert vm.native_seq() == -1
+    r = ctx.engine_call("onevent", [I(3)], swallow=True)             # a D16 host route: no native executing
+    assert not r.ok and len(vm.swallowed) == 1 and vm.last_error is None
+    assert sum(1 for l in tr.lines if l.startswith("E ")) == 1        # D10's E line of the outermost call, once
+    assert log == ["C -1 onevent 0010:00000003 " + " ".join(NOTHING10[1:]), "X -1"]
+    rec = osi_vm.parse_log_record(log[0])
+    assert rec["kind"] == "C" and rec["seq"] == -1 and rec["name"] == "onevent"
+    assert osi_vm.parse_log_record("X -1") == {"kind": "X", "seq": -1, "raw": "X -1"}
+
+
+def test_replay_H_with_a_type_other_than_the_minting_type_is_a_desync(tmp_path):   # m2
+    m = _replay_mutated(tmp_path, lambda l: [x.replace("H 0037:00000003 +1", "H 0022:00000003 +1") for x in l])
+    assert m == "replay desync at seq 5: H 0022:00000003 +1: handle 3 was minted as type 0037"
+
+
+def test_replay_H_minus_one_below_the_engine_count_is_an_early_free_desync(tmp_path):   # m2
+    def edit(l):
+        i = l.index("H 0026:00000004 +1")
+        return l[:i] + ["H 0026:00000004 -1"] + l[i:]                 # the sprite's engine count is 0 here
+    m = _replay_mutated(tmp_path, edit)
+    assert m == "replay desync at seq 8: H 0026:00000004 -1 would take engine count 0 below 0 (an early free)"
+
+
+def test_replay_trailing_records_are_a_desync(tmp_path):              # m3: the whole log must be consumed
+    log = []
+    _run_worked(_worked_registry(True), log)
+    p = tmp_path / "natives.log"
+    p.write_text("\n".join(log + ["H 0037:00000003 +1", "00000010 gcsaver.getmask 0 -> 0010:00000000"]) + "\n")
+    reg = _worked_registry(False)
+    reg.replay_from(p)
+    _run_worked(reg)
+    with pytest.raises(osi_vm.ReplayDesync) as ei:
+        reg.replay_finish()
+    assert str(ei.value) == "replay desync at the end of the run: 2 records not consumed, first H 0037:00000003 +1"
+    reg2 = _worked_registry(False)
+    p.write_text("\n".join(log) + "\n")
+    reg2.replay_from(p)
+    _run_worked(reg2)
+    reg2.replay_finish()                                              # exactly consumed: no error
+
+
+def test_run_base_replay_with_trailing_records_fails(tmp_path):      # m3 through the CLI
+    osi = tmp_path / "rerun.osi"
+    osi.write_bytes(osiasm.assemble(RERUN_ASM.read_text())[0])
+    py = [sys.executable, str(REPO / "tools" / "research" / "osi_vm.py"), "--run", str(osi), "--frames", "6",
+          "--keys", "esc@1"]
+    a = subprocess.run(py + ["--log-out", str(tmp_path / "a.log")], capture_output=True, text=True, timeout=110)
+    assert a.returncode == 0, a.stderr
+    log = tmp_path / "a.log"
+    log.write_text(log.read_text() + "K      6\n")
+    c = subprocess.run(py + ["--replay", str(log)], capture_output=True, text=True, timeout=110)
+    assert c.returncode == 1
+    assert "stop: replay desync: replay desync at the end of the run: 1 records not consumed, first K      6" in c.stdout
+
+
+def test_calls_depth_reads_context_depth_after_a_swallow():         # m4 (controller ruling: conformance.md literal)
+    """After the swallow, onevent continues with context_depth 2 (main + the swallowed call's leftover) while only
+    one engine call is in flight. depth 2 therefore makes NO nested call: g stays 0."""
+    asm = """.globals g
+.function inner 0 @inner
+.function onevent 0 @ev
+.function main 0
+    PushConstant0
+    SetVariableValue global:g
+    CallGameFunction t.sw 0
+    Return
+ev:
+    DebugOn
+    CallGameFunction t.re 0
+    Return
+inner:
+    IncrementVariable global:g
+    PushNothing
+    Return
+"""
+    re_spec = {"cls": "t", "name": "re", "min": 0, "max": 0, "types": [], "returns": {"type": "0x10", "value": 7},
+               "calls": {"entry": "inner", "args": [], "depth": 2}}
+    seen = []
+    vm, heap, tr, info = _spec_vm(asm, [SW_SPEC, re_spec])
+    orig = vm.natives.invoke
+
+    def spy(call):
+        if call.fn_text == b"re":
+            seen.append((call.vm.context_depth, call.vm._nest))
+        return orig(call)
+    vm.natives.invoke = spy
+    r = vm.call("main", [])
+    assert r.ok and r.result == I(7)
+    assert seen == [(2, 1)]                                           # the two readings differ here
+    assert vm.global_value("g") == I(0) and not any(l.startswith("C inner ") for l in tr.lines)
+    assert vm.context_depth == 1
+
+
+def test_release_of_a_handled_object_writes_H_minus_one_then_F_g():  # m5
+    f = fw()
+    vm, heap, tr, _ = _vm()
+    log = []
+    ctx = _ctx(vm, log)
+    at_delete = []
+
+    class Sprite(f.GameObject):
+        def on_delete(self):
+            at_delete.append((list(log), tr.lines[-1]))
+
+    s = Sprite(0x26, 0)
+    v = ctx.create_variant(s)
+    ctx.add_ref(s)
+    heap.dispose(v)
+    ctx.release(s)
+    assert log == ["H 0026:00000001 +1", "H 0026:00000001 -1"]
+    assert tr.lines == ["A g 00000001 26", "F g 00000001"]
+    assert at_delete == [(["H 0026:00000001 +1", "H 0026:00000001 -1"], "F g 00000001")]

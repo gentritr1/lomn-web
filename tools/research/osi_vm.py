@@ -584,6 +584,14 @@ class NativeRegistry:
             r = self.stub_return(entry, vm.heap, call)
         return r if r is not None else NOTHING
 
+    def replay_finish(self) -> None:
+        """At the end of a replay run the whole log must have been consumed: trailing records (a final H, a native or
+        a K the replay never reached) are a desync."""
+        if self.replay is not None and self.replay_pos < len(self.replay):
+            rest = len(self.replay) - self.replay_pos
+            raise ReplayDesync("replay desync at the end of the run: %d records not consumed, first %s"
+                               % (rest, self.replay[self.replay_pos]["raw"]))
+
     def _peek(self):
         return self.replay[self.replay_pos] if self.replay_pos < len(self.replay) else None
 
@@ -600,7 +608,10 @@ class NativeRegistry:
     def _replay_one(self, call: NativeCall) -> Variant:
         """One cursor in the replay's own execution order (natives.md §3.3, I6). Inside replayed native N: H records are
         applied, C N calls are performed (their natives consume their own records), X N decides a swallow; then N's own
-        line. Host-level H and C -1 are never performed: met here they are not native N's and are a desync."""
+        line. An H must carry the handle's minting type and is +1 or -1; a -1 that would take the engine count below 0
+        (an early free of a variant-held object) is a desync. `C -1` (a host call) met here is not N's: a desync.
+        Limit: the format cannot tell a host-level H written just before N's entry from one inside N, so every H met
+        inside N is applied as N's (no host H exists in M2a-2, natives.md §3.1)."""
         vm, heap = call.vm, call.vm.heap
         seq = call.seq
         got = "%s.%s/%d" % (call.cls_text.decode("latin-1"), call.fn_text.decode("latin-1"), len(call.slots))
@@ -622,12 +633,19 @@ class NativeRegistry:
                 return self._materialise(heap, rec["ret"], rec["ret_text"], rec["ret_g"], seq)
             if kind == "H":
                 self.replay_pos += 1
-                if rec["handle"] not in heap.games:
+                h = rec["handle"]
+                if h not in heap.games:
                     raise ReplayDesync("replay desync at seq %d: %s on a handle that is not live" % (seq, rec["raw"]))
+                if rec["type"] != heap.game_type(h):
+                    raise ReplayDesync("replay desync at seq %d: %s: handle %d was minted as type %04x"
+                                       % (seq, rec["raw"], h, heap.game_type(h)))
                 if rec["delta"] == 1:
-                    heap.add_ref(rec["handle"])
+                    heap.add_ref(h)
                 elif rec["delta"] == -1:
-                    heap.release(rec["handle"])               # 0 frees it: F g at this event
+                    if heap.engine(h) <= 0:
+                        raise ReplayDesync("replay desync at seq %d: %s would take engine count %d below 0 (an early "
+                                           "free)" % (seq, rec["raw"], heap.engine(h)))
+                    heap.release(h)                           # 0 frees it: F g at this event
                 else:
                     raise ReplayDesync("replay desync at seq %d: %s is not +1/-1" % (seq, rec["raw"]))
                 continue
@@ -1240,13 +1258,14 @@ class Vm:
         """D16 rules 1-2, at the swallow point of a native's catch: the VM stays exactly as the throw left it; the E line
         of the swallowed error is written here (pc/op of the failing instruction, depth and top at the throw), then
         `P <pc> 64` if fpu_pc was 24 (the catch pad's fninit 0x657245). No last_error, no reset, no engine call ends.
-        natives.log gets `X <seq>` (natives.md §3.1) when the native has a sequence number and a log is kept."""
+        natives.log gets `X <seq>` (natives.md §3.1) when a log is kept, and the reserved `X -1` for a swallow on a host
+        route (seq -1: no native executing). seq None (the replay) writes nothing."""
         e.top = self.top()
         e.pc_after = self.pc
         self._t('E %08x %02x %4d "%s"' % (e.pc, e.op, e.depth, msg_escape(e.message_bytes)))
         self._set_pc64(e.pc)
         self.swallowed.append(e)
-        if seq is not None and seq >= 0:
+        if seq is not None:
             self.log_x(seq)
 
     # natives.log v2 (natives.md §3; trace.md §6): lines in event order, written only while a log is kept
@@ -1268,13 +1287,18 @@ class Vm:
     def log_h(self, h: int, delta: int) -> None:
         self._log("H %04x:%08x %+d" % (self.heap.game_type(h), h, delta))
 
+    @staticmethod
+    def _log_seq(seq: int) -> str:
+        """`%08d`, or the literal `-1` of the reserved host records (`C -1 …`, `X -1`), never `%08d` of -1."""
+        return "-1" if seq < 0 else "%08d" % seq
+
     def log_c(self, seq: int, name, args) -> None:
         nb = name.encode("latin-1") if isinstance(name, str) else bytes(name)
         args = list(args) + [NOTHING] * (10 - len(args))
-        self._log("C %08d %s %s" % (seq, name_token(nb), " ".join(self.log_value(a) for a in args)))
+        self._log("C %s %s %s" % (self._log_seq(seq), name_token(nb), " ".join(self.log_value(a) for a in args)))
 
     def log_x(self, seq: int) -> None:
-        self._log("X %08d" % seq)
+        self._log("X %s" % self._log_seq(seq))
 
     def begin_frame(self, frame: int) -> None:
         """The host's frame start: `K %6d` in natives.log (live), or the replay's check of that record."""
@@ -3015,6 +3039,7 @@ def run_base(a) -> int:
                 if err is not None:
                     stop = 'error "%s" at frame %d pc %08x op %02x' % (err.message, k, err.pc, err.op)
                     break
+        reg.replay_finish()                       # a replay must consume the whole log (no-op without --replay)
     except ReplayDesync as e:
         stop = "replay desync: %s" % e
     finally:
@@ -3042,7 +3067,7 @@ def run_base(a) -> int:
     print("engine-call nesting: max %d (cap %d)" % (vm.max_nesting, MAX_ENGINE_NESTING))
     print("stop: %s" % stop)
     print("script sha256 unchanged: %s" % (hashlib.sha256(vm.image).hexdigest() == hashlib.sha256(script).hexdigest()))
-    return 0
+    return 1 if stop.startswith("replay desync") else 0
 
 
 def main(argv=None) -> int:

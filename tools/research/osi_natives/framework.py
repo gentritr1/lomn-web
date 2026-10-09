@@ -144,17 +144,28 @@ class HostContext:
         runs the call (its result is disposed by the call protocol) and returns its CallResult. An error propagates out
         of the native, unless swallow=True (only where the original catches: the three LoadArea blocks, natives.md
         §5.2, and the conformance `swallow` natives): then D16 rules 1-2 apply here (the VM stays as at the throw, the
-        E line and `X <seq>` are written) and CallResult(found=True, ok=False) is returned."""
+        E line and `X <seq>` are written) and CallResult(found=True, ok=False) is returned. Outside any native (a host
+        route) the records are the reserved `C -1 …` and, for a swallow, `X -1`."""
         vm = self.vm
         seq = vm.native_seq()
         vm.log_c(seq, name, args)
         try:
-            return vm.call(name, list(args))
+            r = vm.call(name, list(args))
         except VmError as e:
             if not swallow:
                 raise
             vm.swallow_error(e, seq)
             return CallResult(True, False, NOTHING)
+        if seq < 0 and swallow and not r.ok:
+            # A host route (no native executing, seq -1: D16's process entries): the call was the outermost one, so
+            # D10 already wrote its E line (and P) and left the VM as at the throw. The host's catch swallows it: no
+            # last_error stays set, the error is recorded, and natives.log gets the reserved `X -1`.
+            e = vm.last_error
+            e.pc_after = vm.pc
+            vm.swallowed.append(e)
+            vm.last_error = None
+            vm.log_x(seq)
+        return r
 
     # --- the rest of the ABI
     def subsystem(self, cls):
