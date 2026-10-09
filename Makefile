@@ -219,8 +219,9 @@ osi-diff: native wasm $(VENV)/.ok
 # lomn_view under node (the same three files); (3) the Python oracle with its OWN native models (`--real-natives
 # --install`; with stub: its own stubs); (4) the Python oracle replaying the native natives.log; (5) the coverage report
 # (coverage.py --log == lomn_view's) and, once tools/research/osi_taint.py exists (Task 5), the taint report. Digest
-# guards compare D lines only (C1: the header carries the natives= table hash). Prints cmp 1/4 .. 4/4. Controller-only
-# (heavy: native + wasm builds). Until a game-native group is bound, `real` fails closed on both engines (no run).
+# guards compare D lines, plus the headers with natives= stripped (C1: the header carries the natives= table hash).
+# Prints cmp 1/4 .. 4/4. Controller-only (heavy: native + wasm builds). Until a game-native group is bound, `real` fails
+# closed on both engines (no run). The Python oracle's CLI has no User/ directory option (lomn_view's is per run).
 OSI_A9 := build/osi-a9
 OSI_A9_NATIVES ?= real
 OSI_A9_PY_NATIVES = $(if $(filter real,$(OSI_A9_NATIVES)),--real-natives --install "$(LOMN_DATA)/install",)
@@ -248,6 +249,11 @@ osi-a9: native wasm $(VENV)/.ok
 	  echo "taint report:"; cat $(OSI_A9)/taint.txt; \
 	else echo "taint report: SKIPPED (tools/research/osi_taint.py is not merged yet)"; fi
 	@for s in native wasm python python_replay; do grep '^D ' $(OSI_A9)/$$s.digest > $(OSI_A9)/$$s.D || { echo "osi-a9: no D lines in $$s.digest"; exit 1; }; done
+	@for s in native wasm python python_replay; do grep '^#' $(OSI_A9)/$$s.digest | sed 's/natives=[0-9a-f]*//' > $(OSI_A9)/$$s.H; \
+	  [ -s $(OSI_A9)/$$s.H ] || { echo "osi-a9: no header in $$s.digest"; exit 1; }; done
+	@for s in wasm python python_replay; do diff $(OSI_A9)/native.H $(OSI_A9)/$$s.H > /dev/null || \
+	  { echo "osi-a9: header native != $$s (natives= stripped, C1):"; diff $(OSI_A9)/native.H $(OSI_A9)/$$s.H; exit 1; }; done; \
+	  echo "headers native == wasm32 == Python == Python replay (natives= stripped, C1): OK"
 	@cmp $(OSI_A9)/native.D $(OSI_A9)/wasm.D && cmp $(OSI_A9)/native.natives.log $(OSI_A9)/wasm.natives.log && \
 	  cmp $(OSI_A9)/native.window $(OSI_A9)/wasm.window && cmp $(OSI_A9)/native.summary $(OSI_A9)/wasm.summary && \
 	  echo "cmp 1/4 D lines native == wasm32 ($$(wc -l < $(OSI_A9)/native.D) lines; natives.log, window -1:2 and stdout byte-identical): OK"

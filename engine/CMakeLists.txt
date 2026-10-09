@@ -151,6 +151,12 @@ else()
   target_link_libraries(lomn_view PRIVATE lomn_area lomn_osi $<$<BOOL:${LOMN_WEBGPU}>:lomn_webgpu>)  # M2a-2 T6: --script 1
   target_include_directories(lomn_view PRIVATE src/app "${LOMN_TOOLCHAIN_DIR}/include")
   target_compile_definitions(lomn_view PRIVATE "LOMN_OSI_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/../data/osi\"")
+  # M2a-2 T6 fix 1 (m5): the same tool with its tables at build/native/osi_tables_fixture (written by
+  # tools/tests/test_lomn_view_script.py), so the table exit codes are tested on corrupted copies, never on data/osi.
+  add_executable(lomn_view_tables_fixture tools/lomn_view.cpp)
+  target_link_libraries(lomn_view_tables_fixture PRIVATE lomn_area lomn_osi)
+  target_include_directories(lomn_view_tables_fixture PRIVATE src/app "${LOMN_TOOLCHAIN_DIR}/include")
+  target_compile_definitions(lomn_view_tables_fixture PRIVATE "LOMN_OSI_DATA_DIR=\"${CMAKE_CURRENT_BINARY_DIR}/osi_tables_fixture\"")
   target_compile_options(lomn_view PRIVATE -Wall -Wextra)
   # REF3 revision 2: the CPU reference of the D3D8 fixed-function formulas (the GPU probe's expectation) against an
   # independent Python implementation from the D3D8 documentation, on gpu_ffp's cases + 4000 seeded random samples.
@@ -253,8 +259,9 @@ else()
            "rm -rf \"$1\"; \"$0\" --synthetic 2 --backend null --out \"$1.txt\" --write-install \"$1\" >/dev/null 2>&1 || exit 1; \"$0\" --install \"$1\" --manifest 1 --out \"$1.ok.json\" >/dev/null 2>&1 || { echo 'control: --manifest alone failed'; exit 1; }; for v in on off yes; do rm -f \"$1.bad.json\"; \"$0\" --install \"$1\" --manifest 1 --texture-cache $v --out \"$1.bad.json\" >/dev/null 2>&1; rc=$?; if [ $rc -ne 2 ]; then echo \"--manifest 1 --texture-cache $v: rc=$rc (want 2)\"; exit 1; fi; [ ! -e \"$1.bad.json\" ] || { echo 'usage error wrote an output'; exit 1; }; done"
            $<TARGET_FILE:lomn_view> ${CMAKE_CURRENT_BINARY_DIR}/view_manifest_texcache)
   # C8: a survey that finds no area is an environment error (exit 3), not an empty success.
+  # M2a-2 T6 fix 1: the output moved beside the install ($1.s.json): lomn_view refuses outputs inside the install (exit 2).
   add_test(NAME view_cli_survey_empty COMMAND sh -c
-           "rm -rf \"$1\"; mkdir -p \"$1/Data/Levels/lev1\" || exit 1; \"$0\" --install \"$1\" --survey 1 --out \"$1/s.json\" >/dev/null 2>&1; rc=$?; [ $rc -eq 3 ] || { echo \"rc=$rc (want 3)\"; exit 1; }"
+           "rm -rf \"$1\"; mkdir -p \"$1/Data/Levels/lev1\" || exit 1; \"$0\" --install \"$1\" --survey 1 --out \"$1.s.json\" >/dev/null 2>&1; rc=$?; [ $rc -eq 3 ] || { echo \"rc=$rc (want 3)\"; exit 1; }"
            $<TARGET_FILE:lomn_view> ${CMAKE_CURRENT_BINARY_DIR}/view_survey_empty)
   # M1a-4 Task 3: --texture-cache. Off (absent or "off") and on give byte-identical call and state logs (synthetic A9
   # scene); the metrics JSON has a "texture_cache" key only when on; a bad value is exit 2. A survey of the written

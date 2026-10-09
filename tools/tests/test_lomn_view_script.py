@@ -4,7 +4,10 @@ Base.osi is exit 3), the A8 coverage report (byte for byte what tools/osi/covera
 and "lomn_view adds no behaviour": with --natives stub its digest, natives.log and trace window equal lomn_osi_run's on
 the same script. The data-free cases use engine/tests/data/osi_a9_smoke.asm; the real-install cases need LOMN_DATA.
 The C++ side needs build/native (make test-tools builds it)."""
+import hashlib
 import json
+import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -18,6 +21,11 @@ OSIASM = REPO / "tools" / "osi" / "osiasm.py"
 COVERAGE = REPO / "tools" / "osi" / "coverage.py"
 SMOKE_ASM = REPO / "engine" / "tests" / "data" / "osi_a9_smoke.asm"
 KEYS = "down@100 down@160 enter@220 esc@280"
+# fix 1 (m5): lomn_view.cpp built with LOMN_OSI_DATA_DIR = this directory (CMake target lomn_view_tables_fixture), so the
+# table exit codes can be tested on corrupted copies of data/osi without touching the real tables.
+VIEW_FIX = REPO / "build" / "native" / "lomn_view_tables_fixture"
+FIX_TABLES = REPO / "build" / "native" / "osi_tables_fixture"
+TABLES = ("natives.json", "natives_beta150.json", "types.json", "native_overrides.json")
 
 
 def _run(exe, *args, timeout=100):
@@ -235,3 +243,186 @@ def test_real_a8_setup_frame(lomn_data, tmp_path):
     cov = _coverage_lines(r.stdout)
     assert cov[0].endswith(", unregistered 0") and cov == _coverage_py(tmp_path / "v.log")
     assert any(l.split()[5] == "-1" for l in cov[1:])  # natives first hit in Setup (frame -1)
+
+
+# ---- fix 1, m1 (user-data safety): no output path may reach the install; the game files are read-only to us ----
+def _tree_sha(root):
+    """sha256 over every path and file content under root (symlinks not followed), sorted: any write, delete or new file
+    under the install changes it."""
+    h = hashlib.sha256()
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames.sort()
+        for n in sorted(filenames + [d for d in dirnames if os.path.islink(os.path.join(dirpath, d))]):
+            p = os.path.join(dirpath, n)
+            h.update(os.path.relpath(p, root).encode() + b"\0")
+            h.update(os.readlink(p).encode() if os.path.islink(p) else Path(p).read_bytes())
+    return h.hexdigest()
+
+
+def _file_sha(p):
+    return hashlib.sha256(Path(p).read_bytes()).hexdigest()
+
+
+@pytest.fixture
+def victim(smoke, tmp_path):
+    """A private copy of the smoke install (never the real one: a wrong guard here would delete game data), plus links
+    from outside into it."""
+    inst = tmp_path / "install"
+    shutil.copytree(smoke / "install", inst)
+    (tmp_path / "out").mkdir()
+    os.symlink(inst / "data", tmp_path / "out" / "dirlink")                   # a directory symlink into the install
+    os.symlink(inst / "data" / "Base.osi", tmp_path / "out" / "script.lnk")   # a file symlink to the script
+    os.link(inst / "data" / "Base.osi", tmp_path / "out" / "script.hard")     # a hard link to the script
+    os.symlink(inst, tmp_path / "out" / "instlink")                          # a symlink to the install root
+    return inst
+
+
+OUT_TARGETS = {
+    "the script": lambda i, o: i / "data" / "Base.osi",
+    "the script, other case": lambda i, o: i / "DATA" / "base.OSI",
+    "a .. path to the script": lambda i, o: i / "data" / ".." / "data" / "Base.osi",
+    "a .. path from outside": lambda i, o: o / ".." / "install" / "data" / "Base.osi",
+    "a new file under the install": lambda i, o: i / "data" / "new.out",
+    "a new file in the install root": lambda i, o: i / "new.out",
+    "the install root itself": lambda i, o: i,
+    "through a directory symlink": lambda i, o: o / "dirlink" / "Base.osi",
+    "a new file through a directory symlink": lambda i, o: o / "dirlink" / "new.out",
+    "a symlink to the script": lambda i, o: o / "script.lnk",
+    "a hard link to the script": lambda i, o: o / "script.hard",
+    "through a symlink to the install root": lambda i, o: o / "instlink" / "data" / "x.out",
+}
+
+
+@pytest.mark.parametrize("target", sorted(OUT_TARGETS))
+@pytest.mark.parametrize("opt", ["--digest", "--natives-log", "--trace", "--out"])
+def test_script_outputs_never_reach_the_install(victim, opt, target):
+    out_dir = victim.parent / "out"
+    before, hard_before = _tree_sha(victim), _file_sha(out_dir / "script.hard")
+    path = OUT_TARGETS[target](victim, out_dir)
+    r = _run(VIEW, "--install", victim, "--script", "1", "--natives", "stub", opt, path)
+    assert r.returncode == 2, (r.returncode, r.stdout, r.stderr)
+    assert "install" in r.stderr and opt in r.stderr, r.stderr
+    assert _tree_sha(victim) == before and _file_sha(out_dir / "script.hard") == hard_before
+    assert (out_dir / "script.lnk").is_symlink()
+
+
+def test_script_symlinked_outside_the_install_is_protected_too(smoke, tmp_path):
+    """data/Base.osi may be a symlink to a file elsewhere: an output naming that real file is refused as well, before
+    anything is removed."""
+    real = tmp_path / "elsewhere" / "real.osi"
+    real.parent.mkdir()
+    shutil.copy(smoke / "install" / "data" / "Base.osi", real)
+    (tmp_path / "install" / "data").mkdir(parents=True)
+    os.symlink(real, tmp_path / "install" / "data" / "Base.osi")
+    sha = _file_sha(real)
+    for opt in ("--digest", "--natives-log", "--trace", "--out"):
+        r = _run(VIEW, "--install", tmp_path / "install", "--script", "1", "--natives", "stub", opt, real)
+        assert r.returncode == 2 and "script" in r.stderr, (opt, r.returncode, r.stderr)
+        assert _file_sha(real) == sha
+    # (the disk VFS does not serve a symlinked file, so this install itself fails to run: the guard is belt and braces)
+
+
+def test_outputs_beside_the_install_are_allowed(victim):
+    """Control: a directory whose name merely starts with the install's ("install2") is not inside it."""
+    side = victim.parent / (victim.name + "2")
+    side.mkdir()
+    before = _tree_sha(victim)
+    r = _run(VIEW, "--install", victim, "--script", "1", "--natives", "stub", "--digest", side / "v.digest",
+             "--natives-log", side / "v.log", "--trace", side / "v.trace", "--out", side / "v.json")
+    assert r.returncode == 0, r.stderr
+    assert all((side / n).is_file() for n in ("v.digest", "v.log", "v.trace", "v.json"))
+    assert _tree_sha(victim) == before
+
+
+M1_OUT_CASES = {
+    "render --out": lambda i: ["--level", "levt", "--area", "stat", "--backend", "null", "--out", i / "data" / "c.txt"],
+    "render --out in the install root": lambda i: ["--level", "levt", "--area", "stat", "--backend", "null", "--out",
+                                                 i / "c.txt"],
+    "render --state-log": lambda i: ["--level", "levt", "--area", "stat", "--backend", "null", "--out",
+                                     i.parent / "c.txt", "--state-log", i / "data" / "s.txt"],
+    "survey --out": lambda i: ["--survey", "1", "--out", i / "s.json"],
+    "manifest --out": lambda i: ["--manifest", "1", "--out", i / "data" / ".." / "m.json"],
+}
+
+
+@pytest.mark.parametrize("case", sorted(M1_OUT_CASES))
+def test_m1_outputs_never_reach_the_install(victim, case):
+    before = _tree_sha(victim)
+    r = _run(VIEW, "--install", victim, *M1_OUT_CASES[case](victim))
+    assert r.returncode == 2 and "install" in r.stderr, (r.returncode, r.stderr)
+    assert _tree_sha(victim) == before
+
+
+# ---- fix 1, m3: a fresh User/ directory per run ----
+def test_user_dir_is_fresh_per_run_and_removed(smoke, tmp_path):
+    tmpd = tmp_path / "tmpd"
+    tmpd.mkdir()
+    shared = tmpd / "lomn_view_user"  # the old shared directory, with a leftover: it must not be the run's User/
+    shared.mkdir()
+    (shared / "leftover.sav").write_text("x")
+    env = dict(os.environ, TMPDIR=str(tmpd))
+    dirs = []
+    for k in range(2):
+        r = subprocess.run([str(VIEW), "--install", str(smoke / "install"), "--script", "1", "--natives", "stub",
+                            "--out", str(tmp_path / ("j%d.json" % k))], capture_output=True, text=True, timeout=60,
+                           env=env)
+        assert r.returncode == 0, r.stderr
+        u = json.loads((tmp_path / ("j%d.json" % k)).read_text())["user_dir"]
+        assert Path(u).parent.resolve() == tmpd.resolve() and Path(u).name != "lomn_view_user"
+        assert not Path(u).exists()  # removed at exit
+        dirs.append(u)
+    assert dirs[0] != dirs[1]
+    assert sorted(p.name for p in tmpd.iterdir()) == ["lomn_view_user"] and (shared / "leftover.sav").exists()
+    # a failing run (exit 3: Base.osi does not parse) removes its User/ directory too
+    (tmp_path / "bad" / "data").mkdir(parents=True)
+    (tmp_path / "bad" / "data" / "Base.osi").write_bytes(b"OSI\0garbage")
+    r = subprocess.run([str(VIEW), "--install", str(tmp_path / "bad"), "--script", "1"], capture_output=True, text=True,
+                       timeout=60, env=env)
+    assert r.returncode == 3
+    assert sorted(p.name for p in tmpd.iterdir()) == ["lomn_view_user"]
+
+
+# ---- fix 1, m5: unreadable AND malformed tables exit 3; 4 stays "the host cannot start" ----
+@pytest.fixture
+def fix_tables():
+    assert VIEW_FIX.is_file(), "build/native is missing: run `make native` first"
+    shutil.rmtree(FIX_TABLES, ignore_errors=True)
+    FIX_TABLES.mkdir(parents=True)
+    for n in TABLES:
+        shutil.copy(REPO / "data" / "osi" / n, FIX_TABLES / n)
+    yield FIX_TABLES
+    shutil.rmtree(FIX_TABLES, ignore_errors=True)
+
+
+TABLE_CASES = {
+    "natives.json malformed": ("natives.json", "[{not json"),
+    "natives.json not a list": ("natives.json", "{}"),
+    "natives_beta150.json not a list": ("natives_beta150.json", "{}"),
+    "natives_beta150.json malformed": ("natives_beta150.json", "["),
+    "types.json missing": ("types.json", None),
+    "types.json malformed": ("types.json", "{\"a\":"),
+    "overrides: unknown key": ("native_overrides.json", '[{"key": "no.such", "tier": "tier1"}]'),
+    "overrides: tier disagrees with the merged table": (
+        "native_overrides.json", '[{"key": "gcgame.getresolutionwidth", "tier": "tier1"}]'),
+    "overrides malformed": ("native_overrides.json", "[{"),
+}
+
+
+@pytest.mark.parametrize("case", sorted(TABLE_CASES))
+def test_bad_tables_exit_3(smoke, fix_tables, case):
+    name, text = TABLE_CASES[case]
+    if text is None:
+        (fix_tables / name).unlink()
+    else:
+        (fix_tables / name).write_text(text)
+    for natives in ("stub", "real"):
+        r = _run(VIEW_FIX, "--install", smoke / "install", "--script", "1", "--natives", natives)
+        assert r.returncode == 3, (natives, r.returncode, r.stdout, r.stderr)
+        assert r.stdout == ""
+
+
+def test_good_fixture_tables_control(smoke, fix_tables):
+    assert _run(VIEW_FIX, "--install", smoke / "install", "--script", "1", "--natives", "stub").returncode == 0
+    o = _run(OSI_RUN, smoke / "install" / "data" / "Base.osi", "--real-natives")
+    r = _run(VIEW_FIX, "--install", smoke / "install", "--script", "1", "--natives", "real")
+    assert r.returncode == (4 if o.returncode == 2 else 0), r.stderr  # nothing bound: the host cannot start

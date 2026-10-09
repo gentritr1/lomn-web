@@ -4,7 +4,8 @@
 #   MODE=smoke (no game data): tests/data/osi_a9_smoke.asm assembled into a temporary install; --natives stub must equal
 #              lomn_osi_run on the same script (digest, natives.log and the trace window -1:2 byte for byte: lomn_view adds
 #              no behaviour); the coverage report == coverage.py --log of its natives.log and == the report computed by
-#              hand in the .asm header; bad arguments exit 2, a missing install exits 3.
+#              hand in the .asm header; bad arguments exit 2, a missing install exits 3; an output onto the script
+#              or inside the install exits 2 and leaves the install byte-identical (fix 1, m1).
 #   MODE=real (LOMN_DATA): the A6 path (FRAMES frames + KEYSPEC) with --natives stub: D lines == lomn_osi_run's D lines
 #              (C1: D lines only), natives.log equal, coverage == coverage.py; then the A8 run (--frames 1) exits 0 with
 #              `unregistered 0`.
@@ -89,6 +90,20 @@ if(MODE STREQUAL "smoke")
   expect_rc(2 "--script 1 --level x" ${RUNNER} ${EXE} --install ${OUT}/install --script 1 --level x)
   expect_rc(2 "--trace-frames 3:2" ${RUNNER} ${EXE} --install ${OUT}/install --script 1 --trace ${OUT}/x.trace --trace-frames 3:2)
   expect_rc(3 "missing install" ${RUNNER} ${EXE} --install ${OUT}/missing --script 1 --natives stub)
+  # fix 1 (m1): an output onto the script, or anywhere inside the install, is refused (exit 2) and the install is untouched
+  file(SHA256 ${OUT}/install/data/Base.osi sha_before)
+  expect_rc(2 "--digest onto the script" ${RUNNER} ${EXE} --install ${OUT}/install --script 1 --natives stub
+            --digest ${OUT}/install/data/Base.osi)
+  expect_rc(2 "--natives-log via .. into the install" ${RUNNER} ${EXE} --install ${OUT}/install --script 1 --natives stub
+            --natives-log ${OUT}/install/data/../data/Base.osi)
+  expect_rc(2 "--out inside the install" ${RUNNER} ${EXE} --install ${OUT}/install --script 1 --natives stub
+            --out ${OUT}/install/data/v.json)
+  file(SHA256 ${OUT}/install/data/Base.osi sha_after)
+  file(GLOB inst_files RELATIVE ${OUT}/install ${OUT}/install/*/* ${OUT}/install/*)
+  if(NOT sha_before STREQUAL sha_after OR NOT inst_files STREQUAL "data;data/Base.osi")
+    message(FATAL_ERROR "the install changed: ${sha_before} -> ${sha_after}, files ${inst_files}")
+  endif()
+  message(STATUS "install untouched: OK")
 elseif(MODE STREQUAL "real")
   set(INSTALL "$ENV{LOMN_DATA}/install")
   run("lomn_view --script 1" ${RUNNER} ${EXE} --install ${INSTALL} --script 1 --natives stub --frames ${FRAMES} --keys "${KEYSPEC}"

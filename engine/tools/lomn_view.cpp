@@ -20,8 +20,15 @@
 //   types.json, native_overrides.json). stdout, in order: the A8 coverage report (tools/osi/coverage.py's grammar, byte
 //   for byte), `nesting high-water %d`, `stack high-water %d`, then lomn_osi_run's summary lines without wall-clock
 //   fields (so native and wasm32 stdout are byte-identical; the timings are in the JSON). Exit codes: 0 ok, 2 bad
-//   arguments, 3 install / Base.osi / tables unreadable, 4 the host cannot start, a VM error stopped the run, or a write
+//   arguments (including an output inside the install, see below), 3 an input error: the install, Base.osi or a table
+//   (data/osi) unreadable or malformed (an override that disagrees with the merged registry included), 4 the host
+//   cannot start (--natives real with no bound group, no User directory), a VM error stopped the run, or a write
 //   failed.
+//   Fix 1 (review m1, m3): the install is read-only. In every mode with --install, an output (--out and its .json,
+//   --state-log, --trace, --digest, --natives-log) that is the install directory, lies under it, or is the script file
+//   (through "..", symlinks, hard links or another case spelling) is exit 2 before anything is removed or written. The
+//   --script run mounts User/ on a fresh mkdtemp directory under the temp directory, removed when the run ends (its path
+//   is the JSON's user_dir).
 // Options (every option takes a value):
 //   --backend webgpu|null   webgpu (default) writes <out> as PNG; null writes the rhi call log to <out>
 //   --width 1280 --height 720 --frames 1
@@ -306,8 +313,85 @@ bool same_file(const std::string& a, const std::string& b) {
   const sfs::path ca = sfs::weakly_canonical(sfs::absolute(a, ea), ea), cb = sfs::weakly_canonical(sfs::absolute(b, eb), eb);
   return (ea || eb) ? a == b : ca == cb;
 }
+// M2a-2 T6 fix 1 (m1, user-data safety): the install is read-only to lomn_view. The files the VFS serves as
+// Root/Data/base.osi: every <install>/<data>/<base.osi> whose names match case-insensitively (the VFS's own rule).
+std::vector<std::string> script_files(const std::string& install) {
+  namespace sfs = std::filesystem;
+  auto lower = [](std::string s) {
+    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return s;
+  };
+  auto children = [&](const sfs::path& dir, const char* name) {
+    std::vector<sfs::path> out;
+    std::error_code ec;
+    for (sfs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec))
+      if (lower(it->path().filename().string()) == name) out.push_back(it->path());
+    return out;
+  };
+  std::vector<std::string> out;
+  for (const sfs::path& d : children(install, "data"))
+    for (const sfs::path& f : children(d, "base.osi")) out.push_back(f.string());
+  return out;
+}
+// Why `out` may not be written ("" = it may): it is one of `scripts` (followed through symlinks and hard links:
+// equivalent() compares the files themselves, wherever they live), or it is the install directory or lies under it
+// (after canonicalisation: "..", symlinked directories and a differently-cased spelling all resolve, and every ancestor
+// of the canonical path is compared with equivalent(), so a symlink or another spelling of the install root counts too).
+// Never throws.
+std::string install_conflict(const std::string& out, const std::string& install, const std::vector<std::string>& scripts) {
+  namespace sfs = std::filesystem;
+  for (const std::string& s : scripts) {
+    std::error_code ec;
+    if (sfs::equivalent(out, s, ec) && !ec) return "is the install's script " + s;
+  }
+  std::error_code ec;
+  sfs::path p = sfs::absolute(out, ec);
+  if (ec) return "";
+  sfs::path c = sfs::weakly_canonical(p, ec);
+  if (!ec) p = c;
+  for (int guard = 0; guard < 4096; ++guard) {
+    std::error_code e2;
+    if (sfs::equivalent(p, install, e2) && !e2) return "lies inside the install " + install;
+    const sfs::path parent = p.parent_path();
+    if (parent.empty() || parent == p) break;
+    p = parent;
+  }
+  return "";
+}
+// 0, or exit 2 after naming the output (one check for every mode that writes files and has --install).
+int refuse_install_outputs(const std::vector<std::pair<std::string, std::string>>& outs, const std::string& install) {
+  const std::vector<std::string> scripts = script_files(install);
+  for (const auto& o : outs) {
+    if (o.second.empty()) continue;
+    const std::string why = install_conflict(o.second, install, scripts);
+    if (!why.empty()) return usage((o.first + " " + o.second + " " + why + ": lomn_view never writes into the install").c_str());
+  }
+  return 0;
+}
+
+// M2a-2 T6 fix 1 (m3): the --script run's User/ mount is a fresh directory under the temp directory, made by mkdtemp
+// and removed (recursively) when the run ends, on every exit path; so no run can see another run's leftovers.
+struct RunUserDir {
+  std::string path;  // empty until mkdtemp succeeded: nothing else is ever removed
+  bool make() {
+    std::error_code ec;
+    const std::filesystem::path t = std::filesystem::temp_directory_path(ec);
+    std::string tmpl = ((ec ? std::filesystem::path("/tmp") : t) / "lomn_view_user.XXXXXX").string();
+    std::vector<char> b(tmpl.begin(), tmpl.end());
+    b.push_back('\0');
+    if (!::mkdtemp(b.data())) return false;
+    path = b.data();
+    return true;
+  }
+  ~RunUserDir() {
+    if (path.empty()) return;
+    std::error_code ec;
+    std::filesystem::remove_all(path, ec);
+  }
+};
 #else
 bool same_file(const std::string& a, const std::string& b) { return a == b; }
+int refuse_install_outputs(const std::vector<std::pair<std::string, std::string>>&, const std::string&) { return 0; }
 #endif
 
 #if !defined(__EMSCRIPTEN__)
@@ -786,6 +870,8 @@ int script_mode(std::map<std::string, std::string>& a) {
     for (size_t j = i + 1; j < outs.size(); ++j)
       if (same_file(outs[i].second, outs[j].second))
         return usage((outs[i].first + " and " + outs[j].first + " name the same file").c_str());
+  // fix 1 (m1): never an output inside the install or onto its script (checked before anything is removed or written)
+  if (int rc = refuse_install_outputs(outs, a["--install"])) return rc;
 
   // Arguments are valid: only now drop whatever an earlier run left (a usage error leaves existing outputs untouched).
   for (const auto& o : outs)
@@ -795,7 +881,9 @@ int script_mode(std::map<std::string, std::string>& a) {
 #else
   // Decision 2: Base.osi through the VFS at Root/Data/base.osi, the literal GcGame::SetUpScripting passes to CreateVM.
   const std::string install = a["--install"];
-  std::unique_ptr<fs::FileSystem> fsp = fs::open_disk(install, disk_user_dir());
+  RunUserDir user;  // fix 1 (m3): a fresh User/ per run, removed on every exit path
+  if (!user.make()) return std::fprintf(stderr, "cannot create a User directory under the temp directory: %s\n", std::strerror(errno)), 4;
+  std::unique_ptr<fs::FileSystem> fsp = fs::open_disk(install, user.path);
   if (!fsp) return std::fprintf(stderr, "cannot open install %s\n", install.c_str()), 3;
   std::vector<uint8_t> image;
   if (fsp->read("Root/Data/base.osi", image) != fs::Error::None)
@@ -811,7 +899,17 @@ int script_mode(std::map<std::string, std::string>& a) {
   std::string err;
   if (!file.parse(image, &err)) return std::fprintf(stderr, "Root/Data/base.osi: %s\n", err.c_str()), 3;
   std::map<std::string, std::string> bodies;
-  if (!native_bodies(nj, mj, bodies, &err)) return std::fprintf(stderr, "native tables: %s\n", err.c_str()), 4;
+  // fix 1 (m5): unreadable AND malformed tables are input errors (exit 3). A stub-only host built from the same tables
+  // with no sinks and no VFS is the table check (registry, types, the overrides cross-check): whatever it throws is a
+  // table error. Exit 4 below is then only what the requested host adds (binding real natives).
+  if (!native_bodies(nj, mj, bodies, &err)) return std::fprintf(stderr, "native tables: %s\n", err.c_str()), 3;
+  try {
+    osi::ScriptHost::Options probe;
+    probe.keys = keys;
+    osi::ScriptHost check(file, nj, mj, tj, ov, nullptr, nullptr, nullptr, probe);
+  } catch (const std::exception& e) {
+    return std::fprintf(stderr, "native tables: %s\n", e.what()), 3;
+  }
 
   // Sinks and header exactly as lomn_osi_run writes them (so the digest equals its digest on the same script and tables).
   std::string keys_field = keys;
@@ -944,7 +1042,7 @@ int script_mode(std::map<std::string, std::string>& a) {
       << ",\"insns_per_frame_p95\":" << pct_u(insns_per_frame, 0.95) << ",\"insns_samples\":" << insns_per_frame.size()
       << ",\"natives_per_frame_p50\":" << pct_u(natives_per_frame, 0.5) << ",\"natives_per_frame_p95\":" << pct_u(natives_per_frame, 0.95)
       << ",\n\"script_ms_per_frame_p50\":" << num(pct_d(ms_per_frame, 0.5)) << ",\"script_ms_per_frame_p95\":" << num(pct_d(ms_per_frame, 0.95))
-      << ",\"setup_ms\":" << num(setup_ms) << ",\"rss_peak_bytes\":" << rss_peak() << "\n}\n";
+      << ",\"setup_ms\":" << num(setup_ms) << ",\"rss_peak_bytes\":" << rss_peak() << ",\n\"user_dir\":" << js(user.path) << "\n}\n";
     m.close();
     if (m.fail()) return std::fprintf(stderr, "cannot write %s\n", a["--out"].c_str()), 4;
   }
@@ -976,6 +1074,11 @@ int main(int argc, char** argv) {
     if (has(k)) return usage((std::string(k) + " needs --script 1").c_str());
   const std::string out = has("--out") ? a["--out"] : "";
   if (out.empty()) return usage("--out is required");
+  // M2a-2 T6 fix 1 (m1): no output of any mode (--out, its .json, --state-log) inside the install or onto its script.
+  if (has("--install"))
+    if (int rc = refuse_install_outputs({{"--out", out}, {"--out (.json)", out + ".json"}, {"--state-log", has("--state-log") ? a["--state-log"] : ""}},
+                                        a["--install"]))
+      return rc;
   if (has("--synthetic") && a["--synthetic"] != "1" && a["--synthetic"] != "2") return usage("--synthetic takes 1 (A7 scene) or 2 (A9 state scene)");
   if (has("--survey") && a["--survey"] != "1") return usage("--survey takes exactly 1");
   const bool synthetic = has("--synthetic");
