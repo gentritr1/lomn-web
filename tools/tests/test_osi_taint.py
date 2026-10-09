@@ -242,7 +242,7 @@ def test_flip_implies_sink_with_a_tier1_override(base_osi, flip30, tmp_path):
 
 
 # M4 (fix 1): every op whose result carries a tag is pinned: forcing that op's result tag to empty breaks a program.
-RESULT_BUILDERS = ("binary", "unary", "typetest", "eq", "get_member", "get_this", "get_this_fn", "get_member_str",
+RESULT_BUILDERS = ("binary", "unary", "typetest", "eq", "div", "get_member", "get_this", "get_this_fn", "get_member_str",
                    "get_member_fn_str", "get_var", "pull", "dup", "get_array", "native")
 
 

@@ -211,6 +211,7 @@ float normalise_yaw(float deg) {
   if (y <= -180.0) y += 360.0;
   return static_cast<float>(y);
 }
+// Safety note: outputs are always deleted before being written; the install guard relies on this for dangling links and hard links into the install (T6 review).
 // Removes a stale output file; a missing file is fine. False (with errno) when it exists but cannot be removed (e.g. a
 // directory), which the caller reports as a write failure.
 bool remove_stale(const std::string& path) { return ::unlink(path.c_str()) == 0 || errno == ENOENT; }

@@ -637,6 +637,12 @@ last two are added.
 3. any argument of a `tier1` native;
 4. the `Process` result, which the re-run rule reads (spec §3.1: a false result re-runs `Process` in the same frame);
 5. a 0x19 member name or a 0x83 function name that comes from a tainted string.
+- **jump target**: a 0x50/0x51 call whose target address is tainted (counted under branch).
+- **name**: a 0x18/0x1a member name, or a 0x19/0x83 name, that is tainted.
+- **refstore**: a store through a tainted reference: 0x10/0x1a into a tainted object, 0x15 into a tainted this, 0x93–0x96 into a tainted array or at a tainted index.
+- **errpath**: a tainted array index (0x91/0x93/0x95/0x96) or divisor (0x73/0x75), which can change the error path.
+
+A native whose sinks are all type checks (== nothing, or a type test) is reported "type-only": its exact value may be a cited placeholder, but its type and nothing-vs-something must match the original exactly (controller ruling, 2026-10-09).
 
 The CHANGED-NULL natives (flip probe) are handled by the rule "game-returning → must" (plan Review focus 5), not by a
 sink: every CHANGED-NULL native must be `tier1` in the merged overrides.
