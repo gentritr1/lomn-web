@@ -207,8 +207,8 @@ def test_committed_overrides_rows_are_valid_sorted_ascii_and_agree_with_the_modu
     for k in TIER1_KEYS:
         assert by_key[k]["tier"] == "tier1" and "default" not in by_key[k], k
         assert bodies[k] in _addrs(by_key[k]["cite"]), k
-        assert _addrs(dr().CITES[k]) <= _addrs(by_key[k]["cite"]) | {0}, (k, sorted(hex(a) for a in
-                                                                          _addrs(dr().CITES[k]) - _addrs(by_key[k]["cite"])))
+        # the merged file keeps side a's wording (controller ruling, pairs 7-9); the module's own cite must name the body
+        assert bodies[k] in _addrs(dr().CITES[k]), k
     for k in TIER2_KEYS:
         assert by_key[k]["tier"] == "tier2" and "default" not in by_key[k], k
         assert bodies[k] in _addrs(by_key[k]["cite"]) and dr().TIER2[k] == bodies[k], k
@@ -1361,8 +1361,9 @@ def test_a9_path_with_the_directors_models(tmp_path, lomn_data):
         a, b, c = (int(t.split(":")[1], 16) for t in tok[4:7])
         want = read_fluff_independently(inst, a, b, c) or b"XXX"
         assert l.endswith(" S %d %s" % (len(want), want.hex())), (n_line, l)
-    # this group makes no engine call and no reference change on the path
-    assert not any(l.startswith(("C ", "X ", "H ")) for l in log)
+    # no error on the path; after the pair-9 merge the objects group's C/H lines (addtoa, show) are on it too, and the
+    # whole log is checked byte for byte against the C++ engine by `make osi-a9` (cmp 3/4, 4/4)
+    assert not any(l.startswith("X ") for l in log)
 
 
 def test_a9_path_is_deterministic(tmp_path, lomn_data):

@@ -1109,7 +1109,7 @@ def test_fix1_rows_are_present_and_playcinematic_is_not_in_this_group():
     for k in ("gc3dsound.synclistenertocamera", "gccollisionphysicsgroup.settoaposition", "gcstatusscreen.hideinventory",
               "gccharacter.initmotionsystem"):
         assert data[k]["tier"] == "tier2" and "default" not in data[k] and data[k]["cite"].isascii(), k
-    assert "gchuddirector.playcinematic" not in data
+    assert data["gchuddirector.playcinematic"]["tier"] == "tier1"   # pair 8 owns it (controller ruling)
     assert "gchuddirector.playcinematic" not in ob().TIER2_KEYS
     assert "0x568a5e" in data["gcmodeldirector.addtoa"]["note"] and "0x5d4e40" in data["gcmodeldirector.addtoa"]["note"]
     assert "Pohatu" in data["gcmodeldirector.addtoa"]["note"] and "0x568c02" in data["gcmodeldirector.addtoa"]["note"]
