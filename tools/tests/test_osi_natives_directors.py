@@ -680,13 +680,14 @@ def test_loadarea_cnt1_does_not_fire_and_plain_hives_never_do():
     asm = ('.function main 0\nPushConstantString "frnt"\nCallGameFunction gcareadirector.setcurrentarea 1\nReturn\n'
            '.function OnEvent 2\nPushConstanti8 1\nReturn\n')
     cases = [
-        ([d.AreaObject("objects", 0xA1, cnt1), d.AreaObject("hives", 0xC1, cnt1),
-          d.AreaObject("characters", 0xB1, cnt1)], cnt1, 0),                        # main character cnt1: never fires
+        ([d.AreaObject("objects", 0xA1, cnt1), d.AreaObject("hives", 0xC1, cnt1)], cnt1, 0),                        # main character cnt1: never fires
         ([d.AreaObject("objects", 0xA1, lbld)], cnt1, 0),                           # lbld object, main character cnt1
         ([d.AreaObject("objects", 0xA1, cnt1)], lbld, 0),                           # main character lbld, object id cnt1
         ([d.AreaObject("hives", 0xC1, lbld, plain=True)], lbld, 0),                 # hive ctor 0x6239b0
         ([d.AreaObject("hives", 0xC1, lbld)], lbld, 1),                             # hive ctor 0x5432a0: fires
         ([d.AreaObject("objects", 0xA1, lbld)], lbld, 1),
+        ([d.AreaObject("characters", 0xB1, cnt1)], cnt1, 1),                        # characters: no 'lbld' gate (0x418850)
+        ([d.AreaObject("characters", 0xB1, lbld)], cnt1, 0),                        # id != main character
     ]
     for objs, main, want in cases:
         vm, ctx, tr, log = make_vm(asm)

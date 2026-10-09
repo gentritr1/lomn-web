@@ -521,7 +521,12 @@ class AreaDirector:
                 # id [ms+0x14] (0x543f44 -> 0x5748ec), and the guard 0x574eeb-0x574ef1 needs it to equal the main
                 # character's id. 'cnt1' != 'lbld', so the guard never passes while the main character is 'cnt1'.
                 # A hive record with [rec+0x2c] == 0 uses ctor 0x6239b0 (0x6262fa) and never reaches SetupMoveable.
-                if (not o.plain and o.motion_id == MOVEABLE_SETUP_ID
+                # The 'lbld' gate is for the objects and hives blocks only: the ctor 0x5432a0 has exactly three callers
+                # (0x4842dc GcNoLightDirector, 0x489937 AddMoveableObj = objects, 0x6236d4 GcHive ctor). Characters reach
+                # SetupMoveable through GcCharacter::SetupMoveable 0x418850 (vtable slot at file offset 0x2edc58) ->
+                # 0x574b80 with no 'lbld' check: a character record fires when its id equals the main character's.
+                gated = block != "characters"
+                if (not o.plain and (o.motion_id == MOVEABLE_SETUP_ID or not gated)
                         and o.motion_id == self.main_character()):               # cmp ecx,edx 0x574ef1
                     r = self.set_under_water(ctx, self.under_water, swallow=True)
                     if not r.ok:                                                 # swallowed: the object is not completed,
