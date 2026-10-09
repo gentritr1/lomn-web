@@ -30,6 +30,8 @@ struct HostFlags {
   bool skip_video = true;     // D1: playcinematic completes instantly
 };
 
+class HostContext;
+
 // One engine object the script can hold (D13). `engine_refs` is the number of references the engine holds when the
 // object is constructed (cited per class in natives.md §2.4: 0 for an object the native constructs, the holders alive
 // at the call for an engine-owned one). The handle is minted on the first create_variant, never at construction.
@@ -42,6 +44,10 @@ class GameObject {
   uint16_t type() const { return type_; }      // the game type the handle is minted under (its `A g` line)
   uint32_t handle() const { return handle_; }  // 0 until the first create_variant
   int32_t engine_refs() const { return engine_refs_; }  // the engine's references now (natives.log's ` G`)
+  // M2a-2 T9a: the engine references this object's deleting destructor drops (natives.md §2.2: Free 0x4f2bc0 calls
+  // vtable[0]; e.g. ~ScTextObject 0x611070 releases its font). HostContext calls it once, after the object has left the
+  // context and after its `F g`, just before deleting it. It must not throw. Default: none.
+  virtual void release_held(HostContext&) {}
 
  private:
   friend class HostContext;

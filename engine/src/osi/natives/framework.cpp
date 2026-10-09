@@ -88,7 +88,12 @@ Variant HostContext::create_variant(GameObject* o, uint16_t as_type) {
 
 void HostContext::destroy(GameObject* o) {
   auto it = owned_.find(o);
-  if (it != owned_.end()) owned_.erase(it);  // deletes it; an object the context does not own is only forgotten
+  if (it == owned_.end()) return;  // an object the context does not own is only forgotten
+  // M2a-2 T9a: take the object out of the context first, then run its destructor's engine releases (release_held), then
+  // delete it. A release there may free another object (its F g, on_free -> destroy), which re-enters owned_ safely.
+  std::unique_ptr<GameObject> dead = std::move(it->second);
+  owned_.erase(it);
+  dead->release_held(*this);
 }
 
 // The heap freed a handle (its total reached 0, `F g` written): delete the host object (the original's Free 0x4f2bc0,
