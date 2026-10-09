@@ -33,6 +33,19 @@ bool BlockChain::open_art(std::string_view path, std::string* err) { return open
 bool BlockChain::open_current(std::string_view path, std::string* err) { return open_into(path, current_, current_path_, err); }
 bool BlockChain::open_second(std::string_view path, std::string* err) { return open_into(path, second_, second_path_, err); }
 
+void BlockChain::set_unloaded(Source s, std::string_view tag) {
+  BlockFile bf;
+  std::string err;
+  bf.open_bytes({'B', 'L', 'K', 'F', 1, 0, 0, 0, 0, 0, 0, 0}, &err);  // a header with no entry: open, Find -> -1
+  if (s == Source::Current) {
+    current_ = std::move(bf);
+    current_path_ = std::string(tag);
+  } else if (s == Source::Second) {
+    second_ = std::move(bf);
+    second_path_ = std::string(tag);
+  }
+}
+
 bool BlockChain::enter_area(std::string_view level, std::string_view area, std::string* err) {
   // "%.4s": the game truncates both ids to 4 characters.
   std::string lev(level.substr(0, 4)), are(area.substr(0, 4));
