@@ -58,7 +58,17 @@ Controller-verified 2026-10-08: the page loads to the folder picker with 0 conso
   - re-measure the maximum engine-call nesting with real natives (cap 64; measured max 1 with stubs);
   - E3 rep 3 (Haiku vs Sonnet).
 
-### 3.2 M2a-2: native framework, Setup to the first Process (NEXT: start here)
+### 3.2 M2a-2: native framework, Setup to the first Process (IN PROGRESS: resume here)
+**State 2026-10-09.**
+- Merged on `m2-osi-vm` @ 030db5a: Tasks 1, 2a, 2b, 3, 4, 5, 6, 7 (a+b), 11, the error-PC table, the fail-closed runners and the docs batches. Each passed a blind review and controller verification. Both engines agree byte for byte on 541 programs and, with real natives, on the 600-frame A9 run.
+- Interrupted mid-work by a network outage, with partial UNCOMMITTED work preserved: pair 8 (directors, saver, mods) in worktrees `lomn-web-m2-t8a`/`t8b`, and pair 9 (objects, model director, camera, HUD) in `lomn-web-m2-t9a`/`t9b`.
+- Remaining after the pairs:
+  - the F7 follow-up batch (ledger);
+  - Task 10, the A8–A10 gate: taint re-run with real natives, mutate_vm full re-run (incl. the S07 unit gap), wasm stack per level, swallow_count probe, event_probe with real natives;
+  - Task 12, the close-out (Opus whole-branch review).
+- **Billing (owner, 2026-10-09): the Max plan's weekly usage is at 80%, so NO more plan usage for this project.** Run everything from a terminal `claude` session logged into the Console account (credits), in a fresh session.
+- **Credit estimate to finish M2a-2:** about $40–80 (about $195 left).
+- Ledger with exact resume steps: `.superpowers/sdd/2026-10-09-lomn-web-m2a2/progress.md` (last section).
 Process: the controller (Opus 5.5) writes the spec and plan, Fable 5.1 reviews them once for precision, then subagent-driven development with Sonnet 5.5 / Opus 5.5 medium.
 - Generated typed stubs for every native, with real returns for the 3 copy-kind natives.
 - The natives `Setup` needs, implemented against the decomp with a citation per native.
