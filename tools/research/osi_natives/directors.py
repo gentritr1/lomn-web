@@ -79,6 +79,10 @@ CITES = {
     "gcsaver.getammo":
         "// body 0x5d3910, method 0x5d3910 <GcSaver::GetAmmo>; asm pin: 0x5d3913 mov ax,[0x7474c8] (a word, .data 0), "
         "u16 variant 0x4183f0 (0x4183fa movzx edx,word)",
+    "gcsaver.setammo":
+        "// body 0x5d3840, method 0x5d3840 <GcSaver::SetAmmo>; asm pin: 0x5d3845 lea edx,[esp+0x10] (argument 0), 0x5d3849 "
+        "mov dx,[edx], 0x5d384c mov [0x7474c8],dx (a word; the field getammo reads at 0x5d3913), 0x5d3853 {0xf, 0} "
+        "(returns nothing)",
     "bettersaver.getbooleanvalue":
         "// body BetterSaver.dll 0x10001f70, method 0x10001f70 <BetterSaver::GetBooleanValue>; asm pin: "
         "0x10001f77 movzx esi,word (the u16 key), 0x10001fc8 xor al,al (absent), 0x10001fd1 setne cl, 0x10001fd8 mov "
@@ -215,7 +219,8 @@ class Saver:
     ResetData 0x5d5490, natives.md §9.1)."""
 
     def __init__(self, ctx):
-        self.ammo = 0                   # [0x7474c8] word
+        self.ammo = 0                   # [0x7474c8] word: the ONE store (setammo 0x5d384c, the Toa ctor 0x56898b, getammo 0x5d3913)
+        self.toa_id = NULL_ID           # [0x74749c] dword: AddToa 0x47e221 (.data 0x3f3f3f3f; no script native reads it)
         self.level = 0                  # [0x74748c] byte: ResetData 0x5d5493
         self.area = NULL_ID             # [0x747490] dword: ResetData 0x5d549a
         self.conditions = 0             # [0x8391a0] dword: ResetData 0x5d54ec
@@ -259,8 +264,14 @@ class Saver:
                     ad.remove_object(ctx, loader, obj_id)
 
 
+def _set_ammo(ctx):
+    def fn(call):
+        ctx.subsystem(Saver).ammo = call.arg(0).value & 0xFFFF                  # mov dx,[edx]; mov [0x7474c8],dx (0x5d3849/0x5d384c)
+        return NOTHING                                                         # {0xf, 0} (0x5d3853-0x5d3858)
+    return fn
+
+
 def _get_ammo(ctx):
-    # SetAmmo 0x5d3840 (unbound, deferred) writes the same word [0x7474c8]: a script write is not read back yet
     def fn(call):
         return Variant(T_INT, ctx.subsystem(Saver).ammo & 0xFFFF)              # mov ax,[0x7474c8]; 0x4183f0 movzx word
     return fn
@@ -721,6 +732,7 @@ def bind(reg, ctx) -> None:
     reg.bind("gcareadirector.getscriptfluffstring", _get_script_fluff_string(ctx))
     reg.bind("gcsaver.cheatmenu", _cheat_menu(ctx))
     reg.bind("gcsaver.getammo", _get_ammo(ctx))
+    reg.bind("gcsaver.setammo", _set_ammo(ctx))
     reg.bind("bettersaver.getbooleanvalue", _get_boolean_value(ctx))
     reg.bind("bettersaver.setbooleanvalue", _set_boolean_value(ctx))
     reg.bind("bettersaver.save", _bs_save(ctx))

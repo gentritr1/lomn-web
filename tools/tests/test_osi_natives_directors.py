@@ -46,7 +46,7 @@ def fw():
 
 
 # ----------------------------------------------------------------------------------------------- harness
-def make_vm(asm, install=None, deterministic=True, with_log=True, skip_video=True):
+def make_vm(asm, install=None, deterministic=True, with_log=True, skip_video=True, groups=("directors",)):
     """The oracle VM with the real native registry and only this group bound."""
     f, d = fw(), dr()
     image, _ = osiasm.assemble(asm)
@@ -58,6 +58,9 @@ def make_vm(asm, install=None, deterministic=True, with_log=True, skip_video=Tru
     vfs = f.Vfs(install) if install is not None else None
     ctx = f.HostContext(vm, heap, vfs, f.HostFlags(deterministic=deterministic, skip_video=skip_video), log)
     d.bind(reg, ctx)
+    if "objects" in groups:
+        from osi_natives import objects
+        objects.bind(reg, ctx)
     return vm, ctx, tr, log
 
 
@@ -150,7 +153,7 @@ def pin(disasm, start, stop, expect, exe=None):
 # ===============================================================================================================
 TIER1_KEYS = sorted(["gcgame.getmainview", "gcgame.getkeymapper", "gcgame.getmp3player", "gcviewport.getcamera",
                      "gcareadirector.getcurrentlevel", "gcareadirector.setcurrentlevel", "gcareadirector.setcurrentarea",
-                     "gcareadirector.getscriptfluffstring", "gcsaver.cheatmenu", "gcsaver.getammo",
+                     "gcareadirector.getscriptfluffstring", "gcsaver.cheatmenu", "gcsaver.getammo", "gcsaver.setammo",
                      "bettersaver.getbooleanvalue", "bettersaver.setbooleanvalue",
                      "bettersaver.save", "gchuddirector.playcinematic"])
 TIER2_KEYS = ["gckeymapper.setusecontext", "gcmp3player.play", "gcmp3player.setupforplay", "gcmp3player.stop",
@@ -1372,3 +1375,54 @@ def test_a9_path_is_deterministic(tmp_path, lomn_data):
     a = _a9(tmp_path / "a", lomn_data)
     b = _a9(tmp_path / "b", lomn_data)
     assert a[1] == b[1] and a[2].read_text() == b[2].read_text()
+
+
+# ===============================================================================================================
+# F7 item 1: gcsaver.setammo (body 0x5d3840) and the ONE saver store [0x7474c8] / [0x74749c]
+# ===============================================================================================================
+def test_setammo_asm_pins_and_every_reference_to_the_two_fields(disasm, image):
+    pin(disasm, 0x5d3840, 0x5d3862, {
+        0x5d3840: "push ebx", 0x5d3841: "mov ebx, dword ptr [esp + 0x8]", 0x5d3845: "lea edx, [esp + 0x10]",
+        0x5d3849: "mov dx, word ptr [edx]", 0x5d384c: "mov word ptr [0x7474c8], dx",
+        0x5d3853: "mov word ptr [ebx], 0xf", 0x5d3858: "mov dword ptr [ebx + 0x4], 0x0"})
+    # the .text census of both fields (EXECUTED objdump, F7b): the writers and readers; the pushes at 0x5d3c32.. are the
+    # save/load routines (M4). No other script native touches them.
+    rows = disasm(0x401000, 0x6ff000)
+    refs = {a: t for a, t in rows.items() if "0x7474c8" in t or "0x74749c" in t}
+    writes = sorted(a for a, t in refs.items() if t.startswith("mov word ptr [0x7474c8]") or t.startswith("mov dword ptr [0x74749c]"))
+    assert writes == [0x47e221, 0x56898b, 0x56b225, 0x56b4b6, 0x56b824, 0x5d384c]
+    readers = sorted(a for a, t in refs.items() if a not in writes and t.startswith("mov") )
+    assert readers == [0x56b211, 0x56b49a, 0x56b814, 0x56e520, 0x5d19ca, 0x5d3913, 0x62d4b8]
+    assert image.u32(0x74749c) == 0x3F3F3F3F                                       # .data: the saver toa id is the null id
+
+
+def test_setammo_then_getammo_through_one_store_with_word_truncation():
+    d = dr()
+    src = ".function main 0\nPushConstanti32 %d\nCallGameFunction gcsaver.setammo 1\nCallGameFunction gcsaver.getammo 0\nReturn\n"
+    for v, want in ((5, 5), (0, 0), (0x1FFFF, 0xFFFF), (0x10000, 0), (-1, 0xFFFF)):
+        r, vm, ctx, tr, log = run_main(src % v)
+        assert r == Variant(0x10, want), v
+        assert ctx.subsystem(d.Saver).ammo == want                               # the word store [0x7474c8] (0x5d384c)
+    # setammo returns nothing {0xf, 0} (0x5d3853 / 0x5d3858)
+    r, *_ = run_main(".function main 0\nPushConstanti32 7\nCallGameFunction gcsaver.setammo 1\nReturn\n")
+    assert r == NOTHING
+
+
+def test_addtoa_and_setammo_and_getammo_share_the_saver_store():
+    ONEV = ".function OnEvent 2\nPushConstanti8 1\nReturn\n"
+    d = dr()
+    src = ('.function main 0\nPushConstantString "onua"\nCallGameFunction gcmodeldirector.addtoa 1\nPop\n'
+           'CallGameFunction gcsaver.getammo 0\nReturn\n') + ONEV
+    r, vm, ctx, tr, log = run_main(src, groups=("objects",))
+    assert r == Variant(0x10, 250)                                                # the toa's ammo (0xfa, 0x56898b)
+    sv = ctx.subsystem(d.Saver)
+    assert sv.ammo == 250 and sv.toa_id == 0x6F6E7561                              # [0x74749c] = the toa name id (0x47e221)
+    src = ('.function main 0\nPushConstantString "onua"\nCallGameFunction gcmodeldirector.addtoa 1\nPop\n'
+           'PushConstanti32 9\nCallGameFunction gcsaver.setammo 1\nCallGameFunction gcsaver.getammo 0\nReturn\n') + ONEV
+    r, *_ = run_main(src, groups=("objects",))
+    assert r == Variant(0x10, 9)                                                  # setammo after addtoa wins
+    src = ('.function main 0\nPushConstanti32 9\nCallGameFunction gcsaver.setammo 1\n'
+           'PushConstantString "onua"\nCallGameFunction gcmodeldirector.addtoa 1\nPop\n'
+           'CallGameFunction gcsaver.getammo 0\nReturn\n') + ONEV
+    r, *_ = run_main(src, groups=("objects",))
+    assert r == Variant(0x10, 250)                                                # the ctor store overwrites it

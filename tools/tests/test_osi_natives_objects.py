@@ -47,6 +47,12 @@ def sv():
     return services
 
 
+def saver(ctx):
+    """The ONE saver store (directors.Saver): addtoa's [0x7474c8] / [0x74749c] writes land here."""
+    from osi_natives import directors
+    return ctx.subsystem(directors.Saver)
+
+
 def fw():
     from osi_natives import framework
     return framework
@@ -513,7 +519,7 @@ def test_addtoa_calls_onevent_32_250_inside_the_native_and_returns_int_1():
     toa = md.map[CNT1]
     assert isinstance(toa, ob().GcToa) and toa.ammo == 250 and toa.engine_refs == 1       # the map's copy: 1
     assert toa.char_id == CNT1 and toa.node_id == CNT1 and toa.name_id == ONUA
-    assert md.main_toa is toa and md.saver_ammo == 250 and md.saver_toa_id == ONUA
+    assert md.main_toa is toa and saver(ctx).ammo == 250 and saver(ctx).toa_id == ONUA
     assert md.toa_index == 0
 
 
@@ -524,7 +530,7 @@ def test_addtoa_name_selects_the_toa_index_and_the_id():
         md = ctx.subsystem(ob().ModelDirector)
         assert md.toa_index == idx, name
         want = sv().convert_string_to_id(name.encode())
-        assert md.map[CNT1].name_id == want and md.saver_toa_id == want
+        assert md.map[CNT1].name_id == want and saver(ctx).toa_id == want
 
 
 def test_addtoa_second_call_runs_the_constructor_again_but_returns_0_and_keeps_the_first_toa():
@@ -534,7 +540,7 @@ def test_addtoa_second_call_runs_the_constructor_again_but_returns_0_and_keeps_t
     assert r == Variant(0x10, 0)
     assert [l for l in log if l.startswith("C ")].__len__() == 2          # OnEvent ran in both constructors (unconditional)
     md = ctx.subsystem(ob().ModelDirector)
-    assert md.map[CNT1].name_id == ONUA and md.saver_toa_id == 0x67616C69       # [0x74749c] is written before Add (0x47e221)
+    assert md.map[CNT1].name_id == ONUA and saver(ctx).toa_id == 0x67616C69       # [0x74749c] is written before Add (0x47e221)
     assert md.toa_index == 0                                                 # the switch is on the success tail only
 
 
@@ -563,8 +569,8 @@ def test_addtoa_onevent_error_propagates_out_of_the_native_and_nothing_is_added(
     src = ('.function main 0\nPushConstantString "onua"\nCallGameFunction gcmodeldirector.addtoa 1\nReturn\n') + bad
     msg, vm, ctx, tr, log = fails(src)
     md = ctx.subsystem(ob().ModelDirector)
-    assert md.map == {} and md.main_toa is None and md.saver_toa_id is None
-    assert md.saver_ammo == 250                                           # written at 0x56898b, before the Call at 0x568a59
+    assert md.map == {} and md.main_toa is None and saver(ctx).toa_id == 0x3F3F3F3F
+    assert saver(ctx).ammo == 250                                           # written at 0x56898b, before the Call at 0x568a59
     assert not any(l.startswith("00000000 gcmodeldirector.addtoa") for l in log)      # no line of its own (natives.md 3.2)
     assert "Script is calling gcmodeldirector.addtoa" in msg
 
