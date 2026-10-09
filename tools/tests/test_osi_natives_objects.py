@@ -196,8 +196,8 @@ def test_committed_overrides_rows_are_valid_sorted_ascii_and_name_the_bodies_of_
         r = by_key[k]
         assert r["tier"] == "tier1" and "default" not in r, k
         assert int(win[k]["body"], 16) in _addrs(r["cite"]), k
-        # the module cites every address the file's cite names (the file is the module's text)
-        assert _addrs(r["cite"]) == _addrs(ob().CITES[k].replace("->", "->")), k
+        # the merged file keeps side a's wording (controller ruling); the module's own cite must name the body
+        assert int(win[k]["body"], 16) in _addrs(ob().CITES[k]), k
 
 
 INT_TIER2 = ("gclightdirector.toggleconstantlights", "gc3dsound.synclistenertocamera")
