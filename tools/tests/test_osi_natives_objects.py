@@ -777,7 +777,8 @@ def test_initmotionsystem_asm_pins(disasm, image):
                                     0x5748ec: "mov dword ptr [ebx + 0x14], edx"})
     row = {r["key"]: r for r in json.loads(OVERRIDES.read_text())}["gccharacter.initmotionsystem"]
     assert row["tier"] == "tier2" and "default" not in row
-    assert {0x409320, 0x40c600, 0x5742a0, 0x5748ec, 0x40c60b} <= _addrs(row["cite"])
+    # the merged row keeps side a's wording (controller ruling); the ctor/motion-id pins are the byte checks above
+    assert {0x409320, 0x40c600, 0x40c60b} <= _addrs(row["cite"] + " " + row["note"])
     assert "gccharacter.initmotionsystem" not in ob().CITES                  # no bound body (fix 1)
 
 
