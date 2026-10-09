@@ -56,7 +56,7 @@ test time; the binary is never committed.
   `expect_error.top`). `{"type": X}` alone is not a valid expectation: the C++ runner compares it as value 0 and the
   oracle compares the type only, so the two runners would disagree. `text`, `hex` and `game` are the other forms and
   need no `value`. `found` is not part of the format: both runners now fail a program that carries an `expect.found` key
-  (amendment 18), and `tools/tests/test_conformance_report.py` still fails on both rules.
+  (rule 22), and `tools/tests/test_conformance_report.py` still fails on both rules.
 - `fpu_pc` (optional in `expect`, `expect_error`) is the precision state after the call; after any error it is 64 (D8′/D10).
   `reset_after_error()` does not change `fpu_pc`, so a second entry point (`main2`) called after an error runs at 64.
 
@@ -221,7 +221,7 @@ The acceptance is the output of `tools/osi/conformance_report.py DIR [--group a|
 handlers ≥2: x/96, row×message pairs: y/111, falsifiers: k/31, argc violations: z/20, programs: N, pending: P
 ```
 
-`programs` excludes the pending programs (amendment 17), which are counted in `pending` and cover nothing.
+`programs` excludes the pending programs (rule 21), which are counted in `pending` and cover nothing.
 
 - The denominators are measured from the tables by the script (2026-10-08, empty corpus):
   - 96 handlers;
@@ -367,8 +367,8 @@ Both runners (`lomn_osi_conform`, `osi_vm.py --conform`) implement these. They c
       identical and trace-free, and prints `conform-trace-cmp: P pending (no trace on either side)`.
     - `tools/osi/conformance_report.py` counts them as `pending: P` and excludes them from `programs` and from every
       coverage number.
-    - Unknown keys: see amendment 18 (they fail closed).
-18. **Fail-closed expectation keys** (2026-10-09, M2a-2). A runner must not let a program pass on a field nobody compares.
+    - Unknown keys: see rule 22 (they fail closed).
+22. **Fail-closed expectation keys** (2026-10-09, M2a-2). A runner must not let a program pass on a field nobody compares.
     - Each runner keeps an explicit list of the key paths it compares and a list of descriptive keys it ignores. A key
       path is the chain of object keys from the top of the `.expect.json`, with `[*]` after a key whose value is an array
       of objects and `*` for the name of a global under `expect.globals` / `expect_error.globals`. Scalars inside an
