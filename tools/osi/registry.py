@@ -1128,7 +1128,7 @@ def type_table_names(res: dict) -> set[str]:
     return names
 
 
-def render_types(res: dict) -> str:
+def render_types(res: dict, overrides=()) -> str:
     rows, replay = res["rows"], res["replay"]
     uses = collections.Counter(t for r in rows for t in r["types"] if t)
     cv = {c["class"] for c in res["createvariant"]}
@@ -1335,7 +1335,113 @@ def render_types(res: dict) -> str:
     w("- **Type 0 and the by-reference box.** Whether the %d `unknown:0x0` slots can ever be satisfied is decided by `ConvertVariant`" % sum(r["types"].count("unknown:0x0") for r in rows))
     w("  and the natives' bodies, not by this table.")
     w("")
+    w("## Tiers (M2a-2)")
+    w("")
+    w(tier_summary(list(overrides)))
+    w("")
     return "\n".join(L) + "\n"
+
+
+# ------------------------------------------------------------------------------- M2a-2 T2b: the registry overrides
+# docs/osi/natives.md §7.2. data/osi/native_overrides.json is a sorted list of {key, tier, cite, note[, default]} rows.
+# The merge sets `tier` (and replaces `default`) on the winner row of each named key and touches nothing else, so an
+# empty file changes no byte of natives.json / natives_beta150.json (minor m6). cite and note stay in the overrides file.
+OVERRIDE_REQUIRED = ("key", "tier", "cite", "note")
+OVERRIDE_FIELDS = set(OVERRIDE_REQUIRED) | {"default"}
+OVERRIDE_TIERS = ("tier1", "tier2", "tier3")
+_HEX_TYPE = re.compile(r"0x[0-9a-f]{2}$")
+_BITS = re.compile(r"[0-9a-f]{8}$")
+_ADDR = re.compile(r"0x0*([0-9a-fA-F]+)")
+
+
+def _default_ok(d) -> bool:
+    if not isinstance(d, dict) or not isinstance(d.get("type"), str) or not _HEX_TYPE.match(d["type"]):
+        return False
+    if set(d) == {"type", "value"}:
+        v = d["value"]
+        return isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= 0xFFFFFFFF
+    return set(d) == {"type", "bits"} and d["type"] == "0x12" and isinstance(d["bits"], str) and bool(_BITS.match(d["bits"]))
+
+
+def _winners(rows: list[dict], mods: list[dict]) -> dict[str, tuple[str, int]]:
+    """{key: ("exe" | "mod", index)} of the winner rows: exe winners first; a mod row only if no exe row has the key."""
+    out: dict[str, tuple[str, int]] = {}
+    for i, r in enumerate(rows):
+        if r.get("winner", True):
+            out.setdefault(r["key"], ("exe", i))
+    for i, r in enumerate(mods):
+        if r.get("winner", True):
+            out.setdefault(r["key"], ("mod", i))
+    return out
+
+
+def check_overrides(overrides, rows: list[dict], mods: list[dict] = ()) -> list[str]:
+    """The schema problems of an overrides file (docs/osi/natives.md §7.2); [] when it is valid."""
+    if not isinstance(overrides, list):
+        return ["the overrides file must be a JSON list"]
+    win = _winners(rows, list(mods))
+    problems, seen, last = [], set(), None
+    for n, o in enumerate(overrides):
+        where = "row %d" % n
+        if not isinstance(o, dict):
+            problems.append("%s: not an object" % where)
+            continue
+        key = o.get("key")
+        where = "row %d (%s)" % (n, key)
+        missing = [f for f in OVERRIDE_REQUIRED if f not in o]
+        extra = sorted(set(o) - OVERRIDE_FIELDS)
+        if missing or extra:
+            problems.append("%s: field set: missing %s, not allowed %s" % (where, missing, extra))
+        if not isinstance(key, str) or key not in win:
+            problems.append("%s: unknown key (not a winner of natives.json or natives_beta150.json)" % where)
+            continue
+        if key in seen:
+            problems.append("%s: duplicate key" % where)
+        elif last is not None and key < last:
+            problems.append("%s: rows must be sorted by key (%r after %r)" % (where, key, last))
+        seen.add(key)
+        last = max(last or key, key)
+        if o.get("tier") not in OVERRIDE_TIERS:
+            problems.append("%s: tier %r is not one of %s" % (where, o.get("tier"), ", ".join(OVERRIDE_TIERS)))
+        if "default" in o:
+            if o.get("tier") == "tier1":
+                problems.append("%s: a tier1 row has no default (its body decides the result)" % where)
+            elif not _default_ok(o["default"]):
+                problems.append("%s: default %r is not {type, value u32} or {type 0x12, bits}" % (where, o["default"]))
+        kind, i = win[key]
+        body = (rows if kind == "exe" else mods)[i]["body"]
+        want = int(body, 16)
+        cite = o.get("cite")
+        if not isinstance(cite, str) or not cite.strip():
+            problems.append("%s: empty cite" % where)
+        elif want not in {int(m.group(1), 16) for m in _ADDR.finditer(cite)}:
+            problems.append("%s: cite does not name the row's body %s" % (where, body))
+        if "note" in o and (not isinstance(o["note"], str) or not o["note"].strip()):
+            problems.append("%s: empty note" % where)
+    return problems
+
+
+def apply_overrides(rows: list[dict], mods: list[dict], overrides) -> tuple[list[dict], list[dict]]:
+    """Merge the overrides into the rows (in place) and return (rows, mods). Raises RegistryError on any schema problem."""
+    problems = check_overrides(overrides, rows, mods)
+    if problems:
+        raise RegistryError("native_overrides.json: " + "; ".join(problems))
+    win = _winners(rows, mods)
+    for o in overrides:
+        kind, i = win[o["key"]]
+        row = (rows if kind == "exe" else mods)[i]
+        row["tier"] = o["tier"]
+        if "default" in o:
+            row["default"] = o["default"]
+    return rows, mods
+
+
+def tier_summary(overrides) -> str:
+    """The docs/osi/types.md line that reports the merged overrides."""
+    n = collections.Counter(o.get("tier") for o in overrides)
+    return ("Registry overrides (`data/osi/native_overrides.json`, docs/osi/natives.md §7): %d rows: tier1 %d, tier2 %d, "
+            "tier3 %d. Every other winner keeps its generated tier: `stub` (no `tier` key) in `natives.json`, `mod` in "
+            "`natives_beta150.json`." % (len(overrides), n["tier1"], n["tier2"], n["tier3"]))
 
 
 def write_rows(rows: list[dict], path: Path) -> None:
@@ -1354,11 +1460,17 @@ def main(argv=None) -> int:
     ap.add_argument("--out-types-json", help="data/osi/types.json (M2a-1 T0)")
     ap.add_argument("--mods", help="install/mods directory: decode the Beta 1.5.0 mod registrations (D12)")
     ap.add_argument("--out-mods", help="data/osi/natives_beta150.json (needs --mods)")
+    ap.add_argument("--overrides", help="data/osi/native_overrides.json: tiers and decided defaults (natives.md §7.2)")
     ap.add_argument("--check", action="store_true", help="exit 1 if --out-types is not up to date")
     a = ap.parse_args(argv)
     res = build(Path(a.exe).read_bytes(), Path(a.corpus), Path(a.osi))
     rows = res["rows"]
-    doc = render_types(res)
+    overrides = json.loads(Path(a.overrides).read_text()) if a.overrides else []
+    mods = mod_registrations(Path(a.mods), Path(a.osi), rows) if a.mods and a.out_mods else []
+    apply_overrides(rows, mods, overrides)
+    if overrides:
+        print("overrides: %d rows merged from %s" % (len(overrides), a.overrides))
+    doc = render_types(res, overrides)
     dups = [k for k, n in collections.Counter(r["key"] for r in rows).items() if n > 1]
     unknown = collections.Counter(t for r in rows for t in r["types"] if t and t.startswith(UNKNOWN_PREFIX))
     print("natives: %d rows, %d distinct keys, %d duplicated keys, %d winners" % (
@@ -1384,7 +1496,6 @@ def main(argv=None) -> int:
         Path(a.out_types_json).write_text(render_types_json(res))
         print("wrote %s" % a.out_types_json)
     if a.mods and a.out_mods:
-        mods = mod_registrations(Path(a.mods), Path(a.osi), rows)
         Path(a.out_mods).write_text(render_rows(mods))
         print("wrote %s: %d mod rows, %d called by Base.osi, site literals %s" % (
             a.out_mods, len(mods), sum(m["called_by_base_osi"] for m in mods),

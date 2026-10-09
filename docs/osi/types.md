@@ -230,3 +230,7 @@ argument is 0), and `_WinMain@16` (0x401020) calls `SrInitializeAll` before `App
 - **Type 0 and the by-reference box.** Whether the 12 `unknown:0x0` slots can ever be satisfied is decided by `ConvertVariant`
   and the natives' bodies, not by this table.
 
+## Tiers (M2a-2)
+
+Registry overrides (`data/osi/native_overrides.json`, docs/osi/natives.md §7): 0 rows: tier1 0, tier2 0, tier3 0. Every other winner keeps its generated tier: `stub` (no `tier` key) in `natives.json`, `mod` in `natives_beta150.json`.
+

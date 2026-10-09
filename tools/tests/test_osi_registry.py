@@ -649,15 +649,21 @@ def test_committed_natives_json_is_fresh_and_data_free(reg, canonical_exe, lomn_
     """data/osi/natives.json is committed so that M2a-2's stub generator needs no Ghidra; regenerating it must give the
     same bytes. It holds names, addresses, counts and type names only."""
     out_json, out_md = tmp_path / "natives.json", tmp_path / "types.md"
+    # as `make osi-tables` runs it (M2a-2 T2b: with the committed overrides, which may name a mod key)
     assert reg.main(["--exe", str(canonical_exe), "--osi", str(lomn_data / "install" / "data" / "Base.osi"),
-                     "--corpus", str(gen_decomp), "--out-json", str(out_json), "--out-types", str(out_md)]) == 0
+                     "--corpus", str(gen_decomp), "--out-json", str(out_json), "--out-types", str(out_md),
+                     "--mods", str(lomn_data / "install" / "mods"), "--out-mods", str(tmp_path / "mods.json"),
+                     "--overrides", str(REPO / "data" / "osi" / "native_overrides.json")]) == 0
     assert COMMITTED_JSON.exists() and out_json.read_bytes() == COMMITTED_JSON.read_bytes()
+    assert (tmp_path / "mods.json").read_bytes() == (REPO / "data" / "osi" / "natives_beta150.json").read_bytes()
     rows = json.loads(COMMITTED_JSON.read_text())
     assert len(rows) == 1056
     fields = {"cls", "name", "key", "site", "body", "max", "min", "types", "crt_index", "init", "winner",
               "called_by_base_osi", "phase", "ret", "ret_class", "default", "sets_fpu_pc64"}
+    # M2a-2 T2b: the overrides merge adds `tier` to the winner row of each overridden key, and nothing else
+    overridden = {o["key"] for o in json.loads((REPO / "data" / "osi" / "native_overrides.json").read_text())}
     for r in rows:
-        assert set(r) == fields
+        assert set(r) == (fields | {"tier"} if r["winner"] and r["key"] in overridden else fields)
         assert all(isinstance(r[k], str) for k in ("cls", "name", "key", "site", "body", "init", "phase"))
         assert all(t is None or isinstance(t, str) for t in r["types"]) and len(r["types"]) == 10
         assert isinstance(r["max"], int) and isinstance(r["min"], int)
