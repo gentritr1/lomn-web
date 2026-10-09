@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "lomn/fs.h"
+#include "lomn/osi/objects.h"
 #include "lomn/osi/services.h"
 #include "lomn/sage/slb.h"
 
@@ -169,14 +170,23 @@ void AreaDirector::load_header(int h, bool second) {
   put(second ? Source::Second : Source::Current, h);
 }
 
-// GcAreaDirector::RemoveArea 0x489560 (from SetCurrentLevel at 0x489add), then [0x83b0b4] = null (0x4895a1) and both block
-// headers are closed (0x4895c4 / 0x4895ce).
-// KNOWN GAP (review I-2, deferred to the follow-up batch by controller ruling): RemoveArea -> GcAreaLoader::CleanUpArea
-// 0x5017d0 (0x489589) calls GcModelDirector::Remove 0x47f320 (0x501830) for every loader entry of type [0x83aa9c] (the
-// characters, 0x501813), and Remove makes Call("OnEvent") at 0x47f680 (guards 0x47f33c / 0x47f376). run_block(kCharacters)
-// treats _char.slb records as loaded characters, so the original would call OnEvent here for each of them; the port makes
-// no call yet.
+// GcAreaDirector::RemoveArea 0x489560 (from SetCurrentLevel at 0x489add, outside any try: exc.py lists no site there).
+// GetAreaLoader 0x48a810 on the area id (0x489574), then GcAreaLoader::CleanUpArea 0x5017d0 (0x489589): its loop
+// (0x5017e3-0x501984, 12-byte entries, in list order) calls GcModelDirector::Remove 0x47f320 (0x501830) for each entry of
+// type [0x83aa9c] (0x501813), which makes Call("OnEvent", 0x2b, id) for every id but 'cnt1' (remove_area_character,
+// objects.cpp). The other entry kinds (GcAreaDirector::Remove 0x488990, GcNoLightDirector::Remove 0x483f70, the trigger,
+// light, back, trans and sound removals) reach no Call in their calls.jsonl closure: objects and hives make no VM call on
+// removal (INFERRED for virtual calls, which calls.jsonl does not follow). Then the loader leaves the map (0x48959c),
+// [0x83b0b4] = null (0x4895a1) and both block headers are closed (0x4895c4 / 0x4895ce). An OnEvent error propagates out of
+// the native from inside the loop (CleanUpArea, Remove and RemoveArea have no catch, exc.py): the later entries, the map
+// erase, the null area and the closes are not reached, and SetCurrentLevel stops before 0x489af6.
 void AreaDirector::remove_area() {
+  auto it = loaders_.find(area_);
+  if (it != loaders_.end()) {
+    const std::vector<uint32_t> entries = it->second;  // CleanUpArea tears the list down only at its end (0x5019e6)
+    for (uint32_t id : entries) remove_area_character(ctx_, id);
+  }
+  loaders_.erase(area_);
   area_ = kNullId;
   close(1);
   close(0);
@@ -218,9 +228,18 @@ void AreaDirector::load_area(const std::string& name) {
   // as SrAsString([0x83902c]) (0x489344) and the area NAME argument (not its id), each cut to 4 bytes.
   const std::string dir =
       "Root/Data/Levels/" + identifier_to_string(level_) + "/" + name.substr(0, 4) + "/" + name.substr(0, 4);
+  // a new GcAreaLoader (0x48930f / 0x48931f) collects the entries; after LoadArea it is inserted under the area id
+  // (0x48938c); an id that already has a loader keeps the old one, the new one is released (0x489434)
+  std::vector<uint32_t> entries;
+  struct Filling {
+    std::vector<uint32_t>*& slot;
+    ~Filling() { slot = nullptr; }
+  } filling{loading_};
+  loading_ = &entries;
   run_block(kObjects, dir + "_obj.slb");     // LoadObjects 0x53fc60 (0x4ff93e)
   run_block(kCharacters, dir + "_char.slb");  // LoadCharacters 0x53f3f0 (0x5002ec)
   run_block(kHives, dir + "_hive.slb");      // LoadHives 0x6261c0 (0x500c0b)
+  loaders_.emplace(area_, std::move(entries));
 }
 
 // One swallowing block of LoadArea (natives.md §5.2). GetSLKFile 0x4032e0 on a missing file throws (SrThrow 0x4d91f0 at
@@ -234,8 +253,12 @@ void AreaDirector::load_area(const std::string& name) {
 //   both 'lbld' and the main character's. The hive id is the record id (0x6236c1); the object id is AddMoveableObj's
 //   (0x489925): the record id, renamed (0x4898b0 / 0x4898c1) only while an area loader with that id exists (GetAreaLoader
 //   0x48a810 on the map 0x783a88), which the port does not track (INFERRED: no area is named 'lbld').
-// - characters: AddCharacter 0x47f040 -> GcCharacter::SetupMoveable 0x418850 -> 0x574b80, no 'lbld' guard (INFERRED: the
-//   motion id is the record id).
+// - characters (F7a): per record, GcModelDirector::AddCharacter 0x47f040 (0x53f473) builds the character and Adds it
+//   under its controller id = the record id (GetUniqueIDForType 0x480260 returns the record id while its type is
+//   untracked, 0x480341 -> 0x480352; add_area_character, objects.cpp). Only an Add that succeeds reaches
+//   InitializeCollisionPhysics 0x40da60 (0x47efef) -> GcCharacter::SetupMoveable 0x418850 -> 0x574b80, with no 'lbld'
+//   guard and the motion id = the controller id (0x40c60b). A refused Add (the id is taken, e.g. the Toa's 'cnt1')
+//   makes no call (0x47ef98). Then Get(id) (0x53f4c5) non-null pushes the loader entry (0x53f514) that RemoveArea walks.
 // SetUnderWater makes Call("OnEvent" 0x73df20, byte 0x36, int b) with b = ([0x73c5a8] != 0) on both of its branches
 // (0x589154 / 0x589249). An error inside it unwinds out of the loader to the block's pads: the block's remaining records
 // are not loaded, and LoadArea goes on with the next block (D16).
@@ -263,8 +286,25 @@ void AreaDirector::run_block(Block b, const std::string& file) {
   ++st.runs;
   GameGlobals& g = ctx_.subsystem<GameGlobals>();
   for (uint32_t id : ids) {
-    if (b != kCharacters && id != kLbld) continue;  // GcMoveableObj ctor: cmp [0x734f10], [this+0x80] (0x544065)
-    if (id != g.main_character_id) continue;        // MainCharacterID 0x43af90, read per moveable (0x574eeb-0x574ef3)
+    if (b == kCharacters) {
+      bool modelled = true;
+      GcCharacter* ch = add_area_character(ctx_, id, &modelled);
+      if (!modelled) continue;  // a numbered unique id (GetUniqueIDForType 0x480362-0x480490): not modelled, skipped
+      const bool fires = ch && ch->motion_id() == main_character_id(ctx_);  // 0x574eeb-0x574ef3
+      if (fires) {
+        ++st.nested_calls;
+        bool swallowed = false;
+        ctx_.engine_call_swallowing("OnEvent", {make_int(0x36), make_int(g.global_under_water ? 1 : 0)}, &swallowed);
+        if (swallowed) {
+          ++st.errors;
+          return;  // the pads 0x5002f3 / 0x500312 / 0x500332: this record's entry is never pushed, nor the rest
+        }
+      }
+      if (loading_ && ctx_.subsystem<ModelDirector>().get(id)) loading_->push_back(id);  // 0x53f4c5-0x53f514
+      continue;
+    }
+    if (id != kLbld) continue;                          // GcMoveableObj ctor: cmp [0x734f10], [this+0x80] (0x544065)
+    if (id != main_character_id(ctx_)) continue;        // MainCharacterID 0x43af90, read per moveable (0x574eeb-0x574ef3)
     ++st.nested_calls;
     bool swallowed = false;
     ctx_.engine_call_swallowing("OnEvent", {make_int(0x36), make_int(g.global_under_water ? 1 : 0)}, &swallowed);
@@ -436,6 +476,14 @@ Variant n_cheatmenu(NativeCall&, void* user) {
 // CreateVariant 0x4183f0 movzx word (0x4183fa)
 Variant n_getammo(NativeCall&, void* user) { return make_int(host(user).subsystem<SaverState>().ammo); }
 
+// body 0x5d3840, method 0x5d3840 <GcSaver::SetAmmo (inline)>; asm pin: 0x5d3845 lea edx, [esp+0x10] (argument 0),
+// 0x5d3849 mov dx, [edx] (its low word), 0x5d384c mov [0x7474c8], dx: the word getammo reads (0x5d3913) and the GcToa ctor
+// writes (0x56898b); returns {0x0f, 0} (0x5d3853). Not called by Base.osi.
+Variant n_setammo(NativeCall& c, void* user) {
+  host(user).subsystem<SaverState>().ammo = static_cast<uint16_t>(c.args.at(0)->value);
+  return nothing();
+}
+
 // body 0x47b100, method 0x47b820 <GcHudDirector::PlayCinematic> -> 0x47b920 <GcHudDirector::KillCinematic>; asm pin:
 // 0x47b867 cmp byte [0x70a3b0], 0 (the video switch), 0x47b8fd KillCinematic before the return. D1: the cinematic is
 // complete when the native returns; PlayCinematic reaches no Call (its calls.jsonl closure, 71 functions), so no OnEvent.
@@ -492,6 +540,7 @@ void bind_directors_group(NativeRegistry& reg, HostContext& ctx) {
       {"gcareadirector", "getscriptfluffstring", n_getscriptfluffstring},
       {"gcsaver", "cheatmenu", n_cheatmenu},
       {"gcsaver", "getammo", n_getammo},
+      {"gcsaver", "setammo", n_setammo},
       {"gchuddirector", "playcinematic", n_playcinematic},
       {"bettersaver", "getbooleanvalue", n_getbooleanvalue},
       {"bettersaver", "setbooleanvalue", n_setbooleanvalue},

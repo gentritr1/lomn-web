@@ -558,6 +558,24 @@ TEST_CASE("osi services doesfileexist: Art.blk first (basename, case folded), th
   CHECK_FALSE(does_file_exist(s.host->context(), "Root/Data/AreaViewer.txt"));
 }
 
+TEST_CASE("osi services doesfileexist: a \"User/\" path whose \"..\" climbs above its mount root (Root/ or User/) is 0 (review 7a n-2)") {
+  // Decided port behaviour (natives.md 9.3): the original hands the path to GetFileAttributesA, which would resolve a climb
+  // out of the game or user directory on Windows; the port's VFS has no parent of a mount, so the climb is refused.
+  fs::MemoryFileSystem mem;
+  REQUIRE(mem.mount("Root/Data/loose.txt", {'x'}));
+  const uint8_t one = 1;
+  REQUIRE(mem.write("User/data/player0.sav", &one, 1) == fs::Error::None);
+  auto exists = [&](const std::string& n) { return call_str("scslosifileio", "doesfileexist", n, &mem); };
+  CHECK(exists("a/../../User/data/player0.sav") == make_int(0));         // neither prefix: Root/a/../.. leaves Root/
+  CHECK(exists("Root/../User/data/player0.sav") == make_int(0));         // the Root/ branch
+  CHECK(exists("User/../User/data/player0.sav") == make_int(0));         // the User/ branch
+  CHECK(exists("Root/Data/User/../../../Root/Data/loose.txt") == make_int(0));
+  CHECK(exists("User/data/../data/player0.sav") == make_int(1));         // a ".." that stays inside the mount
+  CHECK(exists("Root/Data/User/../../Data/loose.txt") == make_int(1));   // back to the mount root, never above it
+  CHECK(exists("Data/User/../loose.txt") == make_int(1));                // = Root/Data/loose.txt
+  CHECK(exists("User/./data/player0.sav") == make_int(1));
+}
+
 TEST_CASE("osi services doesfileexist: with a current block file set the loose files are not searched (0x54ddf7 / 0x54de11)") {
   fs::MemoryFileSystem mem;
   REQUIRE(mem.mount("Root/Data/Art/Art.blk", make_blk({"art.tga"})));
@@ -870,12 +888,19 @@ TEST_CASE("osi services userealdeltatime: non-deterministic, the smoothing runs 
   };
   const unsigned fake_dt = f32_bits(static_cast<float>(0.006666666828095913));
   unsigned t = 0, dt = 0;
+  // the flag off: the process time is the fake accumulation time += 0.0066667 (0x4a92c8-0x4a92e3), never the clock
+  // (review 7a n-1: kills `time = now` on this branch)
+  const double fake_step = 0.006666666828095913;
+  double tt = 0;
   for (long f = 0; f < 3; ++f) {  // the flag is off: the fake dt, but the clock is read and the state advances
     REQUIRE(s.host->frame());
     expect(clock_values[static_cast<size_t>(f)]);
     REQUIRE(k_fields(s, f, t, dt));
     CHECK(dt == fake_dt);
+    tt = fadd_pc(tt, fake_step, s.host->vm().fpu_pc());
+    CHECK(t == f32_bits(static_cast<float>(tt)));
   }
+  CHECK(t < f32_bits(1.0f));  // three fake steps from 0, nowhere near the clock's 10.5
   CHECK(ci == 3);  // GetTime(1) ran on every frame, flag or not
   CHECK(rt.count == 3);
   REQUIRE(s.host->vm().call("enable", {}).ok);
@@ -896,6 +921,8 @@ TEST_CASE("osi services userealdeltatime: non-deterministic, the smoothing runs 
   expect(clock_values[5]);
   REQUIRE(k_fields(s, 5, t, dt));
   CHECK(dt == fake_dt);  // back on the fake path; the smoothing went on
+  // the fake step continues from the last process time, the clock's 11.52 of frame 4 (not from the clock's 11.7)
+  CHECK(t == f32_bits(static_cast<float>(fadd_pc(clock_values[4], fake_step, s.host->vm().fpu_pc()))));
   CHECK(ci == 6);
   CHECK(rt.count == 6);
   CHECK(rt.smoothed == smoothed);

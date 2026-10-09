@@ -94,6 +94,10 @@ class GcCharacter : public GameObject {
   uint32_t controller_id() const { return controller_id_; }  // +0x100
   uint32_t node_id() const { return node_id_; }              // +0x10, the render node id (AddToa copies +0x100, 0x47e1eb)
   uint32_t motion_id() const { return controller_id_; }      // [ms+0x14]; no native on the port's path rebuilds it apart
+  // [char+0x1d0], the holder: 0 from the constructor (0x40bbba); written by GcCharacter::SetHolder (gccharacter.setholder
+  // 0x407a40 -> 0x410730, store at 0x410764), a stub in M2a-2 (review 9a m-2: modelling it changes MainCharacterID and the
+  // SetupMoveable guard 0x574ef1, through main_character_id below). Raw, no reference.
+  GcCharacter* holder = nullptr;
 
  private:
   uint32_t character_id_, controller_id_, node_id_;
@@ -120,13 +124,30 @@ struct ModelDirector {
   std::set<uint32_t> mainguy_node;       // ids of the children of the main-guy node
   GcCharacter* ba_character = nullptr;   // GcBAGroup's character [0x83903c] (one engine reference, 0x54b344)
   GcToa* s_toa = nullptr;                // GcGame::sToa [0x7032b8], raw (written at 0x47e527)
-  uint32_t save_toa = 0x3f3f3f3f;        // GcSaver::sSaveToa [0x74749c] (.data), written by AddToa at 0x47e221
-  uint16_t ammo = 0;                     // [0x7474c8] (.bss), written by the GcToa constructor at 0x56898b
-  uint8_t global_underwater = 0;         // [0x73c5a8] (.data 0; its only writer SetGlobalUnderWater 0x589264 is off-path)
+  // sSaveToa [0x74749c], the ammo [0x7474c8] and the flag [0x73c5a8] live in SaverState / GameGlobals (directors.h): one
+  // store per global, whichever native group writes or reads it (F7a, review 9a m-5).
   uint16_t toa_type = 0;                 // the game type of GcToa (gcmodeldirector.gettoa's ret_type), set at bind
+  uint16_t character_type = 0;           // the game type of GcCharacter (gcmodeldirector.getcharacter's ret_type), set at bind
+  // GcModelDirector::TrackUniqueBySlkType 0x47ffe0 (AddCharacter 0x47ec81) / UnTrack 0x480160 (Remove 0x47f48e): the
+  // character ids of the live area-loaded characters, as far as GetUniqueIDForType 0x480260 needs them
+  std::multiset<uint32_t> tracked;
   GcCharacter* get(uint32_t id) const;   // GcModelDirector::Get 0x480f70: the stored pointer or null (no reference)
-  uint32_t main_character_id() const;    // GcGame::MainCharacterID 0x43af90
 };
+
+// GcGame::MainCharacterID 0x43af90: no Toa ([0x7032b8] null, 0x43af91) or no holder ([Toa+0x1d0] null, 0x43afb8) ->
+// [0x7796f4] (GameGlobals::main_character_default); else [[Toa+0x1d0]+0x100], the holder's controller id (0x43afcb).
+uint32_t main_character_id(HostContext& ctx);
+
+// GcCharacterLoader::LoadCharacters 0x53f3f0, one record: GcModelDirector::AddCharacter 0x47f040 (id from
+// GetUniqueIDForType 0x480260) -> new GcCharacter -> AddCharacter 0x47ec30 -> Add 0x480eb0. Returns the new character when
+// Add took it (InitializeCollisionPhysics 0x40da60 then runs, 0x47efef: the caller makes the SetUnderWater check), null
+// when the key was taken (0x47ef98: the new character is dropped). *modelled is false for a record whose id the tracker
+// already holds: GetUniqueIDForType then builds a numbered id (0x480362-0x480490), which the port does not model.
+GcCharacter* add_area_character(HostContext& ctx, uint32_t record_id, bool* modelled);
+
+// GcModelDirector::Remove 0x47f320 for one loader entry (CleanUpArea 0x5017d0, call 0x501830). An error in its OnEvent
+// propagates (no catch on the chain).
+void remove_area_character(HostContext& ctx, uint32_t id);
 
 // ---- HUD ----
 

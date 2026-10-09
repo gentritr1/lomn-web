@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 
+#include "lomn/osi/directors.h"
 #include "lomn/osi/services.h"
 
 namespace lomn::osi {
@@ -31,10 +32,16 @@ GcCharacter* ModelDirector::get(uint32_t id) const {
   return it == map.end() ? nullptr : it->second;
 }
 
-// GcGame::MainCharacterID 0x43af90: sToa [0x7032b8] null (0x43af91) -> [0x7796f4] ('cnt1', static init 0x43c193); else
-// [sToa+0x1d0] null (0x43afb8) -> the same; else [[sToa+0x1d0]+0x100] (0x43afcb). [char+0x1d0] is 0 from the GcCharacter
-// constructor (0x40bbba) and no native of this port writes it, so the result is 'cnt1' (the last branch is unreachable here).
-uint32_t ModelDirector::main_character_id() const { return kIdCnt1; }
+// GcGame::MainCharacterID 0x43af90: sToa [0x7032b8] null (cmp at 0x43af91, jne 0x43af98) -> [0x7796f4] ('cnt1', static
+// init 0x43c193; 0x43af9e); else [sToa+0x1d0] null (0x43afb8, je 0x43afbf) -> the same; else [[sToa+0x1d0]+0x100]
+// (0x43afc1 / 0x43afcb). [char+0x1d0] is 0 from the GcCharacter constructor (0x40bbba); its only native writer,
+// gccharacter.setholder (0x410764), is a stub in M2a-2 (review 9a m-2), so the last branch is modelled but not reached on
+// the A9 path. Every MainCharacterID guard of the port reads this one function (SetupMoveable 0x574ef1 in both groups).
+uint32_t main_character_id(HostContext& ctx) {
+  const ModelDirector& md = ctx.subsystem<ModelDirector>();
+  if (md.s_toa && md.s_toa->holder) return md.s_toa->holder->controller_id();
+  return ctx.subsystem<GameGlobals>().main_character_default;
+}
 
 namespace {
 HostContext& host(void* user) { return *static_cast<HostContext*>(user); }
@@ -129,9 +136,10 @@ Variant n_addtoa(NativeCall& c, void* user) {
   const uint32_t id = convert_string_to_id(name);  // 0x47e194 -> 0x617810 (-> 0x5fb060)
   if (md.toa_type == 0) throw VmError("Undefined: no GcToa game type in the registry");
   GcToa* toa = ctx.make<GcToa>(md.toa_type, name, id);
-  md.ammo = toa->ammo();                                         // 0x56898b
+  SaverState& saver = ctx.subsystem<SaverState>();               // the saver's globals (getammo / setammo read them)
+  saver.ammo = toa->ammo();                                      // 0x56898b
   ctx.engine_call("OnEvent", event_args(0x32, toa->ammo()));    // 0x568a59 (name 0x73b964)
-  md.save_toa = id;                                              // 0x47e221
+  saver.save_toa = id;                                           // 0x47e221
   ctx.add_ref(toa);                                              // Add: temporary +1 (0x480ec7)
   const bool inserted = md.map.find(kIdCnt1) == md.map.end();    // the insert at 0x480ede
   if (inserted) {
@@ -205,11 +213,60 @@ Variant n_setupmoveable(NativeCall& c, void* user) {
   HostContext& ctx = host(user);
   GcCharacter* ch = ctx.object_arg<GcCharacter>(c, 0);
   if (!ch) null_this("GcCharacter::SetupMoveable (0x418856)");
-  ModelDirector& md = ctx.subsystem<ModelDirector>();
-  if (ch->motion_id() == md.main_character_id())
-    ctx.engine_call("OnEvent", event_args(0x36, md.global_underwater != 0 ? 1 : 0));  // name 0x73df20
+  if (ch->motion_id() == main_character_id(ctx))
+    ctx.engine_call("OnEvent", event_args(0x36, ctx.subsystem<GameGlobals>().global_under_water ? 1 : 0));  // 0x73df20
   return nothing();  // 0x409403
 }
+
+}  // namespace
+
+// ---- characters an area loads and removes (natives.md §4, F7a) ----
+
+GcCharacter* add_area_character(HostContext& ctx, uint32_t record_id, bool* modelled) {
+  ModelDirector& md = ctx.subsystem<ModelDirector>();
+  // LoadCharacters sets the id to '????' (0x53f426), so AddCharacter 0x47f040 asks GetUniqueIDForType (0x47f059-0x47f082):
+  // the record id itself when no tracked type matches (0x480341 -> 0x480352); a numbered id otherwise (not modelled).
+  *modelled = md.tracked.count(record_id) == 0;
+  if (!*modelled) return nullptr;
+  // new GcCharacter (0x47f084 / 0x47f0ca): character id = the record id (+0xfc, 0x40b728), controller id = the unique id
+  // (+0x100, 0x40b73e); AddCharacter 0x47ec30 tracks it (0x47ec81) and Adds it under [char+0x100] (0x47ef81-0x47ef8f)
+  GcCharacter* ch = ctx.make<GcCharacter>(md.character_type, record_id, record_id);
+  md.tracked.insert(record_id);
+  ctx.add_ref(ch);                                   // Add: temporary +1 (0x480ec7)
+  const bool inserted = md.map.find(record_id) == md.map.end();
+  if (inserted) {
+    md.map[record_id] = ch;
+    ctx.add_ref(ch);                                 // the map's copy (0x480ede)
+  }  // a refused character stays tracked: the failure path 0x47ef9c-0x47efda calls no UnTrack (its dtor: INFERRED none)
+  ctx.release(ch);                                   // the temporary -1 (0x480f08): a refused character is freed here
+  return inserted ? ch : nullptr;                    // Add false -> return before 0x47efef (0x47ef98)
+}
+
+void remove_area_character(HostContext& ctx, uint32_t id) {
+  ModelDirector& md = ctx.subsystem<ModelDirector>();
+  // [0x83aa4c], the main-guy node, is set by GcModelDirector::Init (0x47d46d) before Setup: the 0x47f32c guard passes
+  // (INFERRED: Init's node is non-null). Get(id) null -> return (0x47f365-0x47f376).
+  GcCharacter* ch = md.get(id);
+  if (!ch) return;
+  // The vine branch (type info [0x838b44], 0x47f39e-0x47f420) needs a vine in the map: no native of this port inserts one.
+  if (id != kIdCnt1) {
+    auto t = md.tracked.find(ch->character_id());  // UnTrackUniqueBySlkType 0x480160 (0x47f48e)
+    if (t != md.tracked.end()) md.tracked.erase(t);
+  } else {
+    md.s_toa = nullptr;                            // UnitializeAnimationEvents 0x480aa0, then sToa = 0 (0x47f4b0)
+  }
+  // Hide 0x47fb50 (0x47f4e5) and RemoveAnimationTriggers 0x4177c0 (0x47f4ee): their node and GcBAGroup reference drops
+  // apply only to a character a script showed; not modelled (INFERRED off-path: Base.osi shows only the Toa, and no area
+  // on the A9 path loads a character).
+  md.map.erase(id);                                // the map erase 0x47f5a9, before the Call
+  ctx.release(ch);                                 // the map's reference
+  if (id == kIdCnt1) return;                       // [0x782884] (0x47f5b3, je 0x47f685): no Call for the Toa's key
+  // Call("OnEvent" 0x70a8b6, byte 0x2b (CreateVariant 0x413ed0 at 0x47f5c7), int id (0x407df0 at 0x47f5de), 8 x nothing
+  // (0x47f5e5-0x47f646)) at 0x47f680; an error propagates (no catch on Remove, CleanUpArea, RemoveArea or SetCurrentLevel)
+  ctx.engine_call("OnEvent", event_args(0x2b, static_cast<int32_t>(id)));
+}
+
+namespace {
 
 // ---- the camera ----
 
@@ -331,6 +388,9 @@ void bind_objects_group(NativeRegistry& reg, HostContext& ctx) {
   };
   // The GcToa game type: gcmodeldirector.gettoa's declared return (types.json "type:GcToa").
   if (const NativeEntry* e = reg.find("gcmodeldirector", "gettoa")) ctx.subsystem<ModelDirector>().toa_type = e->ret_type;
+  // The GcCharacter game type (gcmodeldirector.getcharacter's declared return): area-loaded characters are minted under it.
+  if (const NativeEntry* e = reg.find("gcmodeldirector", "getcharacter"))
+    ctx.subsystem<ModelDirector>().character_type = e->ret_type;
   for (const Row& r : rows)
     if (reg.find(r.cls, r.fn)) reg.bind(std::string(r.cls) + "." + r.fn, r.f, &ctx, Tier::Implemented);
 }

@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "doctest.h"
+#include "lomn/osi/directors.h"
 #include "lomn/osi/heap.h"
 #include "lomn/osi/host.h"
 #include "lomn/osi/natives.h"
@@ -220,8 +221,8 @@ TEST_CASE("osi objects: bind_natives binds the 15 bodies of the objects group") 
   StringTrace tr;
   ScriptHost host(file, kRows, "", kTypes, "", nullptr, &tr, nullptr, ScriptHost::Options{});
   const BindReport rep = bind_natives(host.registry(), host.context());
-  CHECK(rep.game_bodies == 15);
-  CHECK(host.registry().find("gcviewport", "getcamera")->fn == nullptr);  // another group's: stays a stub here
+  // the 15 of this group plus the directors group's getmainview / getcamera, whose rows this table also carries
+  CHECK(rep.game_bodies == 17);
   CHECK(host.registry().find("t9", "mark")->fn == nullptr);
 }
 
@@ -490,9 +491,9 @@ TEST_CASE("osi objects gcmodeldirector.addtoa: OnEvent(0x32, 250) inside the nat
   CHECK(toa->engine_refs() == 1);  // the map's copy (temporary +1/-1 cancel, no handle yet: no H line)
   CHECK(toa->handle() == 0);
   CHECK(md.s_toa == toa);
-  CHECK(md.save_toa == 0x6f6e7561u);
-  CHECK(md.ammo == 250);
-  CHECK(md.main_character_id() == kIdCnt1);
+  CHECK(r.ctx().subsystem<SaverState>().save_toa == 0x6f6e7561u);  // the saver's sSaveToa [0x74749c]
+  CHECK(r.ctx().subsystem<SaverState>().ammo == 250);                // the saver's word [0x7474c8] (getammo reads it)
+  CHECK(main_character_id(r.ctx()) == kIdCnt1);
 }
 
 TEST_CASE("osi objects gcmodeldirector.addtoa: a second Toa still fires OnEvent, but Add fails: int 0, the map keeps the first") {
@@ -510,7 +511,7 @@ TEST_CASE("osi objects gcmodeldirector.addtoa: a second Toa still fires OnEvent,
   REQUIRE(toa);
   CHECK(toa->name() == "onua");
   CHECK(md.s_toa == toa);              // 0x47e527 is on the success branch only
-  CHECK(md.save_toa == 0x74616875u);  // sSaveToa is written before Add (0x47e221): the second name's id
+  CHECK(r.ctx().subsystem<SaverState>().save_toa == 0x74616875u);  // sSaveToa is written before Add (0x47e221): the second name's id
 }
 
 TEST_CASE("osi objects gcmodeldirector.addtoa: an error in OnEvent propagates out of the native (no swallow)") {
@@ -719,7 +720,7 @@ TEST_CASE("osi objects gccharacter.setupmoveable: on the Toa it calls OnEvent(0x
     b.i32(static_cast<int32_t>(kIdCnt1)).call("gcmodeldirector", "getcharacter", 1);
     b.f(0).f(0).i8(0).i8(0).i8(0).call("gccharacter", "setupmoveable", 6).ret();
     on_event(b);
-    Run r2(b, [](ScriptHost& h) { h.context().subsystem<ModelDirector>().global_underwater = 1; });
+    Run r2(b, [](ScriptHost& h) { h.context().subsystem<GameGlobals>().global_under_water = true; });
     REQUIRE_MESSAGE(r2.res.ok, r2.err());
     CHECK(r2.log_has("C 00000003 OnEvent 0010:00000036 0010:00000001 000f:00000000"));
   }
@@ -751,9 +752,61 @@ TEST_CASE("osi objects gccharacter.setupmoveable: on the Toa it calls OnEvent(0x
 TEST_CASE("osi objects MainCharacterID: 'cnt1' before and after addtoa (the Toa's [+0x1d0] stays null)") {
   Asm a;
   a.fn("setup", 0).nothing().ret();
+  a.fn("toa", 0).s("onua").call("gcmodeldirector", "addtoa", 1).ret();
+  a.fn("onevent", 10).nothing().ret();
   Run r(a);
+  CHECK(main_character_id(r.ctx()) == kIdCnt1);
+  REQUIRE(r.host->vm().call("toa", {}).ok);
+  CHECK(main_character_id(r.ctx()) == kIdCnt1);
+}
+
+TEST_CASE("osi objects MainCharacterID asm pin: no Toa -> [0x7796f4]; the Toa's holder [Toa+0x1d0] -> its [+0x100]") {
+  const Pe* im = exe();
+  SKIP_WITHOUT(im);
+  PIN(im, 0x43af91, "83 3d b8 32 70 00 00");  // cmp [0x7032b8], 0
+  PIN(im, 0x43af9e, "8b 15 f4 96 77 00");     // [0x7796f4]
+  PIN(im, 0x43afb8, "83 ba d0 01 00 00 00");  // cmp [Toa+0x1d0], 0 ; je 0x43afe0 (the [0x7796f4] tail)
+  PIN(im, 0x43afc1, "8b 92 d0 01 00 00");
+  PIN(im, 0x43afcb, "8b 92 00 01 00 00");     // [[Toa+0x1d0]+0x100]
+  PIN(im, 0x410764, "89 81 d0 01 00 00");     // GcCharacter::SetHolder's store (gccharacter.setholder, a stub today)
+}
+
+TEST_CASE("osi objects MainCharacterID: the Toa branch follows the holder's controller id, and the SetupMoveable guard with it") {
+  Asm a;
+  a.fn("setup", 0).s("onua").call("gcmodeldirector", "addtoa", 1).ret();  // seq 0 (t9.mark seq 1)
+  a.fn("sm", 0).i32(0x686f6c64).call("gcmodeldirector", "getcharacter", 1);  // 'hold'
+  a.f(0).f(0).i8(0).i8(0).i8(0).call("gccharacter", "setupmoveable", 6).ret();
+  on_event(a);
+  // no Toa: [0x7796f4], whatever it holds
+  {
+    Asm b;
+    b.fn("setup", 0).nothing().ret();
+    Run r0(b);
+    r0.ctx().subsystem<GameGlobals>().main_character_default = 0x61626364u;
+    CHECK(main_character_id(r0.ctx()) == 0x61626364u);
+  }
+  GcCharacter* holder = nullptr;
+  Run r(a, [&](ScriptHost& h) {
+    HostContext& ctx = h.context();
+    holder = ctx.make<GcCharacter>(34, 0x686f6c64u, 0x686f6c64u);
+    ctx.add_ref(holder);
+    ctx.subsystem<ModelDirector>().map[0x686f6c64u] = holder;
+  });
+  // addtoa ran with the holder still null: the Toa branch with [+0x1d0] null gives [0x7796f4]
+  REQUIRE_MESSAGE(r.res.ok, r.err());
   ModelDirector& md = r.ctx().subsystem<ModelDirector>();
-  CHECK(md.main_character_id() == kIdCnt1);
+  REQUIRE(md.s_toa);
+  CHECK(main_character_id(r.ctx()) == kIdCnt1);
+  REQUIRE(r.host->vm().call("sm", {}).ok);  // getcharacter seq 2, setupmoveable seq 3
+  CHECK_FALSE(r.log_has("C 00000003 "));   // 'hold' is not the main character yet
+  md.s_toa->holder = holder;                // what gccharacter.setholder would write (0x410764)
+  CHECK(main_character_id(r.ctx()) == 0x686f6c64u);
+  REQUIRE(r.host->vm().call("sm", {}).ok);  // seq 5: the 0x574ef1 guard now passes for 'hold'
+  CHECK(r.log_has("C 00000005 OnEvent 0010:00000036 0010:00000000 000f:00000000"));
+  r.ctx().subsystem<GameGlobals>().main_character_default = 0x61626364u;
+  CHECK(main_character_id(r.ctx()) == 0x686f6c64u);  // the Toa branch never reads [0x7796f4]
+  md.s_toa->holder = nullptr;
+  CHECK(main_character_id(r.ctx()) == 0x61626364u);
 }
 
 // ============================== gclegocamera.getcameraaimode / setcameraaimode ==============================
@@ -880,6 +933,9 @@ TEST_CASE("osi objects gclegocamera ai mode: leaving 2/3 for another mode releas
   CHECK(run(0xb, 3) == std::vector<std::string>{"H 0023:00000003 +1"});
   CHECK(run(3, 3) == std::vector<std::string>{"H 0023:00000003 +1"});
   CHECK(run(0x103, 0x0b) == std::vector<std::string>{"H 0023:00000003 +1", "H 0023:00000003 -1"});  // the byte is 3
+  // review 9a m-1: an old mode outside {2, 3} keeps the spline ((old - 2) <= 1 unsigned, 0x45b558)
+  CHECK(run(4, 0) == std::vector<std::string>{"H 0023:00000003 +1"});
+  CHECK(run(1, 0) == std::vector<std::string>{"H 0023:00000003 +1"});
 }
 
 // ============================== gchuddirector.addbigsprite / addtextobject ==============================

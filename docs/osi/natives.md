@@ -83,6 +83,10 @@ What a native body in either engine sees and may do. The original's ABI is the 0
   re-reported by the calling handler as "Script is calling %s.%s" (0x82/0x83) or "Script is calling a game function
   directly." (0x84).
 - **`sets_fpu_pc64`** is registry data. The VM applies it at the native's return, stubs included (D8′).
+- **A null object passed to a tier2 native (review 9a m-3, framework convention).** Many original bodies use a
+  `type:<Class>` argument without a null test (for example `gccharacter.initmotionsystem` reads through it at 0x40c60b), so
+  the original faults on a nothing argument. A tier2 native is not modelled: the port returns its typed stub value (or
+  the override's `default`) instead. This is a known divergence on a faulting path only; no code models it.
 
 The exact C++ and Python interfaces are in the plan (Tasks 3 and 4). This section is their contract.
 
@@ -208,10 +212,26 @@ Example on the A9 path:
 | `gcgame.getmp3player` 0x436940 (→ `[0x83879c]`, 0x43aea0) | the global `ScAutoRefPtr` set in `SetUpDatabase`: ctor 0x5dcab0, +1 at 0x43a40c | **1** (same labels) |
 | `gcgame.getmainview` 0x4366e0 (→ `ScScreen::GetViewPort` 0x49d3c0) | the screen's view list (`SetUpView`: ctor 0x43a54c, `ScScreen::AddViewPort` 0x43a85a; the temporaries are released at 0x43a953/0x43a96a) | **1**, INFERRED |
 | `gcviewport.getcamera` 0x4474e0 (→ `[[vp+0x30]+0x1c]`, `GcViewPort::GetCamera` 0x448080; the temporary `ScAutoRefPtr` on `vp+0x30` is released inside) | the camera node; `[0x7032bc]` (0x43a945) is a raw pointer | **1**, INFERRED |
+
+**Nothing vs something for the main view and its camera (F7a, item 5).**
+- `GcGame::GetMainView` 0x43ae20 → `ScScreen::GetViewPort` 0x49d3c0 starts with `xor edi, edi` (0x49d3cb) and returns a
+  view only when one has the key `[0x8391b0]` (compare 0x49d3ea / 0x49d3f2): no match → null → nothing.
+  **Unreachable in M2a-2:** `SetUpView` 0x43a4d0 adds the main view before Setup (`ScScreen::AddViewPort` at 0x43a85a),
+  and the only remover, `ScScreen::RemoveViewPort` 0x49d340, is called only by `MoveViewToBack` 0x49d430 /
+  `MoveViewToFront` 0x49d4c0, which re-add the view (`gcviewport.moveviewtoback` / `moveviewtofront`, not called by
+  Base.osi; `SetUpView` itself calls `MoveViewToFront` at 0x43a872). So `getmainview` always returns the view.
+- `GcViewPort::GetCamera` 0x448080 returns `[[vp+0x30]+0x1c]` (0x44809e, 0x4480ca): a null node faults (no test), a null
+  `+0x1c` gives nothing. The port's main view always has its camera; that the original's `+0x1c` is non-null after
+  `SetUpView` is INFERRED (`SetUpView` builds the camera before `AddViewPort`). A `getcamera` on nothing is an Undefined
+  error in the port (the original faults at 0x44809e).
 | `gcmodeldirector.gettoa` 0x47cf80 / `gcmodeldirector.getcharacter` 0x47ce90 (the same Toa) | the model-director map: `GcModelDirector::Add` 0x480eb0, temporary +1 at 0x480ec7, insert 0x480ede, temporary −1 at 0x480f08. `AddProcess` 0x568262 (in the GcToa ctor) is still queued | **1**, INFERRED (the insert copies one `ScAutoRefPtr`) |
 
 **Engine references added later on the path.**
-- **`gcmodeldirector.show('cnt1')`** (Setup) → `GcModelDirector::Show` 0x47f830 → `GcBAGroup::SetCharacter` (0x47fb42) adds **+1** to the Toa (0x54b344) and stores it in `[0x83903c]` (0x54b364). CITED.
+- **`gcmodeldirector.show('cnt1')`** (Setup) → `GcModelDirector::Show` 0x47f830 adds **two lasting references** to the
+  Toa (CITED): the Toa node's copy (`push_back` 0x419890 → copy ctor 0x419b00, `inc` at **0x419b12**; the temporary +1 /
+  −1 around it, 0x47f9df / 0x47f9f9, cancel) and `GcBAGroup::SetCharacter` (0x47fb42) **+1** at **0x54b344**, stored in
+  `[0x83903c]` (0x54b364). So after the first `show('cnt1')` the Toa's G is **3** (the map, the node, the BA group); a
+  second `show('cnt1')` finds the child (FindChild 0x47f9b6) and changes nothing.
 - **The first `ScProcessManager::Process`** applies the Toa's queued `AddProcess`: +1 (INFERRED).
 - **Natives that store a game argument** (for example `gchuddirector.addbigsprite` 0x47afe0, `gchuddirector.addtextobject` 0x47b010) take engine references. Each one's tier-1 citation (Tasks 3 and 4) states its +1, and it is logged as an `H` record (§3.1).
 
@@ -308,8 +328,11 @@ C 00000002 OnEvent 0010:00000032 0010:000000fa 000f:00000000 000f:00000000 000f:
 00000002 gcmodeldirector.addtoa 1 -> 0010:00000001
 00000004 gcmodeldirector.gettoa 0 -> 0037:00000003 G 1
 H 0037:00000003 +1
+H 0037:00000003 +1
+H 0037:00000003 -1
+H 0037:00000003 +1
 00000005 gcmodeldirector.show 2 -> 000f:00000000
-00000006 gcmodeldirector.getcharacter 1 -> 0022:00000003 G 2
+00000006 gcmodeldirector.getcharacter 1 -> 0022:00000003 G 3
 00000007 gcbigsprite.loadhudsprite 5 -> 0026:00000004 G 0
 H 0026:00000004 +1
 00000008 gchuddirector.addbigsprite 1 -> 000f:00000000
@@ -322,17 +345,18 @@ K      0
 - Lines 3–5: `addtoa` is seq 2 (numbered at entry). Its `C 00000002` line comes first, with the query name `OnEvent`.
   The nested `OnEvent`'s own native is seq 3, and its line comes next. `addtoa`'s line is written at its return, last.
 - Line 6: `gettoa` mints the Toa as handle 3 under type 0x37 with `G 1` (the model-director map, §2.4).
-- Lines 7–8: `show` (seq 5) adds an engine reference to the Toa, which is neither its argument nor its result
-  (0x54b344). The `H` line is written at that event, before `show`'s own line, and prints the minting type 0x37. The
-  replay, executing seq 5, applies it: engine count 1 → 2.
-- Line 9: the same Toa as `GcCharacter` (type tag 0x22, handle 3). `G 2` is the snapshot: the map and `SetCharacter`,
-  no variant counted. The replay finds handle 3 live, adds a variant reference and checks 2 = 1 + 1 (G at minting
-  plus the `H`).
-- Lines 10–12: `loadhudsprite` mints the sprite as handle 4 with `G 0`. `addbigsprite` (seq 8) stores its **argument**
+- Lines 7–11: `show` (seq 5) changes the Toa's engine references four times, though it is neither its argument nor
+  its result (§2.4): the temporary +1 (0x47f9df), the node's copy +1 (0x419b12), the temporary −1 (0x47f9f9) and
+  `SetCharacter`'s +1 (0x54b344). Each `H` line is written at its event, before `show`'s own line, and prints the minting
+  type 0x37. The replay, executing seq 5, applies them: engine count 1 → 3.
+- Line 12: the same Toa as `GcCharacter` (type tag 0x22, handle 3). `G 3` is the snapshot: the map, the node and
+  `SetCharacter`, no variant counted. The replay finds handle 3 live, adds a variant reference and checks 3 = 1 + 2 (G at
+  minting plus the `H` lines).
+- Lines 13–15: `loadhudsprite` mints the sprite as handle 4 with `G 0`. `addbigsprite` (seq 8) stores its **argument**
   and takes a reference: `H 0026:00000004 +1`, then its own line (it returns nothing). The replay, executing seq 8,
   applies the `H`: engine count 0 → 1. If the script later drops its last variant of handle 4, both engines keep the
   sprite (total 1), and neither writes `F g`. Without the `H` line the replay would free it there, and C++ would not.
-- Line 13: frame 0 starts. Line 14: an int result needs no `G`.
+- Line 16: frame 0 starts. Line 17: an int result needs no `G`.
 
 **Header hash (C1).** Merging overrides changes `natives.json`, so the `natives=` hash in the trace header and the
 digest's `T` line change, while the trace does not. Digest guards therefore compare `D` lines only:
@@ -346,9 +370,13 @@ All four are **synchronous**: the engine-to-script call happens inside the nativ
 | Native | What re-enters, and its guard | `OnEvent` tuple (a0, a1, then nothing ×8) |
 |---|---|---|
 | `gcmodeldirector.addtoa` 0x47cc30 | The wrapper calls `GcModelDirector::AddToa(name, 0)`: the second argument 0 is pushed at 0x47cc36. It returns `{0x10, al}` through `CreateVariant` 0x407f30. `AddToa` 0x47e170 → `GcToa::GcToa` (0x47e1d0) → `Call` at **0x568a59**. **Unconditional**: no branch skips it | `(int 0x32, int 250)`. 0x32 comes from `CreateVariant` 0x413ed0 (byte → `{0x10, v}`). 250 is `[toa+0x380]`, set to 0xfa at 0x567e27 (its only writer in the exe), passed through `CreateVariant` 0x4183f0 (u16 → `{0x10, v}`). The same value is copied to `[0x7474c8]` (ammo) at 0x56898b |
-| `gccharacter.setupmoveable` 0x4093c0 | `GcCharacter::SetupMoveable` 0x418850 → `GcMotionSystem::SetupMoveable` 0x574b80 → `SetUnderWater` 0x589050 (call at 0x574efd), **only if `[ms+0x14] == GcGame::MainCharacterID()`** (0x574ee5–0x574ef3). `SetUnderWater` calls `Call` on both of its branches (0x589154 / 0x589249) | `(int 0x36, int b)` with `b = [0x73c5a8] != 0 ? 1 : 0`: `CreateVariant` 0x407f30 with 1 (0x589094) or with 0 (0x5891a7). `[0x73c5a8]` is 0 in `.data`, and its only writer is `SetGlobalUnderWater` 0x589264, which is not on the path. So on the path: `(0x36, 0)`, called on the Toa ('cnt1' = `MainCharacterID`, INFERRED: the motion id is the character id) |
-| `gcareadirector.setcurrentlevel` 0x486c10 | `SetCurrentLevel` 0x489a60 calls `RemoveArea` (0x489add) → … → `GcModelDirector::Remove` → `Call` 0x47f680, **only if** current level `[0x83902c]` ≠ `[0x70b3bc]` and current area `[0x83b0b4]` ≠ `[0x70b3c0]` (0x489aba–0x489ace). Both of the latter are 0x3f3f3f3f in `.data` | **none on the path.** At Setup's single call both globals are the null id, set at 0x48db4b/0x48db5f and 0x48771e (INFERRED that those inits run before Setup) |
-| `gcareadirector.setcurrentarea` 0x486ef0 | (i) `SetCurrentArea` 0x48a540 → `LoadArea` (0x48a588) → `GcAreaLoader::LoadArea` 0x4fedd0: the `LoadObjects` and `LoadCharacters` blocks reach `SetUnderWater` under the same id guard (§5.3). (ii) `GcSaver::SetCurrentArea` 0x5d5500 → `CleanupLoad` 0x5d45d0, which BetterSaver replaces with 0x10001ae0 (§9.3) → `GcAreaLoader::RemoveObject` → `Remove` → `Call` | **none on the path.** (i): `frnt` loads no 'cnt1' object (§5.3). (ii): the removal counts are 0: `[0x83b402]`, `[0x83b401]`, `[0x83b3fa]`, `[0x83b50f]` are zeroed by `ResetData` 0x5d54a4–0x5d54b9 and written otherwise only by `Load` and the `Pickup*` functions. BetterSaver's own token vector is emptied by its `ResetData` hook (0x100016d0–0x100016e0) |
+| `gccharacter.setupmoveable` 0x4093c0 | `GcCharacter::SetupMoveable` 0x418850 → `GcMotionSystem::SetupMoveable` 0x574b80 → `SetUnderWater` 0x589050 (call at 0x574efd), **only if `[ms+0x14] == GcGame::MainCharacterID()`** (0x574ee5–0x574ef3). `SetUnderWater` calls `Call` on both of its branches (0x589154 / 0x589249) | `(int 0x36, int b)` with `b = [0x73c5a8] != 0 ? 1 : 0`: `CreateVariant` 0x407f30 with 1 (0x589094) or with 0 (0x5891a7). `[0x73c5a8]` is 0 in `.data`, and its only writer is `SetGlobalUnderWater` 0x589264, which is not on the path. So on the path: `(0x36, 0)`, called on the Toa: the motion id `[ms+0x14]` is the controller id `[char+0x100]` (read at 0x40c60b, stored at 0x5748ec), 'cnt1' for every GcToa, and `MainCharacterID` is 'cnt1' (below) |
+| `gcareadirector.setcurrentlevel` 0x486c10 | `SetCurrentLevel` 0x489a60 calls `RemoveArea` 0x489560 (0x489add) **only if** current level `[0x83902c]` ≠ `[0x70b3bc]` and current area `[0x83b0b4]` ≠ `[0x70b3c0]` (0x489aba–0x489ace; both 0x3f3f3f3f in `.data`). `RemoveArea` → `GcAreaLoader::CleanUpArea` 0x5017d0 (0x489589) walks the area loader's entries in list order (12 bytes each, 0x501976); each character entry (type `[0x83aa9c]`, 0x501813) goes to `GcModelDirector::Remove` 0x47f320 (0x501830). `Remove` returns at once when the main-guy node `[0x83aa4c]` is null (0x47f32c; set by `GcModelDirector::Init` 0x47d46d before Setup) or `Get(id)` is null (0x47f365–0x47f376); otherwise it hides the character, erases it from the map (0x47f5a9; for 'cnt1' also `sToa` = 0, 0x47f4b0) and then, **unless id is 'cnt1'** (`[0x782884]`, je at 0x47f5bb), makes `Call("OnEvent" 0x70a8b6)` at 0x47f680. The other entry kinds (objects, lights, triggers, sounds; their `Remove`s at 0x488990, 0x483f70, …) reach no `Call` (calls.jsonl closure; INFERRED for virtual calls). The entries are the characters `LoadCharacters` added (pushed at 0x53f514 when `Get(id)` 0x53f4c5 finds one; §5.2). No catch on the chain (`exc.py`: RemoveArea, CleanUpArea, Remove have none, and 0x489add is outside SetCurrentLevel's try sites): an error propagates out of the native, before the map erase of the loader (0x48959c), the null area (0x4895a1) and the new level (0x489af6) | `(int 0x2b, int id)` per removed character in load order: 0x2b from `CreateVariant` 0x413ed0 (0x47f5c7), the id from 0x407df0 (0x47f5de), then nothing ×8. The character was already erased from the map, so a second `setcurrentlevel` after an error skips it. **None on the path:** at Setup's single call both globals are the null id (0x48db4b/0x48db5f, 0x48771e; INFERRED that those inits run before Setup), and `frnt` loads no character |
+| `gcareadirector.setcurrentarea` 0x486ef0 | (i) `SetCurrentArea` 0x48a540 → `LoadArea` (0x48a588) → `GcAreaLoader::LoadArea` 0x4fedd0: the `LoadObjects`, `LoadCharacters` and `LoadHives` blocks reach `SetUnderWater` under the same id guard (§5.2, §5.3): objects and hives only for an id that is **'lbld'** (`[0x734f10]`, cmp at 0x544065) **and** the main character's, hive records with `[rec+0x2c]` = 0 never (0x62623c); characters with **no** 'lbld' gate (`AddCharacter` 0x47f040 → `Add` → `InitializeCollisionPhysics` 0x40da60 (0x47efef) → `GcCharacter::SetupMoveable` 0x418850 → 0x574b80), and only when `Add` took the character (a taken id, e.g. the Toa's 'cnt1', makes no call, 0x47ef98). (ii) `GcSaver::SetCurrentArea` 0x5d5500 → `CleanupLoad` 0x5d45d0, which BetterSaver replaces with 0x10001ae0 (§9.3) → `GcAreaLoader::RemoveObject` → `Remove` → `Call` | **none on the path.** (i): `frnt` loads no 'cnt1' object (§5.3). (ii): the removal counts are 0: `[0x83b402]`, `[0x83b401]`, `[0x83b3fa]`, `[0x83b50f]` are zeroed by `ResetData` 0x5d54a4–0x5d54b9 and written otherwise only by `Load` and the `Pickup*` functions. BetterSaver's own token vector is emptied by its `ResetData` hook (0x100016d0–0x100016e0) |
+
+**`GcGame::MainCharacterID` 0x43af90 (F7a, item 4).** No Toa (`[0x7032b8]` null, 0x43af91) → `[0x7796f4]` ('cnt1', static init 0x43c193; 0x43af9e). A Toa whose holder `[Toa+0x1d0]` is null (0x43afb8) → the same. Otherwise `[[Toa+0x1d0]+0x100]`, the holder's controller id (0x43afc1 / 0x43afcb). `[char+0x1d0]` is 0 from the GcCharacter constructor (0x40bbba); its native writer `gccharacter.setholder` (0x407a40 → 0x410730, store at 0x410764) is a stub in M2a-2 (review 9a m-2), so on the A9 path the result is 'cnt1'. Modelling `setholder` later changes this function and with it the 0x574ef1 guard of every `SetupMoveable` (worklist). Both engines read one function for every guard.
+
+**Area-loaded characters (F7a, item 2).** `LoadCharacters` 0x53f3f0 asks `AddCharacter` 0x47f040 for each record: the id is `GetUniqueIDForType` 0x480260 of the record id, which is the record id itself while no live character of that id is tracked (0x480341 → 0x480352; a tracked one gets a numbered id, 0x480362–0x480490, **not modelled**: both engines skip such a record). The new `GcCharacter` (character id +0xfc = the record id, controller id +0x100 = the unique id, 0x40b728 / 0x40b73e) enters the model-director map under its controller id (`Add` 0x480eb0 at 0x47ef8f: one lasting reference, G 1 if a script later fetches it with `getcharacter`). A refused `Add` drops it (no call). `Get(id)` non-null then pushes the loader entry (0x53f514), also when the character found is an older one under that key. An OnEvent error inside the load is swallowed by the block (D16): that record's entry is never pushed, and the block stops. `Hide` 0x47fb50 and `RemoveAnimationTriggers` 0x4177c0 inside `Remove` drop node and GcBAGroup references of a character a script showed; not modelled (INFERRED off-path).
 
 Release counts: `Call` adds a reference to the VM (0x60b338) and releases it (0x60b41f); `CallWithReturn` does the same (0x60b46b / 0x60b5ab). The VM reference count is not modelled by the port.
 
@@ -398,7 +426,7 @@ Three blocks of `GcAreaLoader::LoadArea` 0x4fedd0 reach the VM. Each is a try wi
 - Over the full extent 0x4fedd0–0x500fe4, each rethrow or retry flag is written only with 0, at the addresses in the table, and no instruction takes its address. EXECUTED: grep of the listing for the six frame offsets.
 - So each rethrow test falls through past its `___throw` 0x657260 (hive block: 0x500cef), each retry test falls through, and loading continues with `ShowLoadingBar` 0x4fea80.
 
-**The hive block's path to the VM** (direct calls, each site CITED): `LoadHives` 0x6261c0 → `GcHive::GcHive` 0x6236a0 (0x6262b5) → `GcMoveableObj::GcMoveableObj` 0x5432a0 (0x6236d4) → `GcMoveableObj::SetupMoveable` 0x545c00 (0x54408b, past that ctor's decomp `size`) → `GcMotionSystem::SetupMoveable` 0x574b80 (0x545c20) → `SetUnderWater` 0x589050 (0x574efd, under the `MainCharacterID` guard of §4) → `Call` (0x589154 / 0x589249). The hive SLK is `GcHiveLoader::GetSLKFile` 0x500ff0 (call 0x500b8a) on the name built from `%.4s_hive.slb` (format 0x729a88, at 0x4ff606).
+**The hive block's path to the VM** (direct calls, each site CITED): `LoadHives` 0x6261c0 → `GcHive::GcHive` 0x6236a0 (0x6262b5) → `GcMoveableObj::GcMoveableObj` 0x5432a0 (0x6236d4) → `GcMoveableObj::SetupMoveable` 0x545c00 (0x54408b, past that ctor's decomp `size`; reached only when the id `[this+0x80]` is 'lbld' = `[0x734f10]`, cmp at 0x544065, jne 0x5440d3; a record with `[rec+0x2c]` = 0 builds `GcHive` 0x6239b0 instead, cmp at 0x62623c, call at 0x6262fa, which reaches no VM function; the objects block has the same 'lbld' gate, the characters block none) → `GcMotionSystem::SetupMoveable` 0x574b80 (0x545c20) → `SetUnderWater` 0x589050 (0x574efd, under the `MainCharacterID` guard of §4) → `Call` (0x589154 / 0x589249). The hive SLK is `GcHiveLoader::GetSLKFile` 0x500ff0 (call 0x500b8a) on the name built from `%.4s_hive.slb` (format 0x729a88, at 0x4ff606).
 
 ### 5.3 The swallow does not fire on the A9 path
 
@@ -413,7 +441,7 @@ Three blocks of `GcAreaLoader::LoadArea` 0x4fedd0 reach the VM. Each is a try wi
   - The ids are `sky1`, `tre1`, `plnt`, `main`, `watr` and `lava`.
   - The flags (+0x38) are 0x110, 0x08, 0x08, 0x10, 0x110 and 0x10.
 - **No record has bit 0x20**, so `GcAreaDirector::AddMoveableObj` (0x53fe03–0x53fe57) never runs.
-- **No id is 'cnt1'.** That matters because, before `addtoa`, `MainCharacterID()` returns `[0x7796f4]` = 'cnt1' (0x43af9e; `[0x7032b8]` = 0 until `AddToa` 0x47e527). So the guard at 0x574ef1 cannot pass. INFERRED: the motion id is the record id passed at 0x53fe36 / 0x5403d2.
+- **Neither the 'lbld' gate nor the main-character guard can pass.** An object reaches `SetUnderWater` only when its id is 'lbld' (`[0x734f10]`, the GcMoveableObj ctor's cmp at 0x544065) **and** equals `MainCharacterID()`, which is `[0x7796f4]` = 'cnt1' on the path (0x43af9e; the Toa branch needs a holder, §4). The motion id is the ctor's `[this+0x80]`, the record id (0x54332c → 0x543f44 → 0x5748ec).
 
 **Oracle check (EXECUTED).** `OnEvent(0x36, 0)`, made as a nested call while Setup is inside `gcareadirector.setcurrentarea`, runs without error in 310 instructions, and Setup completes.
 
@@ -734,7 +762,7 @@ Neither engine models the bound today. **Corpus:** `n-name-256` (a `.rawstring` 
 | `gcsaver.sethealth` / `gethealth` | 0x5d3650 / 0x5d3710 | byte **`[0x7474a8]`** (0x5d365b / 0x5d3713) | 0 |
 | `gcsaver.setenergy` / `getenergy` | 0x5d3680 / 0x5d3730 | byte **`[0x7474ac]`** (0x5d368b / 0x5d3733) | 0 |
 | `gcsaver.gettoa` | 0x5d36b0 | dword `[0x74749c]` (also written by `AddToa` at 0x47e221) | 0x3f3f3f3f |
-| `gcsaver.getammo` / `setammo` | 0x5d3910 / 0x5d3840 | u16 `[0x7474c8]`, returned through 0x4183f0. Written by the GcToa ctor (0x56898b, = 250) and by `AddAmmo`, `LaunchElementalPower`, `ToaIsAlive` and `setammo` | 0. Setup calls `getammo` (native #419) before `addtoa` (#438), so it returns **0** |
+| `gcsaver.getammo` / `setammo` | 0x5d3910 / 0x5d3840 | u16 `[0x7474c8]`, returned through 0x4183f0. Written by the GcToa ctor (0x56898b, = 250) and by `AddAmmo`, `LaunchElementalPower`, `ToaIsAlive` and `setammo` (the low word of its argument, 0x5d3849 / 0x5d384c; tier1 since F7a). Both engines keep **one** store for it (and for `[0x74749c]`) that `getammo`, `setammo` and `addtoa` share | 0. Setup calls `getammo` (native #419) before `addtoa` (#438), so it returns **0** |
 
 **What the init functions touch.**
 - `GcSaver::ResetData` 0x5d5490 writes only `[0x74748c]`, `[0x747490]`, `[0x747494]` and `[0x747498]`, the six counters `[0x83b3fa..0x83b50f]`, the conversation vector (call 0x5d54e7 on 0x838b90) and `[0x8391a0]` = 0 (0x5d54ec); 0x5d5493–0x5d54ec. It does not touch the fields above.
@@ -742,6 +770,13 @@ Neither engine models the bound today. **Corpus:** `n-name-256` (a `.rawstring` 
 - `GcSaver::LoadIni` 0x5d4890 reads only `[GraphicsOptions]` (ResolutionW/H, Windowed, BitDepth, SvpOther, SvpRad, Fog, ParticleDetail, ShadowDetail, Gamma) and `[Misc]` (Language, ControlOption, SoundVolume). If the INI is missing it writes one (0x5d4a3c–0x5d4a57).
 - So the defaults above are the `.data` bytes.
 - The setters on the A9 path (frame 3: `setmask`, `sethealth`, `setenergy`) store into these fields, and nothing on the path reads them back.
+- **`gcareadirector.setfog` 0x487090 and `setnearestmax` 0x486fe0 (tier2, F7a item 3; render state → M2a-3).** `setfog` →
+  `GcAreaDirector::SetFog` 0x48a7a0 (`mov al, 1` at 0x48a7a7: the first two floats are always negated) →
+  `GcGraphicsOptions::SetFogValue` 0x5e5450, which stores `[0x74a344]` and the floats `[0x74a338]` / `[0x74a33c]` /
+  `[0x74a340]` (0x5e5454–0x5e5472); only `GcGraphicsOptions::SetFog` 0x5e5090 (render) reads them. `setnearestmax`
+  stores the low byte of its argument into `[0x70b37c]` (0x486feb); only `GcAreaDirector::GetNearest` 0x487e90 (0x488160,
+  called from `GcLegoCamera::Process`) reads it, and `GcCinemaEngine::Play` / `Stop` save and restore it (0x593d48 /
+  0x5941cd). Neither closure reaches `Call`, and no native reads the fields back, so both are cheap stores: tier2.
 
 **`gcsaver.cheatmenu`** 0x5d35b0 → `GcSaver::CheatMenu` 0x5d4fc0 → `GetPrivateProfileStringA("Misc", "CheatMenu", "")` (0x5d4fdb–0x5d4fea), then compares the result with "LEGOTester" (0x5d502c). The owner's `Bionicle.ini` has `[Misc]` but no `CheatMenu` key → **int 0** (note: "ini → M2a-3").
 
@@ -789,14 +824,14 @@ Each entry is (target ← replacement; trampoline slot):
 2. **`User/` at the start** (`cmp ecx, ebx` 0x100015cc): `SHGetFolderPathA(0, CSIDL_APPDATA 0x1a, 0, 0, buf)` (0x100015df), `\`, the game edition (0x100015f2), then the path from after `User`. Port: `vfs->exists(path)` on the `user/` mount (the per-run User directory).
 3. **Neither** (0x10001608): the code `sprintf`s the "Fatal: We disallow writing to filenames that do not start with Root or User" text (format 0x1001e5c8) and calls `MessageBoxA(0, text, "OSI Script Security Abort", MB_ICONERROR)` (0x10001632; title 0x1001e624). It then **falls through** (0x10001638 reloads the buffer pointer; there is no exit and no return): the common tail at 0x1000163e appends the path UNCHANGED with `strcat_s(buf, size, path)` (0x10001641) and turns `/` into `\` (0x10001662-0x1000167d). `GetFileAttributesA` then resolves that relative path against the process's current directory, which is the directory branch 1 maps through `GetCurrentDirectoryA`. **The answer is `exists("Root/" + path)`.** (The first version of both engines returned false here: a shared misreading, found by review.)
 - **The message box is a host UI side effect.** It is not modelled and not written to natives.log; a UI milestone decides what the browser shows (deferred to the UI milestones).
-- **Divergences that stay (hostile `User/` paths):** (a) `User/../x`: Win32 resolves `..` against `%APPDATA%\<edition>` in the original, so it can leave the user directory; the VFS normalises `..` inside its mount (`fs::normalize`) and never escapes, so the port answers false. That is deliberate (safe in the browser). (b) A path too long for the 0x104-byte buffer makes `strcat_s` call the CRT invalid-parameter handler in the original (INFERRED: the process ends); a script string is at most 254 bytes, `strcat_s` appends to a prefix, so only `User/` paths near the limit are affected, and the port answers by file lookup.
+- **Divergences that stay (hostile paths through the hook):** (a) a `..` that climbs above the mount root: Win32 resolves `..` against the game directory (`Root/` branch and the neither branch) or `%APPDATA%\<edition>` (`User/` branch) in the original, so `Root/../User/x`, `a/../../User/x` or `User/../x` can name a file outside the game's own directories. **Decided port behaviour (both engines, review 7a n-2):** a hook path (the `Root/`-prefixed form for the neither branch) whose `..` segments take the depth below its mount segment answers **0**; a `..` that stays inside the mount resolves normally (`fs::normalize`). That is deliberate (safe in the browser). (b) A path too long for the 0x104-byte buffer makes `strcat_s` call the CRT invalid-parameter handler in the original (INFERRED: the process ends); a script string is at most 254 bytes and `strcat_s` appends it to a prefix (the `Root/` branch's `GetCurrentDirectoryA` result, 0x100015c1, or the `User/` branch's `%APPDATA%\<edition>`), so long paths on **both** branches can overflow when that prefix is long, and the port answers by file lookup.
 - **`CleanupLoad`:** the replacement walks BetterSaver's token vector and the exe's lists at 0x8384a0 and 0x7f79f0 against the current area, calling `GcAreaLoader::RemoveObject`. On the path all of them are empty (§4).
 
 **`OSIProject.DebugServer.dll`:** its `lsdebugger.*` natives are not on the path and were not read further.
 
 ### 9.4 Other notes on the services group (T7a fix 1)
 
-- **`debug.print` (tier2) in a 254-byte case.** The body appends `"\n"` (0x756948) to its argument string in place (0x61d614 -> `ScFixedString::append` 0x4f5c80). `append` throws `kLenTooLong` (error 0x83aa20) when `len >= capacity - n` (0x4f5c96-0x4f5c98, `setae`), here `len >= 254`. So a 254-byte argument is a VM error in the original ("Script is calling debug.print"), while the tier2 stub returns nothing. A script string is at most 254 bytes, so only that one length differs; Base.osi's longest string-table entry is 145 bytes (§8.3). The result `{0x0f, 0}` is written at 0x61d63e/0x61d643, after the virtual call that prints (0x61d639, behind the cheat-menu gate 0x5d4f00); output is not modelled.
+- **`debug.print` (tier2) in a 254-byte case.** The body appends `"\n"` (0x756948) to its argument string in place (0x61d614 -> `ScFixedString::append` 0x4f5c80). `append` throws `kLenTooLong` (error 0x83aa20) when `len >= capacity - n` (0x4f5c96-0x4f5c98, `setae`), here `len >= 254`. So a 254-byte argument is a VM error in the original ("Script is calling debug.print"), while the tier2 stub returns nothing. A script string is at most 254 bytes, so only that one length differs; Base.osi's longest string-table entry is 145 bytes (§8.3). The result `{0x0f, 0}` is written at 0x61d63e/0x61d643, after the virtual call that prints (0x61d639). The cheat-menu gate (`test al` / `je 0x61d601` after 0x61d5ef) skips only the call to 0x46d5a0 at 0x61d5fb; the virtual call at 0x61d639 always runs (0x61d630, reached by the `jmp` at 0x61d619). Output is not modelled.
 - **`gctimer.create` and `Start`.** A started timer is held by the trigger list: `AddTrigger` 0x4c2440 takes a temporary reference (`inc [this+4]`, 0x4c25e5) and releases it (0x4c2619); the lasting reference is the list element's copy constructor 0x4c3280 (`inc [edi+4]`, 0x4c32ae), reached from the insert 0x4c2f90 at 0x4c302b. Engine references: unstarted G 0, started G 1.
 - **`UseRealDeltaTime` outside `--deterministic`.** `ScProcessManager::Process` calls `GetTime(1)` (0x4a91fe-0x4a9200; `timeGetTime() * 0.001`, 0x4fa475-0x4fa48d) and runs the whole blend and clamp (0x4a920c-0x4a929f) on EVERY pass. The flag byte `[0x712d78]` is read once, at 0x4a92a5, and only selects which dt and process time are used: the smoothed dt and `now` (0x4a92ae-0x4a92c0), or the fake step 0x712d68 added to the time (0x4a92c8-0x4a92e3). `[pm+0x10]` receives `now` in both cases (0x4a92ec-0x4a92f2). The port steps the smoothing every frame when not deterministic and selects by the flag. Under `--deterministic` nothing of this runs (D3).
 - **`identifiertostring`** is a pure byte swap with no table and no unknown-id text (0x6178c0-0x617993), cut at the first NUL.

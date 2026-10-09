@@ -63,9 +63,10 @@ class GameSingletons {
 // ---- process-global game state read by more than one native group ----
 struct GameGlobals {
   explicit GameGlobals(HostContext&) {}
-  // GcGame::MainCharacterID 0x43af90: [0x7796f4] = 'cnt1' (stored at 0x43c193) while [0x7032b8] (the Toa AddToa stores,
-  // 0x47e527) is 0. The Toa route (0x43afb2-0x43afd1) belongs to the model-director group, which updates this field.
-  uint32_t main_character_id = 0x636e7431u;
+  // [0x7796f4] = 'cnt1' (static init 0x43c193): what GcGame::MainCharacterID 0x43af90 returns while there is no Toa
+  // ([0x7032b8] null, 0x43af98) or the Toa has no holder ([Toa+0x1d0] null, 0x43afbf). The function itself, with its Toa
+  // branch, is main_character_id(HostContext&) in objects.h (F7a: one function for every guard that reads it).
+  uint32_t main_character_default = 0x636e7431u;
   // byte [0x73c5a8]: 0 in .data; its only writer, GcMotionSystem::SetGlobalUnderWater 0x589264, is no M2a-2 native.
   bool global_under_water = false;
 };
@@ -77,7 +78,8 @@ struct SaverState {
   uint8_t glyph = 0;                // byte [0x7474a4]
   uint8_t health = 0;               // byte [0x7474a8]
   uint8_t energy = 0;               // byte [0x7474ac]
-  uint16_t ammo = 0;                // u16 [0x7474c8] (the GcToa ctor stores [toa+0x380] = 250 there, 0x56898b)
+  uint16_t ammo = 0;                // u16 [0x7474c8]: getammo 0x5d3913, setammo 0x5d384c, the GcToa ctor (250, 0x56898b)
+  uint32_t save_toa = kNullId;      // dword sSaveToa [0x74749c] (.data '????'; gcsaver.gettoa 0x5d36b0; AddToa writes it, 0x47e221)
   uint8_t level = 0;                // byte [0x74748c] (ResetData 0x5d5493; GcSaver::SetLevel 0x5d5740)
   uint32_t area = kNullId;          // dword [0x747490] (ResetData 0x5d549a; GcSaver::SetCurrentArea 0x5d5506)
   uint32_t condition = 0;           // dword [0x8391a0], the legacy condition bits (ResetData 0x5d54ec)
@@ -164,6 +166,12 @@ class AreaDirector {
   Header hdr_[2];
   SlotRef cur_, sec_;
   std::array<LoadBlockStats, 3> stats_{};
+  // The GcAreaLoader of each loaded area (the map 0x783a88, keyed by the area id; insert 0x48a7e0 at 0x48938c, which keeps
+  // the first loader of an id and drops a new one, 0x489434), reduced to its character entries ({id, [0x83aa9c]}, pushed
+  // by LoadCharacters at 0x53f514 when Get(id) finds a character, 0x53f4c5-0x53f4cd), in list order. The other entry
+  // kinds reach no VM function on removal (CleanUpArea 0x5017d0's other Remove targets: no Call in their closure).
+  std::map<uint32_t, std::vector<uint32_t>> loaders_;
+  std::vector<uint32_t>* loading_ = nullptr;  // the entries of the loader LoadArea is filling
   // [0x8391c0]: the fluff string table GcAreaDirector::Init 0x4875b0 loads before Setup
   bool fluff_tried_ = false;
   bool fluff_present_ = false;
