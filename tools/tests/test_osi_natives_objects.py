@@ -146,7 +146,7 @@ def cited(key, *addrs):
 # 0. registration, citations and the overrides rows
 # ===============================================================================================================
 TIER1_KEYS = sorted([
-    "gcbigsprite.loadhudsprite", "gccharacter.initmotionsystem", "gccharacter.setupmoveable",
+    "gcbigsprite.loadhudsprite", "gccharacter.setupmoveable",
     "gchuddirector.addbigsprite", "gchuddirector.addtextobject",
     "gclegocamera.getcameraaimode", "gclegocamera.setcameraaimode", "gclegocamera.setcameraspline",
     "gclegocamera.settargetspline", "gcmodeldirector.addtoa", "gcmodeldirector.getcharacter",
@@ -200,6 +200,9 @@ def test_committed_overrides_rows_are_valid_sorted_ascii_and_name_the_bodies_of_
         assert _addrs(r["cite"]) == _addrs(ob().CITES[k].replace("->", "->")), k
 
 
+INT_TIER2 = ("gclightdirector.toggleconstantlights", "gc3dsound.synclistenertocamera")
+
+
 def test_tier2_rows_of_this_group_are_taint_safe_stubs_with_their_bodies():
     data = {r["key"]: r for r in json.loads(OVERRIDES.read_text())}
     rows = {r["key"]: r for r in json.loads((REPO / "data" / "osi" / "natives.json").read_text()) if r["winner"]}
@@ -207,7 +210,7 @@ def test_tier2_rows_of_this_group_are_taint_safe_stubs_with_their_bodies():
     assert t2 == sorted(ob().TIER2_KEYS)
     for k in t2:
         assert data[k]["tier"] == "tier2" and "default" not in data[k], k       # none-returning natives: the typed stub
-        assert rows[k]["ret"] == ("int" if k == "gclightdirector.toggleconstantlights" else "none"), k
+        assert rows[k]["ret"] == ("int" if k in INT_TIER2 else "none"), k
         assert int(rows[k]["body"], 16) in _addrs(data[k]["cite"]), k
 
 
@@ -772,7 +775,10 @@ def test_initmotionsystem_asm_pins(disasm, image):
                                     0x40c668: "mov dword ptr [edi + 0x124], eax"})
     pin(disasm, 0x5742a0, 0x574a30, {0x5742bf: "mov dword ptr [edx + 0x14], 0x3f3f3f3f", 0x5748ea: "mov edx, dword ptr [esi]",
                                     0x5748ec: "mov dword ptr [ebx + 0x14], edx"})
-    cited("gccharacter.initmotionsystem", 0x409320, 0x40c600, 0x5742a0, 0x5748ec, 0x40c60b)
+    row = {r["key"]: r for r in json.loads(OVERRIDES.read_text())}["gccharacter.initmotionsystem"]
+    assert row["tier"] == "tier2" and "default" not in row
+    assert {0x409320, 0x40c600, 0x5742a0, 0x5748ec, 0x40c60b} <= _addrs(row["cite"])
+    assert "gccharacter.initmotionsystem" not in ob().CITES                  # no bound body (fix 1)
 
 
 SETUP = ('.globals a b\n.function main 0\nPushConstantString "onua"\nCallGameFunction gcmodeldirector.addtoa 1\nPop\n'
@@ -780,22 +786,17 @@ SETUP = ('.globals a b\n.function main 0\nPushConstantString "onua"\nCallGameFun
          'SetVariableValue global:b\n%s'
          'GetVariableValue global:b\nPushConstantf32 1.5\nPushConstantf32 0.8\nPushConstanti8 1\nPushConstanti8 0\n'
          'PushConstanti8 0\nCallGameFunction gccharacter.setupmoveable 6\nPop\nPushConstanti8 1\nReturn\n' + ONEVENT)
-INIT = "GetVariableValue global:b\nCallGameFunction gccharacter.initmotionsystem 1\nPop\n"
+INIT = ""        # initmotionsystem is a tier-2 stub (fix 1): setupmoveable models the motion system as present
 
 
 def test_setupmoveable_with_a_motion_system_on_the_main_character_calls_onevent_0x36_0():
     r, vm, ctx, tr, log = run_main(SETUP % INIT)
     cs = [l for l in log if l.startswith("C ")]
     assert cs == ["C 00000000 OnEvent 0010:00000032 0010:000000fa" + " 000f:00000000" * 8,
-                  "C 00000003 OnEvent 0010:00000036 0010:00000000" + " 000f:00000000" * 8]       # addtoa's, then setupmoveable's
-    assert [l for l in log if "setupmoveable" in l] == ["00000003 gccharacter.setupmoveable 6 -> 000f:00000000"]
+                  "C 00000002 OnEvent 0010:00000036 0010:00000000" + " 000f:00000000" * 8]       # addtoa's, then setupmoveable's
+    assert [l for l in log if "setupmoveable" in l] == ["00000002 gccharacter.setupmoveable 6 -> 000f:00000000"]
     ms = ctx.subsystem(ob().ModelDirector).map[CNT1].motion_system
     assert ms is not None and ms.id == CNT1
-
-
-def test_setupmoveable_without_initmotionsystem_does_nothing():
-    r, vm, ctx, tr, log = run_main(SETUP % "")
-    assert [l for l in log if l.startswith("C ")].__len__() == 1         # only addtoa's: [char+0x124] is null, 0x418856 skips all
 
 
 def test_setupmoveable_guard_follows_main_character_id_and_the_global_underwater_flag():
@@ -825,16 +826,10 @@ def test_setupmoveable_guard_follows_main_character_id_and_the_global_underwater
 def test_a_nothing_never_reaches_a_game_typed_parameter():
     # ConvertVariant refuses nothing -> a game type (opcodes.md), so the null-dereference branches of these natives
     # cannot be reached from a script; the models still raise the fault if a host passes one (unit level below)
-    for native, extra, n in (("gccharacter.initmotionsystem", "", 1), ("gclegocamera.getcameraaimode", "", 1),
+    for native, extra, n in (("gclegocamera.getcameraaimode", "", 1),
                              ("gchuddirector.addbigsprite", "", 1)):
         msg, *_ = fails(".function main 0\nPushNothing\n%sCallGameFunction %s %d\nReturn\n" % (extra, native, n))
         assert "Script is calling " + native in msg
-
-
-def test_initmotionsystem_replaces_the_previous_motion_system():
-    r, vm, ctx, tr, log = run_main(SETUP % (INIT + INIT))
-    toa = ctx.subsystem(ob().ModelDirector).map[CNT1]
-    assert toa.motion_system.id == CNT1 and toa.motion_systems_made == 2
 
 
 # ===============================================================================================================
@@ -1088,3 +1083,38 @@ def test_oracle_a9_run_is_deterministic(lomn_data, tmp_path):
     a = run_oracle(lomn_data, tmp_path, "x", frames=120)
     b = run_oracle(lomn_data, tmp_path, "y", frames=120)
     assert a == b
+
+
+# ===============================================================================================================
+# fix 1: tier-2 rows with their own asm pins (the return type and value are exact), playcinematic left to pair 8
+# ===============================================================================================================
+def test_synclistenertocamera_returns_int_0_asm_pins(disasm, image):
+    pin(disasm, 0x55e150, 0x55e16b, {0x55e153: "call 0x55f720", 0x55e15d: "call 0x413ea0"})
+    pin(disasm, 0x55f720, 0x55f78d, {0x55f787: "xor eax, eax", 0x55f78c: "ret"})
+    pin(disasm, 0x413ea0, 0x413eb5, {0x413ea5: "mov word ptr [ebx], 0x10", 0x413eae: "mov dword ptr [ebx + 0x4], edx"})
+    rows = {r["key"]: r for r in json.loads((REPO / "data" / "osi" / "natives.json").read_text()) if r["winner"]}
+    assert rows["gc3dsound.synclistenertocamera"]["ret"] == "int" and rows["gc3dsound.synclistenertocamera"]["tier"] == "tier2"
+
+
+def test_settoaposition_and_hideinventory_return_nothing_asm_pins(disasm, image):
+    pin(disasm, 0x474360, 0x4743a1, {0x474384: "call 0x475cd0", 0x47438b: "mov word ptr [edi], 0xf",
+                                     0x474390: "mov dword ptr [edi + 0x4], 0x0"})
+    pin(disasm, 0x62d400, 0x62d420, {0x62d407: "call 0x62e250", 0x62d40c: "mov word ptr [ebx], 0xf",
+                                     0x62d411: "mov dword ptr [ebx + 0x4], 0x0"})
+
+
+def test_fix1_rows_are_present_and_playcinematic_is_not_in_this_group():
+    data = {r["key"]: r for r in json.loads(OVERRIDES.read_text())}
+    for k in ("gc3dsound.synclistenertocamera", "gccollisionphysicsgroup.settoaposition", "gcstatusscreen.hideinventory",
+              "gccharacter.initmotionsystem"):
+        assert data[k]["tier"] == "tier2" and "default" not in data[k] and data[k]["cite"].isascii(), k
+    assert "gchuddirector.playcinematic" not in data
+    assert "gchuddirector.playcinematic" not in ob().TIER2_KEYS
+    assert "0x568a5e" in data["gcmodeldirector.addtoa"]["note"] and "0x5d4e40" in data["gcmodeldirector.addtoa"]["note"]
+    assert "Pohatu" in data["gcmodeldirector.addtoa"]["note"] and "0x568c02" in data["gcmodeldirector.addtoa"]["note"]
+
+
+def test_setupmoveable_models_the_motion_system_as_present_with_the_characters_id():
+    r, vm, ctx, tr, log = run_main(SETUP % "")
+    ms = ctx.subsystem(ob().ModelDirector).map[CNT1].motion_system
+    assert ms is not None and ms.id == CNT1

@@ -17,8 +17,9 @@ Divergences from the plan text, found on the asm (reported to the controller):
 - `gcmodeldirector.show('cnt1')` adds the Toa to a render group's child vector (temp AddRef 0x47f9df, push_back copy
   0x419a29, temp Release 0x47f9f9) as well as to the BAGroup (SetCharacter 0x54b344): the engine holds the Toa 3 times
   after `show`, not 2 as natives.md 2.4 / 3.4 say, and four H records are written, not one.
-- `gccharacter.setupmoveable` only calls `OnEvent` if the character has a motion system (`[char+0x124]`, 0x418856),
-  which `gccharacter.initmotionsystem` creates: that native is modelled here (state another native reads back).
+- `gccharacter.setupmoveable` only calls `OnEvent` if the character has a motion system (`[char+0x124]`, 0x418856).
+  `gccharacter.initmotionsystem` (tier 2, no body, controller ruling fix 1) rebuilds it with the same id ([char+0x100]
+  0x40c60b -> [ms+0x14] 0x5748ec; the ctor never calls OnEvent), so setupmoveable models the system as present.
 - `gclegocamera.setcameraspline` / `settargetspline` hold the spline in the same field (+0x3a4) the AI-mode setter
   releases (0x45b5a8): they take engine references on a game argument, so they are tier 1 too.
 """
@@ -81,10 +82,6 @@ CITES = {
         "// body 0x4093c0, method 0x418850 <GcCharacter::SetupMoveable> -> 0x574b80 <GcMotionSystem::SetupMoveable> -> "
         "0x589050 <GcMotionSystem::SetUnderWater>; asm pin: 0x418856 no motion system -> nothing, 0x574ef1 guard [ms+0x14] == "
         "MainCharacterID() 0x43af90, 0x574ef5 byte [0x73c5a8], 0x589154 OnEvent(0x36, 1) / 0x589249 OnEvent(0x36, 0)",
-    "gccharacter.initmotionsystem":
-        "// body 0x409320, method 0x40c600 <GcCharacter::InitMotionSystem> -> 0x5742a0 <GcMotionSystem::GcMotionSystem>; asm "
-        "pin: 0x40c60b id = [char+0x100], 0x40c62f new motion system, 0x5748ec [ms+0x14] = id, 0x40c668 stored at "
-        "[char+0x124] (old released 0x40c657)",
     "gclegocamera.getcameraaimode":
         "// body 0x44ed10, method 0x44ed18 <GcLegoCamera field +0x3a1>; asm pin: 0x44ed18 mov al, byte [edx+0x3a1], "
         "0x44ed40 CreateVariant movzx byte (type 0x10), initial 0 from the ctor 0x44f6a0",
@@ -112,8 +109,9 @@ CITES = {
 # safe on the merged run) and they hold no engine reference on a game object.
 TIER2_KEYS = [
     "gcbigsprite.enablealphachannel", "gcbigsprite.setcolor", "gcbigsprite.sethudposition", "gcbigsprite.setzdepth",
-    "gccharacter.disableallraycollisions", "gccharacter.setbounce",
-    "gchuddirector.hide", "gchuddirector.playcinematic", "gchuddirector.show",
+    "gc3dsound.synclistenertocamera", "gccharacter.disableallraycollisions", "gccharacter.initmotionsystem",
+    "gccharacter.setbounce", "gccollisionphysicsgroup.settoaposition", "gcstatusscreen.hideinventory",
+    "gchuddirector.hide", "gchuddirector.show",
     "gclegocamera.setcampos", "gclegocamera.settargpos",
     "gclightdirector.setcavelighting", "gclightdirector.toggleconstantlights",
     "gcmodeldirector.setnearestmax",
@@ -411,8 +409,8 @@ def setup_moveable(ctx, ch: GcCharacter) -> None:
     GcMotionSystem::SetupMoveable 0x574b80 runs (fields only, no early exit) and ends with the guard
     [ms+0x14] == MainCharacterID() (0x574ef1) -> SetUnderWater(byte [0x73c5a8])."""
     ms = ch.motion_system
-    if ms is None:
-        return
+    if ms is None:       # initmotionsystem is a tier-2 stub with no body: the path reaches 0x574ef1 unconditionally, so the
+        ms = ch.motion_system = GcMotionSystem(ch.char_id)    # system is modelled as present, id [char+0x100] (0x40c60b)
     if ms.id is not None and ms.id == main_character_id(ctx):
         set_under_water(ctx, ctx.subsystem(UnderWater).global_flag)
 
@@ -486,6 +484,8 @@ def add_toa(ctx, name: bytes, flag: int = 0) -> int:
     ident = services.convert_string_to_id(name)                          # 0x47e194 -> 0x617810 -> ConvertStringToID
     toa = GcToa(_tid(ctx, "GcToa"), ident)                               # 0x47e1ac new 0x430, ctor 0x47e1d0
     md.saver_ammo = toa.ammo                                             # 0x56898b: [0x7474c8] = [toa+0x380]
+    # INI-gated block 0x568a5e -> 0x5d4e40 ([Cheat] Urinate == "Pohatu", body 0x568a6b-0x568c02): modelled as INI-absent
+    # (false) until M2a-3, so it is skipped here.
     ctx.engine_call("OnEvent", [Variant(T_INT, 0x32), Variant(T_INT, toa.ammo & 0xFFFF)])   # 0x568a59, unconditional
     toa.node_id = toa.char_id                                            # 0x47e1db-0x47e1eb: [toa+0x10] = [toa+0x100]
     slots = ctx.subsystem(services.BlockFileSlots)
@@ -590,15 +590,6 @@ def _show(ctx):
     return fn
 
 
-def _initmotionsystem(ctx):
-    def fn(call):
-        ch = _arg(ctx, call, 0, GcCharacter, "GcCharacter")
-        old, ch.motion_system = ch.motion_system, GcMotionSystem(ch.char_id)        # 0x40c60b / 0x5748ec / 0x40c668
-        ch.motion_systems_made += 1
-        return NOTHING
-    return fn
-
-
 def _setupmoveable(ctx):
     def fn(call):
         setup_moveable(ctx, _arg(ctx, call, 0, GcCharacter, "GcCharacter"))
@@ -659,7 +650,6 @@ def bind(reg, ctx) -> None:
     reg.bind("gcmodeldirector.gettoa", _gettoa(ctx, T("GcToa")))
     reg.bind("gcmodeldirector.getcharacter", _getcharacter(ctx, T("GcCharacter")))
     reg.bind("gcmodeldirector.show", _show(ctx))
-    reg.bind("gccharacter.initmotionsystem", _initmotionsystem(ctx))
     reg.bind("gccharacter.setupmoveable", _setupmoveable(ctx))
     reg.bind("gclegocamera.getcameraaimode", _getcameraaimode(ctx))
     reg.bind("gclegocamera.setcameraaimode", _setcameraaimode(ctx))
