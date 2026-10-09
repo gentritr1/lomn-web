@@ -178,6 +178,44 @@ def test_default_files_are_the_committed_tables(tmp_path):
     assert sum(1 for v in reg.values() if v["tier"] == "stub") == 1049
 
 
+def test_name_token_unescape_decodes_backslash_first_class(files):
+    """trace.md section 1: a backslash prints as `\\\\`, so the name `b\\x41` (a literal backslash) prints as `b\\\\x41`
+    and must not turn into `bA`-style output; `\\x41` alone is the byte 0x41."""
+    assert coverage._key("A.b\\\\x41") == "a.b\\x41"
+    assert coverage._key("A.b\\x41") == "a.ba"
+    assert coverage._key("A.b\\\\\\x41") == "a.b\\a"           # backslash, then the escape for 0x41
+
+
+ERR_TRACE = [
+    HDR, CALL,
+    "I 00000030 82    1    1 00ff:00000000",
+    'E 00000030 82    1 "Script is calling a.one"',                  # a call that failed: no N line
+    "K      0 00000000 00000000 00000000",
+    "I 00000040 82    1    1 00ff:00000000",
+    "N 00000040 B.Two 0 -> 000f:00000000",
+    "F s 00000001",
+    'E 00000040 82    2 "Script is calling b.two"',                  # the error came after the N line (the pops)
+    "I 00000050 82    1    1 00ff:00000000",
+    'E 00000050 82    1 "Script is calling c.three"',
+    "I 00000060 70    1    1 00ff:00000000",
+    'E 00000060 70    1 "Results of comparison expression is not integral"',   # not a native call
+]
+
+
+def test_errored_native_calls_are_counted(files):
+    """m-2: an E line at op 0x82 with no N line since the last I line is a call of the native it names; an E line after
+    the native's own N line is the same call (no double count)."""
+    rows = run_report(ERR_TRACE, files)
+    assert rows[0] == "coverage: natives distinct 3 (tier1 1, tier2 1, stub 1, mod 0, tier3 0), calls 3, unregistered 0"
+    got = {r.split()[1]: (int(r.split()[5]), int(r.split()[7])) for r in rows[1:]}
+    assert got == {"a.one": (-1, 1), "b.two": (0, 1), "c.three": (0, 1)}
+
+
+def test_errored_call_of_an_unknown_native_is_unregistered(files):
+    lines = [HDR, "I 00000030 82    1    1 00ff:00000000", 'E 00000030 82    1 "Script is calling z.ghost"']
+    assert run_report(lines, files)[0].endswith("calls 1, unregistered 1")
+
+
 # ----------------------------------------------------------------------------------------------- flip_probe.py
 
 FLIP_ROWS = [
@@ -358,3 +396,38 @@ def test_flip_probe_real_null_control_and_criteria(flip, base_osi):
     b = flip.run_once(*args, frames=30, deadline=30)
     assert (a.pcs, a.instructions, a.natives) == (b.pcs, b.instructions, b.natives)
     assert (a.instructions, len(a.pcs), len(a.natives)) == (70222, 13534, 69)
+
+
+def test_flip_probe_null_label_needs_the_rejection_at_the_native_call(flip, tmp_path):
+    """m-3: a game native whose nothing makes the script fail somewhere ELSE (a GetObjectClassID (0xbf) on it) is CHANGED, with the error
+    in <stop>; only the next native call that rejects the nothing as a type:<Class> argument is CHANGED-NULL."""
+    sys.path[:0] = [str(REPO / "tools" / "osi")]
+    import osiasm
+    asm = """
+.strings "t" "mk3" "mk" "use"
+.function Setup 0
+    CallGameFunction t.mk3 0
+    GetObjectClassID
+    Pop
+    CallGameFunction t.mk 0
+    CallGameFunction t.use 1
+    Pop
+    PushConstant0
+    Return
+.function Process 3
+    PushConstanti8 1
+    Return
+"""
+    rows = [dict(FLIP_ROWS[i], winner=True, default=None, sets_fpu_pc64=False) for i in (2, 4)]
+    rows[0].update(name="mk", key="t.mk")
+    mk3 = dict(rows[0], name="mk3", key="t.mk3", body="0x9")
+    rows = [mk3] + rows
+    for r in rows:
+        r["types"] = list(r.get("types", [])) + [None] * (10 - len(r.get("types", [])))
+    n = tmp_path / "n3.json"
+    n.write_text(json.dumps(rows))
+    image, _ = osiasm.assemble(asm)
+    res = {r.key: r for r in flip.probe(image, n, None, REPO / "data" / "osi" / "types.json", frames=1, deadline=30)}
+    assert res["t.mk3"].verdict == "CHANGED" and res["t.mk3"].stop.startswith('error "')
+    assert " op bf" in res["t.mk3"].stop
+    assert res["t.mk"].verdict == "CHANGED-NULL" and " op 82" in res["t.mk"].stop

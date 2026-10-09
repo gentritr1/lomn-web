@@ -75,14 +75,75 @@ def test_direct_callers_of_both_targets(tmp_path):
     assert reach.direct_callers(c) == {0x2200, 0x1100, 0x4000, CALL}      # Call itself calls CallWithReturn
 
 
-def test_reentry_summary_line(tmp_path):
+def test_indirect_entries_are_closure_functions_nobody_calls(tmp_path):
+    """I-1: the closure holds `other` (0x4000), which calls both targets but has no caller and is no native body: it can
+    only be entered through a vtable or a callback, so natives that reach it are invisible to the direct-call count."""
+    rows = corpus_files(tmp_path)
+    c = reach.load_corpus(tmp_path)
+    ind = reach.indirect_entries(c, rows)
+    assert [(i.addr, c.names[i.addr], i.depth) for i in ind] == [(0x4000, "other", 1)]
+
+
+def test_find_entries_vtable_slot_and_code_reference(tmp_path):
+    """Entry lookup on an exe image: a function address stored in a run of function addresses is a vtable slot; one
+    pushed in code (0x68 imm32) is a callback registration. A function nobody mentions has no entry."""
+    import struct
+    sys.path[:0] = [str(REPO / "tools" / "osi")]
+    import exc
+    funcs = {0x401000: "register", 0x401100: "A::slot0", 0x401200: "A::slot1", 0x401300: "cb", 0x401400: "lonely"}
+    text = bytearray(0x500)
+    text[0:6] = b"\x68" + struct.pack("<I", 0x401300) + b"\xc3"                  # push cb ; ret  (in `register`)
+    rdata = struct.pack("<IIII", 0x401100, 0x401200, 0, 0)                       # a vtable at 0x600000: slots 0 and 1
+    img = exc.Image([(0x401000, bytes(text)), (0x600000, rdata)])
+    corpus = reach.Corpus(funcs, {})
+    got = reach.find_entries(img, corpus, [0x401100, 0x401200, 0x401300, 0x401400])
+    assert got[0x401100] == ["vtable 0x00600000 slot 0 (slot 0 = A::slot0)"]
+    assert got[0x401200] == ["vtable 0x00600000 slot 1 (slot 0 = A::slot0)"]
+    assert got[0x401300] == ["code reference at 0x00401001 in register (push imm32)"]
+    assert got[0x401400] == []
+
+
+def test_format_indirect(tmp_path):
+    rows = corpus_files(tmp_path)
+    c = reach.load_corpus(tmp_path)
+    ind = reach.indirect_entries(c, rows)
+    assert reach.format_indirect(ind[0], c, ["vtable 0x00600000 slot 3 (slot 0 = x)"]) == (
+        "indirect 0x00004000 other depth 1 entered: vtable 0x00600000 slot 3 (slot 0 = x)")
+    assert reach.format_indirect(ind[0], c, []).endswith("entered: no reference found in the exe")
+    assert reach.format_indirect(ind[0], c, None).endswith("entered: n/a (no exe)")
+
+
+def test_reentry_summary_line_is_labelled_a_direct_call_floor(tmp_path):
     rows = corpus_files(tmp_path)
     c = reach.load_corpus(tmp_path)
     res = reach.vm_reentry(c, rows)
     assert reach.reentry_summary(res, rows, c, on_path={"n1.f", "n2.f", "n3.f"}) == (
-        "vm-reentry: 3 of 4 natives reach 0x60b320/0x60b450 (direct callers of the targets: 4); "
-        "on the stub path 2: n2.f 1, n1.f 3")
+        "vm-reentry (direct-call floor): 3 of 4 natives reach 0x60b320/0x60b450 through direct calls (direct callers of "
+        "the targets: 4); 1 closure functions are entered only through vtables or callbacks, so more natives may "
+        "re-enter; on the stub path 2: n2.f 1, n1.f 3")
     assert reach.reentry_summary(res, rows, c, on_path=None).endswith("on the stub path n/a (no Base.osi)")
+
+
+def test_stub_path_natives_honours_the_tables(tmp_path):
+    """m-6: the natives table of the CLI reaches the oracle run. A script that calls t.f is only runnable with a table
+    that registers it."""
+    image, _ = osiasm.assemble("""
+.strings "t" "f"
+.function Setup 0
+    CallGameFunction t.f 0
+    Pop
+    PushConstant0
+    Return
+.function Process 3
+    PushConstanti8 1
+    Return
+""")
+    osi = tmp_path / "x.osi"
+    osi.write_bytes(image)
+    n = tmp_path / "n.json"
+    n.write_text(json.dumps([{"cls": "t", "name": "f", "key": "t.f", "min": 0, "max": 0, "types": [None] * 10, "ret": "int",
+                              "ret_class": None, "winner": True, "default": None, "sets_fpu_pc64": False, "body": "0x1"}]))
+    assert reach.stub_path_natives(osi, natives=n, mods=None, types=DATA / "types.json", frames=1) == {"t.f"}
 
 
 def test_load_corpus_missing_files(tmp_path):
@@ -266,14 +327,37 @@ def test_real_on_path_natives_are_the_four(corpus, winners, lomn_data):
                                          "gccharacter.setupmoveable", "gcmodeldirector.addtoa"]
 
 
+def test_real_indirect_entries(corpus, winners):
+    """49 functions of the 226-function closure have no caller and are no native body (EXECUTED by the review and here);
+    among them the ones named in the review."""
+    ind = reach.indirect_entries(corpus, winners)
+    names = {corpus.names[i.addr] for i in ind}
+    assert len(ind) == 49
+    assert {"GcTimer::Trigger", "GcLegoCamera::Process", "ScSLOSIProcess::Process", "_SafMainCRTStartup"} <= names
+    assert any("vector_deleting_destructor" in n and n.startswith("GcHive") for n in names)
+
+
+def test_real_indirect_entries_have_exe_references(corpus, winners, canonical_exe):
+    sys.path[:0] = [str(REPO / "tools" / "osi")]
+    import exc
+    img = exc.Image.from_file(canonical_exe)
+    ind = reach.indirect_entries(corpus, winners)
+    got = reach.find_entries(img, corpus, [i.addr for i in ind])
+    by = {corpus.names[i.addr]: got[i.addr] for i in ind}
+    assert any(e.startswith("vtable ") for e in by["GcTimer::Trigger"])
+    assert by["GcHive::`vector_deleting_destructor'"] and by["GcHive::`vector_deleting_destructor'"][0].startswith("vtable ")
+
+
 def test_cli_vm_reentry_last_line(corpus, lomn_data):
     r = subprocess.run([sys.executable, str(REPO / "tools" / "osi" / "reach.py"), "--vm-reentry"], capture_output=True,
                        text=True, timeout=110, env={"PATH": "/usr/bin:/bin", "LOMN_DATA": str(lomn_data)})
     assert r.returncode == 0, r.stderr
     last = r.stdout.splitlines()[-1]
-    assert last.startswith("vm-reentry: 35 of 1049 natives reach 0x60b320/0x60b450 (direct callers of the targets: 71); "
-                           "on the stub path 4: ")
+    assert last.startswith("vm-reentry (direct-call floor): 35 of 1049 natives reach 0x60b320/0x60b450 through direct "
+                           "calls (direct callers of the targets: 71); 49 closure functions are entered only through "
+                           "vtables or callbacks, so more natives may re-enter; on the stub path 4: ")
     assert sum(1 for ln in r.stdout.splitlines() if ln.startswith("reentry ")) == 35
+    assert sum(1 for ln in r.stdout.splitlines() if ln.startswith("indirect ")) == 49
 
 
 @pytest.fixture(scope="module")

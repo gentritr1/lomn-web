@@ -226,3 +226,47 @@ def test_cli_chain_several_functions(canonical_exe):
     assert r.returncode == 0, r.stderr
     assert [ln for ln in r.stdout.splitlines() if ln.startswith("catches")] == [
         "catches 3 pads 0x00439324 0x00439343 0x00439363", "catches 3 pads 0x00401080 0x00401093 0x004010b0"]
+
+
+# ----------------------------------------------------------------------------------------------- the section lookup (fix round 1, m-4)
+
+def tiny_pe(sections, base=0x400000):
+    """A minimal PE32 image: `sections` = [(name, rva, bytes)]. Only what Image.from_pe reads."""
+    pe = 0x80
+    optsz = 0xE0
+    hdr = bytearray(0x400)
+    hdr[0:2] = b"MZ"
+    struct.pack_into("<I", hdr, 0x3C, pe)
+    hdr[pe:pe + 4] = b"PE\0\0"
+    struct.pack_into("<H", hdr, pe + 6, len(sections))
+    struct.pack_into("<H", hdr, pe + 20, optsz)
+    struct.pack_into("<I", hdr, pe + 24 + 28, base)
+    raw = bytearray()
+    for i, (name, rva, data) in enumerate(sections):
+        o = pe + 24 + optsz + 40 * i
+        hdr[o:o + 8] = name.ljust(8, b"\0")
+        struct.pack_into("<IIII", hdr, o + 8, len(data), rva, len(data), 0x400 + len(raw))
+        raw += data
+    return bytes(hdr) + bytes(raw)
+
+
+def test_exc_section_is_found_by_name_not_by_address():
+    """The index of a build whose .exc sits elsewhere is still read: one short function at 0x401000."""
+    info = b"\x09\0\0\0"
+    index = struct.pack("<II", 0x401000, 0x500000 + 0x10) + struct.pack("<I", 0xFFFFFFFF)
+    exe = tiny_pe([(b".text", 0x1000, b"\x90" * 16), (b".exc", 0x3000, index), (b".rdata", 0x100000, b"\0" * 0x10 + info)])
+    img = exc.Image.from_pe(exe)
+    assert img.section_va(".exc") == 0x403000
+    idx = exc.load_index(img)
+    assert idx == {0x401000: 0x500010}
+    assert exc.decode_function(img, 0x401000, idx)["short"] is True
+
+
+def test_missing_exc_section_fails_loudly():
+    img = exc.Image.from_pe(tiny_pe([(b".text", 0x1000, b"\x90" * 16)]))
+    with pytest.raises(ValueError, match="no .exc section"):
+        exc.load_index(img)
+
+
+def test_real_exc_section_start(canonical_exe):
+    assert exc.Image.from_file(canonical_exe).section_va(".exc") == 0x6EF000

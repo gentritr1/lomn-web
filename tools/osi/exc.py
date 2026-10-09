@@ -39,14 +39,14 @@ END_BIT = 0x8000
 SIZES = {0x10: 14, 0x01: 10, 0x11: 6, 0x0A: 10, 0x0C: 14, 0x07: 14}
 KIND_NAMES = {0x10: "catch", 0x01: "dtor", 0x13: "spec", 0x11: "endspec", 0x0A: "cleanup10", 0x0C: "dtor2",
               0x07: "dtor-array"}
-INDEX_VA = 0x6EF000          # start of .exc
 
 
 class Image:
     """PE32 sections as data: read(va, n) -> bytes. `regions` (tests) is {va: bytes}."""
 
-    def __init__(self, regions: list[tuple[int, bytes]]):
+    def __init__(self, regions: list[tuple[int, bytes]], sections: dict | None = None):
         self.regions = regions
+        self.sections = sections or {}          # section name -> virtual address (from the PE header)
 
     @classmethod
     def from_pe(cls, data: bytes) -> "Image":
@@ -56,13 +56,20 @@ class Image:
         nsec = struct.unpack_from("<H", data, pe + 6)[0]
         optsz = struct.unpack_from("<H", data, pe + 20)[0]
         base = struct.unpack_from("<I", data, pe + 24 + 28)[0]
-        regions = []
+        regions, sections = [], {}
         for i in range(nsec):
             o = pe + 24 + optsz + 40 * i
+            name = data[o:o + 8].rstrip(b"\0").decode("latin-1")
             vsize, rva, rawsize, rawptr = struct.unpack_from("<IIII", data, o + 8)
             n = min(vsize, rawsize) if vsize else rawsize
             regions.append((base + rva, data[rawptr:rawptr + n]))
-        return cls(regions)
+            sections.setdefault(name, base + rva)
+        return cls(regions, sections)
+
+    def section_va(self, name: str) -> int:
+        if name not in self.sections:
+            raise ValueError("no %s section in this image" % name)
+        return self.sections[name]
 
     @classmethod
     def from_file(cls, path) -> "Image":
@@ -96,10 +103,11 @@ class Image:
         return out.decode("latin-1")
 
 
-def load_index(img: Image, start: int = INDEX_VA) -> dict[int, int]:
-    """{function start: info pointer}, up to the 0xffffffff terminator."""
+def load_index(img: Image, start: int | None = None) -> dict[int, int]:
+    """{function start: info pointer}, up to the 0xffffffff terminator. The index is the `.exc` section, found by name in
+    the PE section table (0x6ef000 in the canonical exe); an image without one raises ValueError."""
     idx = {}
-    va = start
+    va = img.section_va(".exc") if start is None else start
     while img.has(va, 8):
         f, i = struct.unpack("<II", img.read(va, 8))
         if f == 0xFFFFFFFF:

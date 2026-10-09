@@ -67,25 +67,42 @@ def load_registry(natives, mods=None, overrides=None) -> dict[str, dict]:
     return reg
 
 
-_ESC = re.compile(r"\\x([0-9a-f]{2})")
+_ESC = re.compile(r"\\(\\|x([0-9a-f]{2}))")
 
 
 def _key(token: str) -> str:
     """A trace/log name token (trace.md section 1) -> the registry key (lower case)."""
-    return _ESC.sub(lambda m: chr(int(m.group(1), 16)), token).replace("\\\\", "\\").lower()
+    return _ESC.sub(lambda m: "\\" if m.group(1) == "\\" else chr(int(m.group(2), 16)), token).lower()
+
+
+_CALLING = re.compile(r'"Script is calling ([^"\\ ]+\.[^"\\ ]+)"$')
 
 
 def parse_trace(lines) -> tuple[list[tuple[int, int, str]], int]:
-    """[(frame, seq, key)] in call order, and the count of unregistered-function errors. seq is the order of the N line."""
+    """[(frame, seq, key)] in call order, and the count of unregistered-function errors. seq is the order of the call.
+    A call is an `N` line, or an `E` line at op 0x82/0x83 whose message is `Script is calling <cls>.<fn>` and which no
+    `N` line of the same instruction precedes (the call failed before the native returned, so it has no `N` line; an
+    error AFTER the native's `N` line, in the pops, is the same call)."""
     events, unreg, frame = [], 0, -1
+    n_since_i = False
     for ln in lines:
         c = ln[:2]
         if c == "N ":
             events.append((frame, len(events), _key(ln.split(" ", 3)[2])))
+            n_since_i = True
+        elif c == "I ":
+            n_since_i = False
         elif c == "K ":
             frame = int(ln.split()[1])
-        elif c == "E " and UNREGISTERED_MSG in ln:
-            unreg += 1
+        elif c == "E ":
+            if UNREGISTERED_MSG in ln:
+                unreg += 1
+            else:
+                tok = ln.split()
+                m = _CALLING.search(ln)
+                if m and tok[2] in ("82", "83") and not n_since_i:
+                    events.append((frame, len(events), _key(m.group(1))))
+            n_since_i = False
     return events, unreg
 
 

@@ -8,8 +8,14 @@
 
 --vm-reentry: a reverse breadth-first search over gen/decomp/calls.jsonl from the two targets (direct calls only; an edge
 to an address that is not in functions.jsonl is skipped). A native reaches the targets when its registry `body` is on
-the search; `depth` is the number of calls on the shortest chain and `chain` names it. The last line is the summary,
-including which of them are on the stub path (hit by the typed-stub oracle run of Setup + 30 frames; needs Base.osi).
+the search; `depth` is the number of calls on the shortest chain and `chain` names it. THE COUNT IS A DIRECT-CALL
+FLOOR: calls.jsonl has no virtual or callback edges, and some functions of the closure (49 on the canonical exe, e.g.
+GcHive's deleting destructor, GcTimer::Trigger, the `*::Process` methods) have no caller at all, so they are entered
+only through a vtable or a registered callback and natives that reach them are not counted. Those functions are
+listed as `indirect` lines (address, name, depth to the targets, and how the exe enters them: a vtable slot or a code
+reference such as a pushed callback address, found by scanning the exe as data; `--exe`, default
+$LOMN_DATA/reference/LEGOBionicle.exe). Vtables are not resolved further. The last line is the summary, including which
+natives are on the stub path (hit by the typed-stub oracle run of Setup + 30 frames; needs Base.osi).
 Skips with `SKIPPED (run make decomp first)` when the corpus is absent.
 
 The script walk (--argc-violations, --0x19), the reachability rule:
@@ -31,6 +37,7 @@ Caveat printed with --argc-violations: classes can also be constructed by ScSLOS
 from __future__ import annotations
 
 import argparse
+import bisect
 import collections
 import importlib.util
 import json
@@ -93,9 +100,7 @@ class Reentry(NamedTuple):
     chain: list
 
 
-def vm_reentry(c: Corpus, rows, targets=(CALL, CALLRET)) -> list[Reentry]:
-    """Natives (winner rows) whose body reaches a target, sorted by (depth, key). The chain is a shortest path; ties
-    go to the lowest address so the output is stable."""
+def _closure_dist(c: Corpus, targets) -> dict:
     rev: dict[int, list[int]] = collections.defaultdict(list)
     for f, to in c.calls.items():
         for t in to:
@@ -108,6 +113,13 @@ def vm_reentry(c: Corpus, rows, targets=(CALL, CALLRET)) -> list[Reentry]:
             if f not in dist:
                 dist[f] = dist[x] + 1
                 queue.append(f)
+    return dist
+
+
+def vm_reentry(c: Corpus, rows, targets=(CALL, CALLRET)) -> list[Reentry]:
+    """Natives (winner rows) whose body reaches a target through DIRECT calls (a floor, see the module docstring), sorted
+    by (depth, key). The chain is a shortest path; ties go to the lowest address so the output is stable."""
+    dist = _closure_dist(c, targets)
     out = []
     for r in rows:
         if not r.get("winner", True):
@@ -123,26 +135,102 @@ def vm_reentry(c: Corpus, rows, targets=(CALL, CALLRET)) -> list[Reentry]:
     return sorted(out, key=lambda r: (r.depth, r.key))
 
 
+class Indirect(NamedTuple):
+    addr: int
+    depth: int
+
+
+def indirect_entries(c: Corpus, rows, targets=(CALL, CALLRET)) -> list[Indirect]:
+    """Functions of the reverse closure of the targets that have no caller in calls.jsonl and are no native body: they
+    can only be entered through a vtable or a callback, so the natives that reach them are missing from vm_reentry."""
+    dist = _closure_dist(c, targets)
+    called = {t for to in c.calls.values() for t in to}
+    bodies = {int(r["body"], 16) for r in rows if r.get("winner", True)}
+    return sorted((Indirect(a, d) for a, d in dist.items() if a not in called and a not in bodies and a not in targets),
+                  key=lambda i: i.addr)
+
+
+def find_entries(img, c: Corpus, addrs, limit: int = 4) -> dict:
+    """How the exe enters each address, read as data: `vtable 0x<base> slot N (slot 0 = <name>)` when the address sits in
+    a run of two or more function addresses in a data section, `data reference at 0x..` for a lone pointer, and `code reference at
+    0x.. in <function> (push imm32 | mov reg, imm32 | imm32)` when the code embeds the address (a registered callback).
+    An address nothing mentions maps to []."""
+    import struct
+    starts = sorted(c.names)
+    code_lo = starts[0] if starts else 0
+    out = {}
+    for a in addrs:
+        needle = struct.pack("<I", a)
+        hits = []
+        for base, data in img.regions:
+            if base == getattr(img, "sections", {}).get(".exc"):
+                continue                      # the exception index lists every function start: not an entry
+            is_code = base <= code_lo < base + len(data)
+            pos = data.find(needle)
+            while pos >= 0:
+                va = base + pos
+                if is_code:
+                    prev = data[pos - 1] if pos else -1
+                    how = "push imm32" if prev == 0x68 else "mov reg, imm32" if 0xB8 <= prev <= 0xBF else "imm32"
+                    k = bisect.bisect_right(starts, va) - 1
+                    where = c.names[starts[k]] if k >= 0 else "?"
+                    hits.append("code reference at 0x%08x in %s (%s)" % (va, where, how))
+                elif pos % 4 == 0:
+                    first = pos
+                    while first >= 4 and struct.unpack_from("<I", data, first - 4)[0] in c.names:
+                        first -= 4
+                    nxt = pos + 4 <= len(data) - 4 and struct.unpack_from("<I", data, pos + 4)[0] in c.names
+                    if first < pos or nxt:                 # a run of two or more function addresses
+                        s0 = struct.unpack_from("<I", data, first)[0]
+                        hits.append("vtable 0x%08x slot %d (slot 0 = %s)" % (base + first, (pos - first) // 4, c.names[s0]))
+                    else:
+                        hits.append("data reference at 0x%08x" % va)
+                pos = data.find(needle, pos + 1)
+        out[a] = hits[:limit] + (["+%d more" % (len(hits) - limit)] if len(hits) > limit else [])
+    return out
+
+
+def format_indirect(i: Indirect, c: Corpus, entries) -> str:
+    how = ("n/a (no exe)" if entries is None else "; ".join(entries) if entries else "no reference found in the exe")
+    return "indirect 0x%08x %s depth %d entered: %s" % (i.addr, c.names[i.addr], i.depth, how)
+
+
 def format_reentry(r: Reentry, c: Corpus) -> str:
     return "reentry %s depth %d body 0x%08x chain %s" % (r.key, r.depth, r.body, " -> ".join(c.names[a] for a in r.chain))
 
 
 def reentry_summary(res, rows, c: Corpus, on_path) -> str:
     n = sum(1 for r in rows if r.get("winner", True))
-    head = "vm-reentry: %d of %d natives reach 0x60b320/0x60b450 (direct callers of the targets: %d); " % (
-        len(res), n, len(direct_callers(c)))
+    head = ("vm-reentry (direct-call floor): %d of %d natives reach 0x60b320/0x60b450 through direct calls (direct "
+            "callers of the targets: %d); %d closure functions are entered only through vtables or callbacks, so more "
+            "natives may re-enter; " % (len(res), n, len(direct_callers(c)), len(indirect_entries(c, rows))))
     if on_path is None:
         return head + "on the stub path n/a (no Base.osi)"
     on = [r for r in res if r.key in on_path]
     return head + "on the stub path %d: %s" % (len(on), ", ".join("%s %d" % (r.key, r.depth) for r in on))
 
 
-def stub_path_natives(osi_path, frames: int = 30) -> set:
-    """The natives the typed-stub oracle run of Setup + `frames` frames calls (69 on the shipped Base.osi)."""
-    sys.path[:0] = [str(REPO / "tools" / "osi")]
-    import flip_probe
-    run = flip_probe.run_once(Path(osi_path).read_bytes(), DATA / "natives.json", DATA / "natives_beta150.json",
-                              DATA / "types.json", frames=frames, deadline=60)
+_SIBLINGS: dict = {}
+
+
+def _sibling(name: str):
+    """tools/osi/<name>.py, loaded once."""
+    if name not in _SIBLINGS:
+        spec = importlib.util.spec_from_file_location("osi_" + name, REPO / "tools" / "osi" / (name + ".py"))
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = mod
+        spec.loader.exec_module(mod)
+        _SIBLINGS[name] = mod
+    return _SIBLINGS[name]
+
+
+def stub_path_natives(osi_path, frames: int = 30, natives=None, mods="default", types=None) -> set:
+    """The natives the typed-stub oracle run of Setup + `frames` frames calls (69 on the shipped Base.osi), with the given
+    natives / mods / types tables (the committed ones by default; mods=None runs without the mod rows)."""
+    flip = _sibling("flip_probe")
+    run = flip.run_once(Path(osi_path).read_bytes(), natives or DATA / "natives.json",
+                        DATA / "natives_beta150.json" if mods == "default" else mods, types or DATA / "types.json",
+                        frames=frames, deadline=60)
     return set(run.natives)
 
 
@@ -385,6 +473,9 @@ def main(argv=None) -> int:
     ap.add_argument("--corpus", default=str(REPO / "gen" / "decomp"))
     ap.add_argument("--osi")
     ap.add_argument("--natives", default=str(DATA / "natives.json"))
+    ap.add_argument("--mods", default=str(DATA / "natives_beta150.json"))
+    ap.add_argument("--types", default=str(DATA / "types.json"))
+    ap.add_argument("--exe", help="default: $LOMN_DATA/reference/LEGOBionicle.exe (for the `indirect` lines)")
     a = ap.parse_args(argv)
     if not (a.vm_reentry or a.argc_violations or a.site19):
         ap.print_help()
@@ -400,7 +491,15 @@ def main(argv=None) -> int:
             res = vm_reentry(c, rows)
             for r in res:
                 print(format_reentry(r, c))
-            print(reentry_summary(res, rows, c, stub_path_natives(osi_path) if have_osi else None))
+            exe = Path(a.exe) if a.exe else (Path(os.environ["LOMN_DATA"]) / "reference" / "LEGOBionicle.exe"
+                                             if os.environ.get("LOMN_DATA") else None)
+            ind = indirect_entries(c, rows)
+            ents = (find_entries(_sibling("exc").Image.from_file(exe), c, [i.addr for i in ind])
+                    if exe is not None and exe.exists() else None)
+            for i in ind:
+                print(format_indirect(i, c, ents[i.addr] if ents is not None else None))
+            print(reentry_summary(res, rows, c, stub_path_natives(osi_path, natives=a.natives, mods=a.mods, types=a.types)
+                                  if have_osi else None))
     if a.argc_violations or a.site19:
         if not have_osi:
             print("SKIPPED (no LOMN_DATA)")

@@ -9,9 +9,10 @@ Method (plan "Measured facts", the flip row):
   2. For each distinct native, the same run with that one native's return replaced, at every call site, by one fixed
      alternative: int or none -> int 1; float -> 1.0; string -> "x"; colour -> colour 1; copy -> int 1; game -> nothing.
   3. CHANGED when the executed-PC set or the instruction total differs from the baseline, else SAME.
-     CHANGED-NULL (C2) is a CHANGED verdict of a game-returning native whose alternative run ENDED IN AN ERROR: its only
-     tested alternative is nothing, which the next native's `type:<Class>` argument conversion rejects (Setup, or a
-     frame, ends), so the probe cannot say what the real object would change. Such a native must be real (tier 1) in
+     CHANGED-NULL (C2) is a CHANGED verdict of a game-returning native whose alternative run ENDED IN A 0x82 that
+     rejected the flipped nothing: its only tested alternative is nothing, which the next native's `type:<Class>`
+     argument conversion refuses (Setup, or a frame, ends), so the probe cannot say what the real object would change.
+     An error anywhere else (an arithmetic op on the nothing, say) stays CHANGED with the error in <stop>. Such a native must be real (tier 1) in
      M2a-2. A game-returning native whose nothing did change the path without an error (gctimer.create,
      gcgame.getmp3player on the real script) stays CHANGED: the path moved by value.
 Each run has its own wall-clock deadline (default 20 s); a run that reaches it stops with `deadline`.
@@ -103,6 +104,23 @@ class Run(NamedTuple):
     natives: list
     rets: dict
     stop: str
+    null_rejected: bool = False     # the run ended in a 0x82 whose type:<Class> argument was the flipped nothing
+
+
+def _rejects_nothing(vm, reg, err) -> bool:
+    """The error `err` was raised by a 0x82 CallGameFunction one of whose game-typed arguments is a nothing still on the
+    stack (an error leaves the arguments in place, opcodes.md 0x82): the next native consuming the flipped value refused
+    it. The baseline run is clean, so a nothing in a game-typed argument slot comes from the flipped return."""
+    if err.op != 0x82:
+        return False
+    pc = err.pc
+    entry = reg.find(vm.script.string_text(vm._u16(pc + 1)), vm.script.string_text(vm._u16(pc + 3)))
+    if entry is None:
+        return False
+    n = vm._u8(pc + 5)
+    base = vm.depth - n
+    return any(osi_vm.is_game(entry.types[i]) and 0 <= base + i < len(vm.stack) and vm.stack[base + i].type == osi_vm.T_NOTHING
+               for i in range(min(n, len(entry.types))))
 
 
 def run_once(script: bytes, natives, mods, types, frames: int, deadline: float, flip_key: Optional[str] = None) -> Run:
@@ -116,6 +134,7 @@ def run_once(script: bytes, natives, mods, types, frames: int, deadline: float, 
     vm = osi_vm.Vm(script, reg, heap, None)
     vm.pcs_seen = PcSet(time.monotonic() + deadline)
     stop = "none"
+    rejected = False
     setup_insns = 0
     dt = struct.unpack("<d", struct.pack("<Q", osi_vm.DT_BITS_DOUBLE))[0]
     t = 0.0
@@ -125,6 +144,7 @@ def run_once(script: bytes, natives, mods, types, frames: int, deadline: float, 
         setup_insns = vm.instructions
         if not r.ok:
             stop = 'error "%s" in Setup at pc %08x op %02x' % (vm.last_error.message, vm.last_error.pc, vm.last_error.op)
+            rejected = _rejects_nothing(vm, reg, vm.last_error)
         else:
             for k in range(frames):
                 t = float(osi_vm.round_p(Fraction(t) + Fraction(dt), vm.fpu_pc))
@@ -145,10 +165,11 @@ def run_once(script: bytes, natives, mods, types, frames: int, deadline: float, 
                         break
                 if err is not None:
                     stop = 'error "%s" at frame %d pc %08x op %02x' % (err.message, k, err.pc, err.op)
+                    rejected = _rejects_nothing(vm, reg, err)
                     break
     except Deadline:
         stop = "deadline"
-    return Run(setup_insns, vm.instructions, frozenset(vm.pcs_seen), list(reg.hit), dict(reg.rets), stop)
+    return Run(setup_insns, vm.instructions, frozenset(vm.pcs_seen), list(reg.hit), dict(reg.rets), stop, rejected)
 
 
 class Result(NamedTuple):
@@ -169,7 +190,7 @@ def probe(script: bytes, natives, mods, types, frames: int, deadline: float = 20
         if not changed:
             verdict = "SAME"
         else:
-            verdict = "CHANGED-NULL" if base.rets[key] == "game" and r.stop.startswith("error") else "CHANGED"
+            verdict = "CHANGED-NULL" if base.rets[key] == "game" and r.null_rejected else "CHANGED"
         out.append(Result(verdict, key, r.instructions - base.instructions, r.stop))
     return out
 
