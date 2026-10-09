@@ -4,3 +4,4 @@ model uses (game objects, HostContext, the group registry, the VFS and the block
 
 # The native groups register themselves on import (framework.register_group); bind_natives runs them in this order.
 from . import services  # noqa: E402,F401  (M2a-2 T7b: services and time)
+from . import objects  # noqa: E402,F401  (M2a-2 T9b: objects, model director, camera, HUD)
