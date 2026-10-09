@@ -151,25 +151,41 @@ def test_cli_real_natives_fails_closed_when_nothing_is_bound(tmp_path):
     assert p.returncode != 0 and "nothing is bound" in p.stderr
 
 
+def stub_tables(tmp_path):
+    """Copies of the committed tables without the merged override tiers (every exe row a stub, every mod row `mod`): the
+    committed ones carry the tiers of every landed native group, so a baseline pin must not read them."""
+    rows = json.loads(osi_vm.DEFAULT_NATIVES.read_text())
+    for r in rows:
+        r.pop("tier", None)
+    mods = json.loads(osi_vm.DEFAULT_MODS.read_text())
+    for m in mods:
+        m["tier"] = "mod"
+    (tmp_path / "natives.json").write_text(json.dumps(rows))
+    (tmp_path / "mods.json").write_text(json.dumps(mods))
+    return tmp_path / "natives.json", tmp_path / "mods.json"
+
+
 def test_cli_runs_a_synthetic_script(tmp_path):
     """Setup + frames through the CLI: a Process whose result comes from a stub is a process-result sink."""
     text = (".function Setup 0\n    PushConstanti8 1\n    Return\n"
             ".function Process 3\n    CallGameFunction gcgame.getmainview 0\n    Pop\n"
-            "    CallGameFunction gcsaver.cheatmenu 0\n"
+            "    CallGameFunction gcgame.getresolutionwidth 0\n"
             "r:\n    Return\n")
     image, info = osiasm_assemble(text)
     (tmp_path / "s.osi").write_bytes(image)
     (tmp_path / "ov.json").write_text("[]")
+    nat, mod = stub_tables(tmp_path)
     p = subprocess.run([sys.executable, str(REPO / "tools" / "research" / "osi_taint.py"), "--osi",
-                        str(tmp_path / "s.osi"), "--frames", "3", "--overrides", str(tmp_path / "ov.json")],
+                        str(tmp_path / "s.osi"), "--frames", "3", "--overrides", str(tmp_path / "ov.json"),
+                        "--natives", str(nat), "--mods", str(mod)],
                        capture_output=True, text=True, timeout=60)
     assert p.returncode == 0, p.stderr
     assert p.stdout.splitlines() == [
         "taint: natives tainted 2, sinks 1 (branch 0, gamevar 0, tier1-arg 0, process-result 1, name 0, refstore 0, "
         "errpath 0), type-only 0",
-        "sink process-result pc %08x frame      0 <- gcsaver.cheatmenu" % info["labels"]["r"],
+        "sink process-result pc %08x frame      0 <- gcgame.getresolutionwidth" % info["labels"]["r"],
         "native gcgame.getmainview verdict safe",
-        "native gcsaver.cheatmenu verdict UNSAFE",
+        "native gcgame.getresolutionwidth verdict UNSAFE",
     ]
 
 
@@ -205,11 +221,12 @@ def test_flip_implies_sink(base_osi, flip30):
     assert sum(r.verdict == "CHANGED-NULL" for r in flip30) >= 1
 
 
-def test_flip_implies_sink_bites_a_taint_bug(base_osi, flip30, monkeypatch):
+def test_flip_implies_sink_bites_a_taint_bug(base_osi, flip30, monkeypatch, tmp_path):
     """The falsifier's mutation control: a taint pass that loses the tag through 0x22 (SetVariableValue stores no
     tag) calls branch-relevant natives safe, and flip_violations must name them."""
     monkeypatch.setattr(osi_taint.Tracker, "_b_set_var", lambda self, op, h: h)
-    rep = osi_taint.run_base(base_osi, frames=30, keys="", overrides=None)
+    nat, mod = stub_tables(tmp_path)
+    rep = osi_taint.run_base(base_osi, frames=30, keys="", overrides=None, natives=nat, mods=mod)
     bad = osi_taint.flip_violations(flip30, rep, set(), MUST_GAME_RETURNING)
     assert any(b.startswith("CHANGED") and "no sink" in b for b in bad), bad
 
@@ -279,12 +296,8 @@ def test_a9_stub_report(base_osi, tmp_path):
     (tmp_path / "ov.json").write_text("[]")
     # the committed natives.json carries the merged `tier` of every overridden row (T7a onward); the all-stub baseline reads a
     # copy without them, so that this pin does not move when a native group lands
-    rows = json.loads(osi_vm.DEFAULT_NATIVES.read_text())
-    for r in rows:
-        r.pop("tier", None)
-    (tmp_path / "natives.json").write_text(json.dumps(rows))
-    rep = osi_taint.run_base(base_osi, frames=600, keys=A9_KEYS, overrides=tmp_path / "ov.json",
-                             natives=tmp_path / "natives.json")
+    nat, mod = stub_tables(tmp_path)
+    rep = osi_taint.run_base(base_osi, frames=600, keys=A9_KEYS, overrides=tmp_path / "ov.json", natives=nat, mods=mod)
     assert rep.stop == "none" and rep.frames == 600 and rep.instructions == 390706   # the A6 total (measurements.md)
     assert rep.lines()[0] == A9_HEAD
     assert sorted(k for k, v in rep.verdicts().items() if v.startswith("UNSAFE")) == A9_UNSAFE

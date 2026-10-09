@@ -174,13 +174,15 @@ def test_default_files_are_the_committed_tables(tmp_path):
     reg = coverage.load_registry(REPO / "data" / "osi" / "natives.json", REPO / "data" / "osi" / "natives_beta150.json",
                                  None)
     assert len(reg) == 1049 + 19
-    assert sum(1 for v in reg.values() if v["tier"] == "mod") == 19
-    # derived from the committed overrides (natives.md 7.2): every overridden winner has its merged tier, the rest are stubs
+    # derived from the committed overrides (natives.md 7.2): every overridden winner has its merged tier, the rest are
+    # stubs; a mod row keeps tier `mod` unless an override names it (M2a-2 T8b: the BetterSaver keys)
     import json
     ov = json.loads((REPO / "data" / "osi" / "native_overrides.json").read_text())
+    mod_keys = {m["key"] for m in json.loads((REPO / "data" / "osi" / "natives_beta150.json").read_text())}
+    assert sum(1 for v in reg.values() if v["tier"] == "mod") == 19 - sum(1 for o in ov if o["key"] in mod_keys)
     for t in ("tier1", "tier2", "tier3"):
         assert sum(1 for v in reg.values() if v["tier"] == t) == sum(1 for o in ov if o["tier"] == t)
-    assert sum(1 for v in reg.values() if v["tier"] == "stub") == 1049 - len(ov)
+    assert sum(1 for v in reg.values() if v["tier"] == "stub") == 1049 - sum(1 for o in ov if o["key"] not in mod_keys)
 
 
 def test_name_token_unescape_decodes_backslash_first_class(files):
