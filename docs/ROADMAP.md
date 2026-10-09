@@ -59,6 +59,8 @@ Controller-verified 2026-10-08: the page loads to the folder picker with 0 conso
   - E3 rep 3 (Haiku vs Sonnet).
 
 ### 3.2 M2a-2: native framework, Setup to the first Process (IN PROGRESS: resume here)
+**Paused 2026-10-09 and pushed to a private GitHub repo. Start with [resume/README.md](resume/README.md)**: the resume kit holds the ledger, the Task 10 brief, the controller brief template and the launcher.
+
 **State 2026-10-09.**
 - Merged on `m2-osi-vm` @ a794f04: Tasks 1–9 and 11, the error-PC table, the fail-closed runners, the docs batches and the F7 follow-up batch (setammo and one saver store, the RemoveArea → OnEvent removal chain, the loader's Show/Hide of area characters, the Toa branch of MainCharacterID, setfog/setnearestmax, `..` above a mount root, the Python VFS no longer following links). Each passed a blind review and controller verification.
 - Measured on a794f04: both engines pass 541/541 programs with byte-identical traces. `make osi-a9` with real natives gives 4/4 OK: native == wasm32 == Python's own models == replay, over 600 frames. Coverage: 69 natives (tier1 35, tier2 34, stub 0, tier3 0), unregistered 0. Taint with real natives: 0 sinks. `make test-tools`: 974 passed.
@@ -67,8 +69,8 @@ Controller-verified 2026-10-08: the page loads to the folder picker with 0 conso
   - Task 12, the close-out (Opus whole-branch review of 94e8dcc..HEAD).
 - Open for M2a-3: the Show/Hide reference sequences of area-loaded characters are pinned only by each engine's own tests, because neither host loads area content yet. Run a 2-engine differential once the area source exists.
 - **Billing (owner, 2026-10-09): the Max plan's weekly usage is at 80%, so NO more plan usage for this project.** Run everything from a terminal `claude` session logged into the Console account (credits), in a fresh session.
-- **Credit estimate to finish M2a-2:** about $40–80 (about $195 left). The 2026-10-09 resume run spent about $35 on pairs 8+9, and a second run spent about $35 on F7. Task 10 plus Task 12 are estimated at about $25–35.
-- Ledger with exact resume steps: `.superpowers/sdd/2026-10-09-lomn-web-m2a2/progress.md` (last section).
+- **Credits:** about $122 left after 2026-10-09: pairs 8+9 cost $35.94, F7 cost $34.91, and an Explore A/B test about $1. Task 10 plus Task 12 are estimated at $35–45.
+- Ledger with exact resume steps: `docs/resume/m2a2-ledger.md` (a scrubbed copy of the git-ignored `.superpowers/sdd/2026-10-09-lomn-web-m2a2/progress.md`; last section).
 Process: the controller (Opus 5.5) writes the spec and plan, Fable 5.1 reviews them once for precision, then subagent-driven development with Sonnet 5.5 / Opus 5.5 medium.
 - Generated typed stubs for every native, with real returns for the 3 copy-kind natives.
 - The natives `Setup` needs, implemented against the decomp with a citation per native.
@@ -137,7 +139,7 @@ Four real tasks were run headless with `claude -p --output-format json`. The fir
 - `claude plugin update agent-playbooks@agent-playbooks-local`.
 
 **Actions that wait for your explicit yes** (never done without it):
-- merge to main;
+- merge to main (the 2026-10-09 fast-forward and private push were approved);
 - any push (a separate yes each time);
 - deploy;
 - licence and README;
@@ -164,9 +166,7 @@ Four real tasks were run headless with `claude -p --output-format json`. The fir
 
     Never use it for reviews, design, asm or RE readings, rulings, or code whose mistakes tests could miss.
   - **E3 (run in the first sub-milestone on credits):** Haiku 5.5 vs Sonnet 5.5 on the same inputs for log triage, bookkeeping and mechanical edits, interleaved, 3 runs each. Adopt Haiku for a class only if its first-time-correct rate matches Sonnet's.
-  - **Billing split (owner direction 2026-10-09):**
-    - **Max 20x plan,** via subagents from the desktop session: Fable 5.1 reviews, the controller, and by default implementation and Opus reviews.
-    - **$200 Console credits,** via headless `claude -p` with `.superpowers/sdd/cost-test/run.sh`: overflow when plan limits are hit, parallel bursts, and runs where exact $ per task is wanted.
+  - **Billing (owner direction 2026-10-09, superseding the earlier split):** no Max-plan usage for this project. All work runs on Console credits through a headless controller started with `docs/resume/start.sh` (see resume/README.md).
   - Start a fresh session per sub-milestone and resume from this file. Fast mode stays off.
   - Record $ spent per sub-milestone from the Console dashboard.
 - **Verification:**
@@ -176,7 +176,7 @@ Four real tasks were run headless with `claude -p --output-format json`. The fir
 - **No foreground command over 2 minutes.** Long work runs in the background, and every wait matches failure too.
 
 ## 7. Where things live
-- **Branches.** `m2-osi-vm` is the current work; its worktree is `lomn-web-m2`. It contains `m1-integration`, the merged M1. `main` is untouched until you say so.
+- **Branches.** `main` = `m2-osi-vm` (fast-forwarded with the owner's yes on 2026-10-09 and pushed to the private GitHub repo `lomn-web`). Work continues on `m2-osi-vm`; its worktree is `lomn-web-m2`. Task and experiment branches stay local.
 - **Workspaces:**
   - plans in `docs/superpowers/plans/`, specs in `docs/superpowers/specs/`;
   - research in `docs/knowledge/research/`;
