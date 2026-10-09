@@ -33,12 +33,19 @@ def reg():
 
 @pytest.fixture(scope="module")
 def rows():
-    return json.loads((DATA / "natives.json").read_text())
+    # the PRE-merge table: the committed one carries the overrides tiers, so strip them (generated winners have no `tier`)
+    out = json.loads((DATA / "natives.json").read_text())
+    for r in out:
+        r.pop("tier", None)
+    return out
 
 
 @pytest.fixture(scope="module")
 def mods():
-    return json.loads((DATA / "natives_beta150.json").read_text())
+    out = json.loads((DATA / "natives_beta150.json").read_text())
+    for m in out:
+        m["tier"] = "mod"                                   # the generated mod tier
+    return out
 
 
 def _ok_row(**kw):
@@ -111,8 +118,12 @@ def test_duplicate_and_unsorted_keys_are_rejected(reg, rows, mods):
 def test_empty_overrides_change_no_byte(reg, rows, mods):
     """Minor m6: the empty file is a byte-level no-op on both committed tables."""
     r2, m2 = reg.apply_overrides(copy.deepcopy(rows), copy.deepcopy(mods), [])
-    assert reg.render_rows(r2).encode() == (DATA / "natives.json").read_bytes()
-    assert reg.render_rows(m2).encode() == (DATA / "natives_beta150.json").read_bytes()
+    assert r2 == rows and m2 == mods
+    assert reg.render_rows(r2) == reg.render_rows(rows) and reg.render_rows(m2) == reg.render_rows(mods)
+    # and the committed tables are the pre-merge ones plus the committed overrides (M2a-2 T8b)
+    merged_r, merged_m = reg.apply_overrides(copy.deepcopy(rows), copy.deepcopy(mods), json.loads(OVERRIDES.read_text()))
+    assert reg.render_rows(merged_r).encode() == (DATA / "natives.json").read_bytes()
+    assert reg.render_rows(merged_m).encode() == (DATA / "natives_beta150.json").read_bytes()
 
 
 def test_merge_touches_only_the_named_winner_row(reg, rows, mods):

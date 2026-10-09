@@ -587,7 +587,10 @@ def test_cli_writes_rows_and_doc(reg, canonical_exe, lomn_data, gen_decomp, res,
     out_json, out_md = tmp_path / "osi" / "natives.json", tmp_path / "types.md"
     # with the committed overrides, as `make osi-tables` runs it (they add `tier` to the winner rows and the summary line
     # to the doc, and nothing else)
-    ov = ["--overrides", str(REPO / "data" / "osi" / "native_overrides.json")]
+    # (the mod rows are decoded too: native_overrides.json carries Beta 1.5.0 keys, M2a-2 T8b)
+    out_mods = tmp_path / "natives_beta150.json"
+    ov = ["--overrides", str(REPO / "data" / "osi" / "native_overrides.json"),
+          "--mods", str(lomn_data / "install" / "mods"), "--out-mods", str(out_mods)]
     rc = reg.main(["--exe", str(canonical_exe), "--osi", str(lomn_data / "install" / "data" / "Base.osi"),
                    "--corpus", str(gen_decomp), "--out-json", str(out_json), "--out-types", str(out_md), *ov])
     assert rc == 0
@@ -596,6 +599,7 @@ def test_cli_writes_rows_and_doc(reg, canonical_exe, lomn_data, gen_decomp, res,
         r.pop("tier", None)
     assert written == res["rows"]
     assert out_md.read_text() == DOC.read_text()
+    assert out_mods.read_text() == MODS_JSON.read_text()
     assert reg.main(["--exe", str(canonical_exe), "--osi", str(lomn_data / "install" / "data" / "Base.osi"),
                      "--corpus", str(gen_decomp), "--out-json", str(out_json), "--out-types", str(out_md), *ov,
                      "--check"]) == 0
@@ -827,5 +831,9 @@ def test_shim_forwards_max_then_min_to_register_function(lomn_data):
     assert read(0x10003632, 7) == bytes.fromhex("b830ab5f00ffd0")
 
 
-def test_committed_mods_json_is_fresh(reg, mods):
-    assert MODS_JSON.exists() and MODS_JSON.read_text() == reg.render_rows(mods)
+def test_committed_mods_json_is_fresh(reg, mods, rows):
+    # the committed table carries the overrides tiers (as `make osi-tables` writes it): merge them into copies first
+    import copy
+    overrides = json.loads((REPO / "data" / "osi" / "native_overrides.json").read_text())
+    _, merged = reg.apply_overrides(copy.deepcopy(rows), copy.deepcopy(mods), overrides)
+    assert MODS_JSON.exists() and MODS_JSON.read_text() == reg.render_rows(merged)

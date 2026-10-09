@@ -232,5 +232,5 @@ argument is 0), and `_WinMain@16` (0x401020) calls `SrInitializeAll` before `App
 
 ## Tiers (M2a-2)
 
-Registry overrides (`data/osi/native_overrides.json`, docs/osi/natives.md §7): 11 rows: tier1 7, tier2 1, tier3 3. Every other winner keeps its generated tier: `stub` (no `tier` key) in `natives.json`, `mod` in `natives_beta150.json`.
+Registry overrides (`data/osi/native_overrides.json`, docs/osi/natives.md §7): 32 rows: tier1 24, tier2 5, tier3 3. Every other winner keeps its generated tier: `stub` (no `tier` key) in `natives.json`, `mod` in `natives_beta150.json`.
 
