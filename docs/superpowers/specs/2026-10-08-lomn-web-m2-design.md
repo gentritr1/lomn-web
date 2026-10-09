@@ -58,6 +58,71 @@ From the consult and probe 1: 47 of 391 `.CRT` initializers are in the corpus; t
 - **D11 — Typed stubs.** The registry gains a generated `ret` column: the `CreateVariant` overload each body calls. A stub returns nothing, int 0, float 0.0, "", colour 0, a fresh game handle of the overload's class, or a copy of argument 0, as that column says. A per-row `default` overrides it. Without typed stubs, `Setup` dies at its 5th native call (`sctilefont.setcolor` takes a `type:ScTileFont` argument, controller-checked).
 - **D12 — The 7 Beta 1.5.0 mod natives are registered as stubs in M2a-1** (`data/osi/natives_beta150.json`). Their signatures are read from the DLLs as data, never by running them. Two of them sit on the static `Setup` path. Their bodies come in M2a-2.
 
+- **D13 (proposed), game objects.**
+  - `CreateVariant(T*)`: null → nothing; otherwise the object's reference count goes up by 1 (0x445550: `inc dword [edi+4]` at 0x445580).
+  - The handle is minted when the object first passes through `CreateVariant` (`A g` at that moment), not when it is constructed.
+  - The count stored with the handle is the engine's references plus the variants' references.
+  - `Dispose` → −1; at 0 → `F g`, and the host object is deleted (the original's virtual delete).
+  - The same live object always maps to the same handle.
+  - Each class's initial engine count is cited by Task 2a from its constructor.
+  - "45 overloads" means the 45 distinct `ret_class` values over 56 game rows. Task 2a maps each class to its overload address; some classes may share one (minor m2).
+  - **Amended (M2a-2 T2a, controller ruling, round 3):** identity is per object. One handle per live object, whatever the static type; the variant's type tag follows the native's declared return (the same Toa is returned as `GcToa` and as `GcCharacter`). `GcBAGroup::SetCharacter` adds an engine reference (0x54b344). Initial counts and holders: `docs/osi/natives.md` §2.
+- **D14 (proposed), natives.log v2,** an amendment to `trace.md` §6; the trace format itself does not change.
+  - **New records:**
+    - ` G %d` after every game value (a result or a `W` write): the references the engine holds on that object after the native returns, **not counting this variant**. The heap stores total = engine + variants.
+    - `C %08d <name> <a0>…<a9>`: native seq N starts an engine → script call at this point.
+    - `K %6d` at the start of each frame.
+    - **Reserved** (C3): `C -1 …` (a host-originated call) and `H <type>:<handle> %+d` (a reference change on the host side, outside any native). No M2a-2 code writes them unless Task 2a §6 finds a host source on the 600-frame path. Their rules are fixed now so they are not invented later.
+  - **Sequence numbers** are assigned at native **entry**. Lines are written in event order.
+  - **Order inside one native** (as the conformance runner already does, `lomn_osi_conform.cpp:12-14`): nested `C` calls, then `W` writes, then the return.
+  - **Replay rules (I6):**
+    - *Identity.* If the logged handle is live, the replay returns it with one more variant reference and writes no `A g`. Otherwise the logged handle must equal the next handle, and it is minted with `G` engine references.
+    - *`C N` records.* The replay performs the nested call at that point, inside native N.
+    - *`C -1` records.* The replay **never performs** one. Host-originated calls are host behaviour, implemented in both engines. The replay **asserts** that its own host's next call matches the next `C -1` record (name and arguments), the same way it asserts `cls.fn/argc`. `H` is asserted the same way.
+  - **Header hash (C1).** The overrides merge changes `natives.json`, and therefore the `natives=` hash in the trace header and the digest's `T` line, but not the trace. Digest guards compare **`D` lines only**: `grep '^D' a | cmp - <(grep '^D' b)`. Headers are compared with the `natives=` field stripped: `diff <(grep '^#' a | sed 's/natives=[0-9a-f]*//') <(grep '^#' b | sed 's/natives=[0-9a-f]*//')`.
+- **D15 (proposed), the nesting cap after re-measurement.**
+  - Keep 64 while 64 ≥ 4 × the measured maximum M; otherwise use 4 × M.
+  - `STACK_SIZE` ≥ 4.5 × cap × the bytes per level, measured on a **real** re-entrant chain. 4.5× is the M2a-1 margin.
+- **D16. The swallowed nested error.**
+
+  **Scope.** The natives `gcareadirector.setcurrentarea`, `gcareadirector.switchcurrentarea` and `gcareadirector.switchareas` (and the host entries `GcCollisionPhysicsGroup::Process` / `GcBAGroup::Process`) swallow nested errors raised from engine calls made inside `GcAreaLoader::LoadArea` 0x4fedd0's `LoadObjects` (0x4ff93e) and `LoadCharacters` (0x5002ec) blocks. No other VM-reaching call site sits inside a catch (`docs/osi/natives.md` §5.1).
+
+  1. **At the throw.** A nested `Vm::call` that raises leaves the VM state exactly as the throw found it:
+     - the stack, including the inner `{0xff, PC_ret}` marker (0x60b484), the argc arguments pushed by `SetPCAndArgs`, and the partial frame;
+     - `context_depth` +1 (0x60b4b8; the decrement at 0x60b562 never runs);
+     - `pc` = the failing handler's PC at the throw, as **the error-PC table in opcodes.md (T2a-pc)** gives it;
+     - `frame_ptr` as the failing frame set it.
+
+     No reset runs. The error's `E` line is written at the throw, and `fpu_pc` becomes 64 (the catch pad's `fninit`, 0x657245). The swallowing native catches the error inside its body and returns its normal result. The VM's own reference count (+2, from 0x60b338 / 0x60b46b) is not modelled.
+  2. **The calling handler** (0x82, 0x83, 0x84), after a swallowing native returns:
+     - pops n slots with dispose **from the current top** (0x601c50–0x601c6b);
+     - pushes the result (0x601c8d);
+     - self-patches the **outer** instruction, through the start pointer it saved at entry (0x6015b8; written at 0x601e2b–0x601eaa), for 0x82 only;
+     - **does not change `pc`**: 0x82 never writes VM+0x1f58 after the native call.
+
+     `Run` re-reads `pc` every step (0x60b856), so dispatch continues inside the inner function at the error PC.
+  3. **A later `0x52`** that meets an `0xff` marker stops the running `Run` loop (0x600d54–0x600d87). The engine call that owns that loop then:
+     - pops the result (0x60b505);
+     - pops with dispose to the first `0xff` marker (0x60b53e–0x60b560), which is the inner one;
+     - decrements `context_depth`, and rescans `frame_ptr` if it is not 0 (0x60b569–0x60b59b);
+     - sets `pc` from that marker (0x60b5a2);
+     - returns the inner function's value.
+
+     The rest of the outer function never runs in that engine call.
+  4. **Nothing else resets.** Leftover slots stay under the top until something pops them, and `context_depth` stays raised for the rest of the run.
+
+  **Test-native field `"swallow": true`.**
+  - The native makes its `calls` nested call. If that call raises, the runner applies rule 1 inside the native.
+  - The native then returns its `returns` normally and applies its `writes`, and the handler applies rule 2.
+  - The expectations record the outer `Vm::call` result and the post-call snapshot: `depth`, `top`, `pc`, `context_depth`.
+
+  **Corpus programs:**
+  - **`n-swallow-continue`.**
+    - Setup: `main` makes a game-variable write W1, calls T (`swallow`, n = 0, `calls` `onevent`, `returns` 5), then makes a write W2 and returns 1. `onevent` executes `0x02` (which advances PC by 1 before its error, 0x6038a6), then pushes 7 and returns.
+    - Expect: `main`'s result is **7**; W1 is written and W2 is not; `context_depth` after the call is 1. A second `call("main2")` succeeds above the leftovers.
+  - **`n-swallow-reerror`.** `onevent` executes 0x85 (`BCLUnused`, which does not advance, 0x60be60). It re-executes after the swallow and errors again inside `main`'s `Run`. Expect two `E` lines with the same pc and `ok = false`.
+  - **`n-swallow-pops`.** T has n = 2. `onevent` (argc 2) holds 2 locals when its `0x02` fails. The 2 pops remove those locals, not T's arguments. `onevent` then returns T's result. T's arguments stay at the bottom of the leftover region.
+
 ## 5. Oracle
 
 The renderer had an independent Python decoder plus `native == wasm32` state logs. The VM's equivalent (consult §3):
