@@ -1628,7 +1628,8 @@ def test_the_load_side_registers_the_characters_in_the_model_director_map():
     assert vm.call("main", []).ok
     md = ctx.subsystem(objects.ModelDirector)
     assert sorted(md.map) == sorted([CHR1, CNT1])                              # AddCharacter 0x47f040 -> Add 0x480eb0
-    assert all(c.engine_refs == 1 for c in md.map.values())                    # the map's copy
+    # the map's copy plus the load's Show (F7b fix 1: the group's copy, and the BAGroup slot for 'cnt1')
+    assert (md.map[CHR1].engine_refs, md.map[CNT1].engine_refs) == (2, 3)
     assert [(e.obj_id, e.director) for e in ad.loaders[0x66726E74].entries] == [(OBJ1, "area"), (CHR1, "model"), (CNT1, "model")]
     assert not any(l.startswith(("C ", "H ", "X ")) for l in log)
 
@@ -1695,3 +1696,233 @@ def test_the_loadarea_guard_follows_the_toa_branch_of_main_character_id():
     assert run(False, False, CNT1) == 1 and run(False, False, ATT) == 0       # no Toa: [0x7796f4] ('cnt1')
     assert run(True, False, CNT1) == 1 and run(True, False, ATT) == 0         # Toa without +0x1d0: still [0x7796f4]
     assert run(True, True, ATT) == 1 and run(True, True, CNT1) == 0           # attached: [[toa+0x1d0]+0x100]
+
+
+# ===============================================================================================================
+# F7b fix 1: Remove of the main character clears [0x7032b8]; the area loader shows every character it loads; Remove hides
+# ===============================================================================================================
+ATT = 0x61746368
+D_ASM = ('.globals a b\n.function main 0\nPushConstantString "lev0"\nCallGameFunction gcareadirector.setcurrentlevel 1\nPop\n'
+         'PushConstantString "onua"\nCallGameFunction gcmodeldirector.addtoa 1\nPop\n'
+         'CallGameFunction gcmodeldirector.gettoa 0\nSetVariableValue global:b\n'
+         'PushConstantString "frnt"\nCallGameFunction gcareadirector.setcurrentarea 1\nPop\n'
+         'PushConstantString "lev1"\nCallGameFunction gcareadirector.setcurrentlevel 1\nPop\n'
+         'PushConstanti8 1\nReturn\n' + _onevent_logger())
+AREA_ONLY = ('.function main 0\nPushConstantString "frnt"\nCallGameFunction gcareadirector.setcurrentarea 1\nPop\n'
+             'PushConstanti32 %d\nPushConstanti32 %d\nCallGameFunction gcmodeldirector.getcharacter 2\nPop\n'
+             'PushConstanti8 1\nReturn\n' + _onevent_logger())
+
+
+def _toa_world(ctx, attached):
+    """A main Toa as addtoa leaves it: the map entry under 'cnt1' and [0x7032b8]."""
+    from osi_natives import objects
+    md = ctx.subsystem(objects.ModelDirector)
+    t = objects.GcToa(objects._tid(ctx, "GcToa"), 0x6F6E7561)
+    t.node_id = CNT1
+    if attached:
+        t.attached = objects.GcCharacter(objects._tid(ctx, "GcCharacter"), ATT, ATT)
+    md.add(t, CNT1)
+    md.main_toa = t
+    return md, t
+
+
+def test_remove_of_the_main_character_clears_the_toa_pointer(disasm):
+    """Remove 0x47f320, the id == [0x782884] branch 0x47f45d -> 0x47f497: 0x480aa0(&[0x782884]) then `mov [0x7032b8], 0`
+    (0x47f4b0) before the common tail (virtual call 0x47f4be, Hide 0x47f4e5, map erase 0x47f511-0x47f5a9). A Toa in the map
+    and 'cnt1' in the removed character list: MainCharacterID (0x43af90) falls back to [0x7796f4]."""
+    pin(disasm, 0x47f45d, 0x47f4ba, {0x47f45d: "cmp ecx, edx", 0x47f45f: "je 0x47f497", 0x47f497: "mov edx, dword ptr [0x782884]",
+                                      0x47f4aa: "call 0x480aa0", 0x47f4b0: "mov dword ptr [0x7032b8], 0x0"})
+    d = dr()
+    vm, ctx, tr, log = make_vm(LEVEL_AREA_LEVEL + _onevent_logger(), groups=("objects",))
+    ad = _char_world(vm, ctx, [d.AreaObject("characters", CNT1, 1), d.AreaObject("characters", CHR1, 1)])
+    md, toa = _toa_world(ctx, attached=True)
+    assert ad.main_character(ctx) == ATT                                   # before: the attached character's id
+    assert vm.call("main", []).ok
+    assert md.main_toa is None                                             # 0x47f4b0
+    assert ad.main_character(ctx) == CNT1                                  # falls back to [0x7796f4]
+    assert md.map == {}
+    assert [l.split()[4] for l in log if l.startswith("C ")] == ["0010:%08x" % CHR1]     # no OnEvent for the main character
+
+
+def test_remove_of_a_plain_cnt1_character_also_clears_the_toa_pointer_unconditionally():
+    """0x47f4b0 does not look at what the map holds under 'cnt1': a stale pointer is cleared too."""
+    from osi_natives import objects
+    d = dr()
+    vm, ctx, tr, log = make_vm(LEVEL_AREA_LEVEL + _onevent_logger(), groups=("objects",))
+    _char_world(vm, ctx, [d.AreaObject("characters", CNT1, 1)])
+    md = ctx.subsystem(objects.ModelDirector)
+    md.main_toa = objects.GcToa(objects._tid(ctx, "GcToa"), 0x6F6E7561)    # stale: not in the map
+    assert vm.call("main", []).ok
+    assert md.main_toa is None
+
+
+def test_loadarea_passes_the_show_flag_one_through_to_loadcharacters(disasm):
+    """SetCurrentArea 0x48a540 pushes 1 (0x48a585) for LoadArea 0x4892f0 (its other caller pushes 1 too, 0x48a721); LoadArea
+    forwards [ebp+0xc] to GcAreaLoader::LoadArea 0x4fedd0 (0x489351-0x48935a); 0x4fedd0 pushes its byte [ebp+0x10] for
+    LoadCharacters 0x53f3f0 (0x5002cf) and only READS it; LoadCharacters shows the character when [ebp+0x18] != 0
+    (0x53f519 -> Show 0x47f830 at 0x53f535)."""
+    pin(disasm, 0x48a585, 0x48a589, {0x48a585: "push 0x1"})
+    pin(disasm, 0x48a721, 0x48a728, {0x48a721: "push 0x1", 0x48a727: "call 0x4892f0"})
+    pin(disasm, 0x489351, 0x48935f, {0x489351: "mov eax, dword ptr [ebp + 0xc]", 0x48935a: "call 0x4fedd0"})
+    pin(disasm, 0x5002cf, 0x5002ed, {0x5002cf: "mov al, byte ptr [ebp + 0x10]", 0x5002ec: "call 0x53f3f0"})
+    pin(disasm, 0x53f4cf, 0x53f53b, {0x53f514: "call 0x4709d0", 0x53f519: "cmp byte ptr [ebp + 0x18], 0x0",
+                                      0x53f51d: "je 0x53f53c", 0x53f535: "call 0x47f830"})
+
+
+def test_addcharacter_sets_the_node_id_from_the_character_id(disasm):
+    pin(disasm, 0x47ec30, 0x47ec6a, {0x47ec3f: "mov eax, dword ptr [edi + 0x100]", 0x47ec67: "mov dword ptr [edi + 0x10], edx"})
+    from osi_natives import objects
+    d = dr()
+    vm, ctx, tr, log = make_vm(AREA_ONLY % (CHR1, CHR1), groups=("objects",))
+    _char_world(vm, ctx, [d.AreaObject("characters", CHR1, 1)])
+    assert vm.call("main", []).ok
+    assert ctx.subsystem(objects.ModelDirector).map[CHR1].node_id == CHR1
+
+
+def test_the_loader_shows_every_character_it_loads():
+    """Plain ids go to the second render group and the shown-id list (Show 0x47fa30-0x47fb09, shadow type 1), 'cnt1' to the
+    first group and the BAGroup slot; each reference is the map's plus the group's (plus the BAGroup's)."""
+    from osi_natives import objects
+    d = dr()
+    vm, ctx, tr, log = make_vm(AREA_ONLY % (CHR1, CHR1), groups=("objects",))
+    _char_world(vm, ctx, [d.AreaObject("objects", OBJ1, 1), d.AreaObject("characters", CHR1, 1),
+                          d.AreaObject("characters", CNT1, 1), d.AreaObject("characters", CHR2, 1)])
+    assert vm.call("main", []).ok
+    md = ctx.subsystem(objects.ModelDirector)
+    c1, cn, c2 = md.map[CHR1], md.map[CNT1], md.map[CHR2]
+    assert md.group_other.items == [c1, c2] and md.shown_ids == [CHR1, CHR2]
+    assert md.group_cnt1.items == [cn] and ctx.subsystem(objects.BAGroup).character is cn
+    assert (c1.engine_refs, c2.engine_refs, cn.engine_refs) == (2, 2, 3)
+    assert c1.shadow_type == c2.shadow_type == 1 and cn.shadow_type is None
+    assert c1.parent is md.group_other and cn.parent is md.group_cnt1
+    assert [e[0] for e in md.events] == [CHR1, CNT1, CHR2] and all(e[2] == 1 for e in md.events)     # 0x47fb28, per record in list order
+    line = [l for l in log if " gcmodeldirector.getcharacter " in l][0]
+    assert line.endswith("-> 0022:00000001 G 2")                                                      # G counts the group's copy
+
+
+def test_a_record_refused_by_add_shows_the_existing_toa():
+    """'cnt1' is already in the map (addtoa): AddCharacter's Add refuses (an existing key keeps its value), Get still
+    finds the id (0x53f4c5), so Show(cnt1) shows the Toa and SetCharacter takes it."""
+    from osi_natives import objects
+    d = dr()
+    vm, ctx, tr, log = make_vm(AREA_ONLY % (CNT1, CNT1), groups=("objects",))
+    ad = _char_world(vm, ctx, [d.AreaObject("characters", CNT1, 1)])
+    md, toa = _toa_world(ctx, attached=False)
+    assert vm.call("main", []).ok
+    assert md.map[CNT1] is toa                                                    # not overwritten by a new GcCharacter
+    assert md.group_cnt1.items == [toa] and ctx.subsystem(objects.BAGroup).character is toa
+    assert toa.engine_refs == 3 and toa.parent is md.group_cnt1
+    assert [(e.obj_id, e.director) for e in ad.loaders[0x66726E74].entries] == [(CNT1, "model")]
+
+
+def test_addcharacter_keeps_an_existing_key():
+    from osi_natives import objects
+    vm, ctx, tr, log = make_vm(AREA_ONLY % (CHR1, CHR1), groups=("objects",))
+    md = ctx.subsystem(objects.ModelDirector)
+    first = objects.GcCharacter(objects._tid(ctx, "GcCharacter"), CHR1, CHR1)
+    md.add(first, CHR1)
+    ctx.subsystem(dr().ModelObjects).add_character(ctx, CHR1)
+    assert md.map[CHR1] is first and first.engine_refs == 1
+
+
+def test_h_lines_of_a_held_toa_across_load_and_removal():
+    """The Toa handle (script global) sees the load's Show (+1 temp, +1 group, -1 temp, +1 SetCharacter: the same four as
+    gcmodeldirector.show) and Remove's Hide (SetCharacter(0) -1 at 0x47fce9, group erase -1 at 0x47fda8 -> 0x4197c0) and the
+    map erase (-1 at 0x47f5a9): the engine count ends at 0 (a missing ctx.release in Remove leaves 1)."""
+    d = dr()
+    vm, ctx, tr, log = make_vm(D_ASM, groups=("objects",))
+    _char_world(vm, ctx, [d.AreaObject("characters", CNT1, 1)])
+    assert vm.call("main", []).ok
+    hs = [l.split(" ", 1)[1] for l in log if l.startswith("H ")]
+    assert hs == ["0037:00000001 +1", "0037:00000001 +1", "0037:00000001 -1", "0037:00000001 +1",
+                  "0037:00000001 -1", "0037:00000001 -1", "0037:00000001 -1"], hs
+    assert vm.heap.engine(1) == 0
+
+
+def test_remove_releases_the_maps_reference_of_a_held_character():
+    """A script handle to a loaded character: +1 group at the load (H 2 events + temp), then Hide's group erase -1 and the
+    map erase -1: engine count 0 (mutant: no ctx.release in remove -> 1)."""
+    d = dr()
+    src = (AREA_ONLY % (CHR1, CHR1)).replace('.function main 0\n', '.globals h\n.function main 0\n', 1).replace(
+        "CallGameFunction gcmodeldirector.getcharacter 2\nPop\n", "CallGameFunction gcmodeldirector.getcharacter 2\nSetVariableValue global:h\n"
+        'PushConstantString "lev0"\nCallGameFunction gcareadirector.setcurrentlevel 1\nPop\n'
+        'PushConstantString "lev1"\nCallGameFunction gcareadirector.setcurrentlevel 1\nPop\n')
+    vm, ctx, tr, log = make_vm(src, groups=("objects",))
+    ad = _char_world(vm, ctx, [d.AreaObject("characters", CHR1, 1)])
+    ad.level = 0x6C657630
+    assert vm.call("main", []).ok
+    assert vm.heap.engine(1) == 0
+    hs = [l.split(" ", 1)[1] for l in log if l.startswith("H ")]
+    assert hs[-2:] == ["0022:00000001 -1", "0022:00000001 -1"], hs                # group erase, then the map's copy
+
+
+def test_remove_hides_the_character_before_the_map_erase_and_onevent():
+    """Hide 0x47fb50 (call 0x47f4e5, non-environment path): group erase + SetParent(0) (virtual +0x28, INFERRED) and the
+    shown-id erase (0x47fe60-0x47fe71) for a plain id."""
+    from osi_natives import objects
+    d = dr()
+    vm, ctx, tr, log = make_vm(LEVEL_AREA_LEVEL + _onevent_logger(), groups=("objects",))
+    _char_world(vm, ctx, [d.AreaObject("characters", CHR1, 1), d.AreaObject("characters", CHR2, 1)])
+    md = ctx.subsystem(objects.ModelDirector)
+    seen = {}
+    orig = d.ModelObjects.remove
+
+    def spy(self, ctx_, oid):
+        ch = md.get(oid)
+        orig(self, ctx_, oid)
+        seen[oid] = (ch.parent, ch.engine_refs, list(md.shown_ids), list(md.group_other.items))
+    d.ModelObjects.remove = spy
+    try:
+        assert vm.call("main", []).ok
+    finally:
+        d.ModelObjects.remove = orig
+    c1 = seen[CHR1]
+    assert c1[0] is None and c1[1] == 0 and c1[2] == [CHR2] and len(c1[3]) == 1          # hidden, both references dropped
+    assert seen[CHR2][2] == [] and seen[CHR2][3] == []
+    assert md.group_other.items == [] and md.shown_ids == [] and md.map == {}
+
+
+def test_hide_of_cnt1_clears_the_ba_group_slot_even_when_the_group_does_not_contain_it():
+    """Hide 0x47fb50 non-environment path: SetCharacter(0) (0x47fce9) precedes the contains test of group [0x8390a8]
+    (0x47fd2a); not contained -> return (0x47fd31), but Remove goes on (map erase, no OnEvent for cnt1)."""
+    from osi_natives import objects
+    d = dr()
+    vm, ctx, tr, log = make_vm("", groups=("objects",)) if False else make_vm(LEVEL_AREA_LEVEL + _onevent_logger(), groups=("objects",))
+    md = ctx.subsystem(objects.ModelDirector)
+    ch = objects.GcCharacter(objects._tid(ctx, "GcCharacter"), CNT1, CNT1)
+    md.add(ch, CNT1)
+    ba = ctx.subsystem(objects.BAGroup)
+    ba.set_character(ch)
+    assert ch.engine_refs == 2
+    ctx.subsystem(d.ModelObjects).remove(ctx, CNT1)
+    assert ba.character is None and md.map == {} and ch.engine_refs == 0
+
+
+def test_remove_of_an_unshown_character_still_erases_it_and_calls_onevent():
+    """Hide returns at its contains test (0x47fdd8 -> ret) but that return is inside Hide: Remove continues."""
+    from osi_natives import objects
+    d = dr()
+    vm, ctx, tr, log = make_vm(LEVEL_AREA_LEVEL + _onevent_logger(), groups=("objects",))
+    md = ctx.subsystem(objects.ModelDirector)
+    ch = objects.GcCharacter(objects._tid(ctx, "GcCharacter"), CHR1, CHR1)
+    md.add(ch, CHR1)
+    md.shown_ids.append(CHR1)                                                    # not erased: Hide returned before 0x47fe54
+    ctx.subsystem(d.ModelObjects).remove(ctx, CHR1)
+    assert md.map == {} and md.shown_ids == [CHR1]
+
+
+def test_setcurrentlevel_guard_needs_both_the_level_and_the_area():
+    """0x489ab4-0x489ace: the level half ([0x83902c] != null) and the area half ([0x83b0b4] != null) both gate RemoveArea."""
+    d = dr()
+    asm = ('.function main 0\nPushConstantString "lev1"\nCallGameFunction gcareadirector.setcurrentlevel 1\nReturn\n' + _onevent_logger())
+    vm, ctx, tr, log = make_vm(asm, groups=("objects",))
+    ad = ctx.subsystem(d.AreaDirector)
+    ad.area = 0x66726E74                                                         # an area is current, the level is still the null id
+    loader = ad.loaders[0x66726E74] = d.AreaLoader()
+    loader.entries.append(d.AreaInfo(CHR1, "model"))
+    _model_world(vm, ctx, [CHR1])
+    assert ad.level == NULL_ID
+    assert vm.call("main", []).ok
+    assert not any(l.startswith("C ") for l in log)
+    assert ad.area == 0x66726E74 and 0x66726E74 in ad.loaders and loader.entries       # RemoveArea was not called
+    assert ad.level == 0x6C657631
