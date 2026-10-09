@@ -6,7 +6,6 @@
   ],
   "falsifier": "the same live engine object returned twice is ONE handle (D13 identity per object, natives.md \u00a72.3)",
   "alternative": "a fresh handle per return: A g 1 and A g 2, 0x60 compares different pointers -> 0, allocs.g 2, live.g 2",
-  "pending": "T3/T4",
   "entry": "main",
   "args": [],
   "natives": [

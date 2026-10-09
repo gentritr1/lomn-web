@@ -20,7 +20,7 @@ its status, and `test_conformance_report.py` checks that this table agrees with 
 **Fail-closed keys** (`docs/osi/conformance.md` §1, fix 1 of Task 2b). A runner fails a non-pending program that
 carries an expectation key it does not compare (`uncompared key <path>`). So a program stays pending while any of its
 keys is new: `pc_after`, `then`, `swallowed`, `expect.top`, `returns.object`, `returns.engine_refs`, `calls.depth`,
-`swallow`. Only `n-onevent-args`, whose keys today's runners all compare, is active.
+`swallow`. Since the merge of Tasks 3 and 4 (2026-10-09) every group-n program is active: both runners compare all their keys.
 
 **The M2a-2 gate (Task 10)** requires both:
 1. the pending count is **0**, on both runners;
@@ -30,19 +30,19 @@ keys is new: `pc_after`, `then`, `swallowed`, `expect.top`, `returns.object`, `r
 
 | program | status | needs |
 |---|---|---|
-| `n-game-engine-ref-survives` | pending | `returns.engine_refs` |
-| `n-game-engine-ref-zero` | pending | `returns.engine_refs` (the key is new, although 0 is today's behaviour) |
-| `n-game-identity` | pending | `returns.engine_refs`, `returns.object` |
-| `n-reenter-depth3` | pending | `calls.depth` |
-| `n-reenter-nested-error-propagates` | pending | `pc_after`, `then` |
-| `n-reenter-nested-error-swallowed` | pending | `swallow`, `swallowed`, `expect.top`, `pc_after`, `then` |
+| `n-game-engine-ref-survives` | active | `returns.engine_refs` |
+| `n-game-engine-ref-zero` | active | `returns.engine_refs` (the key is new, although 0 is today's behaviour) |
+| `n-game-identity` | active | `returns.engine_refs`, `returns.object` |
+| `n-reenter-depth3` | active | `calls.depth` |
+| `n-reenter-nested-error-propagates` | active | `pc_after`, `then` |
+| `n-reenter-nested-error-swallowed` | active | `swallow`, `swallowed`, `expect.top`, `pc_after`, `then` |
 | `n-onevent-args` | active | — (every key is one today's runners compare) |
-| `n-swallow-continue` | pending | D16: `swallow`, `swallowed`, `expect.top`, `pc_after`, `then` |
-| `n-swallow-reerror` | pending | D16: `swallow`, `swallowed`, `pc_after`, `then` |
-| `n-swallow-pops` | pending | D16: `swallow`, `swallowed`, `expect.top`, `pc_after`, `then` |
-| `n-swallow-writes` | pending | D16: `swallow`, `swallowed`, `expect.top`, `pc_after`, `then` |
-| `n-name-256` | pending | the strlen name read of a 0x11 literal with the 255 bound (kOutOfRange; a hostile file's non-NUL terminator), `pc_after`, `then` |
-| `n-name-255` | pending | `pc_after`, `then` (the boundary control for `n-name-256`, same 0x11 path) |
+| `n-swallow-continue` | active | D16: `swallow`, `swallowed`, `expect.top`, `pc_after`, `then` |
+| `n-swallow-reerror` | active | D16: `swallow`, `swallowed`, `pc_after`, `then` |
+| `n-swallow-pops` | active | D16: `swallow`, `swallowed`, `expect.top`, `pc_after`, `then` |
+| `n-swallow-writes` | active | D16: `swallow`, `swallowed`, `expect.top`, `pc_after`, `then` |
+| `n-name-256` | active | the strlen name read of a 0x11 literal with the 255 bound (kOutOfRange; a hostile file's non-NUL terminator), `pc_after`, `then` |
+| `n-name-255` | active | `pc_after`, `then` (the boundary control for `n-name-256`, same 0x11 path) |
 
 ## Authoring rules (copied from docs/osi/conformance.md §2; that file wins if they ever differ)
 

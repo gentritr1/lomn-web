@@ -7,7 +7,6 @@
   ],
   "falsifier": "control for n-game-engine-ref-survives: engine_refs 0 is today's new_game(type) behaviour",
   "alternative": "a runner that adds an engine reference by default (total 2 at creation) never frees it: heap.live.g 1",
-  "pending": "T3/T4",
   "entry": "main",
   "args": [],
   "natives": [

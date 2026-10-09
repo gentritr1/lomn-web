@@ -5,7 +5,6 @@
   ],
   "falsifier": "D16: after a swallowed nested error dispatch continues in the inner function at the error PC (0x02 is +1), and its 0x52 ends the OUTER Run with the inner value",
   "alternative": "resume in the outer function after T (the nested call cleaned up): result int 1, g = int 2, depth 0, context_depth 0; or resume at the failing 0x02 (+0): it errors again, ok = false",
-  "pending": "T3/T4",
   "entry": "main",
   "args": [],
   "natives": [

@@ -5,7 +5,6 @@
   ],
   "falsifier": "D16: a handler that does not advance (BCLUnused, +0) re-executes after the swallow and errors again in main's Run; the reset then pops THROUGH the inner leftover marker to the outermost call's own marker",
   "alternative": "reset stops at the first 0xff marker (M1): M0 stays, so main2 ends at depth 1; or resume after the failing byte: ok = true",
-  "pending": "T3/T4",
   "entry": "main",
   "args": [],
   "natives": [
