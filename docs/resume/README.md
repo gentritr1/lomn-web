@@ -45,13 +45,13 @@ Everything needed to pick the work up again. The day-to-day controller workspace
   - Fable 5.1: only plan reviews and milestone ends.
 
 ## Learning pages
-Plain-English lessons (ELI5 + ASD-STE100 style). Live versions are private claude.ai artifacts; copies are in [../learn/](../learn/).
-1. [LOMN Web Mission](https://claude.ai/artifact/Fwq8bSGV7cngnydcXEyF6w): goal, route, where we are ([local](../learn/lomn-web-mission.html))
-2. [LOMN Reverse Engineering 101](https://claude.ai/artifact/55NmU1TZ2vhcwb1qPtxroQ): RE, .exe files, assembly, debug symbols, Ghidra ([local](../learn/lomn-reverse-engineering-101.html))
-3. [Inside the LOMN Engine](https://claude.ai/artifact/73T8LoCANhM6ddGojXdsqs): file formats, the OSI script VM, natives, D3D8 to WebGPU ([local](../learn/inside-the-lomn-engine.html))
-4. [Proving the LOMN Port](https://claude.ai/artifact/GJRp9GWiDg3QWzouwaJMay): oracles, differential tests, taint, mutation, blind reviews ([local](../learn/proving-the-lomn-port.html))
-5. [LOMN Team, Costs and Limits](https://claude.ai/artifact/K3LoXLjjiKJQc9Kv45WK6U): agent roles, measured costs, limits ([local](../learn/lomn-team-costs-and-limits.html))
-- [LOMN Project Map](https://claude.ai/artifact/4yApp6C7MGDmPJo1VuBmdp): where every file, repo and source lives ([local](../learn/lomn-project-map.html))
+Plain-English lessons (ELI5 + ASD-STE100 style). Live version: one claude.ai artifact with all six pages, [LOMN Web Field Notes](https://claude.ai/artifact/19aS75Ua34tJhianMQB3qF) (opens on page 1; the nav bar reaches the rest). Copies are in [../learn/](../learn/).
+1. [LOMN Web Mission](../learn/lomn-web-mission.html): goal, route, where we are
+2. [LOMN Reverse Engineering 101](../learn/lomn-reverse-engineering-101.html): RE, .exe files, assembly, debug symbols, Ghidra
+3. [Inside the LOMN Engine](../learn/inside-the-lomn-engine.html): file formats, the OSI script VM, natives, D3D8 to WebGPU
+4. [Proving the LOMN Port](../learn/proving-the-lomn-port.html): oracles, differential tests, taint, mutation, blind reviews
+5. [LOMN Team, Costs and Limits](../learn/lomn-team-costs-and-limits.html): agent roles, measured costs, limits
+- [LOMN Project Map](../learn/lomn-project-map.html): where every file, repo and source lives
 
 ## Files here
 - [m2a2-ledger.md](m2a2-ledger.md): the full M2a-2 ledger. Every dispatch, verdict, ruling and integration number, in order. The last sections are the resume point.

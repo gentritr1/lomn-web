@@ -1,6 +1,6 @@
 # LOMN Web: roadmap and resume point
 
-State as of 2026-10-08, late evening. Update this file whenever a milestone closes. The live board mirrors it at https://claude.ai/artifact/GyZGve8HMfmWHzJJhx3PyQ.
+State as of 2026-10-08, late evening. Update this file whenever a milestone closes. The live board mirrors it at https://claude.ai/artifact/EQmTYrdDe5hueHr3pe7GW8.
 
 ## 1. Where we are
 
