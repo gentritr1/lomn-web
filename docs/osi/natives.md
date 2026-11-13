@@ -640,10 +640,11 @@ The map's key order between processes, set by the priority byte that `ScProcessM
 - **Single shot at frame 5, 9, 10, 100 or 599:** SAME.
 - **Repeat:** at 0,1,10,100,599 and at every frame the result is −2391, first divergence frame 0. At 2-599 it is −1775, first divergence frame 2.
 
-**The non-lethal threshold: `(0x28, int 2, 'impc')`, from `CheckWallCloseness` 0x587240** (new in fix round 1).
+**The low-damage event: `(0x28, int 2, 'impc')`, from `CheckWallCloseness` 0x587240** (new in fix round 1; "non-lethal" holds for one or two events only, see the re-correction below).
 - A single shot at any frame is SAME.
 - **Two or more injections in frames 0–1** (repeat at 0,1,10,100,599) change frame 4 by −32 instructions and drop **1** native there (27 → 26). *(Corrected 2026-11-13, M2a-3 Task 1: the earlier text said "with the same natives"; command in measurements.md, "M2a-3 baseline".)*
 - **Injection at every frame from frame 2** (repeat at 2-599, or all) skips **26 `gchuddirector.hide` calls in frame 4** (27 → 1 natives; −1159 instructions), HUD indices 0–18, 23, 49, 50, 58, 67–69. Injecting at every frame 0–599 also changes frames 2 (6 → 1) and 3 (73 → 68). *(Corrected 2026-11-13, M2a-3 Task 1: the earlier text said 3; the instruction deltas −32/−1159/−1775 were right, the native counts were not.)*
+- *(Re-corrected 2026-11-13, M2a-3 Task 2a review I2: the two bullets above count a `:quiet` recording, which drops the event handler's own natives. **No hide is skipped.** With the handler recorded, the handler performs the same hides itself, and the third event kills the Toa. Both modes, with commands: `docs/osi/hud.md` §8.1.)*
 
 **Where it re-converges.** Every change stays inside frames 0–4, the script's HUD set-up frames. From frame 5 on, every run is identical to the baseline in its PC sequence and its native calls, including the runs that inject at every frame through 599. No injection gives ERROR. Every other tuple is SAME in every mode.
 
@@ -653,9 +654,10 @@ The map's key order between processes, set by the priority byte that `ScProcessM
 - The injection position, after the key calls and before each frame's `Process`, is INFERRED: the process-map order is not resolved.
 
 **M2a-3 risk: the wall-closeness event.**
-- `(0x28, int 2, 'impc')` from `CheckWallCloseness` 0x587240 is **non-lethal**. It is **plausible** for a Toa standing on the front end.
-- If it fires twice in frames 0–1, the script skips 1 native in frame 4; if it fires every frame from frame 2, it skips 26 `gchuddirector.hide` calls in frame 4 (corrected 2026-11-13, see above). The script path re-converges, but the skipped hide calls change **engine HUD state**, so persistent HUD visibility may differ from the original.
-- **M2a-3 must either** model `CheckWallCloseness` for the front-end Toa, **or** settle the question against the owner's menu screenshots. *(M2a-3 Decision 7: settled against the owner's screenshots, owner check O6.)*
+- `(0x28, int 2, 'impc')` from `CheckWallCloseness` 0x587240 costs **20 code life** per event (recorded `setcodelife` 40 → 20 → 0; the counter is script state). It is **plausible** for a Toa standing on the front end.
+- One or two events leave no visible trace after frame 4. **The third is lethal at any frame:** the handler calls `toamustdie`, `spinmask(1.2)`, `setcameraaimode(cam, 7)`, the HUD hides, `disablecollisions` and `setcodelife(0)` (`docs/osi/hud.md` §8.2; re-corrected 2026-11-13, the earlier "skips 26 hides" was a `:quiet` recording artefact).
+- HUD visibility cannot tell the cases apart. Mode 7 releases the camera spline and never sends `OnEvent(6)`, so a **late** death (third event at frame ≥ 4, or at frame 3 if the event runs after `Process`) cancels the fly-in and the menu reset. An **early** death gives a normal fly-in with a dying Onua (hud.md §8.2 table).
+- **M2a-3 must either** model `CheckWallCloseness` for the front-end Toa, **or** settle the question against the owner's menu screenshots. *(M2a-3 Decision 7: settled against the owner's screenshots, owner check O6. A screenshot rules the event out only if it shows the end of the fly-in **and** Onua standing, hud.md §8.3.)*
 
 **Re-checks:**
 - Task 10 re-runs `event_probe.py --repeat --at all --natives-impl real` with the real natives. **Done (Task 10, 2026-11-13, EXECUTED):** 47 repeated runs, CHANGED 4 / SAME 43, divergences at frames 0 and 2 only; the single-shot and `2-599` runs agree with Task 2a's counts (measurements.md, "M2a-2 Task 10");
