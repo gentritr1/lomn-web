@@ -7,6 +7,7 @@
 #include "lomn/osi/objects.h"
 #include "lomn/sage/blockchain.h"
 
+#include <cmath>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -110,9 +111,13 @@ Variant n_gcbigsprite_loadhudsprite(NativeCall& c, void* user) {
 // body 0x61a2e0, method 0x61a4d0 <ScSLOSISLKCubicSpline::ScSLOSISLKCubicSpline> (-> GetSLKFile 0x61a580, call 0x61a514);
 // asm pin: 0x61a2e8 push 0xc, 0x61a2f4 the null test, 0x61a350 the AddRef. G 0 (0x61a4de: the base constructor). A
 // missing SLK file leaves the object (its [this+8] null): the result is never nothing after a successful new.
+// M2a-3 T4a: the records are read and accelerated here (GetSLKFile 0x4032e0, AfterConstruction 0x4435b0, hud.md §1.5),
+// at the FPU precision of the call; a missing file leaves no records.
 Variant n_spline_create(NativeCall& c, void* user) {
   HostContext& ctx = host(user);
-  return ctx.create_variant(ctx.make<ScSLOSISLKCubicSpline>(c.entry.ret_type, string_arg(ctx, c, 0)));
+  auto* s = ctx.make<ScSLOSISLKCubicSpline>(c.entry.ret_type, string_arg(ctx, c, 0));
+  load_slk_splines(ctx.block_chain(), s->name(), ctx.vm().fpu_pc(), s->curves);
+  return ctx.create_variant(s);
 }
 
 // ---- the model director ----
@@ -341,6 +346,10 @@ Variant n_setcameraaimode(NativeCall& c, void* user) {
   const uint8_t old = cam.ai_mode;
   const uint8_t now = static_cast<uint8_t>(w(c, 1));
   cam.ai_mode = now;
+  if (now == 2 || now == 3) {  // 0x45b53d-0x45b545: start = SrGetSeconds(0) (M2a-3 T4a)
+    cam.start = ctx.subsystem<HostClock>().time;
+    cam.start_set = true;
+  }
   if (static_cast<uint8_t>(old - 2) <= 1 && now != 2 && now != 3 && cam.spline) {
     GameObject* s = cam.spline;
     cam.spline = nullptr;
@@ -352,6 +361,18 @@ Variant n_setcameraaimode(NativeCall& c, void* user) {
 // SetCameraSpline 0x45b380 / SetTargetSpline 0x45b400 both hold the spline in [cam+0x3a4]: the same one -> nothing
 // (0x45b391 / 0x45b411); else +1 on the new (0x45b397 / 0x45b417, null skipped), -1 on the old (0x45b3a9 / 0x45b429),
 // store (0x45b3b7 / 0x45b437). The other fields (+0x3a8, +0x3b0, +0x3b8, +0x460...) are not read back by a native.
+// M2a-3 T4a: the stores the camera step reads (0x45b3c6-0x45b3ef / 0x45b446-0x45b46f): +0x3b8 = w2 (both setters),
+// +0x3a8 = (double) f32 duration, +0x3b0 = SrGetSeconds(0), +0x460 / +0x461 = the low bytes of the two flags.
+void spline_fields(HostContext& ctx, CameraState& cam, NativeCall& c, size_t dur) {
+  cam.cam_index = w(c, 2);
+  cam.cam_index_set = true;
+  cam.duration = static_cast<double>(wf(c, dur));
+  cam.start = ctx.subsystem<HostClock>().time;
+  cam.forward = static_cast<uint8_t>(w(c, dur + 1));
+  cam.look_ahead = static_cast<uint8_t>(w(c, dur + 2));
+  cam.duration_set = cam.start_set = cam.flags_set = true;
+}
+
 void hold_spline(HostContext& ctx, CameraState& cam, ScSLOSISLKCubicSpline* s) {
   if (cam.spline == s) return;
   if (s) ctx.add_ref(s);
@@ -366,6 +387,7 @@ Variant n_setcameraspline(NativeCall& c, void* user) {
   HostContext& ctx = host(user);
   CameraState& cam = camera(ctx, c, "GcLegoCamera::SetCameraSpline (0x45b38b)");
   hold_spline(ctx, cam, ctx.object_arg<ScSLOSISLKCubicSpline>(c, 1));
+  spline_fields(ctx, cam, c, 3);
   return nothing();  // 0x44f1b9
 }
 
@@ -375,8 +397,38 @@ Variant n_settargetspline(NativeCall& c, void* user) {
   HostContext& ctx = host(user);
   CameraState& cam = camera(ctx, c, "GcLegoCamera::SetTargetSpline (0x45b40b)");
   hold_spline(ctx, cam, ctx.object_arg<ScSLOSISLKCubicSpline>(c, 1));
+  spline_fields(ctx, cam, c, 4);
+  cam.targ_index = w(c, 3);  // +0x3bc (0x45b44f)
+  cam.targ_index_set = true;
   return nothing();
 }
+
+// M2a-3 T4a. body 0x44e8a0 -> SetCameraPosition 0x405e50 (call 0x44e8e3): eye +0x150.. = (x, y, z) as f32; the direction
+// +0x174 and the dirty byte are not modelled (no reader). Returns nothing.
+Variant n_setcampos(NativeCall& c, void* user) {
+  CameraState& cam = camera(host(user), c, "GcLegoCamera::SetCameraPosition (0x44e8e3)");
+  cam.eye = {wf(c, 1), wf(c, 2), wf(c, 3)};
+  cam.eye_set = true;
+  return nothing();
+}
+
+// M2a-3 T4a. body 0x44e900 -> SetTargetPosition 0x405f00 (call 0x44e943): target +0x15c.. = (x, y, z) as f32.
+Variant n_settargpos(NativeCall& c, void* user) {
+  CameraState& cam = camera(host(user), c, "GcLegoCamera::SetTargetPosition (0x44e943)");
+  cam.target = {wf(c, 1), wf(c, 2), wf(c, 3)};
+  cam.target_set = true;
+  return nothing();
+}
+
+// M2a-3 T4a. body 0x44ecb0 -> AddYaw 0x45c2b0 (call 0x44ecc1): rotates the direction +0x174 only (hud.md §1.7), which no
+// modelled state or Z line reads: the camera check (a null camera faults) and nothing.
+Variant n_addyaw(NativeCall& c, void* user) {
+  camera(host(user), c, "GcLegoCamera::AddYaw (0x44ecc1)");
+  return nothing();
+}
+
+// M2a-3 T4a. body 0x618290 <ScSLOSIMath::Abs>: the CRT's fabs 0x657d46 (call 0x6182a8, `fabs` 0x657d4a) -> a float.
+Variant n_abs(NativeCall& c, void*) { return make_float(std::fabs(wf(c, 0))); }
 
 // ---- the HUD ----
 
@@ -430,6 +482,10 @@ void bind_objects_group(NativeRegistry& reg, HostContext& ctx) {
       {"gclegocamera", "setcameraaimode", n_setcameraaimode},
       {"gclegocamera", "setcameraspline", n_setcameraspline},
       {"gclegocamera", "settargetspline", n_settargetspline},
+      {"gclegocamera", "setcampos", n_setcampos},
+      {"gclegocamera", "settargpos", n_settargpos},
+      {"gclegocamera", "addyaw", n_addyaw},
+      {"scslosimath", "abs", n_abs},
       {"gchuddirector", "addbigsprite", n_addbigsprite},
       {"gchuddirector", "addtextobject", n_addtextobject},
   };

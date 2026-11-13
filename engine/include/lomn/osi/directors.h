@@ -52,6 +52,9 @@ class GameSingletons {
   GcLegoCamera* camera(GcViewPort* vp, uint16_t type);
   GcKeyMapper* key_mapper(uint16_t type);
   GcMP3Player* mp3_player(uint16_t type);
+  // M2a-3 T4a: the main view's camera if a native has created it, else null (no creation): the camera the viewport node
+  // steps (hud.md §2.4, priority 3) and the `Z camera` lines print.
+  GcLegoCamera* viewport_camera() const { return view_ ? view_->camera : nullptr; }
 
  private:
   HostContext& ctx_;

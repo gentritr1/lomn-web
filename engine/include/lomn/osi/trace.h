@@ -39,7 +39,8 @@ class StringTrace : public TraceSink {
 };
 
 // Digest mode (trace.md §2): each `K` block becomes `D %6d %8d %016x` (frame, line count, FNV-1a 64 of the block's bytes,
-// LFs included); the header line (`#...`) is copied verbatim; finish() writes `T %d %016x` (total lines, FNV-1a 64 of the
+// LFs included); the header line (`#...`) is copied verbatim; `Z` lines are left out of the D hash and each frame's Z block
+// becomes `Z %6d %8d %016x` right after its D line (M2a-3 T4a, hud.md §9.1); finish() writes `T %d %016x` (total lines, FNV-1a 64 of the
 // whole trace). Lines before the first `K` (the header aside) form a block reported with frame -1 (OPEN for T4: the
 // format does not name it).
 class DigestTrace : public TraceSink {
@@ -54,6 +55,8 @@ class DigestTrace : public TraceSink {
   long frame_ = -1;
   uint64_t block_lines_ = 0, total_lines_ = 0;
   uint64_t block_hash_ = 0xcbf29ce484222325ull, total_hash_ = 0xcbf29ce484222325ull;
+  long z_frame_ = -1;  // M2a-3 T4a: the pending Z block (`Z %6d %8d %016x` after the frame's D line)
+  uint64_t z_lines_ = 0, z_hash_ = 0xcbf29ce484222325ull;
   bool finished_ = false;
 };
 

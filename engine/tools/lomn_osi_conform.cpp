@@ -29,6 +29,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <map>
@@ -39,6 +40,7 @@
 #include <vector>
 
 #include "lomn/osi/heap.h"
+#include "lomn/osi/host.h"
 #include "lomn/osi/json.h"
 #include "lomn/osi/natives.h"
 #include "lomn/osi/registry.h"
@@ -178,6 +180,13 @@ std::set<std::string> compared_keys() {
                         "then.ok", "then.pc_after", "then.result", "then.result.type", "then.result.value", "then.top",
                         "then.top.type", "then.top.value"})
     s.insert(k);
+  // M2a-3 T4a: the group-h keys (conformance.md §6 rules 22-23), compared by this runner from T4a on
+  for (const char* k : {"frames", "mouse", "natives_impl", "host_events", "host_events[*].frame", "host_events[*].position",
+                        "host_events[*].name", "host_events[*].args", "host_events[*].args[*].object",
+                        "host_events[*].args[*].engine_refs", "natives[*].refs", "natives[*].refs[*].arg",
+                        "natives[*].refs[*].delta", "expect.z", "expect.z.*"})
+    s.insert(k);
+  add_value(s, "host_events[*].args[*]", false);
   for (const char* x : {"expect", "expect_error"})
     for (const char* f : {".swallowed", ".swallowed[*].depth", ".swallowed[*].message", ".swallowed[*].op", ".swallowed[*].pc",
                           ".swallowed[*].top", ".swallowed[*].top.type", ".swallowed[*].top.value"})
@@ -197,7 +206,8 @@ void key_paths(const Json& n, const std::string& path, const std::string& pat,
     for (const Json& v : n.arr) key_paths(v, path + "[*]", pat + "[*]", out);
   } else if (n.type == Json::Object) {
     for (const auto& kv : n.obj) {
-      const std::string wild = (pat == "expect.globals" || pat == "expect_error.globals") ? "*" : kv.first;
+      // `*` for a global's name and (M2a-3 T4a) for the frame key under expect.z
+      const std::string wild = (pat == "expect.globals" || pat == "expect_error.globals" || pat == "expect.z") ? "*" : kv.first;
       const std::string rp = path.empty() ? kv.first : path + "." + kv.first;
       const std::string pp = pat.empty() ? wild : pat + "." + wild;
       out.emplace_back(rp, pp);
@@ -221,6 +231,7 @@ struct TestNative {
   const TypeTable* types = nullptr;
   HostContext* ctx = nullptr;
   std::map<std::string, uint32_t>* objects = nullptr;  // returns.object: name -> its handle (0 or freed: make a new one)
+  std::string* refs_fail = nullptr;  // M2a-3 T4a: set to `refs arg <i> is not a game object` (rule 23)
 };
 
 // a `returns` game value through the framework: a host object held engine_refs times (D13); `object` names one
@@ -270,6 +281,19 @@ Variant test_native(NativeCall& c, void* user) {
       Variant v;
       if (!make_value(w, heap, *tn.types, v, &err)) throw VmError("Undefined: test native writes: " + err);
       *c.args[i] = v;  // overwrite without dispose (§6.14d); the following Pop(true) disposes it
+    }
+  // M2a-3 T4a: natives[*].refs, the engine references of a game argument, one H event each (conformance.md §1)
+  if (const Json* rs = tn.spec->get("refs"))
+    for (const Json& ref : rs->arr) {
+      const uint32_t i = ref.get("arg") ? num_u32(*ref.get("arg")) : 0;
+      GameObject* o = i < c.args.size() && is_game_type(c.args[i]->type) ? tn.ctx->object(c.args[i]->value) : nullptr;
+      if (!o) {
+        if (tn.refs_fail && tn.refs_fail->empty()) *tn.refs_fail = "refs arg " + std::to_string(i) + " is not a game object";
+        throw VmError("Undefined: refs arg " + std::to_string(i) + " is not a game object");
+      }
+      const Json* d = ref.get("delta");
+      if (d && d->type == Json::Number && d->num() < 0) tn.ctx->release(o);
+      else tn.ctx->add_ref(o);
     }
   const Json* r = tn.spec->get("returns");
   if (!r) return nothing();
@@ -426,6 +450,92 @@ struct Runner {
     return run_one(expect_path) ? Outcome::Pass : Outcome::Fail;
   }
 
+  // M2a-3 T4a, rule 23: frames 0..n-1 in the process-map order (hud.md §2.4), each with its Z block (hud.md §9); the
+  // camera and mouse models are not run (only the declared events and the MOUSESPEC). Any error fails the program.
+  void run_frames(const Json& ex, uint32_t n, Vm& vm, Heap& heap, HostContext& ctx, StringTrace& tr,
+                  std::map<std::string, uint32_t>& objects, const std::string& refs_fail) {
+    TestNative gen;  // host-event game arguments: the identity rules of returns.object
+    gen.types = &types;
+    gen.ctx = &ctx;
+    gen.objects = &objects;
+    MouseSpec ms;
+    MouseState mst;
+    if (const Json* m = ex.get("mouse")) parse_mouse(m->str, ms, nullptr);
+    const Json* hs = ex.get("host_events");
+    const Json* zx = ex.get("expect") ? ex.get("expect")->get("z") : nullptr;
+    const uint64_t step_bits = 0x3f7b4e81c0000000ull;  // the fake-time step, the double at 0x712d68 (host.cpp time_step)
+    double step, time = 0.0;
+    std::memcpy(&step, &step_bits, 8);
+    std::string err;
+    auto error = [&](const std::string& what) {
+      if (!refs_fail.empty()) {
+        ++fails_in_program;
+        std::printf("FAIL %s: %s\n", cur.c_str(), refs_fail.c_str());
+        return;
+      }
+      fail_msg(what, vm.last_error() ? "error \"" + fmt_message(vm.last_error()->message) + "\"" : "not found");
+    };
+    auto event_args = [&](const Json& h, std::vector<Variant>& out) {
+      if (const Json* a = h.get("args"))
+        for (const Json& x : a->arr) {
+          Variant v;
+          if (x.get("game")) {
+            const uint16_t id = types.id(x.get("game")->str);
+            if (id == 0xffff) return fail_msg("host_events", "unknown game type " + x.get("game")->str), false;
+            v = test_game_return(gen, x, id);
+          } else if (!make_value(x, heap, types, v, &err)) {
+            return fail_msg("host_events", err), false;
+          }
+          out.push_back(v);
+        }
+      return true;
+    };
+    for (uint32_t f = 0; f < n; ++f) {
+      time = fadd_pc(time, step, vm.fpu_pc());
+      const float t = static_cast<float>(time), dt = static_cast<float>(step);
+      char kb[64];
+      std::snprintf(kb, sizeof kb, "K %6u %08x %08x %08x", f, f32_bits(t), f32_bits(dt), f);
+      tr.line(kb);
+      auto events = [&](const char* pos, bool host_call) {
+        if (!hs) return true;
+        for (const Json& h : hs->arr) {
+          if (!h.get("frame") || num_u32(*h.get("frame")) != f || h.get("position")->str != pos) continue;
+          std::vector<Variant> args;
+          if (!event_args(h, args)) return false;
+          const std::string name = h.get("name") ? h.get("name")->str : std::string();
+          const CallResult cr = host_call ? ctx.engine_call(name, args) : vm.call(name, args);
+          if (!cr.ok) return error(std::string("frame ") + std::to_string(f) + " " + pos + " " + name), false;
+        }
+        return true;
+      };
+      if (!events("vk", false) || !events("keymapper", false)) return;
+      for (const auto& args : mouse_frame(ms, mst, f))
+        if (const CallResult cr = ctx.engine_call("OnEvent", args); !cr.ok)
+          return error("frame " + std::to_string(f) + " mouse OnEvent");
+      if (!events("mouse", true)) return;
+      for (int p = 0; p < 11; ++p) {  // re-run while the result is int 0, at most 10 more passes (A6 host)
+        const CallResult pr = vm.call("Process", {make_float(t), make_float(dt), make_int(static_cast<int32_t>(f))});
+        if (!pr.ok) return error("frame " + std::to_string(f) + " Process");
+        if (!(pr.result.type == kInt && pr.result.value == 0)) break;
+      }
+      if (!events("camera", true)) return;
+      std::snprintf(kb, sizeof kb, "Z %6u", f);
+      tr.line(kb);
+      const std::vector<std::string> z = snapshot_lines(ctx);
+      for (const std::string& l : z) tr.line(l);
+      if (const Json* want = zx ? zx->get(std::to_string(f)) : nullptr) {
+        std::vector<std::string> w;
+        for (const Json& l : want->arr) w.push_back(l.str);
+        auto join = [](const std::vector<std::string>& v) {
+          std::string o;
+          for (const auto& l : v) o += (o.empty() ? "" : " | ") + l;
+          return "[" + o + "]";
+        };
+        if (w != z) fail("z." + std::to_string(f), join(w), join(z));
+      }
+    }
+  }
+
   bool run_one(const sfs::path& expect_path) {
     fails_in_program = 0;
     cur = sfs::relative(expect_path, corpus).generic_string();
@@ -441,6 +551,39 @@ struct Runner {
         std::printf("FAIL %s: uncompared key %s\n", cur.c_str(), k.c_str());
       }
       return false;
+    }
+    // M2a-3 T4a: the rule-23 edge cases that fail a program before it runs
+    const Json* frames_j = ex.get("frames");
+    {
+      bool bad = false;
+      if (const Json* ni = ex.get("natives_impl"))
+        if (ni->str != "stubs" && ni->str != "tier1") {
+          std::printf("FAIL %s: bad natives_impl %s\n", cur.c_str(), ni->str.c_str());
+          bad = true;
+        }
+      if (const Json* hs = ex.get("host_events"))
+        for (const Json& h : hs->arr) {
+          const Json* p = h.get("position");
+          const std::string pos = p ? p->str : std::string();
+          if (pos != "vk" && pos != "keymapper" && pos != "mouse" && pos != "camera") {
+            std::printf("FAIL %s: bad position %s\n", cur.c_str(), pos.c_str());
+            bad = true;
+          }
+        }
+      if (frames_j && ex.get("then")) {
+        std::printf("FAIL %s: then with frames\n", cur.c_str());
+        bad = true;
+      }
+      MouseSpec ms;
+      std::string merr;
+      if (const Json* m = ex.get("mouse"); m && !parse_mouse(m->str, ms, &merr)) {
+        std::printf("FAIL %s: bad mouse %s\n", cur.c_str(), merr.c_str());
+        bad = true;
+      }
+      if (bad) {
+        ++fails_in_program;
+        return false;
+      }
     }
     std::string stem = expect_path.filename().string();
     stem = stem.substr(0, stem.size() - std::string(".expect.json").size());
@@ -503,7 +646,17 @@ struct Runner {
     Heap heap(&tr);
     Vm vm(file, reg, heap, &tr);
     HostContext ctx(vm, heap, nullptr, HostFlags{}, nullptr);
-    for (auto& tn : tns) tn->ctx = &ctx;
+    std::string refs_fail;
+    for (auto& tn : tns) tn->ctx = &ctx, tn->refs_fail = &refs_fail;
+    // natives_impl "tier1" (rule 23): the registry rows whose merged tier is tier1 run their engine bodies, every other
+    // row (and every test native) keeps what it had
+    if (const Json* ni = ex.get("natives_impl"); ni && ni->str == "tier1") {
+      std::vector<NativeEntry> before;
+      for (size_t i = 0; i < reg.size(); ++i) before.push_back(reg.entry(i));
+      bind_natives(reg, ctx);
+      for (size_t i = 0; i < reg.size(); ++i)
+        if (before[i].tier != Tier::Implemented || before[i].fn) reg.entry(i) = before[i];
+    }
     this->labels = &labels;
     std::vector<Variant> args;
     if (const Json* a = ex.get("args"))
@@ -517,6 +670,7 @@ struct Runner {
       }
     const std::string entry = ex.get("entry") ? ex.get("entry")->str : std::string("main");
     CallResult r = vm.call(entry, args);
+    if (frames_j && r.ok) run_frames(ex, num_u32(*frames_j), vm, heap, ctx, tr, objects, refs_fail);
     const VmState st = vm.snapshot();
     const VmError* e = vm.last_error();
     const std::vector<Vm::Swallowed> swallowed = vm.swallowed();

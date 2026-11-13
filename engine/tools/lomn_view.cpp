@@ -837,7 +837,7 @@ bool parse_frame_bound(const std::string& s, long& out) {
 int script_mode(std::map<std::string, std::string>& a) {
   auto has = [&](const char* k) { return a.count(k) != 0; };
   static const char* const allowed[] = {"--install", "--script", "--frames", "--keys", "--trace", "--trace-frames", "--digest",
-                                        "--natives-log", "--natives", "--deterministic", "--skip-video", "--out"};
+                                        "--natives-log", "--natives", "--deterministic", "--skip-video", "--out", "--mouse"};
   for (const auto& kv : a)
     if (std::find_if(std::begin(allowed), std::end(allowed), [&](const char* x) { return kv.first == x; }) == std::end(allowed))
       return usage(("--script cannot be combined with " + kv.first + " (the script mode is headless)").c_str());
@@ -850,6 +850,12 @@ int script_mode(std::map<std::string, std::string>& a) {
     std::vector<osi::KeyCall> kc;
     std::string kerr;
     if (!osi::expand_keys(keys, kc, &kerr)) return usage(("bad --keys: " + kerr).c_str());
+  }
+  const std::string mouse = has("--mouse") ? a["--mouse"] : "";  // M2a-3 T4a: MOUSESPEC (hud.md §11)
+  {
+    osi::MouseSpec ms;
+    std::string merr;
+    if (!osi::parse_mouse(mouse, ms, &merr)) return usage(("bad --mouse: " + merr).c_str());
   }
   long wa = -1, wb = 1L << 30;
   if (has("--trace-frames")) {
@@ -957,6 +963,7 @@ int script_mode(std::map<std::string, std::string>& a) {
   osi::ScriptHost::Options opt;
   opt.flags = flags;
   opt.keys = keys;
+  opt.mouse = mouse;
   opt.real_natives = natives == "real";
   std::unique_ptr<osi::ScriptHost> host;
   try {
@@ -1067,7 +1074,9 @@ int main(int argc, char** argv) {
                                 "--texture-cache", "--manifest",
                                 // M2a-2 T6 (I10): the --script mode's options
                                 "--script", "--keys", "--trace", "--trace-frames", "--digest", "--natives-log", "--natives",
-                                "--deterministic", "--skip-video"};
+                                "--deterministic", "--skip-video",
+                                // M2a-3 T4a: MOUSESPEC, and its printer (keys.py --mouse "MOUSESPEC" N)
+                                "--mouse", "--print-mouse"};
   for (int i = 1; i + 1 < argc; i += 2) {
     std::string k = argv[i];
     if (std::find_if(std::begin(known), std::end(known), [&](const char* x) { return k == x; }) == std::end(known))
@@ -1075,8 +1084,18 @@ int main(int argc, char** argv) {
     a[k] = argv[i + 1];
   }
   auto has = [&](const char* k) { return a.count(k) != 0; };
+  if (has("--print-mouse")) {  // lomn_view --mouse SPEC --print-mouse N: the expansion, line for line as keys.py prints it
+    if (a.size() != 2 || !has("--mouse")) return usage("--print-mouse takes only --mouse");
+    uint32_t n = 0;
+    if (!parse_u32(a["--print-mouse"], 0, 100000, n)) return usage("bad --print-mouse (0..100000 frames)");
+    osi::MouseSpec ms;
+    std::string merr;
+    if (!osi::parse_mouse(a["--mouse"], ms, &merr)) return usage(("bad --mouse: " + merr).c_str());
+    std::fputs(osi::mouse_listing(ms, n).c_str(), stdout);
+    return 0;
+  }
   if (has("--script")) return script_mode(a);  // exempt from --out (written only when given) and from the area options
-  for (const char* k : {"--keys", "--trace", "--trace-frames", "--digest", "--natives-log", "--natives", "--deterministic", "--skip-video"})
+  for (const char* k : {"--keys", "--trace", "--trace-frames", "--digest", "--natives-log", "--natives", "--deterministic", "--skip-video", "--mouse"})
     if (has(k)) return usage((std::string(k) + " needs --script 1").c_str());
   const std::string out = has("--out") ? a["--out"] : "";
   if (out.empty()) return usage("--out is required");

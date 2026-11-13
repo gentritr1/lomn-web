@@ -207,7 +207,8 @@ osi-diff: native wasm $(VENV)/.ok
 	  --keys "$(OSI_KEYS)" --trace $(OSI_DIFF)/python.trace > /dev/null
 	awk '/^K      3 /{exit} {print}' $(OSI_DIFF)/python.trace > $(OSI_DIFF)/python.window
 	@cmp $(OSI_DIFF)/native.digest $(OSI_DIFF)/wasm.digest && echo "cmp 1/4 digest native == wasm32: OK"
-	@cmp $(OSI_DIFF)/native.digest $(OSI_DIFF)/python_replay.digest && echo "cmp 2/4 digest native == Python (replaying the native natives.log): OK"
+	@grep '^D' $(OSI_DIFF)/native.digest | cmp - <(grep '^D' $(OSI_DIFF)/python_replay.digest) && \
+	  echo "cmp 2/4 digest D lines native == Python (replaying the native natives.log; a replay writes no Z): OK"
 	@cmp $(OSI_DIFF)/native.digest $(OSI_DIFF)/python.digest && echo "cmp 3/4 digest native == Python (own stubs): OK"
 	@cmp $(OSI_DIFF)/native.window $(OSI_DIFF)/python.window && cmp $(OSI_DIFF)/native.window $(OSI_DIFF)/wasm.window && \
 	  echo "cmp 4/4 full trace Setup + frames 0-2 native == Python == wasm32: OK ($$(wc -l < $(OSI_DIFF)/native.window) lines)"
