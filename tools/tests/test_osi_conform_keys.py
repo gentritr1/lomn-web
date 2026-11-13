@@ -35,7 +35,7 @@ def test_the_two_runners_compare_the_same_key_set():
     for kind, keys in (("compared", osi_vm.COMPARED_KEYS), ("ignored", osi_vm.IGNORED_KEYS)):
         py += ["%s %s" % (kind, k) for k in sorted(keys)]
     assert cpp.stdout.splitlines() == py
-    assert len(osi_vm.COMPARED_KEYS) == 143      # a change to the list must be a visible change to this number
+    assert len(osi_vm.COMPARED_KEYS) == 164      # a change to the list must be a visible change to this number
 
 
 # M2a-2 T4: the keys group n uses (natives.md §5.4, conformance.md "Native-framework fields" and rules 15-19), exactly the
@@ -61,6 +61,48 @@ def test_the_group_n_keys_are_compared_and_every_group_n_program_is_covered():
         assert osi_vm.uncompared_keys(spec) == [], f.name
         used |= {pp for _, pp in osi_vm._key_paths(spec)}
     assert set(GROUP_N_KEYS) <= used                 # every added key has a program that needs it
+
+
+# M2a-3 T4b: the keys corpus group h uses (conformance.md "Host-event fields" and rule 22, "Added for group h"): 21 paths,
+# 143 + 21 = 164. `*` under expect.z is the frame number (so expect.z.0 is the path expect.z.*).
+GROUP_H_KEYS = sorted(
+    ["frames", "mouse", "natives_impl", "host_events", "natives[*].refs", "natives[*].refs[*].arg", "natives[*].refs[*].delta",
+     "expect.z", "expect.z.*"]
+    + ["host_events[*]." + k for k in ("frame", "position", "name", "args")]
+    + ["host_events[*].args[*]." + k for k in ("text", "hex", "game", "type", "value", "bits", "object", "engine_refs")])
+UNUSED_BY_THE_CORPUS = {"host_events[*].args[*].text", "host_events[*].args[*].hex"}   # listed by the doc; no group h program passes a string
+
+
+def test_the_group_h_keys_are_compared_and_every_group_h_program_is_covered():
+    assert len(GROUP_H_KEYS) == 21 and set(GROUP_H_KEYS) <= osi_vm.COMPARED_KEYS
+    assert not (set(GROUP_H_KEYS) & set(GROUP_N_KEYS))
+    files = sorted((REPO / "tests" / "osi" / "conformance" / "h").glob("*.expect.json"))
+    assert len(files) == 4
+    used = set()
+    for f in files:                                  # pending ones included: the keys are checked as if un-pended
+        spec = json.loads(f.read_text())
+        spec.pop("pending", None)
+        assert osi_vm.uncompared_keys(spec) == [], f.name
+        used |= {pp for _, pp in osi_vm._key_paths(spec)}
+    assert set(GROUP_H_KEYS) - used == UNUSED_BY_THE_CORPUS
+
+
+def test_the_frame_number_under_expect_z_folds_to_a_star():
+    paths = [pp for _, pp in osi_vm._key_paths({"expect": {"z": {"0": ["Z ref 0027:00000001 1"], "12": []}}})]
+    assert paths == ["expect", "expect.z", "expect.z.*", "expect.z.*"]
+    assert osi_vm.uncompared_keys({"expect": {"z": {"7": []}}}) == []
+    assert osi_vm.uncompared_keys({"expect": {"zz": {}}}) == ["expect.zz"]
+    assert osi_vm.uncompared_keys({"host_events": [{"frame": 0, "position": "mouse", "name": "x", "args": [{"type": "0x10", "frob": 1}]}]}) \
+        == ["host_events[*].args[*].frob"]
+
+
+def test_a_non_pending_program_with_an_unknown_host_key_fails_closed_on_the_python_runner(tmp_path):
+    doc = json.loads(json.dumps(BASE))
+    doc["host_events"] = [{"frame": 0, "position": "mouse", "name": "OnEvent", "args": [], "frob": 1}]
+    _write(tmp_path, "g/x", doc)
+    r = subprocess.run([sys.executable, str(REPO / "tools" / "research" / "osi_vm.py"), "--conform", str(tmp_path)], capture_output=True,
+                       text=True, timeout=60)
+    assert r.returncode == 1 and "uncompared key host_events[*].frob" in r.stdout
 
 
 def test_the_ignored_list_is_exactly_the_descriptive_keys():

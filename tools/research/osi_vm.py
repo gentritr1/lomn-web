@@ -180,6 +180,10 @@ class VmError(Exception):
         self.top: Optional[Variant] = None
 
 
+class HostProgramError(Exception):
+    """A conformance program that asks the host for something undefined (conformance.md rule 23): the program FAILS."""
+
+
 class UndefinedBehaviour(Exception):
     """Raised by table helpers outside the VM; the VM re-raises it as a VmError at the current instruction."""
 
@@ -229,19 +233,24 @@ def fnv1a64(data: bytes, h: int = FNV_OFF) -> int:
 
 
 class DigestTrace(TraceSink):
-    """trace.md §2 digest mode: the header verbatim, one `D` line per `K` block, then `T`. Lines before the first `K`
-    (Setup) form a block numbered -1 (our convention; trace.md does not name that block)."""
+    """trace.md §2 digest mode: the header verbatim, one `D` line per `K` block (each followed by its frame's `Z` line, M2a-3:
+    `Z %6d %8d %016x`, the `Z` lines are not part of the `D` count and hash), then `T`, which covers every line. Lines before
+    the first `K` (Setup) form a block numbered -1 (our convention; trace.md does not name that block)."""
 
     def __init__(self, path):
         self.f = open(path, "w", encoding="ascii", newline="\n")
         self.total, self.whole = 0, FNV_OFF
         self.block_frame, self.block_lines, self.block_h = None, 0, FNV_OFF
+        self.z_frame, self.z_lines, self.z_h = None, 0, FNV_OFF       # the frame's Z block (trace.md §2), kept apart from D
         self.header_done = False
 
     def _flush(self):
         if self.block_frame is not None and self.block_lines:
             self.f.write("D %6d %8d %016x\n" % (self.block_frame, self.block_lines, self.block_h))
+        if self.z_frame is not None:
+            self.f.write("Z %6d %8d %016x\n" % (self.z_frame, self.z_lines, self.z_h))
         self.block_lines, self.block_h = 0, FNV_OFF
+        self.z_frame, self.z_lines, self.z_h = None, 0, FNV_OFF
 
     def line(self, s: str) -> None:
         data = (s + "\n").encode("ascii")
@@ -255,6 +264,12 @@ class DigestTrace(TraceSink):
         if s.startswith("K "):
             self._flush()
             self.block_frame = int(s.split()[1])
+        elif s.startswith("Z"):                   # `Z %6d` opens the block, the `Z <subsystem>.<field> …` lines follow
+            if self.z_frame is None:
+                self.z_frame = int(s.split()[1])
+            self.z_lines += 1
+            self.z_h = fnv1a64(data, self.z_h)
+            return
         self.block_lines += 1
         self.block_h = fnv1a64(data, self.block_h)
 
@@ -596,6 +611,14 @@ class NativeRegistry:
 
     def _peek(self):
         return self.replay[self.replay_pos] if self.replay_pos < len(self.replay) else None
+
+    def replay_host_c(self, line: str) -> None:
+        """A host-originated call (`C -1`, M2a-3, trace.md §6 "Version 3") in a replay: the replay never performs the record,
+        its own host makes the call, and the line it would write must be the log's next record, byte for byte."""
+        rec = self._peek()
+        if rec is None or rec["raw"] != line:
+            raise ReplayDesync("replay desync at a host call: expected %s, got %s" % (rec["raw"] if rec else "end of log", line))
+        self.replay_pos += 1
 
     def replay_frame(self, frame: int) -> None:
         """The host's frame start: a v2 log has `K %6d` here, before anything else of the frame (natives.md §3.2)."""
@@ -1304,10 +1327,14 @@ class Vm:
         """`%08d`, or the literal `-1` of the reserved host records (`C -1 …`, `X -1`), never `%08d` of -1."""
         return "-1" if seq < 0 else "%08d" % seq
 
-    def log_c(self, seq: int, name, args) -> None:
+    def c_line(self, seq: int, name, args) -> str:
+        """The natives.log `C` line of an engine call (trace.md §6): `C <seq|-1> <name> <a0> … <a9>`."""
         nb = name.encode("latin-1") if isinstance(name, str) else bytes(name)
         args = list(args) + [NOTHING] * (10 - len(args))
-        self._log("C %s %s %s" % (self._log_seq(seq), name_token(nb), " ".join(self.log_value(a) for a in args)))
+        return "C %s %s %s" % (self._log_seq(seq), name_token(nb), " ".join(self.log_value(a) for a in args))
+
+    def log_c(self, seq: int, name, args) -> None:
+        self._log(self.c_line(seq, name, args))
 
     def log_x(self, seq: int) -> None:
         self._log("X %s" % self._log_seq(seq))
@@ -2560,8 +2587,23 @@ def host_variant(vm_or_heap, spec, types: TypeTable) -> Variant:
         return Variant(T_STRING, heap.new_string(bytes.fromhex(spec["hex"])))
     if "game" in spec:
         t = types.id(spec["game"])
+        if "object" in spec and isinstance(vm_or_heap, Vm):              # the identity rules of returns.object (rule 18)
+            from osi_natives.framework import HostContext
+            return _named_object_variant(HostContext.of(vm_or_heap), spec["object"], t, int(spec.get("engine_refs", 0)))
         return Variant(t, heap.new_game(t))
     return parse_variant_spec(spec)
+
+
+def _named_object_variant(ctx, name, t: int, k: int) -> Variant:
+    """The first use of a named host object creates it (the engine holds it k times); later uses while it is live give the
+    same handle (conformance.md "Native-framework fields" `returns.object`)."""
+    from osi_natives.framework import GameObject
+    obj = ctx.test_objects.get(name) if name is not None else None
+    if obj is None or obj.deleted:
+        obj = GameObject(t, k)
+        if name is not None:
+            ctx.test_objects[name] = obj
+    return ctx.create_variant(obj, t)
 
 
 def test_native_entry(spec: dict, types: TypeTable, reg: NativeRegistry) -> NativeEntry:
@@ -2586,21 +2628,20 @@ def test_native_entry(spec: dict, types: TypeTable, reg: NativeRegistry) -> Nati
             ctx.engine_call(nested["entry"], nargs, swallow=bool(spec.get("swallow", False)))
         for w in spec.get("writes", []):
             call.write(int(w["arg"]), host_variant(vm, w, types))
+        for ref in spec.get("refs", []):                       # M2a-3: the engine takes / drops references on a game argument
+            i = int(ref["arg"])
+            v = call.arg(i) if i < len(call.slots) else NOTHING
+            if not is_game(v.type):
+                raise HostProgramError("refs arg %d is not a game object" % i)
+            obj = ctx.object_arg(call, i)
+            (ctx.add_ref if int(ref["delta"]) > 0 else ctx.release)(obj)
         ret = spec.get("returns")
         if ret is None:
             return NOTHING
         if "arg" in ret:
             return vm.heap.duplicate(call.arg(int(ret["arg"])))
         if "game" in ret:
-            t = types.id(ret["game"])
-            k = int(ret.get("engine_refs", 0))
-            name = ret.get("object")
-            obj = ctx.test_objects.get(name) if name is not None else None
-            if obj is None or obj.deleted:
-                obj = GameObject(t, k)
-                if name is not None:
-                    ctx.test_objects[name] = obj
-            return ctx.create_variant(obj, t)
+            return _named_object_variant(ctx, ret.get("object"), types.id(ret["game"]), int(ret.get("engine_refs", 0)))
         return host_variant(vm, ret, types)
 
     return NativeEntry(spec["cls"], spec["name"], (spec["cls"] + "." + spec["name"]).lower(), spec.get("min", 0), mx,
@@ -2632,9 +2673,46 @@ def _spec_eq(vm: Vm, got: Optional[Variant], spec, text_of=None) -> Optional[str
     return None if want.type == got.type else "expected type %04x, got %s" % (want.type, fmt_v(got))
 
 
+def _host_program_problems(spec: dict) -> list[str]:
+    """conformance.md rule 23: a program that cannot run is refused before it runs, with no trace."""
+    out = []
+    if spec.get("natives_impl", "stubs") not in ("stubs", "tier1"):
+        out.append("bad natives_impl %s" % spec["natives_impl"])
+    if "frames" in spec and "then" in spec:
+        out.append("then with frames")
+    frames = spec.get("frames")
+    if spec.get("mouse"):
+        import keys as osi_keys
+        try:
+            osi_keys.expand_mouse(spec["mouse"], frames or 1)
+        except ValueError as e:
+            out.append("bad mouse: %s" % e)
+    for ev in spec.get("host_events", []):
+        if ev.get("position") not in ("vk", "keymapper", "mouse", "camera"):
+            out.append("bad position %s" % ev.get("position"))
+        elif frames is not None and not (isinstance(ev.get("frame"), int) and 0 <= ev["frame"] < frames):
+            out.append("host event frame %s is outside 0..%s" % (ev.get("frame"), frames and frames - 1))
+    return out
+
+
+def _host_events(spec: dict, types: TypeTable) -> dict:
+    """{(frame, position): [(name, [arg builders])]} of a program with frames: the MOUSESPEC's calls first, then the
+    declared events in list order (rule 23 step 4); an arg builder runs when the call is made (a game argument mints its
+    handle there, so `A g` sits where the call is)."""
+    import keys as osi_keys
+    out: dict = {}
+    for f, args in osi_keys.expand_mouse(spec.get("mouse", ""), int(spec["frames"])):
+        out.setdefault((f, "mouse"), []).append(("OnEvent", [Variant(*a) for a in args]))
+    for ev in spec.get("host_events", []):
+        out.setdefault((ev["frame"], ev["position"]), []).append(
+            (ev["name"], [(lambda vm, a=a: host_variant(vm, a, types)) for a in ev.get("args", [])]))
+    return out
+
+
 def run_program(asm_path: Path, trace_dir: Optional[Path] = None, *, natives_p=DEFAULT_NATIVES, mods_p=DEFAULT_MODS,
-                types_p=DEFAULT_TYPES) -> list[str]:
-    """Runs one corpus program; returns the list of FAIL reasons (empty = pass)."""
+                types_p=DEFAULT_TYPES, log: Optional[list] = None, zout: Optional[dict] = None) -> list[str]:
+    """Runs one corpus program; returns the list of FAIL reasons (empty = pass). A test may pass `log` (a list that receives
+    the natives.log lines) and `zout` (a dict that receives each frame's Z block)."""
     import osiasm
     exp_path = asm_path.with_name(asm_path.name[:-4] + ".expect.json")
     spec = json.loads(exp_path.read_text())
@@ -2646,6 +2724,9 @@ def run_program(asm_path: Path, trace_dir: Optional[Path] = None, *, natives_p=D
               if isinstance(spec.get(e), dict) and "swallowed" in spec[e] and not isinstance(spec[e]["swallowed"], list)]
     if shape:
         return ["malformed key " + k for k in shape]
+    bad = _host_program_problems(spec)
+    if bad:
+        return bad
     try:
         image, info = osiasm.assemble(asm_path.read_text(encoding="latin-1"))
     except osiasm.AsmError as e:
@@ -2662,10 +2743,15 @@ def run_program(asm_path: Path, trace_dir: Optional[Path] = None, *, natives_p=D
         trace_dir.mkdir(parents=True, exist_ok=True)
         trace = FileTrace(trace_dir / (asm_path.name[:-4] + ".trace"))
         trace.line(header_line(image, natives_p, mods_p, types_p))
+    reg.return_log = log
     heap = Heap(trace)
     vm = Vm(image, reg, heap, trace)
     fails = []
+    host = None
     try:
+        if spec.get("natives_impl") == "tier1" and spec.get("registry") == "natives.json":
+            from osi_natives import framework                  # a registry row whose tier is tier1 runs its engine body
+            framework.bind_natives(reg, framework.HostContext(vm, heap, None, framework.HostFlags(), None))
         args = [host_variant(vm, a, types) for a in spec.get("args", [])]
         texts = {}
         orig_dispose = heap.dispose
@@ -2678,6 +2764,17 @@ def run_program(asm_path: Path, trace_dir: Optional[Path] = None, *, natives_p=D
         heap.dispose = capture
         res = vm.call(spec.get("entry", "main"), args)
         heap.dispose = orig_dispose
+        if "frames" in spec and res.ok:                        # rule 23: the frames, in the process-map order
+            from osi_natives.framework import HostContext
+            from osi_natives.host_sources import FrameHost
+            host = FrameHost(vm, trace, HostContext.of(vm), _host_events(spec, types), camera_model=False)
+            for f in range(int(spec["frames"])):
+                if not host.frame(f):
+                    e = host.error
+                    fails.append('frame %d: error "%s" at %08x op %02x' % (f, e.message, e.pc, e.op))
+                    return fails
+            if zout is not None:
+                zout.update(host.z)
         snap = vm.snapshot()
         labels = info["labels"]
         text_of_live = lambda v: heap.text(v.value) if v.value in heap.strings else None   # noqa: E731
@@ -2700,6 +2797,12 @@ def run_program(asm_path: Path, trace_dir: Optional[Path] = None, *, natives_p=D
             _cmp_state(vm, ex, snap, fails)
             _cmp_pc_after(ex, snap, labels, fails)
             _cmp_swallowed(vm, ex.get("swallowed", []), labels, fails)
+            for fk, want in (ex.get("z") or {}).items():       # the frame's whole Z block after its header (hud.md §9)
+                got = host.z.get(int(fk)) if host is not None else None
+                if got is None:
+                    fails.append("z[%s]: that frame was not run" % fk)
+                elif got != want:
+                    fails.append("z[%s]: expected %r, got %r" % (fk, want, got))
         else:
             ex = spec["expect_error"]
             if res.ok:
@@ -2739,6 +2842,8 @@ def run_program(asm_path: Path, trace_dir: Optional[Path] = None, *, natives_p=D
             fails.append("tripwire: the script image changed")
     except ReplayDesync as e:
         fails.append("replay: %s" % e)
+    except HostProgramError as e:
+        fails.append(str(e))
     except VmError as e:
         fails.append("host error: %s" % e.message)
     except RecursionError as e:                                 # M1: like the C++ "Undefined: host exception: ..."
@@ -2891,7 +2996,13 @@ COMPARED_KEYS = frozenset(
     + [p + ".swallowed" + k for p in ("expect", "expect_error")
        for k in ("", "[*].message", "[*].pc", "[*].op", "[*].depth", "[*].top", "[*].top.type", "[*].top.value")]
     + ["then", "then.entry", "then.args", "then.ok", "then.result", "then.result.type", "then.result.value", "then.depth",
-       "then.top", "then.top.type", "then.top.value", "then.context_depth", "then.pc_after"])
+       "then.top", "then.top.type", "then.top.value", "then.context_depth", "then.pc_after"]
+    # M2a-3 T4b: the keys corpus group h uses (conformance.md "Host-event fields", rules 22 and 23), exactly the paths its
+    # programs need: 21 keys, 143 -> 164. `*` under expect.z is the frame number.
+    + ["frames", "mouse", "natives_impl", "host_events"]
+    + ["host_events[*]." + k for k in ("frame", "position", "name", "args")]
+    + ["host_events[*].args[*]." + k for k in _VALUE_FORMS + ("object", "engine_refs")]
+    + ["natives[*].refs", "natives[*].refs[*].arg", "natives[*].refs[*].delta", "expect.z", "expect.z.*"])
 # descriptive keys no runner compares (the coverage report reads some of them): listed so that nothing else passes unexamined
 IGNORED_KEYS = frozenset(["id", "rows", "note", "alternative", "falsifier", "falsifier_id", "argc_violation", "pending"])
 
@@ -2903,7 +3014,7 @@ def _key_paths(node, path="", pattern=""):
             yield from _key_paths(v, path + "[*]", pattern + "[*]")
     elif isinstance(node, dict):
         for k, v in node.items():
-            wild = "*" if pattern in ("expect.globals", "expect_error.globals") else k
+            wild = "*" if pattern in ("expect.globals", "expect_error.globals", "expect.z") else k
             rp, pp = (path + "." + k) if path else k, (pattern + "." + wild) if pattern else wild
             yield rp, pp
             yield from _key_paths(v, rp, pp)
@@ -2914,15 +3025,30 @@ def uncompared_keys(spec) -> list[str]:
     return [rp for rp, pp in _key_paths(spec) if pp not in COMPARED_KEYS and pp not in IGNORED_KEYS]
 
 
+PYTHON_DONE = frozenset(["T4b"])       # the pending task ids whose Python-side feature this runner now has (M2a-3)
+
+
+def _python_pending(exp_path) -> Optional[str]:
+    """The pending task id as THIS runner sees it (conformance.md rule 21). A program's `pending` names the tasks of both
+    runners ("T4a/T4b"); the C++ runner skips it on any non-empty string until its own task removes the key. This runner
+    ignores the C++-only task ids (`T<n>a`) and the ids it has done (PYTHON_DONE): what is left keeps it pending, nothing
+    left runs it. `h-z-hud` ("T4a/T4b/T6a/T6b") stays pending here until T6b is done. No corpus file changes."""
+    from conform_pending import pending_task
+    task = pending_task(exp_path)
+    if task is None:
+        return None
+    left = [t for t in task.split("/") if t not in PYTHON_DONE and not re.fullmatch(r"T\d+a", t)]
+    return task if left else None          # the full id, so the PENDING line is the one the C++ runner prints
+
+
 def conform(directory, trace_dir=None) -> int:
     """Runs every program under DIR. A program whose expect.json has a non-empty string "pending" (the task id) is not run:
     it prints `PENDING <group>/<id> (<task>)` and is counted apart; it needs no .asm, writes no trace and never fails."""
-    from conform_pending import pending_task
     d = Path(directory)
     passed, pending, total = 0, 0, 0
     for exp in sorted(d.rglob("*.expect.json")):
         asm = exp.with_name(exp.name[:-len(".expect.json")] + ".asm")
-        task = pending_task(exp)
+        task = _python_pending(exp)
         if task is not None:
             pending += 1
             print("PENDING %s (%s)" % (asm.relative_to(d).with_suffix("").as_posix(), task))
@@ -2989,19 +3115,27 @@ def run_base(a) -> int:
         trace.line(header_line(script, a.natives, a.mods, a.types, extra))
     heap = Heap(trace)
     vm = Vm(script, reg, heap, trace)
+    ctx = None
     if a.real_natives:                    # the models of the registered groups (Tasks 7b-9b); the rest stay stubs (D11)
         from osi_natives import framework
         vfs = framework.Vfs(a.install) if a.install else None
         ctx = framework.HostContext(vm, heap, vfs, framework.HostFlags(), reg.return_log)
         framework.bind_natives(reg, ctx)
+    ctx = ctx if a.real_natives else None
     vm.pcs_seen = set()
     stop = "none"
     per_frame = []
     pass_counts: list[int] = []
-    pm_flag, proc_byte = 0, 1     # registered so that it runs on the first frame (the shipped script runs every frame)
-    keys = key_calls(a.keys) if a.keys else {}
-    dt = struct.unpack("<d", struct.pack("<Q", DT_BITS_DOUBLE))[0]
-    time = 0.0
+    from osi_natives.host_sources import FrameHost
+    events: dict = {}
+    for f, calls in key_calls(a.keys).items() if a.keys else []:      # priority 0: the VK triggers; priority 1: the key mapper
+        for name, args in calls:
+            events.setdefault((f, "keymapper" if args[1].value == 251 else "vk"), []).append((name, args))
+    if a.mouse:
+        import keys as osi_keys
+        for f, args in osi_keys.expand_mouse(a.mouse, a.frames):
+            events.setdefault((f, "mouse"), []).append(("OnEvent", [Variant(*x) for x in args]))
+    host = FrameHost(vm, trace, ctx, events, camera_model=bool(a.real_natives or a.replay))
     try:
         r = vm.call("Setup", [])
         per_frame.append(("setup", vm.instructions, vm.native_calls, len(vm.pcs_seen)))
@@ -3009,46 +3143,13 @@ def run_base(a) -> int:
             stop = 'error "%s" in Setup at pc %08x op %02x' % (vm.last_error.message, vm.last_error.pc, vm.last_error.op)
         else:
             for k in range(a.frames):
-                time = float(round_p(Fraction(time) + Fraction(dt), vm.fpu_pc))     # fadd qword at the x87 setting
-                tb, db = f32_bits(time), f32_bits(dt)
-                if trace is not None:
-                    trace.line("K %6d %08x %08x %08x" % (k, tb, db, k))
-                vm.begin_frame(k)                 # natives.log `K %6d` before anything else of the frame (or its replay check)
                 i0, n0 = vm.instructions, vm.native_calls
                 vm.pcs_seen = set()
-                err = None
-                for name, args in keys.get(k, []):
-                    r = vm.call(name, args)
-                    if not r.ok:
-                        err = vm.last_error
-                        break
-                # PM+0x40 parity (0x4a92fd-0x4a930a, toggled every frame after the time update): the first pass runs the
-                # process only if its byte at +8 equals the flag (0x4a937d; +9 'paused' is never set for it, 0x4a9383);
-                # a pass that returns true writes +8 = NOT flag (0x4a93b7-0x4a93c1, re-runs 0x4a94a6-0x4a94bb). A process
-                # still false after the 10th re-run keeps +8 == this frame's flag, so it is skipped on the next frame
-                # (no C Process line) and runs again the frame after. The time, the K line, the key calls (separate
-                # engine calls) and the counter PM+0x44 (0x4a95b6) are unconditional.
-                pm_flag ^= 1
-                passes = 0
-                eligible = proc_byte == pm_flag
-                while err is None and eligible:
-                    # ScSLOSIProcess::Process (0x43b33f-0x43b35f) returns false only for an int 0 result (nothing and
-                    # every other type -> true). ScProcessManager::Process re-runs the processes that returned false
-                    # with the same time, dt and counter, at most 10 more times (0x4a930d counter 0; 0x4a955b inc;
-                    # 0x4a957d cmp 0xa / jb); the counter PM+0x44 is incremented only at frame end (0x4a95b6).
-                    r = vm.call("Process", [Variant(T_FLOAT, tb), Variant(T_FLOAT, db), Variant(T_INT, k)])
-                    passes += 1
-                    if not r.ok:
-                        err = vm.last_error
-                        break
-                    if not (r.result.type == T_INT and r.result.value == 0):
-                        proc_byte = pm_flag ^ 1
-                        break
-                    if passes >= 11:
-                        break
-                pass_counts.append(passes)
+                ok = host.frame(k)                # hud.md §2.4: VK, key mapper, mouse, Process passes, camera, then Z
+                pass_counts.append(host.passes)
                 per_frame.append((k, vm.instructions - i0, vm.native_calls - n0, len(vm.pcs_seen)))
-                if err is not None:
+                if not ok:
+                    err = host.error
                     stop = 'error "%s" at frame %d pc %08x op %02x' % (err.message, k, err.pc, err.op)
                     break
         if stop == "none":                        # only check log consumption on a normal completion
@@ -3096,6 +3197,7 @@ def main(argv=None) -> int:
     ap.add_argument("--types", default=str(DEFAULT_TYPES))
     ap.add_argument("--frames", type=int, default=600)
     ap.add_argument("--keys", default="")
+    ap.add_argument("--mouse", default="", help="a MOUSESPEC (hud.md §11): starts the mouse source, OnEvent(26/23/24/25)")
     ap.add_argument("--replay")
     ap.add_argument("--trace")
     ap.add_argument("--digest")
