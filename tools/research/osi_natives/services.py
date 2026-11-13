@@ -162,6 +162,9 @@ def block_find(entries, name: bytes) -> int:
             lo = mid
 
 
+FREED_BLOCK_FILE = object()      # a slot value that points into freed memory (a failed addtoa, objects.add_toa): reading it is UB
+
+
 class BlockFileSlots:
     """The block files SrBlockFileExists 0x54ddc0 reads: Art.blk (object 0x83b0b8, loaded in DoSetUp by 0x436a55), then the
     slots [0x736128] and [0x73612c]. Both slots are 0 at Setup (natives.md §8.2). A slot is a list of entries (objects
@@ -198,8 +201,8 @@ def hook_route(name: bytes):
     directory, 0x10001df2-0x10001e01). Returns (route, path to test):
     - no "User/" anywhere (strstr 0x10001dbe): ("original", name), the original DoesFileExist (0x10001e24);
     - strstr(path, "Root/") == path (0x100015b2): ("root", name): GetCurrentDirectory + path[4:], the install's own file;
-    - strstr(path, "User/") == path (0x100015cc): ("user", name): SHGetFolderPath + edition + path[4:], the per-run User
-      store, which the oracle host does not hold;
+    - strstr(path, "User/") == path (0x100015cc): ("user", name): SHGetFolderPath(0x1a, push 0x100015db) + edition (0x100015f2)
+      + path[4:], a lookup in the per-user store: the VFS "user/" mount (Vfs(install, user_dir); no store given: false);
     - NEITHER (0x10001608): MessageBoxA "OSI Script Security Abort" (0x10001632, not logged) and then NO jump: the same
       strcat_s (0x10001641) with the path unchanged onto an empty buffer, '/' turned into '\\' (0x1000166a), relative to the
       current directory, which is the Root/ mapping: ("neither", "Root/" + name). Review C-1 (a shared misreading of "false").
@@ -235,6 +238,8 @@ def sr_block_file_exists(ctx, name: bytes) -> bool:
     art = st.art_entries()
     if art is not None and block_find(art, name) >= 0:
         return True
+    if st.current is FREED_BLOCK_FILE:
+        raise VmError("Undefined behaviour: block-file slot [0x736128] points into a freed object (0x54ddf0 -> ScBlockFile::Find)")
     if st.current is not None:
         if block_find(st.current, name) >= 0:
             return True
@@ -245,12 +250,11 @@ def sr_block_file_exists(ctx, name: bytes) -> bool:
 def does_file_exist(ctx, name: bytes) -> bool:
     """ScSLOSIFileIO::DoesFileExist 0x615ef0 with BetterSaver's hook 0x10001da0 (natives.md §9.3): see `hook_route`. The
     "root" and "neither" routes test the install's own file (a regular file; a directory is false, 0x10001dfd); the "user"
-    route is the per-run User store (not modelled: false); any other path goes to the original."""
+    route tests the per-user store through the same VFS ("user/" mount; false when none is mounted); any other path goes to
+    the original."""
     route, path = hook_route(name)
     if route == "original":
         return sr_block_file_exists(ctx, path.encode("latin-1"))
-    if route == "user":
-        return False
     return file_exists(ctx, path.encode("latin-1"))
 
 

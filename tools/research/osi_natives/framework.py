@@ -215,10 +215,12 @@ class Vfs:
     """Read-only game paths ("Root/…") under the install directory. Paths are normalised Windows-style: '\\' -> '/',
     ASCII lower-case, duplicate '/' collapsed, "." dropped and ".." folded; a ".." that would climb out of the first
     segment consumes it, so the result no longer starts with root/ and the path is refused (BadMount). "root/…"
-    resolves case-insensitively inside install_dir. "User/…" (read-write) is not modelled here."""
+    resolves case-insensitively inside install_dir; "user/…" does the same inside user_dir (read-only here), and is refused
+    when no user_dir is given (the oracle host holds no per-user store)."""
 
-    def __init__(self, install_dir):
+    def __init__(self, install_dir, user_dir=None):
         self.root = Path(install_dir)
+        self.user = Path(user_dir) if user_dir is not None else None
 
     @staticmethod
     def normalize(path: str) -> str:
@@ -255,9 +257,10 @@ class Vfs:
         if self.climbs_above_mount(path):
             return None
         parts = self.normalize(path).split("/")
-        if parts[0] != "root" or len(parts) < 2:
+        top = {"root": self.root, "user": self.user}.get(parts[0])
+        if top is None or len(parts) < 2:
             return None
-        cur = self.root
+        cur = top
         for i, seg in enumerate(parts[1:], 1):
             last = i == len(parts) - 1
             if not cur.is_dir():
