@@ -1652,6 +1652,41 @@ def test_an_error_inside_the_removed_onevent_leaves_setcurrentlevel_with_the_par
     assert 0x66726E74 in ad.loaders and ad.area == 0x66726E74 and ad.level == 0x6C657630    # 0x4895a1 / 0x489af6 not reached
 
 
+def _chars_install(tmp_path):
+    from test_osi_natives_objects import make_install                           # the shared .blk writer
+    return make_install(tmp_path, art=["a.tga"], chars={"cnt1.blk": ["x.tga"]}, loose=["y.tga"])
+
+
+def test_a_swallowed_error_in_a_character_load_leaves_the_block_file_slot_at_the_characters_block(tmp_path):
+    """Review I-1. AddCharacter's inner function 0x47ec30 saves the slot [0x736128] (0x47eca5, GetCurBlockFile 0x54db30), LoadCharBlockHeader
+    0x419330 (call 0x47ecb2) sets it to char+0x228 (SetCurBlockFile 0x54db20 at 0x419403), then Add 0x47ef8f, 0x40da60 (call 0x47efef;
+    its SetupMoveable call 0x40e23c reaches OnEvent) and only then the restore (0x47effa). exc.py: the call sites 0x47ef8f/0x47efef
+    (and 0x40e23c in 0x40da60) carry destructor records only, and 0x53f3f0/0x47f040 have no catch: the error leaves for the LoadArea
+    catch (D16) with the slot still at the character's block, which every later block-file lookup reads. A clean load restores it."""
+    d = dr()
+    inst = _chars_install(tmp_path)
+    bad = ".function OnEvent 2\nDebugOn\nPushConstanti8 1\nReturn\n"             # SetUnderWater's OnEvent(0x36, ..) raises
+    ok = ".function OnEvent 2\nPushConstanti8 1\nReturn\n"
+    main = '.function main 0\nPushConstantString "frnt"\nCallGameFunction gcareadirector.setcurrentarea 1\nReturn\n'
+
+    def run(onevent):
+        from osi_natives import services
+        vm, ctx, tr, log = make_vm(main + onevent, install=inst, groups=("objects",))
+        _swallow_world(vm, ctx, [d.AreaObject("characters", CNT1, CNT1)])        # id == the main character: SetupMoveable fires
+        assert vm.call("main", []).ok
+        return vm, ctx, services
+
+    vm, ctx, services = run(bad)
+    assert len(vm.swallowed) == 1                                                # the error was swallowed (D16), not propagated
+    slots = ctx.subsystem(services.BlockFileSlots)
+    assert slots.current is not None and [e.name for e in slots.current] == ["x.tga"]
+    assert services.does_file_exist(ctx, b"x.tga") is True                       # found through the leaked slot (0x54ddf0) ...
+    assert services.does_file_exist(ctx, b"Root/y.tga") is False                 # ... and a set slot suppresses FileExists (0x54de41)
+    vm, ctx, services = run(ok)                                                  # control: the same load without an error
+    assert vm.swallowed == [] and ctx.subsystem(services.BlockFileSlots).current is None      # restored at 0x47effa
+    assert services.does_file_exist(ctx, b"Root/y.tga") is True                  # the loose file is visible again (0x54de41)
+
+
 def test_objects_and_hives_entries_reach_the_area_director_not_the_model_director():
     d = dr()
     vm, ctx, tr, log = make_vm(LEVEL_AREA_LEVEL + _onevent_logger(), groups=("objects",))

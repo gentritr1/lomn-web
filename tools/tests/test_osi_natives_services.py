@@ -568,6 +568,52 @@ def test_doesfileexist_hook_user_paths(tmp_path):
     assert s.hook_route(b"a/Root/User/x")[0] == "neither"
 
 
+def test_doesfileexist_user_route_is_a_lookup_in_the_user_store(tmp_path):
+    """Review M-5. ResolveGamePath ijl15.dll 0x10001570, the branch at 0x100015cc (strstr(path, "User/") == path): SHGetFolderPathA with
+    CSIDL 0x1a (push 0x1a at 0x100015db, call 0x100015df), the edition (call 0x100015f2 -> 0x100016b0) and path+4 (add ebx, 4 at
+    0x10001603) are strcat_s'd (0x100015ec / 0x100015fa) into the buffer the hook hands to GetFileAttributesA: a lookup in the per-user
+    store, never a constant false. The port's store is the VFS "user/" mount (engine/include/lomn/fs.h open_disk): Vfs(install,
+    user_dir). The install's own User/ directory is not the store."""
+    inst = make_install(tmp_path, art=["foo.tga"], loose=["User/data/player1.sav"])
+    user = tmp_path / "userdir"
+    (user / "Data").mkdir(parents=True)
+    (user / "Data" / "Player2.sav").write_text("x")
+    (user / "Data" / "sub").mkdir()
+    ctx_asm = '.function main 0\nPushConstantString "%s"\nCallGameFunction scslosifileio.doesfileexist 1\nReturn\n'
+
+    def ask(path, with_store=True):
+        vm, ctx, tr, log = make_vm(ctx_asm % path, install=inst)
+        if with_store:
+            ctx.vfs.user = user                                                  # the user store mount (Vfs(install, user_dir))
+        r = vm.call("main", [])
+        assert r.ok
+        return r.result.value
+
+    assert ask("User/data/player2.sav") == 1                                     # case-insensitive, inside the store
+    assert ask("User/data/missing.sav") == 0
+    assert ask("User/data/sub") == 0                                             # a directory is not a file (0x10001dfd)
+    assert ask("User/data/player1.sav") == 0                                     # the install's User/ is not the store
+    assert ask("User/../Root/User/data/player1.sav") == 0                        # a ".." above the mount answers 0 (hostile-path divergence)
+    assert ask("User/data/player2.sav", with_store=False) == 0                   # no store mounted: false, as before
+
+
+def test_doesfileexist_absolute_and_drive_paths_stay_inside_the_root_mount(tmp_path):
+    """Review M-4. A path that starts with neither Root/ nor User/ but contains "User/" takes the fall-through at 0x10001608: the original
+    strcat_s's it UNCHANGED onto an empty buffer (0x10001641), so "/abs/User/x" and "C:/User/x" stay absolute in the original. The port
+    deliberately maps every such path to "Root/" + path (the safer reading, natives.md 9.3): nothing outside the install is reachable."""
+    inst = make_install(tmp_path, art=["foo.tga"])
+    outside = tmp_path / "outside" / "User"
+    outside.mkdir(parents=True)
+    (outside / "f.txt").write_text("x")
+    absolute = str(outside / "f.txt").replace("\\", "/")
+    assert Path(absolute).is_file()                                              # the file exists on the host
+    assert sv().hook_route(absolute.encode()) == ("neither", "Root/" + absolute)
+    assert sv().hook_route(b"C:/User/x.sav") == ("neither", "Root/C:/User/x.sav")
+    assert exists(inst, absolute)[0] == 0                                        # ... and the port does not see it
+    assert exists(inst, "C:/User/x.sav")[0] == 0
+    assert exists(inst, "/User/x.sav")[0] == 0
+
+
 def test_doesfileexist_without_a_vfs_is_false():
     r, *_ = run_main('.function main 0\nPushConstantString "Root/Data/x"\nCallGameFunction scslosifileio.doesfileexist 1\nReturn\n')
     assert r == Variant(0x10, 0)

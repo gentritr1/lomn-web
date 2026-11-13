@@ -544,18 +544,36 @@ def test_addtoa_second_call_runs_the_constructor_again_but_returns_0_and_keeps_t
     assert md.toa_index == 0                                                 # the switch is on the success tail only
 
 
-def test_addtoa_duplicate_leaves_the_character_block_file_in_the_slot_and_success_restores_it(tmp_path):
+def test_addtoa_failed_add_leaves_the_slot_pointing_into_the_freed_toa(tmp_path):
+    """Review I-2, failure branch. AddToa 0x47e170 saves the slot (GetCurBlockFile call 0x47e1f1, kept at [ebp-0x134]), LoadCharBlockHeader
+    0x419330 sets it to toa+0x228 (call 0x47e1fe), and the only restore is 0x47e61e on the success tail. A failed Add (call 0x47e4bd,
+    jne 0x47e510 not taken) returns 0 at 0x47e4ca-0x47e508 with no restore, and Add 0x480eb0 drops its temporary reference to the
+    new, never-stored Toa (dec at 0x480f08, delete through vtable +4 at 0x480f16): the slot is a dangling pointer. Undefined
+    behaviour at the first lookup that reads it (0x54ddf0 -> Find), not at the addtoa."""
     inst = make_install(tmp_path, art=["a.tga"], chars={"onua.blk": ["x.tga"], "gali.blk": ["y.tga"]})
     src = ('.function main 0\nPushConstantString "onua"\nCallGameFunction gcmodeldirector.addtoa 1\nPop\n'
            'PushConstantString "gali"\nCallGameFunction gcmodeldirector.addtoa 1\nReturn\n') + ONEVENT
     vm, ctx, tr, log = make_vm(src, install=inst)
     slots = ctx.subsystem(sv().BlockFileSlots)
     assert slots.current is None
-    assert vm.call("main", []).ok
-    # the first call restored the slot (0x47e61e); the duplicate one returned at 0x47e4ca without restoring: gali.blk stays
-    assert slots.current is not None and [e.name for e in slots.current] == ["y.tga"]
-    # so doesfileexist no longer falls back to the loose file system (natives.md 8.2: a set slot suppresses FileExists)
-    assert sv().does_file_exist(ctx, b"Root/Data/Art/Art.blk") is False
+    r = vm.call("main", [])
+    assert r.ok and r.result == Variant(0x10, 0)                            # the duplicate returns 0, no error yet
+    assert slots.current is sv().FREED_BLOCK_FILE                           # the first call restored (0x47e61e); the second did not
+    assert sv().does_file_exist(ctx, b"a.tga") is True                      # Art.blk is read first (0x54ddc7): the slot is not touched
+    with pytest.raises(osi_vm.VmError, match="^Undefined behaviour: .*0x736128"):
+        sv().does_file_exist(ctx, b"Root/other.tga")                        # Art misses, [0x736128] is non-null: Find on freed memory
+
+
+def test_addtoa_success_restores_exactly_the_slot_value_it_saved(tmp_path):
+    """Review I-2, success branch: the restore 0x47e61e pushes [ebp-0x134] (0x47e618), the value GetCurBlockFile returned at 0x47e1f1,
+    whatever it was: not the Toa's block, and not null."""
+    inst = make_install(tmp_path, art=["a.tga"], chars={"onua.blk": ["x.tga"]})
+    src = '.function main 0\nPushConstantString "onua"\nCallGameFunction gcmodeldirector.addtoa 1\nReturn\n' + ONEVENT
+    vm, ctx, tr, log = make_vm(src, install=inst)
+    slots = ctx.subsystem(sv().BlockFileSlots)
+    before = slots.current = []
+    r = vm.call("main", [])
+    assert r.ok and r.result == Variant(0x10, 1) and slots.current is before
 
 
 def test_addtoa_success_with_a_missing_character_block_still_succeeds_and_restores_the_slot():

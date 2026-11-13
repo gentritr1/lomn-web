@@ -523,6 +523,8 @@ def add_toa(ctx, name: bytes, flag: int = 0) -> int:
     slots.current = _character_block(ctx, ident)                         # 0x47e1fe: LoadCharBlockHeader 0x419330 sets it
     saver.toa_id = ident & M32                                           # 0x47e221: [0x74749c] = id
     if not md.add(toa, ID_CNT1):                                         # 0x47e4bd Add; 0x47e4ca: return 0 with no restore
+        # the slot keeps toa+0x228 and Add's temporary reference was the Toa's only one (0x480f08 dec, 0x480f16 delete): dangling
+        slots.current = services.FREED_BLOCK_FILE
         return 0
     toa.collision_group = object()                                       # 0x47e522 InitializeCollisionPhysics 0x56c270
     md.main_toa = toa                                                    # 0x47e527
