@@ -260,3 +260,11 @@ def test_cli_table_format_and_determinism(lomn_data):
 
 
 MENU_PINS = {"BionicleFont": [82, 57, 32], "BionicleFontHi": [165, 113, 57]}
+
+
+def test_results_are_the_low_dword_of_the_chopped_qword():
+    """GetStrLen/GetStrHeight return `mov eax,[low dword]` of a `fistp qword` (0x628bd6, 0x628ce5)."""
+    assert colfont.chop_low32(11.9) == 11 and colfont.chop_low32(-0.9) == 0
+    assert colfont.chop_low32(4294967299.0) == 3                     # u32 width wrap: 2^32 + 3 -> low dword 3
+    assert colfont.chop_low32(2147483648.0) == -2147483648           # bit 31 set: signed eax
+    assert colfont.chop_low32(float("inf")) == 0 and colfont.chop_low32(float("nan")) == 0 and colfont.chop_low32(1e19) == 0

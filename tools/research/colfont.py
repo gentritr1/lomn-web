@@ -32,6 +32,16 @@ def f32(x: float) -> float:
     return struct.unpack("<f", struct.pack("<f", x))[0]
 
 
+
+def chop_low32(x: float) -> int:
+    """x87 RC chop, `fistp qword`, then `mov eax,[low dword]` (GetStrLen 0x628bca/0x628bd6, GetStrHeight 0x628cd9/0x628ce5):
+    the low 32 bits of the truncated value as a signed int. Out of int64 range (or inf/NaN) fistp stores the integer
+    indefinite 0x8000000000000000, whose low dword is 0."""
+    if x != x or abs(x) >= 2.0 ** 63:
+        return 0
+    low = int(x) & 0xFFFFFFFF
+    return low - (1 << 32) if low >= 1 << 31 else low
+
 class ColError(Exception):
     pass
 
@@ -194,7 +204,7 @@ class Fnt:
         tot = 0.0                                                # [0x75822c] = 0.0
         for code in self.codes(s):
             tot = f32(self._width(code, xscale) + tot)
-        return int(tot - self.kerning * f32(xscale))
+        return chop_low32(tot - self.kerning * f32(xscale))
 
     def has_unknown(self, s) -> bool:
         return any(c != 0x20 and c not in self._first for c in self.codes(s))
@@ -218,7 +228,7 @@ class Fnt:
             cand = f32(hh - d) if base > yo else hh
             if cand > above:
                 above = cand
-        return int(above + below)                                # chop toward zero; both terms >= 0
+        return chop_low32(above + below)
 
 
 class Tga:
