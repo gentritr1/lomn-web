@@ -49,6 +49,7 @@ class Heap {
   void release(uint32_t h);
   int32_t engine_refs(uint32_t h) const;  // the engine part of a live game handle's count
   int32_t refs(uint32_t h) const;         // the total (engine + variants)
+  std::vector<uint32_t> live_games() const;  // M2a-3 T4a: every live game handle, ascending (the `Z ref` lines, hud.md §9)
   // Called with the handle after every game free (F g), whoever dropped the last reference: the host deletes its object.
   void set_free_hook(std::function<void(uint32_t)> f) { free_hook_ = std::move(f); }
   // Test-only seam (parked N4): set a kind's next handle, to reach the wrap guard without 4 G allocations.

@@ -1,6 +1,7 @@
 // M2a-1 T1: the VM heap (D7) and the stack (D10 caps).
 #include "lomn/osi/heap.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <utility>
@@ -86,6 +87,14 @@ void Heap::add_ref(uint32_t h) {
   Game& g = game(h);
   ++g.refs;
   ++g.engine;
+}
+
+std::vector<uint32_t> Heap::live_games() const {
+  std::vector<uint32_t> v;
+  v.reserve(games_.size());
+  for (const auto& kv : games_) v.push_back(kv.first);
+  std::sort(v.begin(), v.end());
+  return v;
 }
 
 void Heap::release(uint32_t h) {

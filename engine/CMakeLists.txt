@@ -43,7 +43,7 @@ target_link_libraries(lomn_ini PRIVATE lomn_core)
 add_library(lomn_osi STATIC src/osi/heap.cpp src/osi/convert.cpp src/osi/registry.cpp src/osi/trace.cpp src/osi/vm.cpp
             src/osi/vm_handlers.cpp src/osi/natives/framework.cpp src/osi/natives/groups.cpp src/osi/natives/selftest.cpp
             src/osi/natives/services.cpp src/osi/natives/directors.cpp src/osi/natives/objects.cpp
-            src/osi/host.cpp)  # M2a-2 T3: the native framework (groups: the explicit list, fix 1 I-1), ScriptHost; T7a: services; T8a: directors; T9a: objects
+            src/osi/natives/host_sources.cpp src/osi/host.cpp)  # M2a-2 T3: the native framework (groups: the explicit list, fix 1 I-1), ScriptHost; T7a: services; T8a: directors; T9a: objects
 target_link_libraries(lomn_osi PUBLIC lomn_sage)
 target_compile_options(lomn_osi PRIVATE -Wall -Wextra)
 if(EMSCRIPTEN)
@@ -332,8 +332,8 @@ add_executable(lomn_tests tests/test_main.cpp tests/test_fs.cpp tests/test_rhi_n
                tests/test_rhi_mesh.cpp tests/test_view_mips.cpp tests/test_view_area.cpp tests/test_d3d.cpp tests/test_sage_osi.cpp
                tests/test_area_states.cpp tests/test_sage_frame.cpp tests/test_view_texture_cache.cpp tests/test_fuzz_fragments.cpp
                tests/test_rhi_destroy.cpp tests/test_prefetch_fs.cpp tests/test_fly_camera.cpp  # M1b
-               tests/test_osi_vm.cpp tests/test_osi_natives.cpp tests/test_osi_services.cpp tests/test_osi_directors.cpp tests/test_osi_objects.cpp
-               tests/test_ini.cpp)  # M2a-1, M2a-2 T3, T7a, T8a, T9a; M2a-3 T5a
+               tests/test_osi_vm.cpp tests/test_osi_natives.cpp tests/test_osi_services.cpp tests/test_osi_directors.cpp tests/test_osi_objects.cpp tests/test_osi_host_sources.cpp
+               tests/test_ini.cpp)  # M2a-1, M2a-2 T3, T7a, T8a, T9a; M2a-3 T4a, T5a
 # wasm32 stack for the OSI VM (I2): a native re-entering the VM costs 1,648 bytes of C++ stack per engine call
 # (measured 2026-10-09, Vm::call -> call_impl -> run -> dispatch -> 0x82 -> native -> Vm::call), 116,240 bytes in use at
 # the 65th call's nesting-cap throw in lomn_osi_conform. 512 KiB was 4.5x that; M2a-2 T10 re-measured 1,984 B per level by trap, 138,000 at the cap, so 576 KiB (the default 64 KiB runs out near level 33:
@@ -361,7 +361,7 @@ if(NOT EMSCRIPTEN)
                  tests/test_osi_vm.cpp src/osi/heap.cpp src/osi/convert.cpp src/osi/registry.cpp src/osi/trace.cpp
                  src/osi/vm.cpp src/osi/vm_handlers.cpp  # M2a-1: the VM's unit cases under ASan + UBSan
                  tests/test_osi_natives.cpp src/osi/natives/framework.cpp src/osi/natives/groups.cpp
-                 src/osi/natives/selftest.cpp src/osi/natives/services.cpp src/osi/natives/directors.cpp src/osi/natives/objects.cpp src/osi/host.cpp
+                 src/osi/natives/selftest.cpp src/osi/natives/services.cpp src/osi/natives/directors.cpp src/osi/natives/objects.cpp src/osi/natives/host_sources.cpp src/osi/host.cpp
                  tests/test_osi_services.cpp tests/test_osi_directors.cpp tests/test_osi_objects.cpp src/fs/memory_fs.cpp src/fs/disk_fs.cpp
                  tests/test_ini.cpp src/fs/ini.cpp)  # M2a-2 T3: the native framework; T7a: services; T8a: directors; T9a: objects
   target_include_directories(lomn_tests_asan PRIVATE include "${LOMN_TOOLCHAIN_DIR}/include")
@@ -411,6 +411,13 @@ add_test(NAME osi_conform_pending COMMAND ${CMAKE_COMMAND} "-DRUNNER=${CMAKE_CRO
          -DASSEMBLE=${CMAKE_CURRENT_SOURCE_DIR}/../tools/osi/conform_assemble.py
          -DOUT=${CMAKE_CURRENT_BINARY_DIR}/osi_conform_pending
          -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/osi_conform_pending.cmake)
+# M2a-3 T4a: corpus group h on this runner, from a copy without the T4a/T4b pending mark (the Python runner keeps it).
+add_test(NAME osi_conform_h COMMAND ${CMAKE_COMMAND} "-DRUNNER=${CMAKE_CROSSCOMPILING_EMULATOR}"
+         -DEXE=$<TARGET_FILE:lomn_osi_conform> -DPYTHON=python3
+         -DASSEMBLE=${CMAKE_CURRENT_SOURCE_DIR}/../tools/osi/conform_assemble.py
+         -DCORPUS=${CMAKE_CURRENT_SOURCE_DIR}/../tests/osi/conformance/h
+         -DOUT=${CMAKE_CURRENT_BINARY_DIR}/osi_conform_h
+         -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/osi_conform_h.cmake)
 # M2a-1 T4 (A6): the differential run of the real Base.osi (Setup + 600 Process frames + the key taps, typed stubs)
 # against the independent Python oracle, natively and under node (NODERAWFS reads LOMN_DATA and data/osi). ctest
 # osi_a6_digest: C++ digest == oracle digest (own stubs) == oracle digest replaying the C++ natives.log, natives.log

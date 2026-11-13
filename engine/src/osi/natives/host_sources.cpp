@@ -1,0 +1,293 @@
+// M2a-3 T4a: the host sources of a frame (hud.md §1, §2.4, §5.1, §9, §11): the SLK cubic spline maths, the camera step
+// (the viewport node, priority 3), the mouse driver's calls, and the `Z` snapshot lines.
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstdio>
+#include <cstring>
+#include <string>
+#include <vector>
+
+#include "lomn/osi/directors.h"
+#include "lomn/osi/heap.h"
+#include "lomn/osi/host.h"
+#include "lomn/osi/objects.h"
+#include "lomn/sage/blockchain.h"
+#include "lomn/sage/slb.h"
+
+namespace lomn::osi {
+
+namespace {
+
+// One x87 operation at the precision control: pc 24 rounds to f32 (exact: every operand is f32-representable and
+// 53 >= 2*24 + 2, so double-then-float rounding equals the single rounding). ponytail: pc 64 is approximated as 53 bits.
+double r(double x, int pc) { return pc == 24 ? static_cast<double>(static_cast<float>(x)) : x; }
+
+}  // namespace
+
+// ScCubicSpline::Accelerate 0x4435f0 (NR spline(), natural ends; hud.md §1.5): y2 and u stored f32, constants 2.0
+// [0x7041f0], 1.0 [0x7041f4], 6.0 [0x7041f8]. The derivative pass (+4) is not read by any modelled path.
+void spline_accelerate(SplineCurve& c, int pc) {
+  const size_t n = c.t.size();
+  c.y2.assign(n, 0.0f);
+  if (n < 3) return;
+  std::vector<float> u(n, 0.0f);
+  const auto& t = c.t;
+  const auto& v = c.v;
+  for (size_t i = 1; i + 1 < n; ++i) {
+    const double D = r(double(t[i + 1]) - t[i - 1], pc);
+    const double sig = r(r(double(t[i]) - t[i - 1], pc) / D, pc);
+    const double p = r(r(sig * c.y2[i - 1], pc) + 2.0, pc);
+    c.y2[i] = static_cast<float>(r((sig - 1.0) / p, pc));
+    const double d2 = r(r(double(v[i + 1]) - v[i], pc) / r(double(t[i + 1]) - t[i], pc), pc);
+    const double d1 = r(r(double(v[i]) - v[i - 1], pc) / r(double(t[i]) - t[i - 1], pc), pc);
+    u[i] = static_cast<float>(r(d2 - d1, pc));
+    u[i] = static_cast<float>(r(r(r(r(6.0 * u[i], pc) / D, pc) - r(sig * u[i - 1], pc), pc) / p, pc));
+  }
+  c.y2[n - 1] = 0.0f;
+  for (size_t k = n - 1; k-- > 0;) c.y2[k] = static_cast<float>(r(r(double(c.y2[k]) * c.y2[k + 1], pc) + u[k], pc));
+}
+
+// ScCubicSpline::Interpolate 0x443a70 (NR splint, no clamp: the end segments extrapolate).
+float spline_interpolate(const SplineCurve& c, float tf, int pc) {
+  const size_t n = c.t.size();
+  if (n == 0) return 0.0f;
+  if (n == 1) return c.v[0];
+  size_t lo = 0, hi = n - 1;
+  while (hi - lo > 1) {
+    const size_t mid = (hi + lo) >> 1;
+    if (c.t[mid] > tf) hi = mid;
+    else lo = mid;
+  }
+  const double t = tf;
+  const double h = r(double(c.t[hi]) - c.t[lo], pc);
+  const double A = r(r(double(c.t[hi]) - t, pc) / h, pc);
+  const double B = r(r(t - c.t[lo], pc) / h, pc);
+  const double lin = r(r(B * c.v[hi], pc) + r(A * c.v[lo], pc), pc);
+  const double cb = r(r(r(r(B * B, pc) * B, pc) - B, pc) * c.y2[hi], pc);
+  const double ca = r(r(r(r(A * A, pc) * A, pc) - A, pc) * c.y2[lo], pc);
+  const double curv = r(r(r(cb + ca, pc) * r(h * h, pc), pc) * static_cast<double>(1.0f / 6.0f), pc);
+  return static_cast<float>(r(lin + curv, pc));
+}
+
+// ScSLKManager::GetSLKFile 0x4032e0 (SrBlockFileLoad 0x4033d4 with the name as given) and AfterConstruction 0x4435b0
+// (Accelerate per record; its counter is a byte, so only the low byte of the count is used). False: the file is not
+// found or not a spline table (the original would fault on the first Interpolate).
+bool load_slk_splines(const sage::BlockChain* chain, const std::string& name, int pc, std::vector<SplineCurve>& out) {
+  out.clear();
+  if (!chain) return false;
+  std::vector<uint8_t> bytes;
+  std::string err;
+  if (!chain->load(name, bytes, nullptr, &err)) return false;
+  sage::Slb slb;
+  if (!slb.parse(std::move(bytes), &err)) return false;
+  uint32_t count = 0, recs = 0;
+  if (!slb.read_u32(0, count) || !slb.read_ptr(4, recs)) return false;
+  count &= 0xff;
+  for (uint32_t i = 0; i < count; ++i) {
+    const uint64_t rec = recs + 12ull * i;
+    uint32_t knots = 0, at = 0;
+    if (!slb.read_u32(rec, knots) || !slb.read_ptr(rec + 4, at)) return out.clear(), false;
+    SplineCurve c;
+    for (uint32_t k = 0; k < knots; ++k) {
+      float t = 0, v = 0;
+      if (!slb.read_f32(at + 8ull * k, t) || !slb.read_f32(at + 8ull * k + 4, v)) return out.clear(), false;
+      c.t.push_back(t);
+      c.v.push_back(v);
+    }
+    spline_accelerate(c, pc);
+    out.push_back(std::move(c));
+  }
+  return true;
+}
+
+// ---- MOUSESPEC (hud.md §11; tools/osi/keys.py --mouse has the same expansion) ----
+
+namespace {
+bool digits(const std::string& s, size_t max_len) {
+  return !s.empty() && s.size() <= max_len && std::all_of(s.begin(), s.end(), [](char ch) { return ch >= '0' && ch <= '9'; });
+}
+}  // namespace
+
+bool parse_mouse(const std::string& spec, MouseSpec& out, std::string* err) {
+  out = MouseSpec{};
+  auto fail = [&](const std::string& m) {
+    if (err) *err = m;
+    out = MouseSpec{};
+    return false;
+  };
+  static const char* const kButtons[] = {"lmb", "rmb", "mmb", "xmb"};
+  size_t i = 0;
+  while (i < spec.size()) {
+    if (spec[i] == ' ' || spec[i] == '\t') {
+      ++i;
+      continue;
+    }
+    size_t j = i;
+    while (j < spec.size() && spec[j] != ' ' && spec[j] != '\t') ++j;
+    const std::string tok = spec.substr(i, j - i);
+    i = j;
+    const size_t at = tok.find('@');
+    if (at == std::string::npos || !digits(tok.substr(at + 1), 9)) return fail("bad mouse token " + tok);
+    const long frame = std::stol(tok.substr(at + 1));
+    const std::string head = tok.substr(0, at);
+    const size_t comma = head.find(',');
+    if (comma != std::string::npos) {
+      const std::string xs = head.substr(0, comma), ys = head.substr(comma + 1);
+      if (!digits(xs, 5) || !digits(ys, 5)) return fail("bad mouse position " + tok);
+      const long x = std::stol(xs), y = std::stol(ys);
+      if (x >= 65536 || y >= 65536) return fail("mouse position out of range " + tok);
+      if (!out.pos.emplace(frame, std::make_pair(int32_t(x), int32_t(y))).second) return fail("duplicate mouse position " + tok);
+    } else {
+      int b = -1;
+      if (head.size() == 4 && (head[3] == '+' || head[3] == '-'))
+        for (int k = 0; k < 4; ++k)
+          if (head.compare(0, 3, kButtons[k]) == 0) b = k;
+      if (b < 0) return fail("bad mouse token " + tok);
+      if (!out.button[b].emplace(frame, head[3] == '+').second) return fail("duplicate mouse button " + tok);
+    }
+    out.any = true;
+  }
+  return true;
+}
+
+// GcMouseDriver::Process (hud.md §5.1): every frame OnEvent(26, x, y) (0x55c753), then per button 1..4: held -> 24,
+// pressed -> 23, released -> 25.
+std::vector<std::vector<Variant>> mouse_frame(const MouseSpec& spec, MouseState& st, long frame) {
+  std::vector<std::vector<Variant>> calls;
+  if (!spec.any) return calls;
+  if (auto p = spec.pos.find(frame); p != spec.pos.end()) st.x = p->second.first, st.y = p->second.second;
+  calls.push_back({make_int(26), make_int(st.x), make_int(st.y)});
+  for (int b = 0; b < 4; ++b) {
+    const bool was = st.down[b];
+    bool now = was;
+    if (auto e = spec.button[b].find(frame); e != spec.button[b].end()) now = e->second;
+    st.down[b] = now;
+    const int ev = was && now ? 24 : now ? 23 : was ? 25 : 0;
+    if (ev) calls.push_back({make_int(ev), make_int(b + 1)});
+  }
+  return calls;
+}
+
+std::string mouse_listing(const MouseSpec& spec, long frames) {
+  std::string o;
+  MouseState st;
+  char b[32];
+  for (long k = 0; k < frames; ++k)
+    for (const auto& call : mouse_frame(spec, st, k)) {
+      o += std::to_string(k) + " OnEvent";
+      for (const Variant& v : call) {
+        std::snprintf(b, sizeof b, " %04x:%08x", v.type, v.value);
+        o += b;
+      }
+      o += "\n";
+    }
+  return o;
+}
+
+// ---- the camera step: GcLegoCamera::Process modes 2 and 3 (hud.md §1.3) ----
+
+bool camera_process(HostContext& ctx, double time) {
+  GcLegoCamera* camo = ctx.subsystem<GameSingletons>().viewport_camera();
+  if (!camo || !camo->handle()) return true;
+  auto& cams = ctx.subsystem<Cameras>().by_handle;
+  auto it = cams.find(camo->handle());
+  if (it == cams.end()) return true;
+  CameraState& cam = it->second;
+  if (cam.ai_mode != 2 && cam.ai_mode != 3) return true;  // the other modes run no spline guard (mode 8's OnEvent: §1.3)
+  const int pc = ctx.vm().fpu_pc();
+  const bool mode3 = cam.ai_mode == 3, forward = cam.forward != 0;
+  // elapsed = time - start at pc, clamped to the duration (0x452a43-0x452a6e); reverse: rem = duration - elapsed
+  double elapsed = fadd_pc(time, -cam.start, pc);
+  if (elapsed > cam.duration) elapsed = cam.duration;
+  const double s = forward ? elapsed : r(cam.duration - elapsed, pc);
+  const float param = static_cast<float>(r(s / cam.duration, pc));
+  // the positions (only when the spline has the records; the original faults on a missing file or record)
+  auto* sp = dynamic_cast<ScSLOSISLKCubicSpline*>(cam.spline);
+  auto point = [&](uint32_t idx, float p, std::array<float, 3>& outp) {
+    if (!sp) return false;
+    const uint8_t i0 = static_cast<uint8_t>(idx);
+    const uint8_t ix[3] = {i0, static_cast<uint8_t>(i0 + 1), static_cast<uint8_t>(i0 + 2)};
+    for (uint8_t i : ix)
+      if (i >= sp->curves.size()) return false;
+    for (int a = 0; a < 3; ++a) outp[a] = spline_interpolate(sp->curves[ix[a]], p, pc);
+    return true;
+  };
+  std::array<float, 3> pt{};
+  if (point(cam.cam_index, param, pt)) cam.eye = pt, cam.eye_set = true;
+  if (mode3) {
+    if (point(cam.targ_index, param, pt)) cam.target = pt, cam.target_set = true;
+  } else if (cam.look_ahead) {  // the mode-2 look-ahead on the camera splines: (s +/- 0.01) / duration
+    const double la = fadd_pc(s, forward ? 0.01 : -0.01, pc);
+    if (point(cam.cam_index, static_cast<float>(r(la / cam.duration, pc)), pt)) cam.target = pt, cam.target_set = true;
+  }
+  // the guard: forward elapsed >= duration (0x452c02), reverse rem <= 0.0 (0x4528db / 0x452efc)
+  if (forward ? !(elapsed >= cam.duration) : !(s <= 0.0)) return true;
+  cam.start = time;  // 0x452c14 / 0x4525be / 0x452901 / 0x452f22
+  cam.start_set = true;
+  // OnEvent(6, cam, 0) (0x452c1a-0x452d24): CreateVariant(cam) +1 is the argument's own reference; Call moves it
+  const CallResult r6 = ctx.engine_call("OnEvent", {make_int(6), ctx.create_variant(camo), make_int(0)});
+  return !r6.found || r6.ok;
+}
+
+// ---- the Z snapshot (hud.md §9.2): the lines after the header, sorted bytewise ----
+
+std::vector<std::string> snapshot_lines(HostContext& ctx) {
+  std::vector<std::string> z;
+  char b[160];
+  Heap& heap = ctx.heap();
+  for (uint32_t h : heap.live_games()) {
+    std::snprintf(b, sizeof b, "Z ref %04x:%08x %d", heap.game_type(h), h, heap.engine_refs(h));
+    z.push_back(b);
+  }
+  if (GcLegoCamera* camo = ctx.subsystem<GameSingletons>().viewport_camera()) {
+    CameraState none;
+    auto& cams = ctx.subsystem<Cameras>().by_handle;
+    auto it = camo->handle() ? cams.find(camo->handle()) : cams.end();
+    const CameraState& c = it == cams.end() ? none : it->second;
+    auto dbl = [](double d) {
+      uint64_t u;
+      std::memcpy(&u, &d, 8);
+      char t[24];
+      std::snprintf(t, sizeof t, "%016llx", static_cast<unsigned long long>(u));
+      return std::string(t);
+    };
+    auto vec = [](const std::array<float, 3>& v) {
+      char t[40];
+      std::snprintf(t, sizeof t, "%08x %08x %08x", f32_bits(v[0]), f32_bits(v[1]), f32_bits(v[2]));
+      return std::string(t);
+    };
+    std::snprintf(b, sizeof b, "Z camera.mode %02x", c.ai_mode);
+    z.push_back(b);
+    if (c.spline && c.spline->handle()) {
+      std::snprintf(b, sizeof b, "Z camera.spline %04x:%08x", heap.game_type(c.spline->handle()), c.spline->handle());
+      z.push_back(b);
+    } else {
+      z.push_back("Z camera.spline -");
+    }
+    // index / flags: `-` when both bytes are unwritten, otherwise each byte on its own (`-` for an unwritten one; the
+    // oracle's choice, controller note)
+    auto byte2 = [](const char* key, bool set_a, uint32_t a, bool set_b, uint32_t b2) {
+      if (!set_a && !set_b) return std::string("Z camera.") + key + " -";
+      char t[8];
+      std::string o = std::string("Z camera.") + key;
+      for (auto [set, v] : {std::pair<bool, uint32_t>{set_a, a}, {set_b, b2}}) {
+        std::snprintf(t, sizeof t, "%02x", v & 0xff);
+        o += set ? " " + std::string(t) : std::string(" -");
+      }
+      return o;
+    };
+    z.push_back(byte2("index", c.cam_index_set, c.cam_index, c.targ_index_set, c.targ_index));
+    z.push_back(byte2("flags", c.flags_set, c.forward, c.flags_set, c.look_ahead));
+    z.push_back("Z camera.duration " + (c.duration_set ? dbl(c.duration) : std::string("-")));
+    z.push_back("Z camera.start " + (c.start_set ? dbl(c.start) : std::string("-")));
+    z.push_back("Z camera.eye " + (c.eye_set ? vec(c.eye) : std::string("-")));
+    z.push_back("Z camera.target " + (c.target_set ? vec(c.target) : std::string("-")));
+  }
+  const CinematicState& cs = ctx.subsystem<CinematicState>();
+  if (cs.completed > 0) z.push_back(std::string("Z cs.playing ") + (cs.playing ? "1" : "0"));
+  std::sort(z.begin(), z.end());
+  return z;
+}
+
+}  // namespace lomn::osi

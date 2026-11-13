@@ -3,6 +3,7 @@
 // with the re-run and skip rules). The frame loop is the one M2a-1 T4 wrote in lomn_osi_run.cpp, moved here unchanged.
 // No frame-hook API (C3): a host source is added only when natives.md §6 names one on the path.
 #pragma once
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -52,11 +53,43 @@ bool expand_keys(const std::string& spec, std::vector<KeyCall>& out, std::string
 // The fake-time step: fadd qword at the precision-control state (24 or 64 bits, D8'), then fstp qword.
 double fadd_pc(double a, double b, int pc);
 
+// ---- M2a-3 T4a: the host sources (engine/src/osi/natives/host_sources.cpp; hud.md §1, §2, §5, §9, §11) ----
+
+// MOUSESPEC (hud.md §11; tools/osi/keys.py expand_mouse): `x,y@f` (0..65535 each) and `lmb|rmb|mmb|xmb` + `+`/`-` `@f`.
+struct MouseSpec {
+  std::map<long, std::pair<int32_t, int32_t>> pos;  // frame -> cursor
+  std::array<std::map<long, bool>, 4> button;        // buttons 1..4: frame -> down
+  bool any = false;                                  // a token was given (no MOUSESPEC -> no mouse source)
+};
+// false (and *err) on a malformed token, a negative frame, a coordinate outside 0..65535, an unknown button, or two
+// tokens of one kind (the position, or one button) at one frame.
+bool parse_mouse(const std::string& spec, MouseSpec& out, std::string* err);
+struct MouseState {
+  int32_t x = 0, y = 0;  // (0, 0) before the first position token (a host choice, hud.md §11)
+  std::array<bool, 4> down{};
+};
+// The mouse source's calls of one frame (GcMouseDriver::Process 0x55c160): OnEvent(26, x, y) every frame, then for
+// buttons 1..4 OnEvent(23, b) on the first frame down, 24 while held, 25 on the first frame up. Each entry is the
+// argument list (ints); `st` carries the cursor and the buttons from frame to frame. Nothing when !spec.any.
+std::vector<std::vector<Variant>> mouse_frame(const MouseSpec& spec, MouseState& st, long frame);
+// keys.py --mouse "MOUSESPEC" N: one `<frame> OnEvent <v> ...` line (with LF) per call of frames 0..frames-1.
+std::string mouse_listing(const MouseSpec& spec, long frames);
+
+// The viewport camera's step (GcLegoCamera::Process 0x451990, modes 2 and 3; hud.md §1.3) at pass time `time`, after the
+// script's Process (priority 3, §2.4). A guard that fires sets start = time and calls OnEvent(6, cam, 0) through
+// HostContext::engine_call (natives.log `C -1`). Returns false only when that call raised an error.
+bool camera_process(HostContext& ctx, double time);
+
+// The frame's `Z` lines (hud.md §9.2), sorted bytewise, without the `Z %6d` header: `Z ref` for every live game handle,
+// the `Z camera.*` lines when the viewport camera exists, `Z cs.playing` after the first playcinematic.
+std::vector<std::string> snapshot_lines(HostContext& ctx);
+
 class ScriptHost {
  public:
   struct Options {
     HostFlags flags;
     std::string keys;
+    std::string mouse;  // M2a-3 T4a: MOUSESPEC (hud.md §11); empty = no mouse source
     bool real_natives = false;  // bind every registered native group (bind_natives); otherwise all typed stubs
     // M2a-2 T7a: the real-time clock in seconds (GetTime(1) 0x4fa460 = timeGetTime() * 0.001). Read only when the host is
     // not deterministic and the script has switched UseRealDeltaTime on (natives.md D3); empty = std::chrono::steady_clock.
@@ -90,6 +123,8 @@ class ScriptHost {
   std::unique_ptr<HostContext> ctx_;
   std::vector<KeyCall> keys_;
   size_t kc_ = 0;
+  MouseSpec mouse_;
+  MouseState mouse_state_;
   long frame_ = 0;       // the next frame number
   long skip_frame_ = -2;
   long current_frame_ = -1;  // the frame being run (-1 before the first)

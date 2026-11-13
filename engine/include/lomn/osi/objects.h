@@ -3,10 +3,12 @@
 // reference count needs them (GcToa derives from GcCharacter), and record the constructor arguments that M2a-3 renders.
 // Render, audio and model side effects are not modelled (natives.md §1.1 Decision 6).
 #pragma once
+#include <array>
 #include <cstdint>
 #include <map>
 #include <set>
 #include <string>
+#include <vector>
 
 #include "lomn/osi/natives.h"
 
@@ -70,12 +72,29 @@ class GcBigSprite : public GameObject {
   uint8_t b5_, b6_;
 };
 
+// M2a-3 T4a: one record of an SLK cubic-spline table (hud.md §1.5; the code is engine/src/osi/natives/host_sources.cpp):
+// the knots (t, v) of the 12-byte record {u32 knots, -> (f32 t, f32 v)[], y2} and the y2 table Accelerate fills.
+struct SplineCurve {
+  std::vector<float> t, v, y2;
+};
+// ScCubicSpline::Accelerate 0x4435f0 (NR spline(), natural ends) at the FPU precision `pc` (24, 53 or 64; 64 is computed
+// as 53, see host_sources.cpp).
+void spline_accelerate(SplineCurve& c, int pc);
+// ScCubicSpline::Interpolate 0x443a70 (NR splint(), no clamp), the f32 the callers store (fstp dword).
+float spline_interpolate(const SplineCurve& c, float t, int pc);
+// ScSLKManager::GetSLKFile 0x4032e0 for a spline table: SrBlockFileExists (0x40339e) then SrBlockFileLoad (0x4033d4) of
+// `name` through the block chain, the relocation trailer (sage::Slb), then AfterConstruction 0x4435b0 (Accelerate per record
+// at `pc`). false (and no records) when the chain is null, the file is missing or the table is malformed.
+bool load_slk_splines(const sage::BlockChain* chain, const std::string& name, int pc, std::vector<SplineCurve>& out);
+
 // ScSLOSISLKCubicSpline::ScSLOSISLKCubicSpline 0x61a4d0: an SLK file looked up by name (GetSLKFile 0x61a580, call
 // 0x61a514); a missing file still leaves the object (no null path in the wrapper 0x61a2e0 after a successful new).
+// M2a-3 T4a: the records the constructor loads (empty when the file was not found).
 class ScSLOSISLKCubicSpline : public GameObject {
  public:
   ScSLOSISLKCubicSpline(uint16_t type, std::string name) : GameObject(type, 0), name_(std::move(name)) {}
   const std::string& name() const { return name_; }
+  std::vector<SplineCurve> curves;
 
  private:
   std::string name_;
@@ -171,13 +190,28 @@ struct HudDirector {
 // GcLegoCamera state the camera natives read back: the AI mode byte [cam+0x3a1] (0 from the constructor, 0x44f6a0) and
 // the spline [cam+0x3a4] (null from the constructor, 0x44f6ad; one engine reference while held). Keyed by the camera's
 // game handle: the camera comes from gcviewport.getcamera (another group), and a handle is one live object (D7).
+// M2a-3 T4a: the fields of hud.md §1.2 that the camera step (host_sources.cpp) reads and the `Z camera` lines print. A
+// `*_set` flag is false until a native or the camera step writes the field (its constructor default is not cited: Z `-`).
 struct CameraState {
   uint8_t ai_mode = 0;
   GameObject* spline = nullptr;
+  uint32_t cam_index = 0, targ_index = 0;  // +0x3b8 (both setters), +0x3bc (SetTargetSpline only); the low byte is used
+  double duration = 0.0, start = 0.0;      // +0x3a8 = (double) f32 argument, +0x3b0 = SrGetSeconds(0)
+  uint8_t forward = 0, look_ahead = 0;     // +0x460, +0x461 (low bytes of the arguments)
+  std::array<float, 3> eye{}, target{};    // +0x150.., +0x15c.. (SetCameraPosition / SetTargetPosition, f32)
+  bool cam_index_set = false, targ_index_set = false, duration_set = false, start_set = false, flags_set = false;
+  bool eye_set = false, target_set = false;
 };
 struct Cameras {
   explicit Cameras(HostContext&) {}
   std::map<uint32_t, CameraState> by_handle;
+};
+
+// SrGetSeconds(0) 0x4fa460 with fake time ([0x712d78] == 0) returns [pm+8], the pass time (0x4fa497, hud.md §1.2):
+// ScriptHost stores its pm+8 here before each frame's first call (0.0 during Setup, INFERRED as pm+8's start value).
+struct HostClock {
+  explicit HostClock(HostContext&) {}
+  double time = 0.0;
 };
 
 }  // namespace lomn::osi

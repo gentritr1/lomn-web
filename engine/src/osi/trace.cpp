@@ -41,6 +41,13 @@ void DigestTrace::flush_block() {
   out_->line(b);
   block_lines_ = 0;
   block_hash_ = 0xcbf29ce484222325ull;
+  if (z_lines_) {  // the frame's Z block, one line after its D (hud.md §9.1, trace.md §2)
+    std::snprintf(b, sizeof b, "Z %6ld %8llu %016llx", z_frame_, static_cast<unsigned long long>(z_lines_),
+                  static_cast<unsigned long long>(z_hash_));
+    out_->line(b);
+    z_lines_ = 0;
+    z_hash_ = 0xcbf29ce484222325ull;
+  }
 }
 
 void DigestTrace::line(std::string_view s) {
@@ -48,6 +55,15 @@ void DigestTrace::line(std::string_view s) {
   ++total_lines_;
   if (!s.empty() && s[0] == '#') {
     out_->line(s);
+    return;
+  }
+  if (!s.empty() && s[0] == 'Z') {  // not part of the D hash (controller ruling on Decision 6)
+    if (s.find_first_not_of(" -0123456789", 1) == std::string_view::npos)  // the header `Z %6d`
+      z_frame_ = std::strtol(std::string(s.substr(1)).c_str(), nullptr, 10);
+    else if (!z_lines_)
+      z_frame_ = frame_;
+    z_hash_ = fnv1a64(fnv1a64(z_hash_, s), "\n");
+    ++z_lines_;
     return;
   }
   if (!s.empty() && s[0] == 'K') {

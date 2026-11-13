@@ -26,6 +26,7 @@
 #include "lomn/ini.h"
 #include "lomn/osi/directors.h"
 #include "lomn/osi/json.h"
+#include "lomn/osi/objects.h"
 #include "lomn/osi/services.h"
 
 namespace lomn::osi {
@@ -207,6 +208,7 @@ ScriptHost::ScriptHost(const sage::OsiFile& script, std::string_view natives_jso
   reg_ = NativeRegistry::load(natives_json, mods_json, types_);
   check_overrides(overrides_json, reg_);
   if (!expand_keys(opt_.keys, keys_, &err)) throw std::runtime_error(err);
+  if (!parse_mouse(opt_.mouse, mouse_, &err)) throw std::runtime_error("bad mouse: " + err);
   reg_.set_return_log(log_);
   heap_ = std::make_unique<Heap>(trace_);
   vm_ = std::make_unique<Vm>(script_, reg_, *heap_, trace_);
@@ -305,10 +307,24 @@ bool ScriptHost::frame() {
     std::snprintf(kb, sizeof kb, "K %6ld", k);
     log_->line(kb);
   }
+  ctx_->subsystem<HostClock>().time = time_;  // SrGetSeconds(0) = pm+8 for the natives of this frame
+  auto failed = [&](bool ok) {
+    if (!ok && stats_.stop == "none")
+      stats_.stop = "error \"" + fmt_message(vm_->last_error()->message) + "\" at frame " + std::to_string(k);
+  };
+  // The process map's order (hud.md §2.4): GcInputDriver (priority 0: the VK keys, 5 arguments), then the key mapper
+  // (priority 1: esc, 3 arguments), the mouse driver, the script's Process, the viewport camera (priority 3).
   for (; kc_ < keys_.size() && keys_[kc_].frame < k; ++kc_) {}
-  for (; kc_ < keys_.size() && keys_[kc_].frame == k && stats_.stop == "none"; ++kc_) {
-    CallResult kr = vm_->call("Input", keys_[kc_].args);
-    if (!kr.ok) stats_.stop = "error \"" + fmt_message(vm_->last_error()->message) + "\" at frame " + std::to_string(k);
+  size_t kend = kc_;
+  while (kend < keys_.size() && keys_[kend].frame == k) ++kend;
+  for (bool vk : {true, false})
+    for (size_t i = kc_; i < kend && stats_.stop == "none"; ++i)
+      if ((keys_[i].args.size() == 5) == vk) failed(vm_->call("Input", keys_[i].args).ok);
+  kc_ = kend;
+  for (const auto& args : mouse_frame(mouse_, mouse_state_, k)) {
+    if (stats_.stop != "none") break;
+    const CallResult mr = ctx_->engine_call("OnEvent", args);
+    failed(!mr.found || mr.ok);
   }
   if (stats_.stop == "none") {
     if (k == skip_frame_) {
@@ -338,6 +354,13 @@ bool ScriptHost::frame() {
       }
       if (capped) skip_frame_ = k + 1;
     }
+  }
+  if (stats_.stop == "none") failed(camera_process(*ctx_, time_));
+  // the Z block (hud.md §9.1): after the frame's last record; none for a frame whose call errored (the oracle's choice)
+  if (trace_ && stats_.stop == "none") {
+    std::snprintf(kb, sizeof kb, "Z %6ld", k);
+    trace_->line(kb);
+    for (const std::string& l : snapshot_lines(*ctx_)) trace_->line(l);
   }
   ++counter_;  // 0x4a95b6
   ++frame_;
