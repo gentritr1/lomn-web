@@ -411,7 +411,9 @@ Both runners (`lomn_osi_conform`, `osi_vm.py --conform`) implement these. They c
 22. **Fail-closed expectation keys** (2026-10-09, M2a-2). A runner must not let a program pass on a field nobody compares.
     - Each runner keeps an explicit list of the key paths it compares and a list of descriptive keys it ignores. A key
       path is the chain of object keys from the top of the `.expect.json`, with `[*]` after a key whose value is an array
-      of objects and `*` for the name of a global under `expect.globals` / `expect_error.globals`. Scalars inside an
+      of objects, `*` for the name of a global under `expect.globals` / `expect_error.globals`, and `*` for the frame
+      number under `expect.z` (so `expect.z.0` is the path `expect.z.*`; osi_vm's `_key_paths` yields `expect.z.0` today, so Task 4a
+      folds frame keys to `*` in both runners). Scalars inside an
       array add no path (`natives[*].types` is one path).
     - A NON-pending program with a key path in neither list FAILS, before it runs and with no trace:
       `FAIL <path>: uncompared key <key path>` (the oracle prints it among the reasons of its `FAIL` line). A pending
@@ -431,7 +433,7 @@ Both runners (`lomn_osi_conform`, `osi_vm.py --conform`) implement these. They c
     - **Added for group `h` (M2a-3 Task 3; compared once Tasks 4a/4b land, until then only pending programs use them):**
       `frames`, `mouse`, `natives_impl`; `host_events`, `host_events[*].{frame,position,name,args}`, and under
       `host_events[*].args[*]` the value forms `text`, `hex`, `game`, `type`, `value`, `bits` plus `object` and
-      `engine_refs`; `natives[*].refs`, `natives[*].refs[*].{arg,delta}`; `expect.z`, `expect.z.*`.
+      `engine_refs`; `natives[*].refs`, `natives[*].refs[*].{arg,delta}`; `expect.z`, `expect.z.*` (`*` = the frame key).
     - Before this amendment the C++ runner did not compare `expect_error.{context_depth,globals,heap}` (the oracle did;
       one corpus program, `b/b-eng-reenter-depth`, uses `expect_error.context_depth`) and it checked `expect.found` (the
       oracle did not). Both now compare the same set; `found` is gone.
@@ -456,3 +458,10 @@ Both runners (`lomn_osi_conform`, `osi_vm.py --conform`) implement these. They c
     - With `"natives_impl": "tier1"`, a game object of type `ScTextObject`, `GcBigSprite` or `ScTileFont` that a test
       native mints is known to the HUD model with every field `-` (hud.md §9.2), so the `tier1` setters can act on it.
     - An unknown `position` fails the program before it runs (`FAIL <path>: bad position <p>`), like an unknown key.
+    - Three more edge cases fail the program (controller ruling, Task 3 fix 1):
+      - a `natives_impl` other than `"stubs"` or `"tier1"`, before it runs: `FAIL <path>: bad natives_impl <v>`;
+      - a `refs[*].arg` whose argument is not a game object when the native runs (a non-game value, or no such
+        argument): the call errors, and a group-`h` program raises no error (§1 "Expectations"):
+        `FAIL <path>: refs arg <i> is not a game object`;
+      - `then` together with `frames`, before it runs: `then` is not defined with frames (`FAIL <path>: then with
+        frames`), as `expect_error` is not.

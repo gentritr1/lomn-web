@@ -49,8 +49,16 @@ block, LFs included) and ends with `T %d %016x` (total lines, FNV-1a 64 of the w
 included verbatim. Since M2a-3 the frame's `Z` block (hud.md §9) is **not** part of its `K` block: the `D` line's count
 and hash exclude every `Z` line, so A6/A9 `D` lines are unchanged (controller ruling on Decision 6). The `Z` block gets
 its own line after the `D` line, `Z %6d %8d %016x` (frame, line count of the block including its `Z %6d` header,
-FNV-1a 64 of its bytes, LFs included). `T` keeps its definition, so it now covers the `Z` lines too; digest guards
-compare `D` lines, and `Z` lines separately (`grep '^Z' a | cmp - <(grep '^Z' b)`).
+FNV-1a 64 of its bytes, LFs included). `T` keeps its definition, so it now covers the `Z` lines too (controller ruling,
+fix 1).
+
+Today two gates compare **whole** digest files with a replay run: `engine/tests/osi_a6.cmake:45`
+(`same(cpp.digest py_replay.digest "digest C++ == Python (replay)")`) and `Makefile:210` (osi-diff `cmp 2/4 digest
+native == Python (replaying the native natives.log)`). A replay run writes no `Z` (§6, Version 3), so its digest lacks
+the `Z` lines and has another `T`, and both gates would fail. **Task 4a changes them**: the replay comparison becomes the
+`D` lines alone, `T` excluded (`grep '^D' a | cmp - <(grep '^D' b)`); the `Z` lines and `T` are compared three-way,
+C++ native vs wasm32 vs the Python full (own-models) run, which keep comparing whole files (osi_a6.cmake:44, Makefile
+`cmp 1/4` and `cmp 3/4`).
 
 ## 3. Event order
 
@@ -235,7 +243,8 @@ written when the call starts; the lines of the natives the call causes follow it
 
 **Position (hud.md §2.4 walk order, EXECUTED; the camera's place INFERRED, hud.md §1.6 m4).** Within one frame, after
 its `K` line:
-1. priority 0, the VK triggers: `Input(C1, VK, state, 0.0, 0.0)` (hud.md §5.3). No `C -1`; the natives the handler
+1. priority 0, the VK triggers: `Input(C1, VK, state, 0.0, 0.0)` (hud.md §5.3; INFERRED there: that
+   `GcControllerProcess` is live on the front end). No `C -1`; the natives the handler
    calls write their own lines;
 2. priority 1, the key mapper: `Input(C1, id, state)` (hud.md §5.2). No `C -1`. It runs before the mouse driver:
    both are priority 1, and the latest added runs first (0x4395b7 after 0x43955a);
@@ -244,7 +253,11 @@ its `K` line:
 5. priority 3, the camera: `C -1 OnEvent 0010:00000006 <cam> G <n> 0010:00000000 000f:00000000 …` in a frame where a
    spline guard fires (hud.md §1.3);
 6. the frame's `Z` block in the trace (none in natives.log).
-Keys of one frame and one priority keep their KEYSPEC order.
+Keys of one frame and one priority keep their KEYSPEC order. **This changes the host rule**: before M2a-3 every key of a
+frame ran in KEYSPEC order whatever its source; now the VK keys (priority 0: Enter, Space, the arrows) run before the
+key-mapper keys (priority 1: Esc) of the same frame. A6 is unaffected: its KEYSPEC (`down@100 down@160 enter@220
+esc@280`, `engine/CMakeLists.txt:421` and `Makefile:190`; `esc@1` in osi_a6.cmake:69) never has keys of two priorities
+in one frame (each tap holds frames f and f+1, and no two taps share a frame).
 
 **The camera's game argument.** `CreateVariant` 0x447500 adds one reference (0x447530) to the camera before `Call`.
 That is the reference of the variant `SetPCAndArgs` then moves onto the VM stack without `Duplicate` (opcodes.md,
@@ -255,18 +268,25 @@ excluding that variant, and **no `H` line** belongs to the call (this corrects D
 follows"). If the camera has no handle yet, the call mints it (`A g` in the trace before the `C` line), as any
 `CreateVariant` does.
 
+**What the corpus can see.** No group-`h` program can see an `H` line or its absence: conformance has no natives.log key
+(conformance.md §6). A program sees only the count in `Z ref`: the ruling gives `Z ref 002a:00000001 1`
+(`h-cminus1-order`); an **unreleased** host +1 would give 2; a +1/−1 `H` pair nets 0 and also gives 1, so the count
+cannot tell the ruling from Decision 3's pair. The no-`H` rule is checked by a Task 4a/4b engine test instead: a frame
+with a camera event writes `C -1 OnEvent 0010:00000006 002a:… G n …` and no `H 002a:` line.
+
 **Replay.** As for every host record (§3.3 of natives.md): the replay never performs a `C -1`; its own host sources make
 the call, and it asserts that the call's name and arguments equal the next record's.
 
 **`Z`.** The end-of-frame snapshot (hud.md §9) is a trace record, not a natives.log record. A replay run writes none
-(it runs no native, so it has no HUD or cinema state): the `Z` comparison is three-way (native, wasm32, Python own
-models), while the `D` comparison stays four-way.
+(it runs no native, so it has no HUD or cinema state): the `Z` lines and `T` are compared three-way (native, wasm32,
+Python own models), while the `D` lines, `T` excluded, stay four-way. The two gates this changes are named in §2.
 
 **The merge (controller ruling, M2a-2 T2b, accepted as proposed; `natives.md` §7.2):** an override sets `tier`, and
 `default` when it has one, on the **winner row** of its key only (exe keys in `natives.json`, mod keys in
 `natives_beta150.json`); `cite` and `note` stay in `data/osi/native_overrides.json`; a `tier1` row has no `default`.
 
 **Header hash (C1).** The overrides merge (`natives.md` §7.2) changes `natives.json` and therefore the header's
-`natives=` hash and the digest's `T` line, but not the trace. Digest guards compare `D` lines only:
+`natives=` hash and the digest's `T` line, but not the trace. A guard that must survive such a change compares `D`
+lines only (the osi_a6/osi-diff gates compare whole files, §2):
 `grep '^D' a | cmp - <(grep '^D' b)`. Headers are compared with the `natives=` field stripped:
 `diff <(grep '^#' a | sed 's/natives=[0-9a-f]*//') <(grep '^#' b | sed 's/natives=[0-9a-f]*//')`.

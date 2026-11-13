@@ -6,7 +6,7 @@
     "0x72"
   ],
   "falsifier": "the host calls of one frame run in process-map order (hud.md 2.4; trace.md 6 Version 3): VK Input (priority 0), key-mapper Input (1), mouse OnEvent (1, after the key mapper), Process (2), camera OnEvent(6) (3), whatever the list order",
-  "alternative": "list order (camera, mouse, key mapper, VK) then Process: g = 53214; camera before Process: 12354; mouse before the key mapper (first added first): 13245",
+  "alternative": "list order (camera, mouse, key mapper, VK) then Process: g = 53214; camera before Process: 12354; mouse before the key mapper (first added first): 13245; an unreleased host +1 on the camera (CreateVariant's +1 never released): Z ref 002a:00000001 2",
   "pending": "T4a/T4b",
   "entry": "main",
   "args": [],
@@ -135,5 +135,5 @@
       ]
     }
   },
-  "note": "Hand-derived (expect_calc.arith / compare). Setup: g = 0, returns int 1. Frame 0 in rule-23 order, each handler doing g = g*10 + d (0x72 then 0x70, int): VK Input(C1, 13, 2, 0.0, 0.0): d = 1 + (13 == 251) = 1 -> 1; key mapper Input(C1, 251, 2): d = 1 + 1 = 2 -> 12; mouse OnEvent(26, 450, 330): d = 3 + 2*(26 == 6) = 3 -> 123; Process: d = 4 -> 1234; camera OnEvent(6, cam, 0): d = 3 + 2*1 = 5 -> 12345 (fits int32). The camera's game argument: CreateVariant mints handle 1 (GcLegoCamera 0x2a, engine_refs 1, total 2); the reference moves onto the stack with the argument (SetPCAndArgs, no Duplicate; trace.md 6 Version 3), and onevent's Return disposes it: total 1, no H, no F g. So Z ref 002a:00000001 1, heap live.g 1, allocs.g 1. The alternative 'the host keeps its own +1' (Decision 3's H pair) gives Z ref ... 2. Ints only and no string->float: fpu_pc 24. input declares 5, so the key mapper's 3 arguments arrive with 2 nothings."
+  "note": "Hand-derived (expect_calc.arith / compare). Setup: g = 0, returns int 1. Frame 0 in rule-23 order, each handler doing g = g*10 + d (0x72 then 0x70, int): VK Input(C1, 13, 2, 0.0, 0.0): d = 1 + (13 == 251) = 1 -> 1; key mapper Input(C1, 251, 2): d = 1 + 1 = 2 -> 12; mouse OnEvent(26, 450, 330): d = 3 + 2*(26 == 6) = 3 -> 123; Process: d = 4 -> 1234; camera OnEvent(6, cam, 0): d = 3 + 2*1 = 5 -> 12345 (fits int32). The camera's game argument: CreateVariant mints handle 1 (GcLegoCamera 0x2a, engine_refs 1, total 2); the reference moves onto the stack with the argument (SetPCAndArgs, no Duplicate; trace.md 6 Version 3), and onevent's Return disposes it: total 1, no H, no F g. So Z ref 002a:00000001 1, heap live.g 1, allocs.g 1. Only an unreleased host +1 (CreateVariant's +1 kept by the host and never released) gives Z ref ... 2; Decision 3's +1/-1 H pair nets 0 and also gives 1, so this program cannot tell it from the ruling (no natives.log key; the no-H check is a Task 4a/4b engine test, trace.md 6 Version 3). Ints only and no string->float: fpu_pc 24. input declares 5, so the key mapper's 3 arguments arrive with 2 nothings."
 }

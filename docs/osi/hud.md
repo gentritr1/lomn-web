@@ -851,7 +851,8 @@ The `Z` block shows the state the A9 digest cannot see: engine reference counts,
 ### §9.1 Where and when
 - One block per frame, in the trace, after the frame's last record: after the camera step (priority 3, §2.4), so the frame's `OnEvent(6)` and everything it caused come before it. The block has no `Z` before frame 0 (Setup is not a frame).
 - Every run that writes `K` lines writes the blocks (A6, A9, the menu runs, conformance group `h`).
-- The block is **not** part of the frame's `D` hash (controller ruling on Decision 6): A6/A9 `D` lines stay byte-identical. Digest mode writes one line per block instead (trace.md §6).
+- The block is **not** part of the frame's `D` hash (controller ruling on Decision 6): A6/A9 `D` lines stay byte-identical. Digest mode writes one line per block instead (trace.md §2). `T` still covers the whole trace, `Z` lines included (controller ruling, fix 1).
+- **Two gates break and Task 4a changes them** (trace.md §2): `engine/tests/osi_a6.cmake:45` (`digest C++ == Python (replay)`) and `Makefile:210` (osi-diff `cmp 2/4 digest native == Python (replaying the native natives.log)`) compare whole digest files, and the replay digest has no `Z` lines and so a different `T`. The replay comparison becomes the `D` lines alone, `T` excluded; the `Z` lines and `T` are compared three-way: C++ native, wasm32, and the Python full (own-models) run.
 - `natives.log` carries no `Z` line, so the replay log is unchanged.
 
 ### §9.2 Lines
@@ -859,6 +860,7 @@ The `Z` block shows the state the A9 digest cannot see: engine reference counts,
 - Then one line per item below, **sorted bytewise over the whole line** (C `strcmp`, Python `sorted` on the bytes), so no engine needs to agree on an iteration order.
 - Value formats (trace.md §1): f32 `%08x` bits; double `%016x` bits; byte `%02x`; word `%04x`; int `%d`; a game object `%04x:%08x` (its minting type, as on `H` lines; natives.md §3.1); a byte string `%d <hex>` as on `S` lines (empty: `0` and nothing after it); **`-`** for a field no native has written since the object was created and whose constructor default is not cited (§4.4, §7.3 gaps). A `-` replaces the whole value, even a multi-word one.
 - A subsystem writes lines only for state that exists: no camera lines in a run whose host models no camera (conformance group `h`), no `cs` line before the first `playcinematic`.
+- **No timer line** (Decision 6 lists "the timer flags"): no timer is started on the front-end path (natives.md §6.2), and no engine models `GcTimer` state yet. A `timer.*` line is added to this table by the task that models it.
 
 | Line | One per | Value | Source |
 |---|---|---|---|
@@ -915,6 +917,10 @@ The A9 state log of M1a-3 (`--state-log`) keeps its grammar for the area: `RS`, 
 - **`# viewport HdDr`**: the HUD viewport starts (§3.1, the second viewport, drawn last). Then `# SrPushRenderMode 0x8c034` and the ScDxStates writes the diff produces against the last mode (§3.2), as ordinary `RS`/`TSS` lines.
 - **`XFORM PROJECTION sum=…` / `XFORM VIEW sum=…`** for the ortho camera's device calls (§3.3), with the existing checksum (31-hash over the 64 little-endian f32 bytes).
 - **`RS` / `TSS` / `TEXTURE` / `XFORM WORLD`**: one line per device call that reaches the device, as today. Both writers count: ScDxStates (gated on the device's current value, §3.2) and the raw calls of `ScTileFont::Draw` (§3.6).
+- **`MATERIAL d=<c> a=<c> s=<c> e=<c> p=<g>`**: the existing grammar (`engine/src/d3d/device8.cpp` `set_material`: each colour `<c>` = `(%.6g,%.6g,%.6g,%.6g)` r,g,b,a, power `%.6g`), one line per SetMaterial call.
+  - `ScDrawableMaterial::Draw` 0x54ee70 calls it raw, for each texture entry, at 0x54eef9 (vtable +0xa8, `&entry+0x50`, entry = `[mat+0x14] + i·0x1ac`), **before** the texture's vfunc+0x14 at 0x54ef2f (EXECUTED, §3.4). So it precedes that entry's `TEXTURE` line, and it is not gated on the device's current value: every draw writes one.
+  - The values a HUD sprite tile carries: `LoadIndexed` 0x550d50 stores the D3DMATERIAL8 at entry+0x50 unconditionally (stores 0x550e5e–0x550f60, which every path reaches through 0x550e58; constants read from the exe at 0x7366d4–0x736718; EXECUTED): diffuse (0.7,0.7,0.7,1) (bits `3f333333` ×3, `3f800000`), ambient (1,1,1,1), specular (1,1,1,1), emissive (0,0,0,0), power 80 (`42a00000`). The line is `MATERIAL d=(0.7,0.7,0.7,1) a=(1,1,1,1) s=(1,1,1,1) e=(0,0,0,0) p=80`.
+  - INFERRED: that nothing rewrites entry+0x50 between `LoadIndexed` and the draw (no writer census), and that a font's materials (§3.6, the `ScDrawableMaterial::Create` at 0x627a02) get the same values. Fills and lines (§3.7) set their own raw material (zeroed, plus the colour).
 - **`TEXTURE <stage> <name>`**: `<name>` is the VFS path the texture was loaded from, case preserved, `/` separators, with the extension the loader matched (e.g. `Root/Data/Art/MenuArt/cursor0000.tga`; a multi-tile sprite's tile `…/name0_1.tga` per §3.4); `NULL` for no texture (a missing file, §7.1).
 - **`DRAW hud.<kind> <type>:<handle> <where> call=<DIP|DP> prim=%d count=%d fvf=0x%03x vsum=%08x`**, one per primitive call:
   - kind and `<where>`: `sprite … tile=%d,%d` (row, column; §3.4); `glyph … ch=%02x` (the text object; the byte code; a 2-byte code prints `%04x`; §3.6); `fill …` and `line …` (`gcfilledrectangle`, `gcline`/`gcrectangle`; unreachable from Base.osi, §3.7, kept for completeness) with `<where>` = `-`;
@@ -929,6 +935,7 @@ The cursor, `loadhudsprite(50, 50, 82, 82, "Root/Data/Art/MenuArt/cursor0000", 0
 - Vertices: v0 (50, 50, −7499), v1 (82, 50, −7499), v2 (50, 82, −7499), v3 (82, 82, −7499): the top-left is (x1, y1), as §3.4 says.
 - The draw's lines, after the §3.5 states:
 ```
+MATERIAL d=(0.7,0.7,0.7,1) a=(1,1,1,1) s=(1,1,1,1) e=(0,0,0,0) p=80
 TEXTURE 0 Root/Data/Art/MenuArt/cursor0000.tga
 XFORM WORLD sum=381857c2
 DRAW hud.sprite 0026:<handle> tile=0,0 call=DIP prim=5 count=2 fvf=0x112 vsum=9f18392c
