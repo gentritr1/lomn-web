@@ -70,10 +70,10 @@ Controller-verified 2026-10-08: the page loads to the folder picker with 0 conso
   - conformance: trace-cmp 541/541, byte-identical C++ vs Python;
   - `make osi-a9` with real natives: 4/4 OK, 601 D lines; coverage 69 natives (tier1 35, tier2 34, stub 0, tier3 0), 1,705 calls, 0 unregistered; taint 34 tainted, 0 sinks;
   - `osi-diff` 4/4; `lomn_view --script 1 --frames 1` rc 0; ctest unit|osi|view 26/26;
-  - `make check`: test-tools 992 passed, test-native 45/45, test-wasm 17/17, plus datacheck / datacheck-wasm / worklist (see the ledger);
+  - `make check` layers: test-tools 992 passed, test-native 45/45, test-wasm 17/17, datacheck 39/39 native and wasm, worklist 0 errors;
   - mutation: `mutate_natives` 6/6 caught, `mutate_vm` 46/46 caught, the controls missed as expected;
   - the A9 D lines are unchanged since M2a-1 (601 lines identical to 0f8be36).
-- **UNVERIFIED:** `test-web` and `a13-real`. Playwright 1.63 is not installed and `npm ci --offline` cannot fetch it. M2a-2 changes no `web/` file, and `lomn_web` does not link `lomn_osi`. An online `npm ci` needs your yes.
+- **Web layers (after the owner approved installing Playwright, 2026-11-13):** `make test-web` passes (59/59 unit tests, Metal smoke run with 0 console errors, byo_synthetic 123/123), and `make a13-real` passes 60/60 on the real install.
 - **Incident 2026-11-13.** A subagent deleted the real install's `data/Base.osi`: `cp -Rl` copied the `$LOMN_DATA/install` symlink, and a later `rm` went through it. It was restored from the second LOMN-Beta copy (sha256 checked; the two trees are identical). Rule: build hard-link installs with `mkdir install && cp -Rl "$LOMN_DATA/install/." install/`, and never rm through a symlink.
 - **Cost:** Tasks 10 and 12 ran on the Max plan, so there is no exact $ figure. The earlier M2a-2 runs on Console credits cost $35.94 + $34.91 (§4.1).
 - Full ledger: `docs/resume/m2a2-ledger.md`.
@@ -89,7 +89,6 @@ Controller-verified 2026-10-08: the page loads to the folder picker with 0 conso
 - **Cheat gate.** The `addtoa` INI gate `[Cheat] Urinate` is modelled as absent.
 - **A9 blind spots.** A9 cannot see per-handle refcounts or native state that is never read (`cs.playing`).
 - **Script errors.** On a script error the C++ CLI returns rc 4 and the Python CLI returns 0 (a harness convention).
-- **Web layers.** Reinstall Playwright, then re-run `test-web` and `a13-real`.
 
 **Risk carried from M2a-2 (natives.md §6.3):** the front-end Toa runs its physics every frame, which the headless M2a-2 frame omits as a documented gap. A non-lethal wall-closeness event (`OnEvent(0x28, 2, 'impc')`, CheckWallCloseness 0x587240), if it fires repeatedly, skips 3 HUD `hide` calls at frame 4, so HUD visibility could differ from the original. M2a-3 must model CheckWallCloseness for the front-end Toa, or settle it against the owner's menu screenshots.
 
@@ -170,7 +169,7 @@ Four real tasks were run headless with `claude -p --output-format json`. The fir
 
     Never use it for reviews, design, asm or RE readings, rulings, or code whose mistakes tests could miss.
   - **E3 (run in the first sub-milestone on credits):** Haiku 5.5 vs Sonnet 5.5 on the same inputs for log triage, bookkeeping and mechanical edits, interleaved, 3 runs each. Adopt Haiku for a class only if its first-time-correct rate matches Sonnet's.
-  - **Billing (owner direction 2026-10-09, superseding the earlier split):** no Max-plan usage for this project. All work runs on Console credits through a headless controller started with `docs/resume/start.sh` (see resume/README.md). **Exception, 2026-11-13:** the owner chose the Max plan from the desktop session for M2a-2 Tasks 10 and 12 only. Ask again before M2a-3.
+  - **Billing (owner direction 2026-10-09, superseding the earlier split):** no Max-plan usage for this project. All work runs on Console credits through a headless controller started with `docs/resume/start.sh` (see resume/README.md). **Changed 2026-11-13:** the owner moved LOMN work back to the Max plan, run from the desktop session (controller plus Agent-tool subagents), including M2a-3, until they say otherwise.
   - Start a fresh session per sub-milestone and resume from this file. Fast mode stays off.
   - Record $ spent per sub-milestone from the Console dashboard.
 - **Verification:**

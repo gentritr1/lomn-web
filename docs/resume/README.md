@@ -10,13 +10,13 @@ Everything needed to pick the work up again. The day-to-day controller workspace
   - coverage 69 natives (tier1 35, tier2 34, stub 0), 0 unregistered; taint 0 sinks;
   - test-tools 992 passed, test-native 45/45, test-wasm 17/17; datacheck 39/39 native and wasm; worklist 0 errors;
   - mutate_natives 6/6 caught, mutate_vm 46/46 caught.
-  - UNVERIFIED: test-web and a13-real, because Playwright is not installed. An online `npm ci` needs the owner's yes.
+  - test-web passes (59/59 unit tests, smoke, byo_synthetic 123/123) and a13-real passes 60/60, after Playwright was installed with the owner's yes.
 - `main` is NOT updated: it is still at ad8789a (the commit-ID map), 13 commits behind `m2-osi-vm`. Fast-forwarding `main` to `m2-osi-vm` and pushing need the owner's yes.
 - **Next: M2a-3 (menu systems).** It needs the owner's menu screenshots before its review. What it inherits from M2a-2: [../ROADMAP.md](../ROADMAP.md) §3.3. The full ledger is [m2a2-ledger.md](m2a2-ledger.md).
-- **Billing for M2a-3: ask the owner first.** Tasks 10 and 12 ran on the Max plan from the desktop session (owner's choice for those two tasks only). The standing rule is Console credits via `start.sh`.
+- **Billing:** the Max plan, from the desktop session (owner, 2026-11-13), including M2a-3. `start.sh` and Console credits are only for overflow.
 
 ## Open items to carry
-See ROADMAP §3.3 (area_source seam, refused-Add slot, HUD missing files, `addtoa` cheat gate, front-end Toa wall closeness, A9 blind spots, Playwright). Exe ruling (settled in Task 12): the install exe is authoritative; the reference copy is hand-patched in 7 ranges, pinned by `tools/tests/test_exe_patched_ranges.py`.
+See ROADMAP §3.3 (area_source seam, refused-Add slot, HUD missing files, `addtoa` cheat gate, front-end Toa wall closeness, A9 blind spots). Exe ruling (settled in Task 12): the install exe is authoritative; the reference copy is hand-patched in 7 ranges, pinned by `tools/tests/test_exe_patched_ranges.py`.
 - **Owner checks:** menu screenshots, Esc/Backspace/right-click on Options, G1–G4 shots, a quiet Mac for perf baselines, Safari/Firefox.
 
 ## How the last runs worked (Console API credits)

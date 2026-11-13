@@ -608,3 +608,6 @@ Risks remaining: refused-Add dangling slot unmodelled; area_source seam (x3); A9
 Self-attack: strongest case against APPROVE = both engines share a reading of the slot writers. Countered by the CITED census of exactly 6 [0x736128] references in the install exe (re-review) and fixers' independent byte readings; residual risk is code paths only reachable with area data (seam), listed above.
 Docs: ROADMAP §1/§3.2/§3.3/§6/§7, resume README, ledger copy committed 65fa0b5 on m2-osi-vm.
 Task 12: complete. M2a-2: CLOSED 2026-11-13.
+Owner 2026-11-13: "Yes, install it" (online npm ci for Playwright) and "keep it on max … keep going" (Max plan from the desktop session, incl. M2a-3).
+Playwright installed (EXECUTED): web/ `npm ci --cache $TMPDIR/npm-cache` from the lockfile (playwright 1.63.0 + playwright-core, integrity-checked, registry.npmjs.org); `npx playwright install chromium` → chromium-1243 + headless shell in the user cache.
+Web layers on m2-osi-vm f73a339 (= 80bc109 code + docs; EXECUTED unsandboxed, load 9.1→3.1): make test-web rc 0 — node:test 59/59, smoke adapter apple/metal-3 0 console/page errors, byo_synthetic 123/123; make a13-real rc 0 — 60/60 checks on the real install. test-web + a13-real now VERIFIED; the T10/T12 UNVERIFIED notes are closed.
