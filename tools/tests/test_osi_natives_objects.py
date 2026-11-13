@@ -564,6 +564,25 @@ def test_addtoa_failed_add_leaves_the_slot_pointing_into_the_freed_toa(tmp_path)
         sv().does_file_exist(ctx, b"Root/other.tga")                        # Art misses, [0x736128] is non-null: Find on freed memory
 
 
+def test_loadhudsprite_after_a_failed_addtoa_does_not_read_the_freed_slot(tmp_path):
+    """Fix 3 I-B. LoadHudSprite 0x440460 saves the slot (GetCurBlockFile call 0x440468), sets it to NULL (push 0 0x44046f, SetCurBlockFile
+    0x440471), runs the constructor 0x4404b0 (its presence lookup then takes FileExists, 0x54de41) and restores (0x4404be). It never reads a
+    freed slot: after addtoa, addtoa (refused) the native succeeds, as in C++, and the slot is freed again afterwards."""
+    inst = make_install(tmp_path, art=["a.tga"], chars={"onua.blk": ["x.tga"], "gali.blk": ["y.tga"]}, loose=["data/Art/hud/missing.tga"])
+    src = ('.globals s\n.function main 0\nPushConstantString "onua"\nCallGameFunction gcmodeldirector.addtoa 1\nPop\n'
+           'PushConstantString "gali"\nCallGameFunction gcmodeldirector.addtoa 1\nPop\n'
+           'PushConstantf32 1.0\nPushConstantf32 2.0\nPushConstantf32 3.0\nPushConstantf32 4.0\nPushConstantString "Root/Data/Art/hud/missing"\n'
+           'PushConstanti8 0\nCallGameFunction gcbigsprite.loadhudsprite 6\nSetVariableValue global:s\nPushConstanti8 1\nReturn\n') + ONEVENT
+    vm, ctx, tr, log = make_vm(src, install=inst)
+    slots = ctx.subsystem(sv().BlockFileSlots)
+    r = vm.call("main", [])
+    assert r.ok, vm.last_error and vm.last_error.message
+    assert [l for l in log if "gcbigsprite.loadhudsprite" in l][0].endswith("-> 0026:00000001 G 0")
+    (h, spr), = ctx._objects.items()
+    assert spr.source_present is True                                               # the loose file, through FileExists
+    assert slots.current is sv().FREED_BLOCK_FILE                              # restored (0x4404be), still the dangling pointer
+
+
 def test_addtoa_success_restores_exactly_the_slot_value_it_saved(tmp_path):
     """Review I-2, success branch: the restore 0x47e61e pushes [ebp-0x134] (0x47e618), the value GetCurBlockFile returned at 0x47e1f1,
     whatever it was: not the Toa's block, and not null."""

@@ -502,6 +502,7 @@ class AreaDirector:
         self.under_water = 0                                # the byte [0x73c5a8]: 0 in .data, written only by 0x589264
         self.main_character_id = 0x636E7431                 # [0x7796f4] ('cnt1', static init 0x43c193); [0x7032b8] is 0 until AddToa
         self.set_under_water_calls = 0
+        self.hdr = ([], [])                                 # the level / area block-file header objects (0x48bd10 / 0x48bc10); a slot holds the list itself
         self.nearest_max = 4                                # the byte [0x70b37c]: 4 in .data (setnearestmax 0x486feb, getnearestmax 0x487013)
 
     # --- GcGame::MainCharacterID 0x43af90: one implementation, objects.main_character_id (the Toa branch 0x43afb2-0x43afcb)
@@ -516,6 +517,9 @@ class AreaDirector:
         if self.level != NULL_ID and self.area != NULL_ID:                      # 0x489ab4-0x489ace
             self.remove_area(ctx, self.area)                                     # 0x489add
         self.level = new_id                                                      # 0x489af6
+        self.close_header(0)                                                     # 0x489b84 / 0x489b8e
+        self.close_header(1)
+        self.load_header(ctx, 0, False)                                          # 0x489b93: LoadLevelBlockHeader(0) -> the CURRENT slot
         # the three SLK loads (0x489b65-0x48a44b) swallow every error and no native here reads them: not modelled
         b3 = (s[3] if len(s) > 3 else 0)                                         # movzx eax, byte [name+3] (0x48a455)
         ctx.subsystem(Saver).level = (b3 - 0x30) & 0xFF                          # GcSaver::SetLevel 0x5d5740 (0x48a45f)
@@ -530,6 +534,31 @@ class AreaDirector:
         self.clean_up_area(ctx, loader)
         self.loaders.pop(area_id, None)
         self.area = NULL_ID
+        self.close_header(1)                                                     # 0x4895c4 / 0x4895ce
+        self.close_header(0)
+
+    def close_header(self, h: int) -> None:
+        """ScBlockFile::Close 0x60ff70 on a header object: a slot that holds it stays set and finds nothing (the list is emptied in place)."""
+        self.hdr[h].clear()
+
+    def load_header(self, ctx, h: int, second: bool) -> None:
+        """LoadLevelBlockHeader 0x48bd10 (h 0) / LoadAreaBlockHeader 0x48bc10 (h 1): "Root/Data/Levels/%.4s/%.4s.blk" (level twice, or level
+        and area); a loaded header is not reopened (IsHeaderLoaded); then the slot: the level header goes to the current slot with argument
+        0 (0x48be10) or the second with 1 (0x48be01), the area header always to the current one (0x48bcfb). natives.md §8.2."""
+        from . import services
+        if not self.hdr[h] and ctx.vfs is not None:
+            lev = services.identifier_to_string(self.level).decode("latin-1")
+            name = lev if h == 0 else services.identifier_to_string(self.area).decode("latin-1")
+            try:
+                ents = BlockFiles(ctx.vfs.root, ctx.vfs).entries("Root/Data/Levels/%s/%s.blk" % (lev, name))
+            except ValueError:
+                ents = None
+            self.hdr[h].extend(ents or [])
+        slots = ctx.subsystem(services.BlockFileSlots)
+        if second:
+            slots.second = self.hdr[h]
+        else:
+            slots.current = self.hdr[h]
 
     def clean_up_area(self, ctx, loader: AreaLoader) -> None:
         """GcAreaLoader::CleanUpArea 0x5017d0: every entry's director removes it, in list order; then the list is torn
@@ -575,6 +604,8 @@ class AreaDirector:
         """GcAreaDirector::LoadArea 0x4892f0: [0x83b40f] = 1, a new GcAreaLoader, GcAreaLoader::LoadArea (0x48935a), then
         Add (0x48938c) under the id of the name; a duplicate id is not added (the loader is dropped)."""
         self.loading = True
+        self.load_header(ctx, 0, True)                                           # 0x4ff62c: the level file in the SECOND slot
+        self.load_header(ctx, 1, False)                                          # 0x4ff63b: the area file in the CURRENT slot
         loader = AreaLoader()
         self.loader_load_area(ctx, loader, area_id)
         if area_id not in self.loaders:

@@ -1681,10 +1681,43 @@ def test_a_swallowed_error_in_a_character_load_leaves_the_block_file_slot_at_the
     slots = ctx.subsystem(services.BlockFileSlots)
     assert slots.current is not None and [e.name for e in slots.current] == ["x.tga"]
     assert services.does_file_exist(ctx, b"x.tga") is True                       # found through the leaked slot (0x54ddf0) ...
-    assert services.does_file_exist(ctx, b"Root/y.tga") is False                 # ... and a set slot suppresses FileExists (0x54de41)
     vm, ctx, services = run(ok)                                                  # control: the same load without an error
-    assert vm.swallowed == [] and ctx.subsystem(services.BlockFileSlots).current is None      # restored at 0x47effa
-    assert services.does_file_exist(ctx, b"Root/y.tga") is True                  # the loose file is visible again (0x54de41)
+    assert vm.swallowed == [] and ctx.subsystem(services.BlockFileSlots).current is ctx.subsystem(dr().AreaDirector).hdr[1]      # restored at 0x47effa: the area header LoadArea set (0x4ff63b)
+    assert services.does_file_exist(ctx, b"x.tga") is False                      # the character's file is out of the slot again (0x47effa)
+    assert services.does_file_exist(ctx, b"Root/y.tga") is False                 # the slot is the area header (set, 0x4ff63b): no FileExists (0x54ddf0)
+
+
+def _level_install(tmp_path):
+    from test_osi_natives_objects import make_install, blk_bytes
+    inst = make_install(tmp_path, art=["a.tga"])
+    for rel, names in (("Levels/lev0/lev0.blk", ["inlev.txt"]), ("Levels/lev0/frnt.blk", ["inarea.txt"])):
+        p = inst / "data" / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(blk_bytes(names))
+    return inst
+
+
+def test_setcurrentlevel_and_area_put_their_headers_in_the_slots_and_clear_a_freed_mark(tmp_path):
+    """Fix 3 I-C (C++ test "T12 I-2: setting the slot again clears the freed mark"). SetCurrentLevel 0x489a60 -> LoadLevelBlockHeader
+    0x48bd10 puts the level header in the current slot (call 0x489b93; set 0x48be15), so a freed slot left by a failed addtoa is
+    overwritten and `doesfileexist` finds a level-file name (1). LoadArea 0x4fedd0 puts the level header in the second slot (0x4ff62c)
+    and the area header in the current one (0x4ff63b), the lookup order of §8.2."""
+    from osi_natives import services
+    inst = _level_install(tmp_path)
+    src = ('.function main 0\nPushConstantString "onua"\nCallGameFunction gcmodeldirector.addtoa 1\nPop\n'
+           'PushConstantString "gali"\nCallGameFunction gcmodeldirector.addtoa 1\nPop\n'
+           'PushConstantString "lev0"\nCallGameFunction gcareadirector.setcurrentlevel 1\nReturn\n'
+           '.function area 0\nPushConstantString "frnt"\nCallGameFunction gcareadirector.setcurrentarea 1\nReturn\n'
+           '.function OnEvent 2\nPushConstanti8 1\nReturn\n')
+    vm, ctx, tr, log = make_vm(src, install=inst, groups=("objects",))
+    slots = ctx.subsystem(services.BlockFileSlots)
+    assert vm.call("main", []).ok
+    assert slots.current is not services.FREED_BLOCK_FILE
+    assert services.does_file_exist(ctx, b"x/inlev.txt") is True               # the level header
+    assert services.does_file_exist(ctx, b"x/inarea.txt") is False             # not loaded yet
+    assert vm.call("area", []).ok
+    assert services.does_file_exist(ctx, b"x/inarea.txt") is True              # the area header (current)
+    assert services.does_file_exist(ctx, b"x/inlev.txt") is True               # the level header (second)
 
 
 def test_a_refused_add_in_addcharacter_fires_no_setupmoveable_and_no_onevent():
@@ -1699,6 +1732,8 @@ def test_a_refused_add_in_addcharacter_fires_no_setupmoveable_and_no_onevent():
     _toa_world(ctx, False)                                                      # 'cnt1' is already in the map
     assert vm.call("main", []).ok
     assert ad.set_under_water_calls == 0 and vm.swallowed == [] and not any(l.startswith("C ") for l in log)
+    from osi_natives import services
+    assert ctx.subsystem(services.BlockFileSlots).current is ad.hdr[1]            # the area header the load set: not the freed character, not its block
 
 
 def test_objects_and_hives_entries_reach_the_area_director_not_the_model_director():

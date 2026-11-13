@@ -583,7 +583,12 @@ def _loadhudsprite(ctx, type_id):
     def fn(call):
         rect = tuple(osi_vm.bits_to_f(call.arg(i).value) for i in range(4))
         name = services.c_string(call.vm.heap.text(call.arg(4).value))
-        present = services.sr_block_file_exists(ctx, name + b".tga")                # the block-file oracle, as doesfileexist
+        slots = ctx.subsystem(services.BlockFileSlots)
+        saved, slots.current = slots.current, None                                 # 0x440468 GetCurBlockFile; 0x44046f/0x440471 SetCurBlockFile(0)
+        try:
+            present = services.sr_block_file_exists(ctx, name + b".tga")            # the constructor 0x4404b0 runs with a null slot
+        finally:
+            slots.current = saved                                                  # 0x4404be: restored (a freed pointer is never read)
         obj = GcBigSprite(type_id, rect, name, _byte(call, 5), _byte(call, 6), present)
         return ctx.create_variant(obj, type_id)                                    # 0x43db16 -> 0x43da20
     return fn
