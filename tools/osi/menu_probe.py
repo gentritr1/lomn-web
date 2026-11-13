@@ -11,6 +11,8 @@ several sources at once, and reports what the run reached. Built on event_probe.
                      handle (the front end's `onevent` reads arguments only for events 26 and 25).
                      A trailing `:quiet` leaves the injected call's own natives and pcs out of the run, as event_probe's
                      single-injection mode does (use it to see only what the injection changes in the script's own path).
+IN-FRAME ORDER (keys, then the mouse's OnEvent(26), then the other `pre` events, then Process, then `post` events) is an
+ASSUMPTION of this stand-in with no asm basis. Task 4 pins the order from Task 2a's process-map ruling, not from this probe.
 --mouse x,y@frame    from that frame on (until the next --mouse), OnEvent(26, x, y) before every frame's Process, ahead of the
                      frame's `pre` events. A STAND-IN for Task 4's mouse driver; the full MOUSESPEC grammar is Task 3's.
 Reports (repeatable; default coverage):
@@ -131,8 +133,10 @@ def main(argv=None) -> int:
     ap.add_argument("--install")
     ap.add_argument("--frames", type=int, default=600)
     ap.add_argument("--keys", default="")
-    ap.add_argument("--mouse", action="append", default=[])
-    ap.add_argument("--event", action="append", default=[])
+    ap.add_argument("--mouse", action="append", default=[],
+                    help="x,y@frame. ASSUMED in-frame order (no asm basis): keys, mouse 26, other pre events, Process, post events")
+    ap.add_argument("--event", action="append", default=[],
+                    help="F:ID[:a1,a2..][:pre|post][:quiet]. In-frame order is an ASSUMPTION of this stand-in (see --mouse)")
     ap.add_argument("--natives-impl", choices=("stub", "real"), default="real")
     ap.add_argument("--deadline", type=float, default=110.0, help="seconds")
     ap.add_argument("--report", action="append")

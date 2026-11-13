@@ -156,16 +156,41 @@ def test_mouse_fires_every_frame_from_its_frame(mp, ep):
     assert mp.frames_rows(out, 6) == ["frames: n 6 expected 6 natives/frame p50 1 p95 2 max 2, calls 6 (Setup 0)"]
 
 
+ASM_RESET = ASM_ORDER.replace("""    GetVariableValue global:g
+    PushConstanti8 100
+    Multiply
+    GetVariableValue 0
+    Add
+    SetVariableValue global:g
+    PushConstant0
+    Return
+""", """    GetVariableValue 0
+    PushConstanti8 26
+    EqualTo
+    CompareAndBranchIfFalse @digits
+    PushConstant0
+    SetVariableValue global:g
+    PushConstant0
+    Return
+digits:
+    GetVariableValue global:g
+    PushConstanti8 100
+    Multiply
+    GetVariableValue 0
+    Add
+    SetVariableValue global:g
+    PushConstant0
+    Return
+""")
+
+
 def test_mouse_runs_before_the_frames_events(mp, ep):
-    """The mouse event precedes a same-frame `pre` event: mouse (id 26) then event 9 then event 7 on the 907 script is
-    still 907 only if the 26 does not disturb g: here the ORDER script treats 26 as g = g*100+26, so the digits are
-    26, 9, 7 -> g = 260907, no match; a mouse after them would give 90726, also none. The probe is the native count of a
-    mouse-less run (907 -> 1 native) against the mouse run (0): the mouse event did run, before them (and it is recorded)."""
-    img = _img(ASM_ORDER)
-    plain = _run(ep, img, 3, injections=[mp.parse_event("1:9"), mp.parse_event("1:7")])
-    withm = _run(ep, img, 3, injections=[mp.parse_event("1:9"), mp.parse_event("1:7")], mouse=[(1, 1, 1)])
-    assert mp.per_frame(plain) == [0, 1, 1]
-    assert mp.per_frame(withm) == [0, 0, 0]
+    """Hand-derived, on the 907 script where OnEvent(26) RESETS g to 0 and other ids append digits. Mouse from frame 1;
+    `pre` events 9 then 7 in frame 1. Mouse first (the stand-in's order): g = 0, 9, 907 -> frame 1 runs 1 native; frame 2
+    the mouse resets g again -> 0. [0, 1, 0]. Mouse after the events would give 907 -> 0 before Process: [0, 0, 0]."""
+    img = _img(ASM_RESET)
+    out = _run(ep, img, 3, injections=[mp.parse_event("1:9"), mp.parse_event("1:7")], mouse=[(1, 1, 1)])
+    assert mp.per_frame(out) == [0, 1, 0]
 
 
 def test_quiet_injection_leaves_its_natives_out(mp, ep):
