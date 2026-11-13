@@ -3025,22 +3025,6 @@ def uncompared_keys(spec) -> list[str]:
     return [rp for rp, pp in _key_paths(spec) if pp not in COMPARED_KEYS and pp not in IGNORED_KEYS]
 
 
-PYTHON_DONE = frozenset(["T4b"])       # the pending task ids whose Python-side feature this runner now has (M2a-3)
-
-
-def _python_pending(exp_path) -> Optional[str]:
-    """The pending task id as THIS runner sees it (conformance.md rule 21). A program's `pending` names the tasks of both
-    runners ("T4a/T4b"); the C++ runner skips it on any non-empty string until its own task removes the key. This runner
-    ignores the C++-only task ids (`T<n>a`) and the ids it has done (PYTHON_DONE): what is left keeps it pending, nothing
-    left runs it. `h-z-hud` ("T4a/T4b/T6a/T6b") stays pending here until T6b is done. No corpus file changes."""
-    from conform_pending import pending_task
-    task = pending_task(exp_path)
-    if task is None:
-        return None
-    left = [t for t in task.split("/") if t not in PYTHON_DONE and not re.fullmatch(r"T\d+a", t)]
-    return task if left else None          # the full id, so the PENDING line is the one the C++ runner prints
-
-
 def conform(directory, trace_dir=None) -> int:
     """Runs every program under DIR. A program whose expect.json has a non-empty string "pending" (the task id) is not run:
     it prints `PENDING <group>/<id> (<task>)` and is counted apart; it needs no .asm, writes no trace and never fails."""
@@ -3048,7 +3032,7 @@ def conform(directory, trace_dir=None) -> int:
     passed, pending, total = 0, 0, 0
     for exp in sorted(d.rglob("*.expect.json")):
         asm = exp.with_name(exp.name[:-len(".expect.json")] + ".asm")
-        task = _python_pending(exp)
+        task = pending_task(exp)
         if task is not None:
             pending += 1
             print("PENDING %s (%s)" % (asm.relative_to(d).with_suffix("").as_posix(), task))

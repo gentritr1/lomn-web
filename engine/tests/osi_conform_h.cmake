@@ -1,26 +1,9 @@
-# M2a-3 T4a: corpus group h (host events, Z blocks; docs/osi/conformance.md §6 rule 23) on the C++ runner. The committed
-# programs keep `"pending": "T4a/T4b"` until the Python runner (T4b) passes them too (rule 21), so this test runs a copy
-# with exactly that mark removed: h-z-hud keeps `T4a/T4b/T6a/T6b` (it needs the Task 6 HUD model) and stays pending.
+# M2a-3 T4a: corpus group h (host events, Z blocks; docs/osi/conformance.md §6 rule 23) on the C++ runner. Since the T4a+T4b
+# merge the three host-source programs carry no pending mark; h-z-hud keeps `T4a/T4b/T6a/T6b` (it needs the Task 6 HUD model).
 # RUNNER is empty natively and "node" for wasm32; ASSEMBLE is tools/osi/conform_assemble.py; CORPUS the h directory.
 file(REMOVE_RECURSE ${OUT})
-file(MAKE_DIRECTORY ${OUT}/h)
-file(GLOB files ${CORPUS}/*)
-set(stripped 0)
-foreach(f ${files})
-  get_filename_component(name ${f} NAME)
-  file(READ ${f} text)
-  if(name MATCHES "\\.expect\\.json$")
-    string(FIND "${text}" "\"pending\": \"T4a/T4b\"," at)
-    if(NOT at EQUAL -1)
-      string(REPLACE "\"pending\": \"T4a/T4b\"," "" text "${text}")
-      math(EXPR stripped "${stripped} + 1")
-    endif()
-  endif()
-  file(WRITE ${OUT}/h/${name} "${text}")
-endforeach()
-if(NOT stripped EQUAL 3)
-  message(FATAL_ERROR "expected 3 programs pending exactly T4a/T4b in ${CORPUS}, found ${stripped}")
-endif()
+file(MAKE_DIRECTORY ${OUT})
+file(COPY ${CORPUS}/ DESTINATION ${OUT}/h)
 execute_process(COMMAND ${PYTHON} ${ASSEMBLE} ${OUT} ${OUT}-osi RESULT_VARIABLE arc OUTPUT_VARIABLE aout ERROR_VARIABLE aerr
                 TIMEOUT 60)
 if(NOT arc EQUAL 0)

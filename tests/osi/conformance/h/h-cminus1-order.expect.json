@@ -7,7 +7,6 @@
   ],
   "falsifier": "the host calls of one frame run in process-map order (hud.md 2.4; trace.md 6 Version 3): VK Input (priority 0), key-mapper Input (1), mouse OnEvent (1, after the key mapper), Process (2), camera OnEvent(6) (3), whatever the list order",
   "alternative": "list order (camera, mouse, key mapper, VK) then Process: g = 53214; camera before Process: 12354; mouse before the key mapper (first added first): 13245; an unreleased host +1 on the camera (CreateVariant's +1 never released): Z ref 002a:00000001 2",
-  "pending": "T4a/T4b",
   "entry": "main",
   "args": [],
   "frames": 1,

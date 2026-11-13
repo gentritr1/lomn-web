@@ -268,6 +268,8 @@ def test_the_natives_bodies_asm_pins_and_citations(disasm, image):
     cited("scslosimath.abs", 0x618290, 0x657D46, 0x4077F0)
     cited("gclegocamera.setcampos", 0x44E8A0, 0x405E50, 0x44E8E3)
     cited("gclegocamera.settargpos", 0x44E900, 0x405F00, 0x44E943)
+    pin(disasm, 0x44ECB0, 0x44ECD0, {0x44ECC1: "call 0x45c2b0"})
+    cited("gclegocamera.addyaw", 0x44ECB0, 0x45C2B0, 0x44ECC1)
 
 
 def make(asm, pc=24, install=None):
@@ -829,18 +831,11 @@ def test_group_h_conform_summary_runs_three_and_leaves_h_z_hud_pending(capsys):
     assert out == ["PENDING h-z-hud (T4a/T4b/T6a/T6b)", "conformance: 3/3 pass, 1 pending"]
 
 
-def test_the_pending_marks_are_untouched_so_the_cpp_runner_keeps_skipping_them():
+def test_the_t4_marks_are_removed_and_h_z_hud_waits_for_t6():
+    """Merge of T4a+T4b: the three group-h programs run on both runners; h-z-hud keeps its mark until T6a/T6b."""
     import conform_pending
-    assert [conform_pending.pending_task(H_DIR / (n + ".expect.json")) for n in H_RUNNABLE] == ["T4a/T4b"] * 3
+    assert [conform_pending.pending_task(H_DIR / (n + ".expect.json")) for n in H_RUNNABLE] == [None] * 3
     assert conform_pending.pending_task(H_DIR / "h-z-hud.expect.json") == "T4a/T4b/T6a/T6b"
-
-
-@pytest.mark.parametrize("task, pending", [("T4a/T4b", False), ("T4a", False), ("T4b", False), ("T4a/T4b/T6a/T6b", True), ("T3/T4", True),
-                                           ("T6b", True), ("T4b/T7b", True), ("", False), (None, False)])
-def test_the_python_runner_ignores_cpp_only_and_done_task_ids(tmp_path, task, pending):
-    p = tmp_path / "x.expect.json"
-    p.write_text(json.dumps({"id": "x"} if task is None else {"id": "x", "pending": task}))
-    assert (osi_vm._python_pending(p) is not None) is pending
 
 
 def test_group_h_natives_log_order_of_one_frame():

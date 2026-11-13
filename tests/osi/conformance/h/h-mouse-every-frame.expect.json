@@ -8,7 +8,6 @@
   ],
   "falsifier": "a MOUSESPEC sends OnEvent(26, x, y) on EVERY frame from frame 0 (cursor (0,0) before the first position token), then per button 23 on the first frame down, 24 on each later frame down, 25 on the first frame up, all after the frame's 26 (hud.md 5.1, 11)",
   "alternative": "26 only from the first position token: n 5; 26 only when the position changes: n 3; no held event: log 2325, bs 11, ys 700; buttons before 26: ys 1030",
-  "pending": "T4a/T4b",
   "entry": "main",
   "args": [],
   "frames": 6,

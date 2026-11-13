@@ -8,7 +8,6 @@
   ],
   "falsifier": "Z ref prints each live handle's ENGINE references (minting G plus every H since; natives.md 3.1) at the END of the frame (hud.md 9), also for a handle no script variant holds",
   "alternative": "H ignored: handle 1 freed when the script drops it (no Z ref line, live.g 1) and handle 2 at 2; total references: 1 and 4; snapshot before Process: handle 2 at 1",
-  "pending": "T4a/T4b",
   "entry": "main",
   "args": [],
   "frames": 1,

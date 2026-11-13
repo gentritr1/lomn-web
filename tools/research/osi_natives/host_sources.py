@@ -13,10 +13,10 @@ What is modelled (everything INFERRED is marked at its place):
 - `camera_step`: GcLegoCamera::Process 0x451990, the spline-following modes 2 and 3 and their `OnEvent(6)` guards (§1.3).
 - `FrameHost`: the order of one frame (§2.4: VK triggers, key mapper, mouse driver, the script's Process passes, the camera),
   the `K` line, `C -1` for the mouse and the camera (trace.md §6), the end-of-frame `Z` block (§9).
-- `scslosimath.abs`, `gclegocamera.setcampos` / `settargpos` bodies (the camera eye and target are `Z` lines).
+- `scslosimath.abs`, `gclegocamera.setcampos` / `settargpos` bodies (the camera eye and target are `Z` lines), and
+  `addyaw` as the camera check only (it rotates only +0x174, which no `Z` line shows, hud.md §1.7; same as the C++ body).
 
-Not modelled: the camera's other modes (no OnEvent(6), no spline), `addyaw` (it rotates only +0x174, which no `Z` line shows,
-hud.md §1.7), the HUD lines of `Z` (Task 6b), the spline's first-derivative table (GetFirstDerivative is not on any path)."""
+Not modelled: the camera's other modes (no OnEvent(6), no spline), the HUD lines of `Z` (Task 6b), the spline's first-derivative table (GetFirstDerivative is not on any path)."""
 from __future__ import annotations
 
 import struct
@@ -31,7 +31,7 @@ from expect_calc import round_p
 from . import framework
 from .framework import register_group
 
-TIER1_KEYS = ["scslosimath.abs", "gclegocamera.setcampos", "gclegocamera.settargpos"]
+TIER1_KEYS = ["scslosimath.abs", "gclegocamera.setcampos", "gclegocamera.settargpos", "gclegocamera.addyaw"]
 
 CITES = {
     "scslosimath.abs":
@@ -40,6 +40,9 @@ CITES = {
     "gclegocamera.setcampos":
         "// body 0x44e8a0, method 0x405e50 <GcLegoCamera::SetCameraPosition>; asm pin: 0x44e8be-0x44e8c6 the three float "
         "arguments, 0x44e8ce-0x44e8d8 fstp dword (f32 stores), 0x44e8e3 call SetCameraPosition, 0x44e8e8 returns nothing {0xf,0}",
+    "gclegocamera.addyaw":
+        "// body 0x44ecb0, method 0x45c2b0 <GcLegoCamera::AddYaw>; asm pin: 0x44ecc1 call AddYaw (rotates the direction +0x174 "
+        "only, hud.md 1.7); the camera argument is checked, returns nothing",
     "gclegocamera.settargpos":
         "// body 0x44e900, method 0x405f00 <GcLegoCamera::SetTargetPosition>; asm pin: the same shape as setcampos, 0x44e943 "
         "call SetTargetPosition",
@@ -278,6 +281,10 @@ def bind(reg, ctx) -> None:
         hs.state(_cam(ctx, call)).target = (_f(call, 1), _f(call, 2), _f(call, 3))
         return NOTHING
 
+    def addyaw(call):                     # 0x44ecb0 -> AddYaw 0x45c2b0: rotates only +0x174 (no Z line reads it); the camera check
+        _cam(ctx, call)
+        return NOTHING
+
     def getcamera(call):                  # directors' getter, but the camera is the objects group's class (it has the AI mode)
         from . import directors, objects
         vp = ctx.object_arg(call, 0)
@@ -295,6 +302,7 @@ def bind(reg, ctx) -> None:
     reg.bind("scslosimath.abs", abs_)
     reg.bind("gclegocamera.setcampos", setcampos)
     reg.bind("gclegocamera.settargpos", settargpos)
+    reg.bind("gclegocamera.addyaw", addyaw)
 
     orig_create = reg.entries[reg._key("scslosislkcubicspline", "create")].fn
 
