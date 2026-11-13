@@ -192,8 +192,13 @@ class ProbeRegistry(osi_vm.NativeRegistry):
     allocate and shift the handle counters (D7) without changing the path."""
 
     rec: Optional[Recorder] = None
+    loads: Optional[list] = None        # menu_probe `loads`: (frame, key, [argument values]) of LOAD_KEYS, strings decoded
+    heap = None
 
     def invoke(self, call):
+        if self.rec is not None and not self.rec.injecting and self.loads is not None and call.entry.key in LOAD_KEYS:
+            self.loads.append((len(self.rec.frames) - 2, call.entry.key, [self._text(call.arg(i))
+                                                                           for i in range(len(call.slots))]))
         if self.rec is not None and not self.rec.injecting:
             vals = []
             for i in range(len(call.slots)):
@@ -203,22 +208,57 @@ class ProbeRegistry(osi_vm.NativeRegistry):
         return super().invoke(call)
 
 
+    def _text(self, v):
+        if v.type == 0x16:
+            return self.heap.text(v.value).decode("latin1")
+        if v.type == 0x12:
+            return round(struct.unpack("<f", struct.pack("<I", v.value))[0], 4)
+        return v.value if v.type == 0x10 else "t%02x" % v.type
+
+
+LOAD_KEYS = frozenset((
+    "sctilefont.create", "gcbigsprite.loadhudsprite", "scslosislkcubicspline.create", "sctextobject.create",
+    "sctextobject.setstring", "gclegocamera.setcameraspline", "gclegocamera.settargetspline",
+    "gcmp3player.setupforplay"))
+
+
+class Injection(NamedTuple):
+    """One host `OnEvent(event, *args)` call in frame `frame`: `pre` = after the frame's key calls and before its Process
+    passes, `post` = after them. `record`: the natives and pcs it runs are part of the run (menu_probe); the original
+    single-injection mode (inject=) leaves them out (record False), exactly as before."""
+    frame: int
+    event: int
+    args: tuple
+    when: str = "pre"
+    record: bool = False
+
+
 class Outcome(NamedTuple):
     frames: list            # per frame (index 0 = Setup), the executed pcs and native records
     stop: str
     injected: int
     inject_error: str
+    loads: tuple = ()
 
 
-def run(script, natives, mods, types, frames, keys, deadline, inject=None, natives_impl="stub", install=None) -> Outcome:
+def run(script, natives, mods, types, frames, keys, deadline, inject=None, natives_impl="stub", install=None,
+        injections=(), mouse=(), want_loads=False) -> Outcome:
     """inject = (frame, event, args) or None; `frame` is one frame, or a tuple of frames (repeat mode: the same tuple
     is injected at each of them, in one run). natives_impl "real" binds the oracle's own models (osi_natives, exactly as
-    osi_vm.py --run --real-natives [--install DIR] does; the unbound rows stay typed stubs, D11)."""
+    osi_vm.py --run --real-natives [--install DIR] does; the unbound rows stay typed stubs, D11).
+    M2a-3 T1: `injections` is a list of Injection (any number per frame, fired in list order; `pre` ones after the key
+    calls, `post` ones after the frame's Process passes); `mouse` is [(frame, x, y)]: from each frame on, until the next
+    entry, `OnEvent(26, x, y)` fires before every frame's Process, ahead of that frame's `pre` injections. Both record
+    their natives. `want_loads` fills Outcome.loads with (frame, key, args) of LOAD_KEYS. `inject=` is unchanged."""
     tt = osi_vm.TypeTable.load(types)
     reg = ProbeRegistry.load(natives, mods, tt)
     rec = Recorder(time.monotonic() + deadline if deadline else None)
     reg.rec = rec
+    loads: list = []
+    if want_loads:
+        reg.loads = loads
     heap = osi_vm.Heap(None)
+    reg.heap = heap
     vm = osi_vm.Vm(script, reg, heap, None)
     if natives_impl == "real":  # M2a-2 T10: osi_vm.run_base's binding (the natives.log is kept in memory, unused)
         from osi_natives import framework
@@ -233,14 +273,28 @@ def run(script, natives, mods, types, frames, keys, deadline, inject=None, nativ
     dt = struct.unpack("<d", struct.pack("<Q", osi_vm.DT_BITS_DOUBLE))[0]
     t = 0.0
     pm_flag, proc_byte = 0, 1
+    ins = [Injection(f, inject[1], tuple(inject[2])) for f in sorted(at)] if inject is not None else []
+    ins += list(injections)
+    mouse = sorted(mouse)
 
     def where(e):
         return 'error "%s" at pc %08x op %02x' % (e.message, e.pc, e.op)
 
+    def fire(i):
+        """Call OnEvent for one injection; None on success, else the error text."""
+        vs = [Variant(T_INT, i.event)] + [_variant(a) for a in i.args]
+        vs += [NOTHING] * (10 - len(vs))
+        rec.injecting = not i.record
+        try:
+            r = vm.call("OnEvent", vs)
+        finally:
+            rec.injecting = False
+        return None if r.ok else where(vm.last_error)
+
     try:
         r = vm.call("Setup", [])
         if not r.ok:
-            return Outcome(rec.frames, "Setup " + where(vm.last_error), 0, "")
+            return Outcome(rec.frames, "Setup " + where(vm.last_error), 0, "", tuple(loads))
         for k in range(frames):
             rec.frames.append([])
             if natives_impl == "real":
@@ -253,19 +307,15 @@ def run(script, natives, mods, types, frames, keys, deadline, inject=None, nativ
                 if not r.ok:
                     err = vm.last_error
                     break
-            if err is None and inject is not None and k in at:
-                ev, args = inject[1], inject[2]
-                vs = [Variant(T_INT, ev)] + [_variant(a) for a in args]
-                vs += [NOTHING] * (10 - len(vs))
-                rec.injecting = True
-                try:
-                    r = vm.call("OnEvent", vs)
-                finally:
-                    rec.injecting = False
-                if not r.ok:
-                    inject_error = where(vm.last_error)
-                    return Outcome(rec.frames, "frame %d injected OnEvent %s" % (k, inject_error), rec.injected,
-                                   inject_error)
+            if err is None:
+                m = [x for x in mouse if x[0] <= k]
+                todo = ([Injection(k, 26, (m[-1][1], m[-1][2]), "pre", True)] if m else []) + \
+                       [i for i in ins if i.frame == k and i.when == "pre"]
+                for i in todo:
+                    e = fire(i)
+                    if e:
+                        return Outcome(rec.frames, "frame %d injected OnEvent %s" % (k, e), rec.injected, e,
+                                       tuple(loads))
             pm_flag ^= 1
             passes = 0
             while err is None and proc_byte == pm_flag:
@@ -282,9 +332,15 @@ def run(script, natives, mods, types, frames, keys, deadline, inject=None, nativ
             if err is not None:
                 stop = "frame %d %s" % (k, where(err))
                 break
+            for i in ins:
+                if i.frame == k and i.when == "post":
+                    e = fire(i)
+                    if e:
+                        return Outcome(rec.frames, "frame %d injected OnEvent %s" % (k, e), rec.injected, e,
+                                       tuple(loads))
     except Deadline:
         stop = "deadline"
-    return Outcome(rec.frames, stop, rec.injected, inject_error)
+    return Outcome(rec.frames, stop, rec.injected, inject_error, tuple(loads))
 
 
 class Result(NamedTuple):
