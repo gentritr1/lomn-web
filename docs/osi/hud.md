@@ -684,7 +684,7 @@ The ctor defaults for +0xb0, +0xb1, +0xb2, +0xc8 and the colour were **not read*
 
 | Function (caller) | API | Section / key | Default | Use |
 |---|---|---|---|---|
-| `LoadIni` 0x5d4890 (`AppMain` 0x538246) | Int 0x5d4a24 | GraphicsOptions / ResolutionW | 0 | if 0, `fopen("w+")` truncates and writes 13 defaults (below) |
+| `LoadIni` 0x5d4890 (`AppMain` 0x538246) | Int 0x5d4a24 | GraphicsOptions / ResolutionW | 0 | if 0 (32-bit `test eax,eax` 0x5d4a2a), the file is rebuilt (§6.2a) |
 | `GetScreenData` 0x5d5080 (`AppMain` 0x53827c, `ScDrawableContext::Reset` 0x5591e9) | Int ×7 | GraphicsOptions / ResolutionW, ResolutionH, Windowed, BitDepth, SvpOther, SvpRad, Fog | 0x280, 0x1e0, 0, 0x20, 0, 0, 1 | W/H stored as u16; the rest as bytes |
 | `GetLanguage` 0x5d4c10 (`GcAreaDirector::Init` 0x4877de) | Int | Misc / Language | 0 | → 0x48b200 |
 | `GetKeyOption` 0x5d4c90 (`GcLegoCamera` ctor 0x45058a) | Int | Misc / ControlOption | 1 | returned |
@@ -698,6 +698,8 @@ The ctor defaults for +0xb0, +0xb1, +0xb2, +0xc8 and the colour were **not read*
 | `BadCheat` 0x5d4e40 (`GcToa` ctor 0x568a5e, `GcToa::CleanUp` 0x56b63a) | Str 0x5d4e6a | Cheat / Urinate | "", 0xff | true if == "Pohatu" |
 | `CheatDebug` 0x5d4f00 (`ScSLOSIDebug::Print` 0x61d5ef) | Str 0x5d4f2a | Cheat / Cheat | "", 0xff | true if == "NoGreenCapes" |
 | `CheatMenu` 0x5d4fc0 (native `gcsaver.cheatmenu` 0x5d35b0 only) | Str 0x5d4fea | Misc / CheatMenu | "", 0xff | true if == "LEGOTester" |
+
+- **§6.2a The rebuild (EXECUTED 2026-11-14, objdump 0x5d4a32-0x5d4bee plus the PE string decode):** `fopen(ini,"w+")` 0x6597a0 truncates, `fprintf` 0x65d240 writes "; This is the LEGO Bionicle ini file\n\n", `fclose` 0x6595f0. Then **10** `WritePrivateProfileStringA` `[0x771420]` to GraphicsOptions: ResolutionW 640, ResolutionH 480, **Windowed 1**, BitDepth 32, SvpOther 0, SvpRad 0, Fog 1, ParticleDetail 100, ShadowDetail 2, Gamma 256. Then `fopen("a+")`, "\n", fclose, and **4** writes to Misc: Language 0, ControlOption 1, SoundVolume 100, MusicVolume 100. **14 keys, not 13** (an earlier draft of this row said 13). Every other section, Cheat included, is lost. **Windowed is written as 1** while GetScreenData's built-in default is 0, so a rebuilt file runs windowed. The test is on the 32-bit `GetPrivateProfileIntA` result, so a missing, empty, non-numeric or "0" ResolutionW triggers the rebuild; "-5" does not.
 
 - **The comparison:** `_ScBaseString::compare` 0x4f5990 does a byte compare over min(len) via 0x657820, then the length difference. So it is an **exact, case-sensitive match**.
 - **Cheat natives:** `gcsaver.cheat` / `cheatmenu` / `getfog` return `CreateVariant` 0x407f30 (int, `movzx` byte) = 0 or 1.
