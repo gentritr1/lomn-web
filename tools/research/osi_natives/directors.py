@@ -449,7 +449,7 @@ class ModelObjects:
     def _ctx_model(self, objects):
         return self.ctx.subsystem(objects.ModelDirector)
 
-    def add_character(self, ctx, obj_id: int) -> None:
+    def add_character(self, ctx, obj_id: int) -> bool:
         """GcModelDirector::AddCharacter 0x47f040 as LoadCharacters 0x53f3f0 calls it (0x53f473): a new GcCharacter (0x368 bytes)
         for the id, Add 0x480eb0 into the map (an existing key keeps its value: the new object is dropped and the caller's
         Get 0x480f70 finds the old one). UNVERIFIED, not modelled: the null-id rename (0x47f059 cmp [0x70a81c] =
@@ -461,7 +461,8 @@ class ModelObjects:
         if md.get(obj_id) is None:
             ch = objects.GcCharacter(objects._tid(ctx, "GcCharacter"), obj_id & M32, obj_id & M32)
             ch.node_id = obj_id & M32                                  # 0x47ec30 (the Add wrapper AddCharacter calls): [char+0x10] = [char+0x100] (0x47ec67)
-            md.add(ch, obj_id & M32)
+            return md.add(ch, obj_id & M32)
+        return False                                                   # an existing key: Add 0x480eb0 refuses (0x47ef9a)
 
     def remove(self, ctx, obj_id: int) -> None:
         """GcModelDirector::Remove 0x47f320: director not active -> return (0x47f32c); id not in the map -> return
@@ -610,8 +611,9 @@ class AreaDirector:
                     slots = ctx.subsystem(services.BlockFileSlots)
                     saved_slot = slots.current                                   # 0x47eca5
                     slots.current = objects._character_block(ctx, o.obj_id)      # 0x47ecb2 -> 0x419403
-                    ctx.subsystem(ModelObjects).add_character(ctx, o.obj_id)     # AddCharacter 0x47f040 (0x53f473), Get non-null
-                if (not o.plain and (o.motion_id == MOVEABLE_SETUP_ID or not gated)
+                    added = ctx.subsystem(ModelObjects).add_character(ctx, o.obj_id)   # AddCharacter 0x47f040 (0x53f473), Get non-null
+                if (not (window and not added)                                   # a refused Add returns at 0x47efda: no 0x40da60, no SetupMoveable
+                        and not o.plain and (o.motion_id == MOVEABLE_SETUP_ID or not gated)
                         and o.motion_id == self.main_character(ctx)):               # cmp ecx,edx 0x574ef1
                     r = self.set_under_water(ctx, self.under_water, swallow=True)
                     if not r.ok:                                                 # swallowed: the object is not completed,

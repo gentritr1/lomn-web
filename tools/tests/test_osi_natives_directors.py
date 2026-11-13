@@ -1687,6 +1687,20 @@ def test_a_swallowed_error_in_a_character_load_leaves_the_block_file_slot_at_the
     assert services.does_file_exist(ctx, b"Root/y.tga") is True                  # the loose file is visible again (0x54de41)
 
 
+def test_a_refused_add_in_addcharacter_fires_no_setupmoveable_and_no_onevent():
+    """R3. AddCharacter's inner 0x47ec30: Add (call 0x47ef8f) returning 0 takes `jne 0x47efe0` NOT taken, i.e. 0x47ef9c-0x47efda: it
+    returns without 0x40da60 (call 0x47efef), so neither SetupMoveable (0x40e23c) nor its OnEvent runs. A character record whose id
+    already has a map entry (the Toa 'cnt1') is refused; its id is the main character's, yet the SetUnderWater guard must not fire."""
+    d = dr()
+    asm = ('.function main 0\nPushConstantString "frnt"\nCallGameFunction gcareadirector.setcurrentarea 1\nReturn\n'
+           '.function OnEvent 2\nDebugOn\nPushConstanti8 1\nReturn\n')
+    vm, ctx, tr, log = make_vm(asm, groups=("objects",))
+    ad = _swallow_world(vm, ctx, [d.AreaObject("characters", CNT1, CNT1)])
+    _toa_world(ctx, False)                                                      # 'cnt1' is already in the map
+    assert vm.call("main", []).ok
+    assert ad.set_under_water_calls == 0 and vm.swallowed == [] and not any(l.startswith("C ") for l in log)
+
+
 def test_objects_and_hives_entries_reach_the_area_director_not_the_model_director():
     d = dr()
     vm, ctx, tr, log = make_vm(LEVEL_AREA_LEVEL + _onevent_logger(), groups=("objects",))
