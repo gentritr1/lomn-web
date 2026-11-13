@@ -327,10 +327,38 @@ def test_flip_probe_deadline_per_run(flip, tmp_path):
     assert [(r.verdict, r.key, r.stop) for r in res if r.key == "t.flag"] == [("CHANGED", "t.flag", "deadline")]
 
 
-def test_flip_probe_real_impl_is_not_available_yet(flip, tmp_path):
-    image, n = _flip_files(tmp_path, FLIP_ASM)
-    with pytest.raises(SystemExit):
-        flip.main(["--osi", str(tmp_path / "x.osi"), "--frames", "1", "--natives-impl", "real"])
+REAL_FLIP_ASM = """
+.globals id
+.function Setup 0
+    PushConstantString "abcd"
+    CallGameFunction scslosifoundation.stringtoidentifier 1
+    SetVariableValue global:id
+    PushConstant0
+    Return
+.function Process 3
+    GetVariableValue global:id
+    CompareAndBranchIfFalse @no
+    PushConstanti8 7
+    Pop
+no:
+    PushConstanti8 1
+    Return
+"""
+
+
+def test_flip_probe_real_impl_binds_the_oracle_models(flip):
+    """M2a-2 T10 (Review focus 5: the flip probe on the real-natives run). --natives-impl real binds osi_natives as
+    osi_vm.py --real-natives does. Hand-derived: the model gives stringtoidentifier("abcd") = 0x61626364, so its flip
+    to int 1 keeps the branch (SAME); the typed stub gives 0, so the flip to 1 moves Process (CHANGED, +2 per frame:
+    3 frames = +6)."""
+    sys.path[:0] = [str(REPO / "tools" / "osi")]
+    import osiasm
+    image, _ = osiasm.assemble(REAL_FLIP_ASM)
+    t = (DATA / "natives.json", DATA / "natives_beta150.json", DATA / "types.json")
+    real = flip.probe(image, *t, frames=3, deadline=20, natives_impl="real")
+    stub = flip.probe(image, *t, frames=3, deadline=20)
+    assert [(r.verdict, r.key, r.delta) for r in real] == [("SAME", "scslosifoundation.stringtoidentifier", 0)]
+    assert [(r.verdict, r.key, r.delta) for r in stub] == [("CHANGED", "scslosifoundation.stringtoidentifier", 6)]
 
 
 CHANGED_BY_VALUE = {"bettersaver.getbooleanvalue", "gcareadirector.getcurrentlevel", "gcsaver.cheatmenu",

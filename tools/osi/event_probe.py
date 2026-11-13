@@ -2,7 +2,7 @@
 what the script does on the front-end?
 
   event_probe.py --osi BASE.OSI [--frames 600] [--at 0,1,10,100,599|A-B|all] [--repeat] [--keys KEYSPEC]
-                 [--deadline SECONDS] [--natives-impl stub|real]
+                 [--deadline SECONDS] [--natives-impl stub|real [--install DIR]]
   event_probe.py --verify-sites EXE       check SITES against the exe (objdump, as data)
 
 Why (task-2a report, Decision 8): the Toa is a registered process (GcToa ctor, AddProcess 0x568262) and its
@@ -13,7 +13,7 @@ cannot decide. Instead of modelling the Toa, this probe measures the effect of e
 Method:
   1. A baseline run, as osi_vm.run_base: Setup, then `frames` frames of [key Input calls, Process passes with the
      ScProcessManager parity and re-run rules]. Stub natives (D11) and the Beta 1.5.0 mod rows unless --natives-impl
-     real (Task 4's models; Task 10 re-runs the probe that way).
+     real (the oracle's own models, osi_natives, bound as osi_vm.py --real-natives; Task 10 re-runs the probe that way).
   2. Every distinct event tuple of SITES (see `expand`), injected as `vm.call("OnEvent", [id, args..., nothing...])`
      at each frame of --at, after that frame's key calls and before its Process passes. The original's order between
      the Toa / BA-group processes and ScSLOSIProcess is the process map's key order (ScProcessManager::Process
@@ -210,17 +210,22 @@ class Outcome(NamedTuple):
     inject_error: str
 
 
-def run(script, natives, mods, types, frames, keys, deadline, inject=None, natives_impl="stub") -> Outcome:
+def run(script, natives, mods, types, frames, keys, deadline, inject=None, natives_impl="stub", install=None) -> Outcome:
     """inject = (frame, event, args) or None; `frame` is one frame, or a tuple of frames (repeat mode: the same tuple
-    is injected at each of them, in one run)."""
+    is injected at each of them, in one run). natives_impl "real" binds the oracle's own models (osi_natives, exactly as
+    osi_vm.py --run --real-natives [--install DIR] does; the unbound rows stay typed stubs, D11)."""
     tt = osi_vm.TypeTable.load(types)
-    if natives_impl == "real":
-        raise SystemExit("event_probe.py: --natives-impl real needs tools/research/osi_natives (M2a-2 Task 4)")
     reg = ProbeRegistry.load(natives, mods, tt)
     rec = Recorder(time.monotonic() + deadline if deadline else None)
     reg.rec = rec
     heap = osi_vm.Heap(None)
     vm = osi_vm.Vm(script, reg, heap, None)
+    if natives_impl == "real":  # M2a-2 T10: osi_vm.run_base's binding (the natives.log is kept in memory, unused)
+        from osi_natives import framework
+        reg.return_log = []
+        ctx = framework.HostContext(vm, heap, framework.Vfs(install) if install else None, framework.HostFlags(),
+                                    reg.return_log)
+        framework.bind_natives(reg, ctx)
     vm.pcs_seen = rec
     kc = osi_vm.key_calls(keys) if keys else {}
     stop, inject_error = "none", ""
@@ -238,6 +243,8 @@ def run(script, natives, mods, types, frames, keys, deadline, inject=None, nativ
             return Outcome(rec.frames, "Setup " + where(vm.last_error), 0, "")
         for k in range(frames):
             rec.frames.append([])
+            if natives_impl == "real":
+                vm.begin_frame(k)  # natives.log `K %6d`, as run_base (a model may read the frame)
             t = float(osi_vm.round_p(Fraction(t) + Fraction(dt), vm.fpu_pc))
             tb, db = osi_vm.f32_bits(t), osi_vm.f32_bits(dt)
             err = None
@@ -313,11 +320,11 @@ def compare(base: Outcome, inj: Outcome, event, args, frame) -> Result:
 
 
 def probe(script, natives, mods, types, frames=600, inject_frames=(0, 1, 10, 100, 599), tuples=None,
-          keys=A9_KEYS, deadline=60.0, natives_impl="stub", repeat=False) -> list:
+          keys=A9_KEYS, deadline=60.0, natives_impl="stub", repeat=False, install=None) -> list:
     """Single-shot mode (default): one run per (tuple, frame), the tuple injected once, at that frame. Repeat mode: one
     run per tuple, injected at EVERY frame of `inject_frames` in that run (an event the Toa fires every frame, or N
     times toward a threshold); the result's `frame` is the tuple of frames."""
-    base = run(script, natives, mods, types, frames, keys, deadline, None, natives_impl)
+    base = run(script, natives, mods, types, frames, keys, deadline, None, natives_impl, install)
     if base.stop != "none":
         raise RuntimeError("the baseline run does not finish cleanly: %s" % base.stop)
     tuples = all_tuples() if tuples is None else tuples
@@ -325,11 +332,11 @@ def probe(script, natives, mods, types, frames=600, inject_frames=(0, 1, 10, 100
     for ev, args in tuples:
         if repeat:
             at = tuple(inject_frames)
-            r = run(script, natives, mods, types, frames, keys, deadline, (at, ev, args), natives_impl)
+            r = run(script, natives, mods, types, frames, keys, deadline, (at, ev, args), natives_impl, install)
             out.append(compare(base, r, ev, args, at))
             continue
         for f in inject_frames:
-            r = run(script, natives, mods, types, frames, keys, deadline, (f, ev, args), natives_impl)
+            r = run(script, natives, mods, types, frames, keys, deadline, (f, ev, args), natives_impl, install)
             out.append(compare(base, r, ev, args, f))
     return out
 
@@ -442,6 +449,7 @@ def main(argv=None) -> int:
     ap.add_argument("--keys", default=A9_KEYS)
     ap.add_argument("--deadline", type=float, default=60.0, help="seconds per run")
     ap.add_argument("--natives-impl", choices=("stub", "real"), default="stub")
+    ap.add_argument("--install", help="with --natives-impl real: the install directory the models read (Root/ of the VFS)")
     ap.add_argument("--natives", default=str(DATA / "natives.json"))
     ap.add_argument("--mods", default=str(DATA / "natives_beta150.json"))
     ap.add_argument("--types", default=str(DATA / "types.json"))
@@ -454,7 +462,7 @@ def main(argv=None) -> int:
         ap.error("--osi is required (except with --verify-sites)")
     t0 = time.monotonic()
     res = probe(Path(a.osi).read_bytes(), a.natives, a.mods, a.types, a.frames,
-                parse_at(a.at, a.frames), None, a.keys, a.deadline, a.natives_impl, a.repeat)
+                parse_at(a.at, a.frames), None, a.keys, a.deadline, a.natives_impl, a.repeat, a.install)
     for r in res:
         print(format_line(r))
     counts = {}

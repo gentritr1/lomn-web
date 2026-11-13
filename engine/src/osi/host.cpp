@@ -219,19 +219,24 @@ ScriptHost::ScriptHost(const sage::OsiFile& script, std::string_view natives_jso
       if (reg_.entry(i).tier == Tier::Implemented && !reg_.entry(i).fn) missing += " " + reg_.entry(i).key;
     if (!missing.empty()) throw std::runtime_error("real natives: tier1 without a bound body:" + missing);
   }
-  vm_->set_native_observer([this](const NativeEntry& e, uint64_t seq) {
+  // Coverage counts every call attempt (coverage.py --trace): the natives that entered, and (T10) the 0x82/0x83 calls of
+  // a registered native that failed before its entry, which sort before the native entered next (same seq).
+  auto hit = [this](const NativeEntry& e, uint64_t seq, bool pre_entry) {
     ++stats_.natives;
     auto it = stats_.hits.find(e.key);
     if (it == stats_.hits.end()) {
       NativeHit h;
       h.first_frame = setup_done_ ? current_frame_ : -1;
       h.first_seq = seq;
+      h.first_pre_entry = pre_entry;
       h.tier = e.tier;
       h.bound = e.fn != nullptr;
       it = stats_.hits.emplace(e.key, h).first;
     }
     ++it->second.calls;
-  });
+  };
+  vm_->set_native_observer([hit](const NativeEntry& e, uint64_t seq) { hit(e, seq, false); });
+  vm_->set_native_fail_observer([hit](const NativeEntry& e, uint64_t seq) { hit(e, seq, true); });
 }
 
 ScriptHost::~ScriptHost() = default;

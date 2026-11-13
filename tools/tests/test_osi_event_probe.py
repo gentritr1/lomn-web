@@ -193,3 +193,42 @@ def test_representative_values_for_computed_arguments(ep):
     s = ep.Site("t", 0x1, 0x11, (("id?",), ("f?",), ("i?",), ("i", 5)))
     assert ep.expand(s) == [(0x11, (0x636E7431, ("f", 0.0), 0, 5)), (0x11, (0, ("f", 1.0), 1, 5)),
                             (0x11, (1, ("f", 1.0), 1, 5))]
+
+
+ASM_REAL = """
+.globals id
+.function Setup 0
+    PushConstantString "abcd"
+    CallGameFunction scslosifoundation.stringtoidentifier 1
+    SetVariableValue global:id
+    PushConstant0
+    Return
+.function Process 3
+    GetVariableValue global:id
+    CompareAndBranchIfFalse @no
+    PushConstanti8 7
+    Pop
+no:
+    PushConstanti8 1
+    Return
+.function OnEvent 10
+    PushConstant0
+    Return
+"""
+
+
+def test_real_natives_are_the_oracle_models(ep, tmp_path):
+    """M2a-2 T10: --natives-impl real binds the oracle's own native models (osi_natives, as osi_vm --real-natives).
+    Hand-derived: stringtoidentifier("abcd") is 0x61626364 with the model (non-zero: Process falls through, 6
+    instructions per frame) and the typed stub's int 0 without it (the branch is taken, 4 per frame). 5 frames:
+    real 30, stub 20 Process instructions; Setup runs 5 either way (frame record 0)."""
+    sys.path[:0] = [str(REPO / "tools" / "osi")]
+    import osiasm
+    img, _ = osiasm.assemble(ASM_REAL)
+    n, m, t = DATA / "natives.json", DATA / "natives_beta150.json", DATA / "types.json"
+    real = ep.run(img, n, m, t, 5, "", 30.0, None, "real")
+    stub = ep.run(img, n, m, t, 5, "", 30.0, None, "stub")
+    assert real.stop == "none" and stub.stop == "none"
+    assert [ep._insns([f]) for f in real.frames] == [5, 6, 6, 6, 6, 6]
+    assert [ep._insns([f]) for f in stub.frames] == [5, 4, 4, 4, 4, 4]
+    assert ("scslosifoundation.stringtoidentifier", ((0x16,),)) in [tuple(x) for x in real.frames[0] if isinstance(x, tuple)]

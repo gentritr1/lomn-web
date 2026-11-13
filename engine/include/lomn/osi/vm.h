@@ -100,6 +100,9 @@ class Vm {
   // Called after each native returns normally, before its trace/log lines (HostContext's M-7 invariant check). It may
   // throw; the calling 0x82/0x83/0x84 then re-raises like any native error.
   void set_native_exit_observer(std::function<void(const NativeEntry&, uint64_t)> f) { exit_observer_ = std::move(f); }
+  // T10: called when a 0x82/0x83 call of a registered native fails before the native's entry (argument count, stack,
+  // conversion), with the sequence number the next entered native will get (none is consumed). ScriptHost's coverage.
+  void set_native_fail_observer(std::function<void(const NativeEntry&, uint64_t)> f) { fail_observer_ = std::move(f); }
 
  private:
   static const char* const kDirectCallMessage;  // 0x84's text, reported at a memoised 0x82 site
@@ -204,6 +207,7 @@ class Vm {
   std::vector<uint64_t> active_seq_;  // sequence numbers of the natives executing now, innermost last
   std::function<void(const NativeEntry&, uint64_t)> observer_;
   std::function<void(const NativeEntry&, uint64_t)> exit_observer_;
+  std::function<void(const NativeEntry&, uint64_t)> fail_observer_;
   std::vector<Swallowed> swallowed_;
   struct Saved {
     uint32_t depth = 0, pc = 0, frame = 0;

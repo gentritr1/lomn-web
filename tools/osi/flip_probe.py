@@ -1,6 +1,6 @@
 """M2a-2 T1: the flip probe. Which natives' return values change what the script does?
 
-  flip_probe.py --osi BASE.OSI --frames N [--natives-impl real|stub] [--deadline SECONDS]
+  flip_probe.py --osi BASE.OSI --frames N [--natives-impl real|stub [--install DIR]] [--deadline SECONDS]
 
 Method (plan "Measured facts", the flip row):
   1. A baseline run of Setup + N `Process` frames with every native a typed stub (D11) and the Beta 1.5.0 mod rows
@@ -22,8 +22,9 @@ Output, one line per distinct native in first-hit order (stdout), and a summary 
 `<stop>` is `none`, `deadline`, or `error "<message>" in Setup at pc %08x op %02x` /
 `error "<message>" at frame N pc %08x op %02x`.
 
---natives-impl real needs the Python native models (tools/research/osi_natives, M2a-2 Task 4) and exits with an
-error until they exist; `stub` (default) is the typed-stub run above.
+--natives-impl real (M2a-2 T10) runs the baseline and every flip with the oracle's own native models bound
+(tools/research/osi_natives, as osi_vm.py --run --real-natives [--install DIR]); the unbound rows stay typed stubs.
+`stub` (default) is the typed-stub run above.
 """
 from __future__ import annotations
 
@@ -123,7 +124,8 @@ def _rejects_nothing(vm, reg, err) -> bool:
                for i in range(min(n, len(entry.types))))
 
 
-def run_once(script: bytes, natives, mods, types, frames: int, deadline: float, flip_key: Optional[str] = None) -> Run:
+def run_once(script: bytes, natives, mods, types, frames: int, deadline: float, flip_key: Optional[str] = None,
+             natives_impl: str = "stub", install=None) -> Run:
     """Setup + `frames` Process frames, no keys: the frame loop of osi_vm.run_base (ScProcessManager parity 0x4a92fd,
     the re-run rule 0x4a930d..0x4a957d), copied here because run_base is a print-only driver. The test
     `test_flip_probe_real_driver_matches_run_base` compares the instruction totals of the two."""
@@ -132,6 +134,11 @@ def run_once(script: bytes, natives, mods, types, frames: int, deadline: float, 
     reg.flip_key = flip_key
     heap = osi_vm.Heap(None)
     vm = osi_vm.Vm(script, reg, heap, None)
+    if natives_impl == "real":  # M2a-2 T10: osi_vm.run_base's binding; the flipped key still answers first (invoke)
+        from osi_natives import framework
+        reg.return_log = []
+        framework.bind_natives(reg, framework.HostContext(vm, heap, framework.Vfs(install) if install else None,
+                                                          framework.HostFlags(), reg.return_log))
     vm.pcs_seen = PcSet(time.monotonic() + deadline)
     stop = "none"
     rejected = False
@@ -149,6 +156,8 @@ def run_once(script: bytes, natives, mods, types, frames: int, deadline: float, 
             for k in range(frames):
                 t = float(osi_vm.round_p(Fraction(t) + Fraction(dt), vm.fpu_pc))
                 tb, db = osi_vm.f32_bits(t), osi_vm.f32_bits(dt)
+                if natives_impl == "real":
+                    vm.begin_frame(k)
                 pm_flag ^= 1
                 passes = 0
                 err = None
@@ -179,13 +188,14 @@ class Result(NamedTuple):
     stop: str
 
 
-def probe(script: bytes, natives, mods, types, frames: int, deadline: float = 20.0) -> list[Result]:
-    base = run_once(script, natives, mods, types, frames, deadline)
+def probe(script: bytes, natives, mods, types, frames: int, deadline: float = 20.0, natives_impl: str = "stub",
+          install=None) -> list[Result]:
+    base = run_once(script, natives, mods, types, frames, deadline, None, natives_impl, install)
     if base.stop != "none":
         raise RuntimeError("the baseline run does not finish cleanly: %s" % base.stop)
     out = []
     for key in base.natives:
-        r = run_once(script, natives, mods, types, frames, deadline, flip_key=key)
+        r = run_once(script, natives, mods, types, frames, deadline, key, natives_impl, install)
         changed = r.pcs != base.pcs or r.instructions != base.instructions
         if not changed:
             verdict = "SAME"
@@ -205,16 +215,14 @@ def main(argv=None) -> int:
     ap.add_argument("--frames", type=int, required=True)
     ap.add_argument("--natives-impl", choices=("real", "stub"), default="stub")
     ap.add_argument("--deadline", type=float, default=20.0, help="seconds per run")
+    ap.add_argument("--install", help="with --natives-impl real: the install directory the models read (Root/ of the VFS)")
     ap.add_argument("--natives", default=str(DATA / "natives.json"))
     ap.add_argument("--mods", default=str(DATA / "natives_beta150.json"))
     ap.add_argument("--types", default=str(DATA / "types.json"))
     a = ap.parse_args(argv)
-    if a.natives_impl == "real":
-        raise SystemExit("flip_probe.py: --natives-impl real needs tools/research/osi_natives (M2a-2 Task 4); "
-                         "it does not exist yet")
     script = Path(a.osi).read_bytes()
     t0 = time.monotonic()
-    res = probe(script, a.natives, a.mods, a.types, a.frames, a.deadline)
+    res = probe(script, a.natives, a.mods, a.types, a.frames, a.deadline, a.natives_impl, a.install)
     for r in res:
         print(format_line(r))
     counts = {}

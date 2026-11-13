@@ -19,8 +19,9 @@
 //   second .json suffix); without --out no JSON is written. The tables are data/osi (natives.json, natives_beta150.json,
 //   types.json, native_overrides.json). stdout, in order: the A8 coverage report (tools/osi/coverage.py's grammar, byte
 //   for byte), `nesting high-water %d`, `stack high-water %d`, then lomn_osi_run's summary lines without wall-clock
-//   fields (so native and wasm32 stdout are byte-identical; the timings are in the JSON). Exit codes: 0 ok, 2 bad
-//   arguments (including an output inside the install, see below), 3 an input error: the install, Base.osi or a table
+//   fields (so native and wasm32 stdout are byte-identical; the timings are in the JSON). In a run that stops on an error
+//   the report equals coverage.py --trace on the run's trace (a native whose call failed before it ran is counted).
+//   Exit codes: 0 ok, 2 bad arguments (including an output inside the install, see below), 3 an input error: the install, Base.osi or a table
 //   (data/osi) unreadable or malformed (an override that disagrees with the merged registry included), 4 the host
 //   cannot start (--natives real with no bound group, no User directory), a VM error stopped the run, or a write
 //   failed.
@@ -796,12 +797,16 @@ bool native_bodies(std::string_view natives_json, std::string_view mods_json, st
 // The A8 coverage report (tools/osi/coverage.py's grammar, byte for byte): one row per distinct registered native hit,
 // sorted by (first-hit frame, first-hit sequence). `calls` counts every native call, `unregistered` the calls to a name
 // the registry does not have. From ScriptHost's own hit table (the VM's native observer), not from the natives.log.
+// T10 (T6 review m2): in a run that errors, the report follows coverage.py --trace, not --log: a 0x82/0x83 call of a
+// registered native that fails before the native runs (argument count or type) has no natives.log line but is counted
+// (calls and distinct), as its `Script is calling` E line is by coverage.py --trace.
 std::vector<std::string> coverage_report(const osi::HostStats& hs, const std::map<std::string, std::string>& bodies,
                                          uint64_t unregistered) {
   std::vector<std::pair<std::string, osi::NativeHit>> hits(hs.hits.begin(), hs.hits.end());
   std::sort(hits.begin(), hits.end(), [](const auto& x, const auto& y) {
-    return x.second.first_frame != y.second.first_frame ? x.second.first_frame < y.second.first_frame
-                                                        : x.second.first_seq < y.second.first_seq;
+    if (x.second.first_frame != y.second.first_frame) return x.second.first_frame < y.second.first_frame;
+    if (x.second.first_seq != y.second.first_seq) return x.second.first_seq < y.second.first_seq;
+    return x.second.first_pre_entry && !y.second.first_pre_entry;
   });
   std::map<std::string, size_t> tiers;
   for (const auto& h : hits) ++tiers[osi::tier_name(h.second.tier)];

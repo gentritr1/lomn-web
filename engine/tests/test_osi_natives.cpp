@@ -465,6 +465,31 @@ TEST_CASE("osi natives T3-6: D16 n-reenter-nested-error-swallowed (the swallowed
   CHECK(r.vm->swallowed().empty());  // cleared at the next outermost call
 }
 
+// ============================== T10: the nested call's marker through a bound native (mutate_vm S07) ==============================
+
+namespace {
+Variant nat_t10_reenter(NativeCall& c, void*) {
+  c.vm.call("inner", {});
+  return make_int(1);
+}
+}  // namespace
+
+// test_osi_vm.cpp's "a nested engine call's marker is the PC after the invoking 0x82" pins the same record, but the unit
+// run is one process and doctest orders by file name: S07 makes the D15 cap case below crash (SIGSEGV), which ends the
+// run before test_osi_vm.cpp. This copy runs before that case, so S07's unit check names a dedicated bite.
+TEST_CASE("osi natives T10 S07: a nested engine call's marker is site+6 (0x6015c6-0x601780), set before the native runs") {
+  Rig r;
+  Asm a;
+  a.fn("inner", 0).label("in").i8(3).ret();
+  a.fn("main", 0).label("site").call("t", "reenter", 0).ret();
+  r.load(a);
+  r.reg.add(nentry("t", "reenter", 0, 0, {}, nat_t10_reenter, nullptr));
+  REQUIRE(r.vm->call("main", {}).ok);
+  char want[64];
+  std::snprintf(want, sizeof want, "I %08x 43    2    2 00ff:%08x", a.at("in"), a.at("site") + 6);
+  CHECK(r.index_of(want) != std::string::npos);
+}
+
 // ============================== step 7: parked N2 ==============================
 
 TEST_CASE("osi natives T3-7: FindMemberID with an empty symbol table (0x609c57 xor esi, 0x609cb0): a NULL entry, then undefined") {
@@ -701,6 +726,32 @@ TEST_CASE("osi natives T3 fix1 M-7: after every native the host object's engine 
   CHECK_FALSE(r.vm->call("split", {}).ok);
   CHECK(r.vm->last_error()->message == "Script is calling t.split");
   CHECK(r.ctx->check_engine_refs() == "handle 00000001: host engine count 1, heap engine count 2");
+}
+
+namespace {
+Variant nat_m7_split_str(NativeCall& c, void*) {
+  g_ctx->heap().add_ref(g_m7_obj->handle());  // splits the counts, so the exit check throws after this returns
+  return Variant{kString, c.vm.heap().new_string("ret")};
+}
+}  // namespace
+
+TEST_CASE("osi natives T10 N-1: a native whose return trips the M-7 check has its returned variant disposed first") {
+  Rig r;
+  Asm a;
+  a.fn("get", 0).call("t", "get", 0).ret();
+  a.fn("splits", 0).call("t", "splits", 0).ret();
+  r.load(a);
+  g_ctx = r.ctx.get();
+  g_m7_obj = r.ctx->make<GameObject>(0x27, 1);
+  r.reg.add(nentry("t", "get", 0, 0, {}, nat_m7_get, nullptr));
+  r.reg.add(nentry("t", "splits", 0, 0, {}, nat_m7_split_str, nullptr));
+  REQUIRE(r.vm->call("get", {}).ok);
+  const uint64_t strings_before = r.heap.stats().live[kKindString];
+  CHECK_FALSE(r.vm->call("splits", {}).ok);
+  CHECK(r.vm->last_error()->message == "Script is calling t.splits");
+  // the returned 0x16 is never pushed: without the dispose it stays live (a leak, and no `F s` record)
+  CHECK(r.heap.stats().live[kKindString] == strings_before);
+  CHECK(r.starting("F s").size() == 1);
 }
 
 // ============================== fix 1 M-6: the KEYSPEC parser on hostile input ==============================

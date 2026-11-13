@@ -216,6 +216,30 @@ def test_unregistered_native_is_counted_and_stops_the_run(tmp_path):
     assert any(l.startswith('stop: error "Call to unregistered Game Function" in Setup') for l in v.stdout.splitlines())
 
 
+def test_registered_native_failing_before_entry_is_counted_like_coverage_trace(tmp_path):
+    """M2a-2 T10 (T6 review m2): a registered native whose call fails before the native runs (here too many arguments,
+    the 0x82 argc check) has no `N` line and never reaches the VM's entry observer. coverage.py --trace still counts it
+    (the `E ... "Script is calling cls.fn"` rule), so a native failing on the A9 path shows in the report: lomn_view's
+    report must equal coverage.py --trace on the run's own trace."""
+    (tmp_path / "install" / "data").mkdir(parents=True)
+    asm = tmp_path / "argc.asm"
+    asm.write_text(".function setup 0\n    CallGameFunction gcgame.getresolutionwidth 0\n    Pop\n"
+                   "    PushConstanti8 1\n    PushConstanti8 2\n    PushConstanti8 3\n"
+                   "    CallGameFunction gcgame.getresolutionheight 3\n    Pop\n    PushNothing\n    Return\n")
+    r = subprocess.run([sys.executable, str(OSIASM), str(asm), "-o", str(tmp_path / "install" / "data" / "Base.osi")],
+                       capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr
+    v = _run(VIEW, "--install", tmp_path / "install", "--script", "1", "--natives", "stub", "--trace", tmp_path / "t.trace")
+    assert v.returncode == 4, (v.stdout, v.stderr)
+    assert any(l.startswith('stop: error "Script is calling gcgame.getresolutionheight" in Setup') for l in v.stdout.splitlines())
+    cov = _coverage_lines(v.stdout)
+    # HAND-PINNED: both natives have override rows tier1; the failed attempt is the second call.
+    assert cov[0] == "coverage: natives distinct 2 (tier1 2, tier2 0, stub 0, mod 0, tier3 0), calls 2, unregistered 0"
+    t = subprocess.run([sys.executable, str(COVERAGE), "--trace", str(tmp_path / "t.trace")], capture_output=True,
+                       text=True, timeout=60)
+    assert t.returncode == 0 and cov == t.stdout.splitlines(), t.stdout
+
+
 def test_real_natives_default_fails_closed_like_lomn_osi_run(smoke):
     """--natives real is the default (A9). It binds exactly what lomn_osi_run --real-natives binds: while no game-native
     group is linked, both refuse to run (never a silent stub run); lomn_view exits 4 and prints no report."""

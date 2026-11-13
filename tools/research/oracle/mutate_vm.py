@@ -16,8 +16,9 @@ restored file against the pristine copy taken at start (build/mut-pristine/), re
             first differing record of the window/digest/natives.log the ctest wrote is reported as
             "WINDOW line N after '<previous common line>': cpp='...' py='...'" so EXPECT can name the record
   rerun     ctest -R osi_a6_rerun (the Process re-run / skip rule, both engines, the hand-computed pass-count line)
-The wasm32 leg is not run: no mutant here targets wasm-only behaviour (native == wasm32 is `make osi-diff`'s job).
-A mutant is CAUGHT when at least one named check bites; the per-check outcome is printed (BITE, pass, OFF-TARGET = failed
+Exit status (M2a-2 T10): 0 only when every mutant run is CAUGHT and the control (when run) is MISSED, 1 otherwise, 2 on
+a setup or restore error. The wasm32 leg is not run: no mutant here targets wasm-only behaviour (native == wasm32 is
+`make osi-diff`'s job). A mutant is CAUGHT when at least one named check bites; the per-check outcome is printed (BITE, pass, OFF-TARGET = failed
 but no line matches EXPECT, TIMEOUT). A build failure is BUILD-FAILED (an invalid mutant), never CAUGHT. The no-op control
 must be MISSED by every check. Logs: build/mutlogs/<id>-<check>.log, results: build/mutlogs/results.jsonl.
 """
@@ -203,9 +204,11 @@ M = [
      "      if (m == 0) return 0u;",
      {"conform": r"FAIL a/0x72-signed-zero-negative-times-int-zero"}),
     ("S07", "0x82: PC is advanced after the native, so a nested call's marker is the site, not site+6", VH,
-     "  pc_ = next_pc;  // the handler has consumed its operands before the native runs\n  // D14: the sequence number is assigned at native ENTRY (a nested native gets a higher one, its line comes first)\n  const uint64_t seq = native_seq_++;\n  if (observer_) observer_(e, seq);\n  active_seq_.push_back(seq);\n  NativeCall call{*this, e, site, args};\n  Variant r;\n  try {\n    r = e.fn ? e.fn(call, e.user) : natives_.stub_return(e, heap_, call);\n  } catch (...) {\n    active_seq_.pop_back();\n    throw;\n  }\n  active_seq_.pop_back();\n  if (exit_observer_) exit_observer_(e, seq);\n  cur_pc_ = site;",
-     "  pc_ = site;  // M2a-2 T3: 0x82 now writes +6 before the native; the mutant puts the site back for the call\n  const uint64_t seq = native_seq_++;\n  if (observer_) observer_(e, seq);\n  active_seq_.push_back(seq);\n  NativeCall call{*this, e, site, args};\n  Variant r;\n  try {\n    r = e.fn ? e.fn(call, e.user) : natives_.stub_return(e, heap_, call);\n  } catch (...) {\n    active_seq_.pop_back();\n    throw;\n  }\n  active_seq_.pop_back();\n  pc_ = next_pc;\n  if (exit_observer_) exit_observer_(e, seq);\n  cur_pc_ = site;",
-     {"unit": r"D16 n-reenter-nested-error-swallowed", "tracecmp": r"DIFF \./b/b-eng-reenter\.trace"}),
+     "  pc_ = next_pc;  // the handler has consumed its operands before the native runs\n  // D14: the sequence number is assigned at native ENTRY (a nested native gets a higher one, its line comes first)\n  const uint64_t seq = native_seq_++;\n  if (observer_) observer_(e, seq);\n  active_seq_.push_back(seq);\n  NativeCall call{*this, e, site, args};\n  Variant r;\n  try {\n    r = e.fn ? e.fn(call, e.user) : natives_.stub_return(e, heap_, call);\n  } catch (...) {\n    active_seq_.pop_back();\n    throw;\n  }\n  active_seq_.pop_back();\n  if (exit_observer_) {\n    try {\n      exit_observer_(e, seq);\n    } catch (...) {\n      heap_.dispose(r);  // T10 N-1: the result is never pushed, so it is dropped before the re-raise\n      throw;\n    }\n  }\n  cur_pc_ = site;",
+     "  pc_ = site;  // M2a-2 T3: 0x82 now writes +6 before the native; the mutant puts the site back for the call\n  const uint64_t seq = native_seq_++;\n  if (observer_) observer_(e, seq);\n  active_seq_.push_back(seq);\n  NativeCall call{*this, e, site, args};\n  Variant r;\n  try {\n    r = e.fn ? e.fn(call, e.user) : natives_.stub_return(e, heap_, call);\n  } catch (...) {\n    active_seq_.pop_back();\n    throw;\n  }\n  active_seq_.pop_back();\n  pc_ = next_pc;\n  if (exit_observer_) {\n    try {\n      exit_observer_(e, seq);\n    } catch (...) {\n      heap_.dispose(r);  // T10 N-1: the result is never pushed, so it is dropped before the re-raise\n      throw;\n    }\n  }\n  cur_pc_ = site;",
+     # T10: the dedicated marker case sorts before the D15 cap case that S07 crashes (test_osi_vm.cpp's copy never runs)
+     {"unit": r"T10 S07: a nested engine call's marker|D16 n-reenter-nested-error-swallowed",
+      "tracecmp": r"DIFF \./b/b-eng-reenter\.trace"}),
     ("S08", "D8': a string -> float conversion does not switch fpu_pc to 64", VH,
      "        if (sw) set_pc64();                                              // ___dec2num 0x65f886 (D8')",
      "        (void)sw;",
@@ -276,7 +279,7 @@ def first_diff(a: Path, b: Path, tag: str) -> list[str]:
     """The first differing line of two files as one targeted fail line (plus the previous common line)."""
     if not a.is_file() or not b.is_file():
         return [f"{tag} missing {a.name if not a.is_file() else b.name}"]
-    prev = ""
+    prev = b""  # bytes (T10: a difference on line 1 decoded the str default)
     with a.open("rb") as fa, b.open("rb") as fb:
         n = 0
         while True:
@@ -446,6 +449,7 @@ def main() -> int:
     results = (LOGDIR / "results.jsonl").open("a")
     caught = missed = invalid = 0
     survivors = []
+    ok = True  # M2a-2 T10: exit 0 only when every mutant run is CAUGHT and the control (when run) MISSED
     for i, (mid, name, rel, old, new, checks) in enumerate(M, 1):
         if only and mid not in only:
             continue
@@ -484,6 +488,7 @@ def main() -> int:
                 active.unlink()
             rrc, rsecs = build(tree, targets, f"{mid}-restore-build.log")
         total = time.time() - t0
+        ok &= (verdict == "MISSED") if is_control(mid) else (verdict == "CAUGHT")
         if verdict == "CAUGHT":
             caught += 1
         elif verdict == "MISSED":
@@ -505,8 +510,9 @@ def main() -> int:
           "(the no-op control CTRL must be among the MISSED)", flush=True)
     for rel in sorted({e[2] for e in M}):
         same = filecmp.cmp(tree / rel, pristine / rel, shallow=False)
+        ok &= same
         print(f"final restore cmp {rel}: {'OK' if same else 'DIFFERS'}", flush=True)
-    return 0
+    return 0 if ok else 1
 
 
 if __name__ == "__main__":

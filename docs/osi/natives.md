@@ -48,6 +48,12 @@ Decision text differs from a ruling in §2–§9, the ruling here wins. The diff
     (rule 15(b)).
 11. **D15, the nesting cap:** keep 64 while 64 ≥ 4 × the measured maximum M; otherwise use 4 × M. `STACK_SIZE` is at
     least 4.5 × cap × the bytes per level, measured on a real re-entrant chain.
+    **Measured (Task 10, 2026-11-13; `docs/knowledge/measurements.md`, "M2a-2 Task 10"):** M = **2** on the A9 run with
+    real natives, both engines (two re-entrant chains, both in Setup: `gcmodeldirector.addtoa` → `OnEvent(0x32, 250)` and
+    `gccharacter.setupmoveable` → `OnEvent(0x36, 0)`). 64 ≥ 4 × 2, so the cap stays **64**. wasm32 bytes per level on
+    those real chains: **1,616** and 1,600 (the stack pointer at the outer and at the nested `Vm::call` entry). 4.5 × 64 ×
+    1,616 = 465,408 ≤ 524,288, so `STACK_SIZE` stays **512 KiB**. The whole real A9 run traps (`STACK_OVERFLOW_CHECK=2`)
+    at a `STACK_SIZE` of 12,976 bytes and passes at 13,232.
 12. **`-fwasm-exceptions` scope.** `lomn_view` (the wasm32 node tool) inherits the flag once it links `lomn_osi`.
     `lomn_web` does not link `lomn_osi` until M2b.
 13. **Close-out review:** Opus 5.5 medium.
@@ -450,6 +456,12 @@ Three blocks of `GcAreaLoader::LoadArea` 0x4fedd0 reach the VM. Each is a try wi
 **Oracle check (EXECUTED).** `OnEvent(0x36, 0)`, made as a nested call while Setup is inside `gcareadirector.setcurrentarea`, runs without error in 310 instructions, and Setup completes.
 
 **Runtime confirmation.** Task 10's `swallow_count` probe counts the nested calls and the caught errors in **all three** modelled `LoadArea` blocks (objects, characters, hives) with real natives: `swallow nested-calls k errors m` in the coverage report.
+**Measured (Task 10, 2026-11-13, EXECUTED):** on the real-natives A9 run (Setup + 600 frames + the A9 keys) and on the
+900-frame run without keys, both engines: **k = 0, m = 0**. The natives.log has no `C` record with the sequence number
+of `gcareadirector.setcurrentarea` and **0 `X` records** (the trace: 0 `E`, 0 `X`). The run's only nested engine calls
+are 2 `C` records, both outside `LoadArea`: `OnEvent(0x32, 250)` under `gcmodeldirector.addtoa` and `OnEvent(0x36, 0)`
+under `gccharacter.setupmoveable`. The count is printed by the measurement commands (measurements.md, "M2a-2 Task 10"),
+not as a coverage-report line: the report keeps coverage.py's grammar byte for byte.
 
 ### 5.4 D16, the swallowed nested error (rule)
 
@@ -608,7 +620,7 @@ The map's key order between processes, set by the priority byte that `ScProcessM
 - **M2a-3 must either** model `CheckWallCloseness` for the front-end Toa, **or** settle the question against the owner's menu screenshots.
 
 **Re-checks:**
-- Task 10 re-runs `event_probe.py --repeat --at all --natives-impl real` with the real natives;
+- Task 10 re-runs `event_probe.py --repeat --at all --natives-impl real` with the real natives. **Done (Task 10, 2026-11-13, EXECUTED):** 47 repeated runs, CHANGED 4 / SAME 43, divergences at frames 0 and 2 only; the single-shot and `2-599` runs agree with Task 2a's counts (measurements.md, "M2a-2 Task 10");
 - M2a-3 settles the risk above;
 - M3 models the physics.
 

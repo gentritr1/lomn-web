@@ -22,7 +22,8 @@ namespace lomn::osi {
 
 struct NativeHit {
   long first_frame = -1;  // -1 = Setup
-  uint64_t first_seq = 0, calls = 0;
+  uint64_t first_seq = 0, calls = 0;  // calls: every attempt, including those that failed before the native's entry
+  bool first_pre_entry = false;  // T10: the first hit failed before entry; it sorts before an entered hit of the same seq
   Tier tier = Tier::Stub;  // the registry row's tier (the merged overrides): what the row DECLARES
   bool bound = false;      // whether a body is bound (fix 1, I-1): a tier1 row run as its stub shows bound = false
 };

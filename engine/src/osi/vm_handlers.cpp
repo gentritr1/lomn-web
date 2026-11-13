@@ -739,11 +739,17 @@ bool Vm::bcl_81() {
 // ==== shared: the native call machinery of 0x82/0x83/0x84 (trace.md §3 "A native call")
 void Vm::invoke_native(const NativeEntry& e, uint32_t n, const std::string& cls, const std::string& fn, uint32_t next_pc,
                        bool check_argc, const NativeMsgs& msgs) {
+  // T10 (T6 review m2): a call that fails here, before the native's entry, still reaches the coverage counts (as
+  // coverage.py --trace counts its `Script is calling` E line); only the 0x82/0x83 lookup path (check_argc), whose
+  // re-raise names the native, as there.
+  auto pre_entry_fail = [&] {
+    if (check_argc && fail_observer_) fail_observer_(e, native_seq_);
+  };
   if (check_argc) {
-    if (n > e.max) throw VmError(msgs.too_many);
-    if (n < e.min) throw VmError(msgs.too_few);
+    if (n > e.max) pre_entry_fail(), throw VmError(msgs.too_many);
+    if (n < e.min) pre_entry_fail(), throw VmError(msgs.too_few);
   }
-  if (n > stack_.depth()) throw VmError("Undefined: more native arguments than stack slots");
+  if (n > stack_.depth()) pre_entry_fail(), throw VmError("Undefined: more native arguments than stack slots");
   const uint32_t base = stack_.depth() - n;
   std::vector<Variant*> args(n);
   std::vector<bool> byref(n, false);
@@ -758,6 +764,7 @@ void Vm::invoke_native(const NativeEntry& e, uint32_t n, const std::string& cls,
         heap_.dispose(slot);           // PushInto 0x601ec0 disposes the old value
         slot = r;
       } catch (...) {
+        pre_entry_fail();
         if (!msgs.mismatch) throw;
         char b[160];
         std::snprintf(b, sizeof b, msgs.mismatch, static_cast<int>(i));
@@ -784,7 +791,14 @@ void Vm::invoke_native(const NativeEntry& e, uint32_t n, const std::string& cls,
     throw;
   }
   active_seq_.pop_back();
-  if (exit_observer_) exit_observer_(e, seq);
+  if (exit_observer_) {
+    try {
+      exit_observer_(e, seq);
+    } catch (...) {
+      heap_.dispose(r);  // T10 N-1: the result is never pushed, so it is dropped before the re-raise
+      throw;
+    }
+  }
   cur_pc_ = site;
   cur_op_ = site_op;
   if (e.sets_fpu_pc64) set_pc64();
