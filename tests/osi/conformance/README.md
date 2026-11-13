@@ -58,9 +58,9 @@ the program passes on both runners.
 
 | program | status | needs |
 |---|---|---|
-| `h-cminus1-order` | pending | `frames`, `host_events` (all four positions, a host game argument), `expect.z` |
-| `h-mouse-every-frame` | pending | `frames`, `mouse` |
-| `h-z-ref` | pending | `frames`, `natives[*].refs`, `expect.z` |
+| `h-cminus1-order` | active | `frames`, `host_events` (all four positions, a host game argument), `expect.z` |
+| `h-mouse-every-frame` | active | `frames`, `mouse` |
+| `h-z-ref` | active | `frames`, `natives[*].refs`, `expect.z` |
 | `h-z-hud` | pending | `frames`, `natives_impl`, `expect.z`; Task 6's HUD model |
 
 ## Authoring rules (copied from docs/osi/conformance.md §2; that file wins if they ever differ)

@@ -112,7 +112,7 @@ TIER2_KEYS = [
     "gc3dsound.synclistenertocamera", "gccharacter.disableallraycollisions", "gccharacter.initmotionsystem",
     "gccharacter.setbounce", "gccollisionphysicsgroup.settoaposition", "gcstatusscreen.hideinventory",
     "gchuddirector.hide", "gchuddirector.show",
-    "gclegocamera.setcampos", "gclegocamera.settargpos",
+    # gclegocamera.setcampos / settargpos: tier1 since M2a-3 T4 (host_sources.py)
     "gclightdirector.setcavelighting", "gclightdirector.toggleconstantlights",
     "gcmodeldirector.setnearestmax",
     "gctoa.addmask", "gctoa.setcodelife", "gctoa.switchmask",
