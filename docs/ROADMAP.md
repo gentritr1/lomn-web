@@ -1,6 +1,6 @@
 # LOMN Web: roadmap and resume point
 
-State as of 2026-10-08, late evening. Update this file whenever a milestone closes. The live board mirrors it at https://claude.ai/artifact/GyZGve8HMfmWHzJJhx3PyQ.
+State as of 2026-11-13 (M2a-2 closed). Update this file whenever a milestone closes. The live board mirrors it at https://claude.ai/artifact/GyZGve8HMfmWHzJJhx3PyQ.
 
 ## 1. Where we are
 
@@ -9,7 +9,7 @@ State as of 2026-10-08, late evening. Update this file whenever a milestone clos
 | M0 Foundations | toolchain, decompiler pipeline, native and browser builds | done |
 | M1a-1…4 | read every game file format, render areas natively, faithful look, hardening | done |
 | M1b Browser viewer | pick your game folder in Chrome and fly around any of the 123 areas | **done; you can test it now (§2)** |
-| M2 Script VM to the main menu | the game's own script (Base.osi) runs, up to its main menu in the browser | **in progress, about 34 %** |
+| M2 Script VM to the main menu | the game's own script (Base.osi) runs, up to its main menu in the browser | **in progress: M2a-0…M2a-2 done; M2a-3 next** |
 | M3 One playable area | character, collision, camera, animation | later |
 | M4 Audio, video, saves | sound, cutscenes, browser saves with export | later |
 | M5 The full game | every area, progression, bosses, AI | later |
@@ -22,8 +22,8 @@ Inside M2:
 |---|---|---|
 | M2a-0 | completed decompiled code plus citation tables for 96 opcodes and 1,056 natives | done |
 | M2a-1 | VM core, an independent Python oracle, a 528-program conformance corpus; Base.osi Setup plus 600 frames byte-identical across native, wasm32 and Python; mutation bite and fuzz seed | **done 2026-10-09** (gate green on 5734f02) |
-| M2a-2 | native framework; `Setup` runs to the first `Process`; `lomn_view --script` runs N frames headless | **next** |
-| M2a-3 | menu systems: tile fonts, HUD sprites and text, camera spline, SDL3 input → `Input`/`OnEvent`, `Bionicle.ini`; the menu renders | after M2a-2; **needs your menu screenshots** |
+| M2a-2 | native framework; `Setup` runs to the first `Process`; `lomn_view --script` runs N frames headless | **done 2026-11-13** (gate green on 80bc109) |
+| M2a-3 | menu systems: tile fonts, HUD sprites and text, camera spline, SDL3 input → `Input`/`OnEvent`, `Bionicle.ini`; the menu renders | **next; needs your menu screenshots** |
 | M2a-4 | hardening: VM fuzz under ASan/UBSan, native and wasm32; caps measured; perf entries | after M2a-3 |
 | M2b | the browser page boots to the main menu; keys drive the menu | ends M2 |
 
@@ -58,35 +58,39 @@ Controller-verified 2026-10-08: the page loads to the folder picker with 0 conso
   - re-measure the maximum engine-call nesting with real natives (cap 64; measured max 1 with stubs);
   - E3 rep 3 (Haiku vs Sonnet).
 
-### 3.2 M2a-2: native framework, Setup to the first Process (IN PROGRESS: resume here)
-**Paused 2026-10-09 and pushed to a private GitHub repo. Start with [resume/README.md](resume/README.md)**: the resume kit holds the ledger, the Task 10 brief, the controller brief template and the launcher.
-
-**State 2026-10-09.**
-- Merged on `m2-osi-vm` @ a794f04: Tasks 1–9 and 11, the error-PC table, the fail-closed runners, the docs batches and the F7 follow-up batch (setammo and one saver store, the RemoveArea → OnEvent removal chain, the loader's Show/Hide of area characters, the Toa branch of MainCharacterID, setfog/setnearestmax, `..` above a mount root, the Python VFS no longer following links). Each passed a blind review and controller verification.
-- Measured on a794f04: both engines pass 541/541 programs with byte-identical traces. `make osi-a9` with real natives gives 4/4 OK: native == wasm32 == Python's own models == replay, over 600 frames. Coverage: 69 natives (tier1 35, tier2 34, stub 0, tier3 0), unregistered 0. Taint with real natives: 0 sinks. `make test-tools`: 974 passed.
-- Remaining:
-  - Task 10, the A8–A10 gate (brief ready: `task-10-brief.md` in the ledger directory): taint iterated, mutate_natives + the mutate_vm full re-run (incl. the S07 unit gap), wasm stack per level, swallow_count probe, event_probe with real natives;
-  - Task 12, the close-out (Opus whole-branch review of 94e8dcc..HEAD).
-- Open for M2a-3: the Show/Hide reference sequences of area-loaded characters are pinned only by each engine's own tests, because neither host loads area content yet. Run a 2-engine differential once the area source exists.
-- **Billing (owner, 2026-10-09): the Max plan's weekly usage is at 80%, so NO more plan usage for this project.** Run everything from a terminal `claude` session logged into the Console account (credits), in a fresh session.
-- **Credits:** about $122 left after 2026-10-09: pairs 8+9 cost $35.94, F7 cost $34.91, and an Explore A/B test about $1. Task 10 plus Task 12 are estimated at $35–45.
-- Ledger with exact resume steps: `docs/resume/m2a2-ledger.md` (a scrubbed copy of the git-ignored `.superpowers/sdd/2026-10-09-lomn-web-m2a2/progress.md`; last section).
-Process: the controller (Opus 5.5) writes the spec and plan, Fable 5.1 reviews them once for precision, then subagent-driven development with Sonnet 5.5 / Opus 5.5 medium.
-- Generated typed stubs for every native, with real returns for the 3 copy-kind natives.
-- The natives `Setup` needs, implemented against the decomp with a citation per native.
-- `lomn_view --script`: Setup plus N Process frames, headless, native and wasm32.
-- A tier list of menu natives from the A8/A10 run trace (A3: the 728 `class.func` pairs Base.osi calls).
-- Parked items that land here:
-  - the static reachability walk and the 0x19 residual;
-  - the 4th FindMemberID caller 0x616519 (GetVariantFromBuffer) must use the VM's miss cache;
-  - a `next_[]` handle-wrap guard;
-  - a unit test for the empty-symbol-table NULL case;
-  - the bodies of the Beta 1.5.0 mod natives (read as data, never run);
-  - the atof rounding-chain blind spot (A6/A9 risk);
-  - a `-fwasm-exceptions` scope revisit;
-  - a loadavg field in perf rows.
+### 3.2 M2a-2: closed 2026-11-13
+- Tasks 1–12 are merged on `m2-osi-vm` @ 80bc109. Task 10 (the A8–A10 gate) and Task 12 (the whole-branch review) ran on 2026-11-13 from the desktop session on the Max plan (owner's choice, for those two tasks only).
+- **Task 10.** It added taint iteration, `mutate_natives.py` (6 mutants + control), per-file unit runs in `mutate_vm.py`, the unregistered-native counter, and the wasm stack measured per nesting level (1,984 bytes by trap). Ruling: wasm `STACK_SIZE` is 576 KiB (589,824 bytes), Decision 11 applied to that figure.
+- **Task 12.** The blind Opus review was READY WITH FIXES (0 Critical, 2 Important, 8 minor). One fix dispatch had a C++ side and a Python side. A blind re-review found that the two sides had drifted (3 Important), and a third fix reconciled them against the cited bytes. The scoped re-check gave APPROVE. Modelled now in both engines:
+  - the block-file slot [0x736128]: the swallowed-error leak in AddCharacter, the lazy freed slot after a failed `addtoa`, LoadHudSprite nulling the slot, and the level/area headers in the slots;
+  - RemoveArea with no loader and fluff count 0 raise Undefined;
+  - `doesfileexist` on the user route does a VFS lookup.
+- **Exe ruling.** The install's `LEGOBionicle.exe` (sha256 b372afb9…) is authoritative. The reference copy was hand-patched after linking: 798 bytes in 7 ranges inside 6 functions. `tools/tests/test_exe_patched_ranges.py` pins those ranges and fails if a citation falls inside them without naming the copy.
+- **Measured on frozen 80bc109 (executed):**
+  - conformance: trace-cmp 541/541, byte-identical C++ vs Python;
+  - `make osi-a9` with real natives: 4/4 OK, 601 D lines; coverage 69 natives (tier1 35, tier2 34, stub 0, tier3 0), 1,705 calls, 0 unregistered; taint 34 tainted, 0 sinks;
+  - `osi-diff` 4/4; `lomn_view --script 1 --frames 1` rc 0; ctest unit|osi|view 26/26;
+  - `make check`: test-tools 992 passed, test-native 45/45, test-wasm 17/17, plus datacheck / datacheck-wasm / worklist (see the ledger);
+  - mutation: `mutate_natives` 6/6 caught, `mutate_vm` 46/46 caught, the controls missed as expected;
+  - the A9 D lines are unchanged since M2a-1 (601 lines identical to 0f8be36).
+- **UNVERIFIED:** `test-web` and `a13-real`. Playwright 1.63 is not installed and `npm ci --offline` cannot fetch it. M2a-2 changes no `web/` file, and `lomn_web` does not link `lomn_osi`. An online `npm ci` needs your yes.
+- **Incident 2026-11-13.** A subagent deleted the real install's `data/Base.osi`: `cp -Rl` copied the `$LOMN_DATA/install` symlink, and a later `rm` went through it. It was restored from the second LOMN-Beta copy (sha256 checked; the two trees are identical). Rule: build hard-link installs with `mkdir install && cp -Rl "$LOMN_DATA/install/." install/`, and never rm through a symlink.
+- **Cost:** Tasks 10 and 12 ran on the Max plan, so there is no exact $ figure. The earlier M2a-2 runs on Console credits cost $35.94 + $34.91 (§4.1).
+- Full ledger: `docs/resume/m2a2-ledger.md`.
 
 ### 3.3 M2a-3: menu systems
+**Inherited from M2a-2 (open):**
+- **The area_source seam.** Neither host loads area content yet. When it does:
+  - run a 2-engine differential of area-loaded characters (Show/Hide, which are pinned only per engine now);
+  - check RemoveArea's `OnEvent(0x2b,'vlgr')` for area-loaded characters (differential case x3 diverges only there);
+  - check the hive-SLK lookups that depend on the block-file slot (C++ only today).
+- **The refused-Add dangling slot.** A refused Add in AddCharacter (0x47ef9a → ret 0x47efda) frees the new character and leaves the slot dangling. Both engines leave the slot at its pre-call value. Rule on it with area data.
+- **Missing files.** The missing-file branches of `loadhudsprite` and `sctilefont.create` (with the file manager and error ids).
+- **Cheat gate.** The `addtoa` INI gate `[Cheat] Urinate` is modelled as absent.
+- **A9 blind spots.** A9 cannot see per-handle refcounts or native state that is never read (`cs.playing`).
+- **Script errors.** On a script error the C++ CLI returns rc 4 and the Python CLI returns 0 (a harness convention).
+- **Web layers.** Reinstall Playwright, then re-run `test-web` and `a13-real`.
+
 **Risk carried from M2a-2 (natives.md §6.3):** the front-end Toa runs its physics every frame, which the headless M2a-2 frame omits as a documented gap. A non-lethal wall-closeness event (`OnEvent(0x28, 2, 'impc')`, CheckWallCloseness 0x587240), if it fires repeatedly, skips 3 HUD `hide` calls at frame 4, so HUD visibility could differ from the original. M2a-3 must model CheckWallCloseness for the front-end Toa, or settle it against the owner's menu screenshots.
 
 Tile fonts (binary `.fnt`), HUD sprites, text and rectangles through the D3D8 shim (FVF 0x42, textured quads, HUD transform, drawn after the area), camera spline, SDL3 input, and `Bionicle.ini` via the VFS.
@@ -166,7 +170,7 @@ Four real tasks were run headless with `claude -p --output-format json`. The fir
 
     Never use it for reviews, design, asm or RE readings, rulings, or code whose mistakes tests could miss.
   - **E3 (run in the first sub-milestone on credits):** Haiku 5.5 vs Sonnet 5.5 on the same inputs for log triage, bookkeeping and mechanical edits, interleaved, 3 runs each. Adopt Haiku for a class only if its first-time-correct rate matches Sonnet's.
-  - **Billing (owner direction 2026-10-09, superseding the earlier split):** no Max-plan usage for this project. All work runs on Console credits through a headless controller started with `docs/resume/start.sh` (see resume/README.md).
+  - **Billing (owner direction 2026-10-09, superseding the earlier split):** no Max-plan usage for this project. All work runs on Console credits through a headless controller started with `docs/resume/start.sh` (see resume/README.md). **Exception, 2026-11-13:** the owner chose the Max plan from the desktop session for M2a-2 Tasks 10 and 12 only. Ask again before M2a-3.
   - Start a fresh session per sub-milestone and resume from this file. Fast mode stays off.
   - Record $ spent per sub-milestone from the Console dashboard.
 - **Verification:**
@@ -176,7 +180,7 @@ Four real tasks were run headless with `claude -p --output-format json`. The fir
 - **No foreground command over 2 minutes.** Long work runs in the background, and every wait matches failure too.
 
 ## 7. Where things live
-- **Branches.** `main` = `m2-osi-vm` (fast-forwarded with the owner's yes on 2026-10-09 and pushed to the private GitHub repo `lomn-web`). Work continues on `m2-osi-vm`; its worktree is `lomn-web-m2`. Task and experiment branches stay local.
+- **Branches.** `main` @ ad8789a (fast-forwarded with the owner's yes on 2026-10-09 and pushed to the private GitHub repo `lomn-web`). `m2-osi-vm` is ahead of it by the M2a-2 close-out (Tasks 10 and 12, plus this doc commit); moving `main` again needs your yes. Work continues on `m2-osi-vm`; its worktree is `lomn-web-m2`. Task and experiment branches stay local.
 - **Workspaces:**
   - plans in `docs/superpowers/plans/`, specs in `docs/superpowers/specs/`;
   - research in `docs/knowledge/research/`;
