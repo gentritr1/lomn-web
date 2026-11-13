@@ -9,8 +9,8 @@ data/osi/native_overrides.json). A reading from the decomp alone is marked INFER
 instruction listing (tools/tests/test_osi_natives_directors.py pins each address).
 
 What is NOT modelled, and why:
-- The INI: `gcsaver.cheatmenu` reads `[Misc] CheatMenu` through GetPrivateProfileStringA. The decided value is the
-  default ("" -> int 0; the owner's Bionicle.ini has no such key). `IniSettings` is the seam M2a-3 fills.
+- The INI (M2a-3 T5b): `gcsaver.cheatmenu` reads `[Misc] CheatMenu` through `ini.IniSettings` (Win32 semantics, loaded from
+  Bionicle.ini through the VFS when the host has one; int 0 on the owner's install).
 - The area content. `GcAreaLoader::LoadArea` (0x4fedd0) reads the area's `.slb` files and builds its objects; the oracle
   host has none, so `AreaDirector.area_source` is the seam (default: no objects). With no object loaded, the chains of
   natives.md §4 make no engine call, which is the A9 path. The chain itself (the SetupMoveable guard 0x574ef1 ->
@@ -30,6 +30,7 @@ from typing import Callable, NamedTuple, Optional
 
 from . import framework
 from .framework import BlockFiles, GameObject, register_group
+from .ini import IniSettings
 from .services import c_string, convert_string_to_id, cut
 import osi_vm
 from osi_vm import NOTHING, T_INT, T_STRING, Variant, VmError
@@ -192,43 +193,6 @@ def _get_camera(ctx, vp_type, cam_type):
 # --------------------------------------------------------------------------------------------------------------
 # The saver (natives.md §9.1)
 # --------------------------------------------------------------------------------------------------------------
-class IniSettings:
-    """GetPrivateProfileStringA's data: (section, key) -> bytes, matched case-insensitively. Empty by default: the decided
-    value for this install (the owner's Bionicle.ini has no [Misc] CheatMenu). `language` is `[0x70b384]` (0 = English,
-    the .data byte and the owner's `Language=0`). INI -> M2a-3."""
-
-    def __init__(self, ctx=None):
-        self.values: dict[tuple[bytes, bytes], bytes] = {}
-        self.language = 0
-
-    @staticmethod
-    def _k(s: bytes) -> bytes:
-        return bytes(c + 32 if 0x41 <= c <= 0x5A else c for c in s)
-
-    def set(self, section: bytes, key: bytes, value: bytes) -> None:
-        self.values[(self._k(section), self._k(key))] = value
-
-    def get_private_profile_string(self, section: bytes, key: bytes, default: bytes, size: int = 0xFF) -> bytes:
-        """The API result for a buffer of `size` bytes: the value, or the default, cut to size-1 characters."""
-        v = self.values.get((self._k(section), self._k(key)), default)
-        return cut(v)[:size - 1]
-
-    @classmethod
-    def from_text(cls, text: bytes) -> "IniSettings":
-        """A minimal `[section]` / `key=value` reader (lines without '=' and `;` comments are skipped)."""
-        ini, sec = cls(), b""
-        for ln in text.splitlines():
-            ln = ln.strip()
-            if not ln or ln.startswith(b";"):
-                continue
-            if ln.startswith(b"[") and ln.endswith(b"]"):
-                sec = ln[1:-1]
-            elif b"=" in ln:
-                k, v = ln.split(b"=", 1)
-                ini.set(sec, k.strip(), v.strip())
-        return ini
-
-
 class Saver:
     """GcSaver's `.data`/`.bss` fields that this group reads or writes, with their values at Setup (after InitData ->
     ResetData 0x5d5490, natives.md §9.1)."""

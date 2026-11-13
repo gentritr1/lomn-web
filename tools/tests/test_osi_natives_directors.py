@@ -230,7 +230,7 @@ def test_committed_overrides_rows_are_valid_sorted_ascii_and_agree_with_the_modu
         assert bodies[k] in _addrs(by_key[k]["cite"]) and dr().TIER2[k] == bodies[k], k
     for k in ("gcsaver.cheatmenu", "gcareadirector.getscriptfluffstring"):
         assert by_key[k]["note"]
-    assert "ini -> M2a-3" in by_key["gcsaver.cheatmenu"]["note"]
+    assert "Bionicle.ini" in by_key["gcsaver.cheatmenu"]["note"]
 
 
 def test_the_merged_tables_carry_the_tiers():
