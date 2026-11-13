@@ -914,7 +914,10 @@ bool Vm::bcl_83() {  // BCLCallGameFunctionFromString 0x602160 (not self-patchin
   try {
     pc_ = cur_pc_ + 4;  // the n byte's inc (0x60237c) inside the try: every caught error is re-raised at +4
     const NativeEntry* e = natives_.find(cls, fn);
-    if (!e) throw VmError("Call to unregistered Game Function");  // SrOSIError 0x602431, inside the try
+    if (!e) {
+      if (miss_observer_) miss_observer_();
+      throw VmError("Call to unregistered Game Function");  // SrOSIError 0x602431, inside the try
+    }
     invoke_native(*e, n, cls, fn, next, true,
                   NativeMsgs{"Too many parameters passed to game function", "Too few parameters passed to game function",
                              "Argument type mismatch in call to game function (argument %d [zero based])"});

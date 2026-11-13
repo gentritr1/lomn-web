@@ -236,6 +236,7 @@ ScriptHost::ScriptHost(const sage::OsiFile& script, std::string_view natives_jso
     ++it->second.calls;
   };
   vm_->set_native_observer([hit](const NativeEntry& e, uint64_t seq) { hit(e, seq, false); });
+  vm_->set_native_miss_observer([this] { ++stats_.natives, ++stats_.unregistered_0x83; });  // fix 1 (m1)
   vm_->set_native_fail_observer([hit](const NativeEntry& e, uint64_t seq) { hit(e, seq, true); });
 }
 

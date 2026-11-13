@@ -20,7 +20,7 @@
 //   types.json, native_overrides.json). stdout, in order: the A8 coverage report (tools/osi/coverage.py's grammar, byte
 //   for byte), `nesting high-water %d`, `stack high-water %d`, then lomn_osi_run's summary lines without wall-clock
 //   fields (so native and wasm32 stdout are byte-identical; the timings are in the JSON). In a run that stops on an error
-//   the report equals coverage.py --trace on the run's trace (a native whose call failed before it ran is counted).
+//   the report equals coverage.py --trace on the run's trace (a native whose call failed before it ran is counted, and so is a 0x83 call of an unregistered name).
 //   Exit codes: 0 ok, 2 bad arguments (including an output inside the install, see below), 3 an input error: the install, Base.osi or a table
 //   (data/osi) unreadable or malformed (an override that disagrees with the merged registry included), 4 the host
 //   cannot start (--natives real with no bound group, no User directory), a VM error stopped the run, or a write
@@ -996,7 +996,7 @@ int script_mode(std::map<std::string, std::string>& a) {
   const bool unchanged = osi::sha256_hex(file.bytes().data(), file.bytes().size()) == sha_before;
 
   std::string o;
-  for (const std::string& l : coverage_report(hs, bodies, stats.unregistered)) o += l + "\n";
+  for (const std::string& l : coverage_report(hs, bodies, stats.unregistered + hs.unregistered_0x83)) o += l + "\n";
   char b[512];
   auto add = [&](const char* fmt, auto... v) {
     std::snprintf(b, sizeof b, fmt, v...);
@@ -1041,7 +1041,7 @@ int script_mode(std::map<std::string, std::string>& a) {
       << ",\"deterministic\":" << (flags.deterministic ? "true" : "false") << ",\"keys\":" << js(keys) << ",\n\"frames\":" << frames
       << ",\"frames_run\":" << done << ",\"stop\":" << js(hs.stop) << ",\"script_unchanged\":" << (unchanged ? "true" : "false")
       << ",\n\"setup_instructions\":" << setup_insns << ",\"instructions\":" << vm.instructions() << ",\"natives_calls\":" << hs.natives
-      << ",\"natives_distinct\":" << hs.hits.size() << ",\"unregistered\":" << stats.unregistered
+      << ",\"natives_distinct\":" << hs.hits.size() << ",\"unregistered\":" << stats.unregistered + hs.unregistered_0x83
       << ",\n\"nesting_high_water\":" << hs.max_nesting << ",\"stack_high_water\":" << hs.stack_high_water
       << ",\"passes_total\":" << hs.passes_total << ",\"frames_rerun\":" << hs.frames_rerun << ",\"frames_skipped\":" << hs.frames_skipped
       << ",\"flattening_frame\":" << flatten << ",\n\"insns_per_frame_p50\":" << pct_u(insns_per_frame, 0.5)

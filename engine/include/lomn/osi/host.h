@@ -30,6 +30,7 @@ struct NativeHit {
 
 struct HostStats {
   uint64_t instructions = 0, natives = 0, setup_instructions = 0;
+  uint64_t unregistered_0x83 = 0;  // fix 1 (m1): 0x83 calls of an unregistered name (each also counted in `natives`)
   int max_nesting = 0;        // D15: the engine-call nesting high-water (the outermost call counts 1)
   uint32_t stack_high_water = 0;
   std::map<std::string, NativeHit> hits;  // by folded registry key "cls.name"

@@ -4,7 +4,8 @@ once in its target file, `old` != `new` (except the comment-only control), every
 compiled EXPECT regex on the own-models cmps (CMP3 / CMP4; the control gives None: it must bite nowhere), the six
 mutants of the plan (Review focus 3) are there, ids and names are unique, and each named native is a registered tier-1
 row with a C++ body bound in the native group its file registers (so the mutated code is the code the A9 run calls).
-Whether a mutant changes the native trace on the A9 path is measured by mutate_natives.py itself (verdict NO-EFFECT)."""
+Whether a mutant changes the native trace on the A9 path is checked at run time by mutate_natives.py's NO-EFFECT verdict,
+not by this anchors test (which only proves the anchors still match)."""
 from __future__ import annotations
 
 import json

@@ -25,6 +25,10 @@ Output, one line per distinct native in first-hit order (stdout), and a summary 
 --natives-impl real (M2a-2 T10) runs the baseline and every flip with the oracle's own native models bound
 (tools/research/osi_natives, as osi_vm.py --run --real-natives [--install DIR]); the unbound rows stay typed stubs.
 `stub` (default) is the typed-stub run above.
+Caveat (fix 1, m3): in `real` mode a flipped native's model never runs (the flipped key answers first), so its SIDE
+EFFECTS are removed along with its return value. A CHANGED verdict can then measure side-effect loss, not return
+sensitivity (setupmoveable: the -310 is the nested OnEvent(0x36) count it no longer triggers; addtoa flipped creates no
+Toa).
 """
 from __future__ import annotations
 

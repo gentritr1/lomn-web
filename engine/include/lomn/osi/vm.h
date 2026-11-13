@@ -103,6 +103,9 @@ class Vm {
   // T10: called when a 0x82/0x83 call of a registered native fails before the native's entry (argument count, stack,
   // conversion), with the sequence number the next entered native will get (none is consumed). ScriptHost's coverage.
   void set_native_fail_observer(std::function<void(const NativeEntry&, uint64_t)> f) { fail_observer_ = std::move(f); }
+  // Fix 1 (review m1): called when a 0x83 call names a function the registry does not have. 0x83's lookup is inside its try,
+  // so (as coverage.py --trace reads the re-raised `Script is calling` line) the miss is a counted call AND unregistered.
+  void set_native_miss_observer(std::function<void()> f) { miss_observer_ = std::move(f); }
 
  private:
   static const char* const kDirectCallMessage;  // 0x84's text, reported at a memoised 0x82 site
@@ -208,6 +211,7 @@ class Vm {
   std::function<void(const NativeEntry&, uint64_t)> observer_;
   std::function<void(const NativeEntry&, uint64_t)> exit_observer_;
   std::function<void(const NativeEntry&, uint64_t)> fail_observer_;
+  std::function<void()> miss_observer_;
   std::vector<Swallowed> swallowed_;
   struct Saved {
     uint32_t depth = 0, pc = 0, frame = 0;

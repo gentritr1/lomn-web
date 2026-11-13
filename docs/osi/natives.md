@@ -52,8 +52,14 @@ Decision text differs from a ruling in §2–§9, the ruling here wins. The diff
     real natives, both engines (two re-entrant chains, both in Setup: `gcmodeldirector.addtoa` → `OnEvent(0x32, 250)` and
     `gccharacter.setupmoveable` → `OnEvent(0x36, 0)`). 64 ≥ 4 × 2, so the cap stays **64**. wasm32 bytes per level on
     those real chains: **1,616** and 1,600 (the stack pointer at the outer and at the nested `Vm::call` entry). 4.5 × 64 ×
-    1,616 = 465,408 ≤ 524,288, so `STACK_SIZE` stays **512 KiB**. The whole real A9 run traps (`STACK_OVERFLOW_CHECK=2`)
-    at a `STACK_SIZE` of 12,976 bytes and passes at 13,232.
+    1,616 = 465,408 ≤ 524,288. (The 12,976 / 13,232 trap bracket of the whole `lomn_view` run is its **startup peak**, the
+    `std::filesystem` canonicalisation in the output-path check, not the VM chain; it is not a bytes-per-level figure.)
+    **Fix 1 (I-1), independent measurement:** the trapping `STACK_SIZE` of the nesting-cap conformance chain
+    (`b-eng-reenter-depth` with `calls.depth` = 16, 32, 48, 63, 64, wasm32, `STACK_OVERFLOW_CHECK=2`) is linear at
+    **1,984 bytes per level** (trap / pass at d = 16: 42,736 / 42,768; at d = 64: 137,968 / 138,000), 23 % above the
+    stack-pointer figure. With it, 4.5 × 64 × 1,984 = **571,392 > 524,288**: the rule as written needs `STACK_SIZE` ≥
+    571,392 (576 KiB = 589,824). The cap chain itself traps only below 138,000, so 512 KiB is 3.8 × that. `STACK_SIZE` is
+    **not** changed by the fix round (a link option shared by every wasm executable): the controller decides.
 12. **`-fwasm-exceptions` scope.** `lomn_view` (the wasm32 node tool) inherits the flag once it links `lomn_osi`.
     `lomn_web` does not link `lomn_osi` until M2b.
 13. **Close-out review:** Opus 5.5 medium.
@@ -462,6 +468,13 @@ of `gcareadirector.setcurrentarea` and **0 `X` records** (the trace: 0 `E`, 0 `X
 are 2 `C` records, both outside `LoadArea`: `OnEvent(0x32, 250)` under `gcmodeldirector.addtoa` and `OnEvent(0x36, 0)`
 under `gccharacter.setupmoveable`. The count is printed by the measurement commands (measurements.md, "M2a-2 Task 10"),
 not as a coverage-report line: the report keeps coverage.py's grammar byte for byte.
+
+**`gchuddirector.playcinematic`: D1 has no falsifier on any script path (Task 10 fix 1, EXECUTED by reading both bodies and
+the tests).** Decision 1 (the cinematic is complete when the native returns) is implemented as `cs.playing = true; ...
+cs.playing = false`, and `cs.playing` is written and never read by either engine's code (`directors.cpp`
+`n_playcinematic`, `directors.py` `_play_cinematic`), so no script, A9 or other, can observe it. Only unit tests read the
+field (`test_osi_directors.cpp` ~1594/1603, `test_osi_natives_directors.py` ~1280/1314, the latter with a "not instant"
+mutant), so D1 is falsifiable there and nowhere else; a `mutate_natives` mutant on it is NO-EFFECT by construction.
 
 ### 5.4 D16, the swallowed nested error (rule)
 

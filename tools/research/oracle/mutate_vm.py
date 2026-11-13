@@ -8,7 +8,8 @@ line its EXPECT regex matches (the targeted corpus program, unit case or trace r
 -DLOMN_WEBGPU=OFF`: the checks need no Dawn), LOMN_DATA in the environment (the `diff` check reads Base.osi), python3 on
 PATH and .venv. Each mutant: apply, build only the targets its checks run, run every named check, restore, `cmp` the
 restored file against the pristine copy taken at start (build/mut-pristine/), rebuild. Checks (all exactly the repo's own):
-  unit      build/native/lomn_tests -tc='osi*'                       fail lines: doctest "TEST CASE:" / "ERROR:"
+  unit      build/native/lomn_tests -tc='osi*', one process per test file (a crash in one file does not hide the
+            others' bites)                                          fail lines: doctest "TEST CASE:" / "ERROR:"
   asan      build/native/lomn_tests_asan -tc='osi*' (ASan + UBSan)    same, plus sanitizer reports
   conform   ctest -R '^osi_conform$' (assembles the corpus, runs lomn_osi_conform; 521 programs)   "FAIL <program>: ..."
   tracecmp  the `make conform-trace-cmp` recipe (C++ vs Python corpus traces, cmp per file)        "DIFF <program>.trace"
@@ -206,8 +207,8 @@ M = [
     ("S07", "0x82: PC is advanced after the native, so a nested call's marker is the site, not site+6", VH,
      "  pc_ = next_pc;  // the handler has consumed its operands before the native runs\n  // D14: the sequence number is assigned at native ENTRY (a nested native gets a higher one, its line comes first)\n  const uint64_t seq = native_seq_++;\n  if (observer_) observer_(e, seq);\n  active_seq_.push_back(seq);\n  NativeCall call{*this, e, site, args};\n  Variant r;\n  try {\n    r = e.fn ? e.fn(call, e.user) : natives_.stub_return(e, heap_, call);\n  } catch (...) {\n    active_seq_.pop_back();\n    throw;\n  }\n  active_seq_.pop_back();\n  if (exit_observer_) {\n    try {\n      exit_observer_(e, seq);\n    } catch (...) {\n      heap_.dispose(r);  // T10 N-1: the result is never pushed, so it is dropped before the re-raise\n      throw;\n    }\n  }\n  cur_pc_ = site;",
      "  pc_ = site;  // M2a-2 T3: 0x82 now writes +6 before the native; the mutant puts the site back for the call\n  const uint64_t seq = native_seq_++;\n  if (observer_) observer_(e, seq);\n  active_seq_.push_back(seq);\n  NativeCall call{*this, e, site, args};\n  Variant r;\n  try {\n    r = e.fn ? e.fn(call, e.user) : natives_.stub_return(e, heap_, call);\n  } catch (...) {\n    active_seq_.pop_back();\n    throw;\n  }\n  active_seq_.pop_back();\n  pc_ = next_pc;\n  if (exit_observer_) {\n    try {\n      exit_observer_(e, seq);\n    } catch (...) {\n      heap_.dispose(r);  // T10 N-1: the result is never pushed, so it is dropped before the re-raise\n      throw;\n    }\n  }\n  cur_pc_ = site;",
-     # T10: the dedicated marker case sorts before the D15 cap case that S07 crashes (test_osi_vm.cpp's copy never runs)
-     {"unit": r"T10 S07: a nested engine call's marker|D16 n-reenter-nested-error-swallowed",
+     # T10: the dedicated marker case (test_osi_natives.cpp); fix 1: names only it, the old D16 case is not S07's bite
+     {"unit": r"T10 S07: a nested engine call's marker",
       "tracecmp": r"DIFF \./b/b-eng-reenter\.trace"}),
     ("S08", "D8': a string -> float conversion does not switch fpu_pc to 64", VH,
      "        if (sw) set_pc64();                                              // ___dec2num 0x65f886 (D8')",
@@ -239,9 +240,13 @@ M = [
      {"unit": None, "conform": None, "tracecmp": None, "diff": None}),
 ]
 
+UNIT_PER_FILE = ("rc=0; for f in $(grep -l 'TEST_CASE(\"osi' engine/tests/*.cpp); do timeout 300 build/native/%s -tc='osi*' "
+                 "-sf=\"*/$(basename $f)\" || rc=1; done; exit $rc")
 CHECKS = {
-    "unit": (["lomn_tests"], "timeout 300 build/native/lomn_tests -tc='osi*'"),
-    "asan": (["lomn_tests_asan"], "timeout 300 build/native/lomn_tests_asan -tc='osi*'"),
+    # fix 1 (m2): one doctest process per test file, so a mutant that crashes one (S07 segfaults on the D15 cap case) cannot
+    # hide the bites of the files that run after it in a single process.
+    "unit": (["lomn_tests"], UNIT_PER_FILE % "lomn_tests"),
+    "asan": (["lomn_tests_asan"], UNIT_PER_FILE % "lomn_tests_asan"),
     "conform": (["lomn_osi_conform"], "timeout 300 ctest --test-dir build/native -R '^osi_conform$' --output-on-failure"),
     "tracecmp": (["lomn_osi_conform"], None),  # run by tracecmp() below (the Makefile recipe's commands)
     "diff": (["lomn_osi_run"], "timeout 900 ctest --test-dir build/native -R '^osi_a6_(digest|window)$' --output-on-failure"),

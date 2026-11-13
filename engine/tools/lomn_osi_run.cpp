@@ -262,8 +262,10 @@ int main(int argc, char** argv) {
   if (coverage) {
     std::vector<std::pair<std::string, NativeHit>> hits(hs.hits.begin(), hs.hits.end());
     std::sort(hits.begin(), hits.end(), [](const auto& a, const auto& b) {
-      return a.second.first_frame != b.second.first_frame ? a.second.first_frame < b.second.first_frame
-                                                          : a.second.first_seq < b.second.first_seq;
+      // the hit table is ScriptHost's, which includes pre-entry failures (T10): same tie-break as lomn_view's report
+      if (a.second.first_frame != b.second.first_frame) return a.second.first_frame < b.second.first_frame;
+      if (a.second.first_seq != b.second.first_seq) return a.second.first_seq < b.second.first_seq;
+      return a.second.first_pre_entry && !b.second.first_pre_entry;
     });
     size_t bound = 0;
     for (const auto& h : hits) bound += h.second.bound ? 1 : 0;
