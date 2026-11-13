@@ -1,4 +1,4 @@
-// M2a-3 T5a: lomn_ini <Bionicle.ini> <cases.tsv>: one `INI ...` line per case (the pair-comparison format, ini.h contract).
+// M2a-3 T5a: lomn_ini <Bionicle.ini> <cases.tsv> [--loadini]: one `INI ...` line per case (the pair-comparison format, ini.h contract).
 // Case fields (TSV): id, kind (str|int), section, key, default (hex bytes; decimal for int), size. `#` lines are comments.
 #include <cstdio>
 #include <fstream>
@@ -21,11 +21,12 @@ static std::string unhex(const std::string& h) {
 }
 
 int main(int argc, char** argv) {
-  if (argc != 3) return std::fprintf(stderr, "usage: lomn_ini <ini> <cases.tsv>\n"), 2;
+  if (argc != 3 && !(argc == 4 && std::string(argv[3]) == "--loadini")) return std::fprintf(stderr, "usage: lomn_ini <ini> <cases.tsv> [--loadini]\n"), 2;
   std::ifstream fi(argv[1], std::ios::binary), fc(argv[2]);
   if (!fi || !fc) return std::fprintf(stderr, "lomn_ini: cannot open input\n"), 2;
   const std::string text((std::istreambuf_iterator<char>(fi)), std::istreambuf_iterator<char>());
-  const lomn::ini::File f(text);
+  const lomn::ini::File raw(text);
+  const lomn::ini::File f = argc == 4 ? raw.after_loadini() : raw;  // --loadini: LoadIni's rebuild rule (hud.md 6.2a)
   std::string line;
   while (std::getline(fc, line)) {
     if (!line.empty() && line.back() == '\r') line.pop_back();

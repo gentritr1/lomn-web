@@ -216,14 +216,12 @@ ScriptHost::ScriptHost(const sage::OsiFile& script, std::string_view natives_jso
     // defaults the natives already hold (the original's LoadIni would write them, 0x5d4a24: recorded, not run).
     ini::File f;
     if (ini::load(*vfs, f)) {
-      // GetScreenData 0x5d5080: GraphicsOptions ResolutionW / ResolutionH, defaults 0x280 / 0x1e0, stored as u16. A
-      // ResolutionW of 0 is what LoadIni 0x5d4a24 answers with its default-writing branch: 640 x 480.
-      const uint16_t w = static_cast<uint16_t>(f.get_int("GraphicsOptions", "ResolutionW", 0x280));
+      // GetScreenData 0x5d5080: GraphicsOptions ResolutionW / ResolutionH, defaults 0x280 / 0x1e0, stored as u16. load() has
+      // already applied LoadIni's rebuild (a 32-bit ResolutionW of 0 gives the 14 default keys: 640 x 480, hud.md 6.2a).
       DisplayState& d = ctx_->subsystem<DisplayState>();
-      if (w != 0) {
-        d.width = static_cast<float>(w);
-        d.height = static_cast<float>(static_cast<uint16_t>(f.get_int("GraphicsOptions", "ResolutionH", 0x1e0)));
-      }
+      d.width = static_cast<float>(static_cast<uint16_t>(f.get_int("GraphicsOptions", "ResolutionW", 0x280)));
+      d.height = static_cast<float>(static_cast<uint16_t>(f.get_int("GraphicsOptions", "ResolutionH", 0x1e0)));
+      d.language = f.get_int("Misc", "Language", 0);  // GetLanguage 0x5d4c10 (read; the area director still loads eng)
       // GcSaver::CheatMenu 0x5d4fc0: GetPrivateProfileStringA("Misc", "CheatMenu", "", buf, 0xff, ...)
       ctx_->subsystem<SaverState>().ini_cheat_menu = f.get_string("Misc", "CheatMenu", "", 0xff);
     }

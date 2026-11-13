@@ -80,7 +80,7 @@ TEST_CASE("ini crafted table: every row of ini_crafted.expect") {
       CHECK(f.get_int(c[1], c[2], static_cast<uint32_t>(std::stoul(c[3]))) == std::stoul(c[5]));
     ++n;
   }
-  CHECK(n == 32);  // a row cannot be dropped silently
+  CHECK(n == 37);  // a row cannot be dropped silently
 }
 
 TEST_CASE("ini: an empty or missing file gives the defaults; load() reads Root/Bionicle.ini and never writes it") {
@@ -88,7 +88,7 @@ TEST_CASE("ini: an empty or missing file gives the defaults; load() reads Root/B
   fs::MemoryFileSystem mem;
   ini::File f;
   CHECK_FALSE(ini::load(mem, f));
-  const std::string text = "[Misc]\nCheatMenu=LEGOTester\n";
+  const std::string text = "[GraphicsOptions]\nResolutionW=640\n[Misc]\nCheatMenu=LEGOTester\n";
   REQUIRE(mem.mount("Root/Bionicle.ini", std::vector<uint8_t>(text.begin(), text.end())));
   REQUIRE(ini::load(mem, f));
   CHECK(f.get_string("misc", "cheatmenu", "", 255) == "LEGOTester");
@@ -96,6 +96,30 @@ TEST_CASE("ini: an empty or missing file gives the defaults; load() reads Root/B
   REQUIRE(mem.read("Root/Bionicle.ini", after) == fs::Error::None);
   CHECK(std::string(after.begin(), after.end()) == text);  // the mount is read-only; the host has no write path
   CHECK(mem.write("Root/Bionicle.ini", nullptr, 0) == fs::Error::ReadOnly);
+}
+
+TEST_CASE("ini LoadIni rebuild (hud.md 6.2a): a 32-bit ResolutionW of 0 keeps only the 14 default keys") {
+  const std::string tail = "[Cheat]\r\nUrinate=Pohatu\r\n[Misc]\r\nCheatMenu=LEGOTester\r\nSoundVolume=7\r\n[GraphicsOptions]\r\nWindowed=0\r\n";
+  auto rebuilt = [&](const std::string& w) {
+    const ini::File f = ini::File(w + tail).after_loadini();
+    return f.get_string("Cheat", "Urinate", "", 255).empty() && f.get_string("Misc", "CheatMenu", "", 255).empty() &&
+           f.get_int("Misc", "SoundVolume", 0) == 100 && f.get_int("GraphicsOptions", "Windowed", 0) == 1;
+  };
+  CHECK(rebuilt(""));                                              // missing
+  CHECK(rebuilt("[GraphicsOptions]\r\nResolutionW=\r\n"));         // empty
+  CHECK(rebuilt("[GraphicsOptions]\r\nResolutionW=abc\r\n"));      // non-numeric
+  CHECK(rebuilt("[GraphicsOptions]\r\nResolutionW=0\r\n"));
+  CHECK_FALSE(rebuilt("[GraphicsOptions]\r\nResolutionW=-5\r\n"));     // 32-bit non-zero: no rebuild
+  CHECK_FALSE(rebuilt("[GraphicsOptions]\r\nResolutionW=65536\r\n"));  // not a u16 test
+  CHECK_FALSE(rebuilt("[GraphicsOptions]\r\nResolutionW=640\r\n"));
+  const ini::File r = ini::File(tail).after_loadini();
+  CHECK(r.get_int("GraphicsOptions", "ResolutionW", 0) == 640);
+  CHECK(r.get_int("GraphicsOptions", "ResolutionH", 0) == 480);
+  CHECK(r.get_int("GraphicsOptions", "BitDepth", 0) == 32);
+  CHECK(r.get_int("GraphicsOptions", "Gamma", 0) == 256);
+  CHECK(r.get_int("GraphicsOptions", "Fog", 0) == 1);
+  CHECK(r.get_int("Misc", "Language", 9) == 0);
+  CHECK(r.get_int("Misc", "ControlOption", 0) == 1);
 }
 
 TEST_CASE("ini natives: gcsaver.cheatmenu and gcgame.getresolutionwidth/height read the INI (asm: hud.md 6.2)") {
@@ -114,7 +138,7 @@ TEST_CASE("ini natives: gcsaver.cheatmenu and gcgame.getresolutionwidth/height r
     a.fn("setup", 0).call("gcgame", "getresolutionwidth", 0).ret();
     return run_setup(a, ini);
   };
-  const std::string yes = "[misc]\r\nCHEATMENU = \"LEGOTester\"\r\n", no = "[Misc]\r\nCheatMenu=legotester\r\n",
+  const std::string yes = "[GraphicsOptions]\r\nResolutionW=640\r\n[misc]\r\nCHEATMENU = \"LEGOTester\"\r\n", no = "[GraphicsOptions]\r\nResolutionW=640\r\n[Misc]\r\nCheatMenu=legotester\r\n",
                     big = "[GraphicsOptions]\r\nResolutionW=800\r\nResolutionH=600\r\n",
                     zero = "[GraphicsOptions]\r\nResolutionW=0\r\nResolutionH=7\r\n",
                     keyless = "[GraphicsOptions]\r\nWindowed=1\r\n", wide = "[GraphicsOptions]\r\nResolutionW=65541\r\n";
@@ -130,6 +154,9 @@ TEST_CASE("ini natives: gcsaver.cheatmenu and gcgame.getresolutionwidth/height r
   CHECK(width(&zero) == osi::make_float(640.0f));     // LoadIni rewrites a 0 ResolutionW with the defaults (recorded, not run)
   CHECK(wh(&zero) == osi::make_float(480.0f));
   CHECK(width(&wide) == osi::make_float(5.0f));       // stored as u16 (GetScreenData)
+  const std::string w64k = "[GraphicsOptions]\r\nResolutionW=65536\r\n", cheatlost = "[Misc]\r\nCheatMenu=LEGOTester\r\n";
+  CHECK(width(&w64k) == osi::make_float(0.0f));       // 32-bit non-zero: no rebuild, then u16 0
+  CHECK(cheat(&cheatlost) == osi::make_int(0));       // ResolutionW missing: the rebuild drops [Misc] CheatMenu
 }
 
 TEST_CASE("ini: the owner's Bionicle.ini: cheatmenu 0, the Urinate gate true, 640x480 (F12/F13)") {

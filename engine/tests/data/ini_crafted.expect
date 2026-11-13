@@ -31,3 +31,8 @@ I	Ints	bad	7	0	0
 I	Ints	zero	7	0	0
 I	Ints	missing	7	0	7
 I	Nosuch	n	7	0	7
+I	Ints	neg	7	0	4294967291
+I	Ints	plus	7	0	1
+S	CrOnly	k	D	255	v
+S	CrOnly	k2	D	255	w
+S	Case	nokey	default  	255	default

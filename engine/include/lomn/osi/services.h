@@ -71,6 +71,7 @@ struct DisplayState {
   explicit DisplayState(HostContext&) {}
   float width = 640.0f;
   float height = 480.0f;
+  uint32_t language = 0;  // [Misc] Language, default 0 (GetLanguage 0x5d4c10)
 };
 
 // SrBlockFileExists 0x54ddc0 over the VFS: Art.blk (0x83b0b8, "Root/Data/Art/Art.blk") first, then the current/second
