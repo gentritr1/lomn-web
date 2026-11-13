@@ -125,10 +125,13 @@ Variant n_spline_create(NativeCall& c, void* user) {
 // (0x480ec7), the insert's copy on success (0x480ede), the temporary -1 (0x480f08). Add false (the key is taken) -> int 0
 // (0x47e4ca): the new Toa drops to 0 and is freed, sToa unchanged. Add true -> sToa = the Toa (0x47e527), int 1. The Toa
 // has no handle yet, so none of these reference events writes an H line; G at its minting (gettoa) is 1, the map
-// (natives.md §2.4, INFERRED there: no other lasting holder). Not modelled: the block-file slot (LoadCharBlockHeader sets
-// it at 0x47e1fe; restored only on success, 0x47e61e; after a failed Add the original leaves it pointing into the freed
-// Toa, and its queued AddProcess (0x568262) is a dangling pointer: undefined), the camera, the collision physics, the
-// event handlers and the sounds.
+// (natives.md §2.4, INFERRED there: no other lasting holder). The block-file slot (T12 I-2): AddToa saves it
+// (SrGetCurBlockFile 0x47e1f1 -> [ebp-0x134]) after the constructor, LoadCharBlockHeader 0x419330 (0x47e1fe) sets it to the
+// Toa's header [toa+0x228] (0x419403), and success restores the saved value (0x47e618 / 0x47e61e): no net change, and no
+// call between 0x47e1fe and 0x47e61e reaches Call (calls.jsonl closures), so no script sees the Toa's file. A failed Add
+// returns at 0x47e508 without the restore, the Toa already freed by Add's temporary -1 (0x480f08): the slot points into
+// freed memory (and the queued AddProcess, 0x568262, is a dangling pointer): Undefined behaviour, raised after the
+// release. Not modelled: the camera, the collision physics, the event handlers and the sounds.
 Variant n_addtoa(NativeCall& c, void* user) {
   HostContext& ctx = host(user);
   ModelDirector& md = ctx.subsystem<ModelDirector>();
@@ -147,7 +150,8 @@ Variant n_addtoa(NativeCall& c, void* user) {
     ctx.add_ref(toa);  // the map's ScAutoRefPtr copy
   }
   ctx.release(toa);  // the temporary -1 (0x480f08): a failed Add frees the new Toa here
-  if (!inserted) return make_int(0);  // 0x47e4ca
+  if (!inserted)  // 0x47e4ca -> 0x47e508: int 0 in the original, with the slot left on the freed Toa's header
+    throw VmError("Undefined behaviour: AddToa's failed Add leaves the block-file slot on the freed GcToa (0x47e508)");
   md.s_toa = toa;                     // 0x47e527
   return make_int(1);                 // CreateVariant 0x407f30: {0x10, movzx byte}
 }
@@ -234,7 +238,9 @@ void show_character(HostContext& ctx, uint32_t id, GcCharacter* ch) {
 //   nulled (0x54b364). Then the Toa node [0x8390a8]: FindChild(id) (0x47fd2a, virtual slot 0x40) not found -> return
 //   (0x47fd2f); found -> the temporary +1 (0x47fd51), the search, the temporary -1 (0x47fd77-0x47fd82), SetParentNode(0)
 //   (0x47fda0) and the child's erase (0x4197c0 at 0x47fdab: the shifted siblings' copies, then the last slot's -1).
-// - another id: the same on the main-guy node [0x83aa4c] (0x47fdc6-0x47fe4f), then the id's entry is dropped from the list
+// - another id: GcBAGroup::RemoveCreature 0x54b180 first (0x47fcf3; its erase 0x54b990 shifts raw pointers and decrements the
+//   list count, 0x54b9de: no reference-count operation, and no Call in its closure), then the same on the main-guy node
+//   [0x83aa4c] (0x47fdc6-0x47fe4f), then the id's entry is dropped from the list
 //   [0x83a9c0] (0x47fe54-0x47fe76, ids only: no reference), then the node [0x838778] (0x47fe9f), which Show never fills
 //   (no reference to it in Show 0x47f830-0x47fb4f): its FindChild finds nothing (INFERRED: the char is not in it).
 // Not modelled: 0x418d00 (0x47ff29), 0x4745f0 (0x47fcd2) and 0x516050 (0x47ff3a), reached on this path with the character or

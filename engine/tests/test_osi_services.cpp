@@ -1078,3 +1078,17 @@ TEST_CASE("osi services real tables: every tier1 override is bound by a group, n
   CHECK(host.registry().find("scslosistringfuncs", "getstringtable")->tier == Tier::Tier3);
 }
 #endif
+
+TEST_CASE("osi services doesfileexist T12 M-4: an absolute path in the hook's neither branch stays inside Root/ (intentional divergence)") {
+  // ResolveGamePath (ijl15.dll 0x10001570): the buffer is emptied (0x1000159e) and the neither branch falls through to
+  // strcat_s(buf, size, path) (0x10001641), so "/x/User/..." or "C:/x/User/..." stays absolute in the original and names a
+  // file anywhere on the disk. The port reads it as "Root/" + path (natives.md §9.3 (c)).
+  fs::MemoryFileSystem mem;
+  REQUIRE(mem.mount("Root/Data/Art/Art.blk", make_blk({"alpha.tga"})));
+  REQUIRE(mem.mount("Root/Data/Neither/User/x.txt", {'x'}));
+  REQUIRE(mem.mount("Root/C:/Data/Neither/User/y.txt", {'x'}));
+  auto exists = [&](const std::string& n) { return call_str("scslosifileio", "doesfileexist", n, &mem); };
+  CHECK(exists("/Data/Neither/User/x.txt") == make_int(1));    // Root/ + "/Data/...": the VFS folds the double slash
+  CHECK(exists("C:/Data/Neither/User/y.txt") == make_int(1));  // Root/C:/Data/...: never the host's C: drive
+  CHECK(exists("C:/Data/Neither/User/x.txt") == make_int(0));
+}

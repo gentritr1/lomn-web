@@ -496,14 +496,15 @@ TEST_CASE("osi objects gcmodeldirector.addtoa: OnEvent(0x32, 250) inside the nat
   CHECK(main_character_id(r.ctx()) == kIdCnt1);
 }
 
-TEST_CASE("osi objects gcmodeldirector.addtoa: a second Toa still fires OnEvent, but Add fails: int 0, the map keeps the first") {
+TEST_CASE("osi objects gcmodeldirector.addtoa: a second Toa still fires OnEvent, but Add fails: undefined, the map keeps the first") {
+  // T12 I-2: the failed Add returns at 0x47e508 without the restore 0x47e61e, leaving the block-file slot [0x736128] on
+  // the freed Toa's header [toa+0x228] (LoadCharBlockHeader 0x419403): Undefined behaviour (test_osi_directors.cpp, T12)
   Asm a;
   a.fn("setup", 0).s("onua").call("gcmodeldirector", "addtoa", 1).pop().s("tahu").call("gcmodeldirector", "addtoa", 1).ret();
   on_event(a);
   Run r(a);
-  REQUIRE_MESSAGE(r.res.ok, r.err());
-  CHECK(r.res.result == make_int(0));
-  CHECK(r.log_has("00000002 gcmodeldirector.addtoa 1 -> 0010:00000000"));
+  CHECK_FALSE(r.res.ok);
+  CHECK_FALSE(r.log_has("00000002 gcmodeldirector.addtoa 1 ->"));
   CHECK(r.log_has(std::string("C 00000002 ") + kOnEvent0x32));
   ModelDirector& md = r.ctx().subsystem<ModelDirector>();
   REQUIRE(md.map.size() == 1);

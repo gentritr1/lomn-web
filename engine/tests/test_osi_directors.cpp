@@ -135,6 +135,7 @@ const Pe* image(const char* rel) {
   return it->second.get();
 }
 const Pe* exe() { return image("reference/LEGOBionicle.exe"); }
+const Pe* install_exe() { return image("install/LEGOBionicle.exe"); }  // the authoritative copy (T12 exe ruling)
 const Pe* bettersaver() { return image("install/mods/BetterSaver.dll"); }
 
 #define SKIP_WITHOUT(img)              \
@@ -1719,3 +1720,236 @@ TEST_CASE("osi directors real tables: the group's tier1 overrides are bound; the
   CHECK(g1);
 }
 #endif
+
+// ============================== M2a-2 T12 fix a: the block-file slot of character loads and addtoa; RemoveArea; GetString ==============================
+
+namespace {
+// The calling handler re-reports a native's error as "Script is calling <cls>.<fn>" (0x601dd3 / 0x602b24): this wrapper
+// keeps the native's own message so a test can read it. One wrapped native per test.
+NativeFn g_wrapped_fn = nullptr;
+std::string* g_wrapped_msg = nullptr;
+void keep_native_error(ScriptHost& h, const char* cls, const char* fn, std::string& out) {
+  const NativeEntry* e = h.registry().find(cls, fn);
+  REQUIRE(e);
+  REQUIRE(e->fn);
+  g_wrapped_fn = e->fn;
+  g_wrapped_msg = &out;
+  h.registry().bind(std::string(cls) + "." + fn, [](NativeCall& c, void* u) {
+    try {
+      return g_wrapped_fn(c, u);
+    } catch (const VmError& x) {
+      *g_wrapped_msg = x.message;
+      throw;
+    }
+  }, e->user, Tier::Implemented);
+}
+bool starts_with(const std::string& s, const char* p) { return s.rfind(p, 0) == 0; }
+}  // namespace
+
+TEST_CASE("osi directors T12 asm pin (install exe): the block-file slot in AddCharacter, LoadCharBlockHeader and AddToa") {
+  const Pe* im = install_exe();
+  SKIP_WITHOUT(im);
+  PIN(im, 0x54db20, "8b 54 24 04 89 15 28 61 73 00 c3");  // SrSetCurBlockFile: [0x736128] = arg
+  PIN(im, 0x54db30, "a1 28 61 73 00 c3");                 // SrGetCurBlockFile: eax = [0x736128]
+  // GcModelDirector::AddCharacter 0x47ec30 (its ret 0x47f03c; the next function starts at 0x47f040)
+  PIN(im, 0x47eca5, "e8 86 ee 0c 00");     // save: SrGetCurBlockFile ...
+  PIN(im, 0x47ecaa, "89 85 b4 fe ff ff");  // ... into [ebp-0x14c]
+  PIN(im, 0x47ecb2, "e8 79 a6 f9 ff");     // LoadCharBlockHeader 0x419330 (this = the character)
+  PIN(im, 0x47ef8f, "e8 1c 1f 00 00");     // Add 0x480eb0
+  PIN(im, 0x47ef9a, "75 44");              // Add true -> 0x47efe0
+  PIN(im, 0x47efda, "c3");                 // Add false: return, no restore
+  PIN(im, 0x47efef, "e8 6c ea f8 ff");     // InitializeCollisionPhysics 0x40da60 (-> SetupMoveable -> OnEvent)
+  PIN(im, 0x47eff4, "ff b5 b4 fe ff ff");  // restore: push [ebp-0x14c] ...
+  PIN(im, 0x47effa, "e8 21 eb 0c 00");     // ... SrSetCurBlockFile, reached only when 0x47efef returns
+  // LoadCharBlockHeader 0x419330: open the character's own header [char+0x228] unless loaded, then make it the slot
+  PIN(im, 0x419343, "e8 a8 6c 1f 00");     // IsHeaderLoaded 0x60fff0
+  PIN(im, 0x41934a, "0f 85 ac 00 00 00");  // loaded -> 0x4193fc
+  PIN(im, 0x4193a7, "8b 96 fc 00 00 00");  // the character id [+0xfc] (SrAsString 0x43d020 at 0x4193b8)
+  PIN(im, 0x4193c3, "68 27 f5 6f 00");
+  CHECK(im->cstr(0x6ff527) == "Root/Data/Characters/%.4s.blk");
+  PIN(im, 0x4193ec, "e8 0f 6c 1f 00");     // ScBlockFile::Open 0x610000 (its result is not tested)
+  PIN(im, 0x4193fc, "81 c6 28 02 00 00");  // esi = char + 0x228 ...
+  PIN(im, 0x419403, "e8 18 47 13 00");     // ... SrSetCurBlockFile: set on both paths
+  // GcModelDirector::AddToa 0x47e170
+  PIN(im, 0x47e1f1, "e8 3a f9 0c 00");     // save ...
+  PIN(im, 0x47e1f6, "89 85 cc fe ff ff");  // ... into [ebp-0x134]
+  PIN(im, 0x47e1fe, "e8 2d b1 f9 ff");     // LoadCharBlockHeader (this = the Toa)
+  PIN(im, 0x47e4c8, "75 46");              // Add true -> 0x47e510
+  PIN(im, 0x47e508, "c3");                 // Add false: return, no restore (the Toa was freed in Add, 0x480f08)
+  PIN(im, 0x47e618, "ff b5 cc fe ff ff");  // success: restore the saved slot ...
+  PIN(im, 0x47e61e, "e8 fd f4 0c 00");     // ... SrSetCurBlockFile
+}
+
+TEST_CASE("osi directors T12 I-1: a swallowed character OnEvent leaves the current slot at Root/Data/Characters/<id>.blk") {
+  {
+    fs::MemoryFileSystem mem;
+    mount_area(mem, {{"frnt_char.slb", id_slb({"lbld"}, 0x34)}, {"frnt_hive.slb", id_slb({"lbld"}, 0x3c)},
+                     {"inarea.txt", {1}}});
+    REQUIRE(mem.mount("Root/Data/Characters/lbld.blk", blk({{"inchar.txt", {1}}})));
+    Asm a;
+    area_script(a, "frnt", /*raise=*/true);
+    a.fn("ex_char", 0).s("x/inchar.txt").call("scslosifileio", "doesfileexist", 1).ret();
+    a.fn("ex_area", 0).s("x/inarea.txt").call("scslosifileio", "doesfileexist", 1).ret();
+    a.fn("ex_lev", 0).s("x/inlev.txt").call("scslosifileio", "doesfileexist", 1).ret();
+    Run r(a, &mem, HostFlags{}, [](ScriptHost& h) { main_is(h, "lbld"); });
+    REQUIRE(r.res.ok);
+    AreaDirector& ad = r.ctx().subsystem<AreaDirector>();
+    CHECK(ad.block_stats(AreaDirector::kCharacters).errors == 1);
+    sage::BlockChain* chain = r.ctx().block_chain();
+    REQUIRE(chain);
+    // LoadCharBlockHeader set the slot (0x419403); the error unwound past the restore 0x47effa (no catch at 0x47efef)
+    CHECK(chain->path(sage::Source::Current) == "Root/Data/Characters/lbld.blk");
+    CHECK(chain->path(sage::Source::Second) == "Root/Data/Levels/lev0/lev0.blk");
+    // the hive block's SLK lookup goes Art -> the character file -> the level file: frnt_hive.slb is not found
+    CHECK(ad.block_stats(AreaDirector::kHives).runs == 0);
+    CHECK(r.log_count("X ") == 1);  // only the character's
+    CHECK(r.call("ex_char").result == make_int(1));
+    CHECK(r.call("ex_area").result == make_int(0));
+    CHECK(r.call("ex_lev").result == make_int(1));
+  }
+  {
+    fs::MemoryFileSystem mem;  // no character file: the header stays unloaded, the slot is still set (finds nothing)
+    mount_area(mem, {{"frnt_char.slb", id_slb({"lbld"}, 0x34)}, {"inarea.txt", {1}}});
+    Asm a;
+    area_script(a, "frnt", /*raise=*/true);
+    a.fn("ex_area", 0).s("x/inarea.txt").call("scslosifileio", "doesfileexist", 1).ret();
+    a.fn("ex_lev", 0).s("x/inlev.txt").call("scslosifileio", "doesfileexist", 1).ret();
+    a.fn("ex_art", 0).s("x/art.tga").call("scslosifileio", "doesfileexist", 1).ret();
+    Run r(a, &mem, HostFlags{}, [](ScriptHost& h) { main_is(h, "lbld"); });
+    REQUIRE(r.res.ok);
+    sage::BlockChain* chain = r.ctx().block_chain();
+    REQUIRE(chain);
+    CHECK(chain->path(sage::Source::Current) != "Root/Data/Levels/lev0/frnt.blk");
+    CHECK(r.call("ex_area").result == make_int(0));
+    CHECK(r.call("ex_lev").result == make_int(1));  // the second slot is untouched
+    CHECK(r.call("ex_art").result == make_int(1));  // Art.blk first, whatever the slots hold
+  }
+}
+
+TEST_CASE("osi directors T12 I-1: without an error the character's slot is set around its OnEvent and restored (0x47effa)") {
+  fs::MemoryFileSystem mem;
+  mount_area(mem, {{"frnt_char.slb", id_slb({"lbld"}, 0x34)}, {"frnt_hive.slb", id_slb({"lbld"}, 0x3c)},
+                   {"inarea.txt", {1}}});
+  REQUIRE(mem.mount("Root/Data/Characters/lbld.blk", blk({{"inchar.txt", {1}}})));
+  Asm a;
+  a.fn("setup", 0).s("lev0").call("gcareadirector", "setcurrentlevel", 1).pop();
+  a.s("frnt").call("gcareadirector", "setcurrentarea", 1).ret();
+  // the probe inside each OnEvent: the character's sees its own file, the hive's the area file
+  a.fn("onevent", 10).s("x/inchar.txt").call("scslosifileio", "doesfileexist", 1).pop();
+  a.s("x/inarea.txt").call("scslosifileio", "doesfileexist", 1).pop().nothing().ret();
+  Run r(a, &mem, HostFlags{}, [](ScriptHost& h) { main_is(h, "lbld"); });
+  REQUIRE(r.res.ok);
+  CHECK(r.log_count("C 00000001 OnEvent") == 2);
+  std::string seen;  // the four probes in order: the character's (inchar, inarea), then the hive's
+  for (const auto& l : r.log.lines)
+    if (l.find("scslosifileio.doesfileexist 1 -> 0010:0000000") != std::string::npos) seen += l.back();
+  CHECK(seen == "1001");
+  sage::BlockChain* chain = r.ctx().block_chain();
+  REQUIRE(chain);
+  CHECK(chain->path(sage::Source::Current) == "Root/Data/Levels/lev0/frnt.blk");
+  CHECK(r.ctx().subsystem<AreaDirector>().block_stats(AreaDirector::kHives).runs == 1);
+}
+
+TEST_CASE("osi directors T12 I-2: a successful addtoa leaves the current slot as it found it (0x47e1f1 -> 0x47e61e)") {
+  fs::MemoryFileSystem mem;
+  mount_area(mem, {{"inarea.txt", {1}}});
+  REQUIRE(mem.mount("Root/Data/Characters/onua.blk", blk({{"inchar.txt", {1}}})));
+  REQUIRE(mem.mount("Root/Data/loose.txt", {1}));
+  Asm a;
+  a.fn("setup", 0).s("Root/Data/loose.txt").call("scslosifileio", "doesfileexist", 1).pop();
+  a.s("onua").call("gcmodeldirector", "addtoa", 1).pop();
+  a.s("Root/Data/loose.txt").call("scslosifileio", "doesfileexist", 1).ret();  // a null slot: FileExists (0x54de41)
+  a.fn("lev", 0).s("lev0").call("gcareadirector", "setcurrentlevel", 1).ret();
+  a.fn("ex_char", 0).s("x/inchar.txt").call("scslosifileio", "doesfileexist", 1).ret();
+  a.fn("ex_lev", 0).s("x/inlev.txt").call("scslosifileio", "doesfileexist", 1).ret();
+  add_onevent(a);
+  Run r(a, &mem);
+  REQUIRE(r.res.ok);
+  CHECK(r.res.result == make_int(1));
+  CHECK(r.call("ex_char").result == make_int(0));
+  REQUIRE(r.call("lev").ok);
+  CHECK(r.call("ex_lev").result == make_int(1));
+  CHECK(r.ctx().block_chain()->path(sage::Source::Current) == "Root/Data/Levels/lev0/lev0.blk");
+}
+
+TEST_CASE("osi directors T12 I-2: a failed addtoa (the key is taken) is undefined: the slot points into the freed Toa") {
+  fs::MemoryFileSystem mem;
+  REQUIRE(mem.mount("Root/Data/Art/Art.blk", blk({{"art.tga", {1}}})));
+  REQUIRE(mem.mount("Root/Data/Characters/gali.blk", blk({{"inchar.txt", {1}}})));
+  Asm a;
+  a.fn("setup", 0).s("onua").call("gcmodeldirector", "addtoa", 1).pop();
+  a.s("gali").call("gcmodeldirector", "addtoa", 1).ret();
+  add_onevent(a);
+  std::string msg;
+  Run r(a, &mem, HostFlags{}, [&](ScriptHost& h) { keep_native_error(h, "gcmodeldirector", "addtoa", msg); });
+  CHECK_FALSE(r.res.ok);
+  CHECK(starts_with(msg, "Undefined behaviour:"));
+  CHECK(r.log_count("C ") == 2);  // the second constructor's OnEvent ran before the Add (0x568a59)
+  ModelDirector& md = r.ctx().subsystem<ModelDirector>();
+  REQUIRE(md.map.size() == 1);
+  CHECK(dynamic_cast<GcToa*>(md.get(kIdCnt1))->name() == "onua");
+}
+
+TEST_CASE("osi directors T12 M-1 asm pin (install exe): RemoveArea calls CleanUpArea on a null loader; CleanUpArea reads [this+0x10]") {
+  const Pe* im = install_exe();
+  SKIP_WITHOUT(im);
+  PIN(im, 0x489574, "e8 97 12 00 00");  // GetAreaLoader 0x48a810
+  PIN(im, 0x48957d, "85 c0");           // test eax, eax ...
+  PIN(im, 0x48957f, "74 05");           // ... null skips only the +1 ...
+  PIN(im, 0x489586, "8b 4d ec");        // ... ecx = the (null) loader
+  PIN(im, 0x489589, "e8 42 82 07 00");  // CleanUpArea 0x5017d0
+  PIN(im, 0x5017d9, "89 cf");
+  PIN(im, 0x5017db, "8b 77 10");        // mov esi, [edi+0x10]: a fault on null
+}
+
+TEST_CASE("osi directors T12 M-1: setcurrentlevel inside an area load's OnEvent finds no loader: undefined (swallowed by D16)") {
+  fs::MemoryFileSystem mem;
+  mount_area(mem, {{"frnt_char.slb", id_slb({"lbld"}, 0x34)}});
+  Asm a;
+  a.fn("setup", 0).s("lev0").call("gcareadirector", "setcurrentlevel", 1).pop();
+  a.s("frnt").call("gcareadirector", "setcurrentarea", 1).ret();
+  // the area id is set (0x48a57f) but its loader is inserted only after LoadArea (0x48938c)
+  a.fn("onevent", 10).s("lev1").call("gcareadirector", "setcurrentlevel", 1).pop().nothing().ret();
+  std::string msg;
+  Run r(a, &mem, HostFlags{}, [&](ScriptHost& h) {
+    main_is(h, "lbld");
+    keep_native_error(h, "gcareadirector", "setcurrentlevel", msg);
+  });
+  REQUIRE(r.res.ok);
+  CHECK(starts_with(msg, "Undefined behaviour:"));
+  AreaDirector& ad = r.ctx().subsystem<AreaDirector>();
+  CHECK(ad.block_stats(AreaDirector::kCharacters).errors == 1);
+  CHECK(ad.current_level() == id4("lev0"));
+  CHECK(ad.current_area() == id4("frnt"));
+}
+
+TEST_CASE("osi directors T12 M-2 asm pin (install exe): GetString's n - 1 wraps for n == 0 (dec edx; cmp; jbe)") {
+  const Pe* im = install_exe();
+  SKIP_WITHOUT(im);
+  PIN(im, 0x5e8709, "8b 53 08");        // edx = n
+  PIN(im, 0x5e870c, "4a");              // dec edx: 0 -> 0xffffffff
+  PIN(im, 0x5e870d, "39 d7");           // cmp edi (the index), edx
+  PIN(im, 0x5e870f, "76 1f");           // jbe: every index passes
+  PIN(im, 0x5e8730, "89 fa c1 e2 02 03 53 0c 8b 02");  // [strings + 4 * index]: past the (empty) array
+}
+
+TEST_CASE("osi directors T12 M-2: getscriptfluffstring on an entry with n == 0 is undefined (an out-of-bounds read)") {
+  fs::MemoryFileSystem mem;
+  const uint32_t empt = id4("empt");
+  REQUIRE(mem.mount("Root/Data/Art/Art.blk", blk({{"art.tga", {1}}})));
+  REQUIRE(mem.mount(kFluffLangBlk, blk({{"Fluff_eng.slb", fluff_slb({{empt, 1, {}}, {id4("door"), 1, {"door text"}}})}})));
+  for (uint32_t idx : {0u, 5u}) {
+    Asm a;
+    a.fn("setup", 0).i32(static_cast<int32_t>(empt)).i8(1).i32(static_cast<int32_t>(idx));
+    a.call("gcareadirector", "getscriptfluffstring", 3).ret();
+    std::string msg;
+    Run r(a, &mem, HostFlags{}, [&](ScriptHost& h) { keep_native_error(h, "gcareadirector", "getscriptfluffstring", msg); });
+    CHECK_FALSE(r.res.ok);
+    CHECK(starts_with(msg, "Undefined behaviour:"));
+  }
+  Asm a;  // the other entry still reads normally
+  a.fn("setup", 0).i32(static_cast<int32_t>(id4("door"))).i8(1).i8(0).call("gcareadirector", "getscriptfluffstring", 3).ret();
+  Run r(a, &mem);
+  REQUIRE(r.res.ok);
+  CHECK(r.res.result_text == "door text");
+}

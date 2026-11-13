@@ -36,6 +36,16 @@ class BlockChain {
   // zeroes the entry count, 0x60ffdb): the slot counts as set (SrBlockFileExists skips FileExists, 0x54ddf7) but Find
   // gives -1 for every name (0x60fedb). `tag` is the path() reported for the slot.
   void set_unloaded(Source s, std::string_view tag);
+  // M2a-2 T12: SrGetCurBlockFile 0x54db30 / SrSetCurBlockFile 0x54db20 as a save / restore pair of the current slot.
+  struct Slot {
+    BlockFile bf;
+    std::string path;
+  };
+  Slot save_current() const { return {current_, current_path_}; }
+  void restore_current(Slot s) {
+    current_ = std::move(s.bf);
+    current_path_ = std::move(s.path);
+  }
   // Area entry as GcAreaLoader::LoadArea (0x004fedd0) sets it up: second = <lev>.blk, current = <area>.blk.
   bool enter_area(std::string_view level, std::string_view area, std::string* err);
 

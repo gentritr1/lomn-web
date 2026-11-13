@@ -180,12 +180,15 @@ void AreaDirector::load_header(int h, bool second) {
 // [0x83b0b4] = null (0x4895a1) and both block headers are closed (0x4895c4 / 0x4895ce). An OnEvent error propagates out of
 // the native from inside the loop (CleanUpArea, Remove and RemoveArea have no catch, exc.py): the later entries, the map
 // erase, the null area and the closes are not reached, and SetCurrentLevel stops before 0x489af6.
+// No loader (T12 M-1): GetAreaLoader returns null, the null test 0x48957d-0x48957f skips only the +1, and CleanUpArea
+// runs on it (0x489586 / 0x489589) and reads [null+0x10] (0x5017db): a fault. Reachable when an OnEvent of the area's
+// own load calls setcurrentlevel: the area id is set (0x48a57f) before LoadArea inserts its loader (0x48938c).
 void AreaDirector::remove_area() {
   auto it = loaders_.find(area_);
-  if (it != loaders_.end()) {
-    const std::vector<uint32_t> entries = it->second;  // CleanUpArea tears the list down only at its end (0x5019e6)
-    for (uint32_t id : entries) remove_area_character(ctx_, id);
-  }
+  if (it == loaders_.end())
+    throw VmError("Undefined behaviour: RemoveArea on an area with no loader (CleanUpArea reads [null+0x10], 0x5017db)");
+  const std::vector<uint32_t> entries = it->second;  // CleanUpArea tears the list down only at its end (0x5019e6)
+  for (uint32_t id : entries) remove_area_character(ctx_, id);
   loaders_.erase(area_);
   area_ = kNullId;
   close(1);
@@ -292,6 +295,19 @@ void AreaDirector::run_block(Block b, const std::string& file) {
       if (!modelled) continue;  // a numbered unique id (GetUniqueIDForType 0x480362-0x480490): not modelled, skipped
       const bool fires = ch && ch->motion_id() == main_character_id(ctx_);  // 0x574eeb-0x574ef3
       if (fires) {
+        // The block-file slot (T12 I-1). AddCharacter 0x47ec30 saves the current slot (SrGetCurBlockFile at 0x47eca5),
+        // then LoadCharBlockHeader 0x419330 (0x47ecb2) opens the character's own header [char+0x228] from
+        // "Root/Data/Characters/%.4s.blk" (0x6ff527) on its id [+0xfc] unless loaded (0x419343), and makes it the current
+        // slot even when the open failed (0x419403). The save, the open and the Add reach no Call (calls.jsonl), so the
+        // slot is visible to scripts only inside InitializeCollisionPhysics 0x40da60 (0x47efef) and after it. The restore
+        // (0x47effa) follows 0x47efef with no catch between (exc.py: dtor records only at that site): a swallowed error
+        // leaves the slot on the character's file for every later lookup (the hive block's SLK, doesfileexist, ...).
+        // A refused Add returns at 0x47efda without the restore, the character freed in Add (0x480f08): the slot then
+        // points at freed memory, as after a failed addtoa. Not modelled here (no lookup between; the slot is left as found).
+        const int saved_header = ref(Source::Current);  // a slot that held one of the headers reads it back at the restore
+        sage::BlockChain::Slot saved = c->save_current();
+        const std::string cpath = "Root/Data/Characters/" + identifier_to_string(ch->character_id()) + ".blk";
+        if (!c->open_current(cpath, &err)) c->set_unloaded(Source::Current, "<character block header of " + cpath + ", not loaded>");
         ++st.nested_calls;
         bool swallowed = false;
         ctx_.engine_call_swallowing("OnEvent", {make_int(0x36), make_int(g.global_under_water ? 1 : 0)}, &swallowed);
@@ -299,6 +315,8 @@ void AreaDirector::run_block(Block b, const std::string& file) {
           ++st.errors;
           return;  // the pads 0x5002f3 / 0x500312 / 0x500332: this record's entry is never pushed, nor the rest
         }
+        if (saved_header >= 0) put(Source::Current, saved_header);  // SrSetCurBlockFile(saved) 0x47effa
+        else c->restore_current(std::move(saved));
       }
       // Get(id) (0x53f4c5) non-null (the new character, or the one that refused it: the Toa for 'cnt1'): SetPosition, the entry
       // push (0x53f514), then GcModelDirector::Show(id, area) (0x53f535) while the show byte [ebp+0x18] (0x53f519) is set: the
@@ -363,7 +381,8 @@ void AreaDirector::load_fluff() {
 
 // GcStringTableLoader::GetString 0x5e86e0: the first entry with key0 == w0 (0x5e86fb) and key1 == w1 (0x5e8707); then
 // strings[w2] when w2 <= n - 1, unsigned (0x5e870c-0x5e870f), else "" (0x74ae14, 0x5e8711); no entry: "" (0x5e877f).
-// n == 0 makes n - 1 = 0xffffffff, so the original reads past the array (undefined): the model answers "".
+// n == 0 makes n - 1 = 0xffffffff (dec edx 0x5e870c, jbe 0x5e870f), so every index reads [strings + 4 * index]
+// (0x5e8730-0x5e8738) past the empty array: Undefined behaviour (T12 M-2).
 std::string AreaDirector::fluff_get(uint32_t key0, uint32_t key1, uint32_t index) const {
   uint32_t count = 0, entries = 0;
   if (!fluff_.read_u32(0, count) || !fluff_.read_ptr(4, entries)) return "";
@@ -372,7 +391,8 @@ std::string AreaDirector::fluff_get(uint32_t key0, uint32_t key1, uint32_t index
     uint32_t k0 = 0, k1 = 0, n = 0;
     if (!fluff_.read_u32(at, k0) || !fluff_.read_u32(at + 4, k1) || !fluff_.read_u32(at + 8, n)) return "";
     if (k0 != key0 || k1 != key1) continue;
-    if (n == 0 || index > n - 1) return "";
+    if (n == 0) throw VmError("Undefined behaviour: GetString on an entry with no strings reads past its array (0x5e870c)");
+    if (index > n - 1) return "";
     uint32_t arr = 0, target = 0;
     if (!fluff_.read_ptr(at + 12, arr)) return "";
     const uint64_t slot = static_cast<uint64_t>(arr) + 4ull * index;
