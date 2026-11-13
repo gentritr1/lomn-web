@@ -1911,15 +1911,17 @@ def test_addcharacter_keeps_an_existing_key():
 
 def test_h_lines_of_a_held_toa_across_load_and_removal():
     """The Toa handle (script global) sees the load's Show (+1 temp, +1 group, -1 temp, +1 SetCharacter: the same four as
-    gcmodeldirector.show) and Remove's Hide (SetCharacter(0) -1 at 0x47fce9, group erase -1 at 0x47fda8 -> 0x4197c0) and the
+    gcmodeldirector.show) and Remove's Hide (SetCharacter(0) -1 at 0x47fce9, the temporary +1/-1 around the child search at 0x47fd51/0x47fd77, group erase -1 at 0x47fda8 -> 0x4197c0) and the
     map erase (-1 at 0x47f5a9): the engine count ends at 0 (a missing ctx.release in Remove leaves 1)."""
     d = dr()
     vm, ctx, tr, log = make_vm(D_ASM, groups=("objects",))
     _char_world(vm, ctx, [d.AreaObject("characters", CNT1, 1)])
     assert vm.call("main", []).ok
     hs = [l.split(" ", 1)[1] for l in log if l.startswith("H ")]
+    # M2a-3 T11b: Hide's found child takes a temporary reference around its search (cnt1 path `inc [edx+4]` 0x47fd51 ... `dec [ecx+4]`
+    # 0x47fd77; the other path 0x47fdf3 / 0x47fe1f; objdump of the install exe, natives.md "Hide on removal"): +1 -1 before the erase.
     assert hs == ["0037:00000001 +1", "0037:00000001 +1", "0037:00000001 -1", "0037:00000001 +1",
-                  "0037:00000001 -1", "0037:00000001 -1", "0037:00000001 -1"], hs
+                  "0037:00000001 -1", "0037:00000001 +1", "0037:00000001 -1", "0037:00000001 -1", "0037:00000001 -1"], hs
     assert vm.heap.engine(1) == 0
 
 
