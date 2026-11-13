@@ -22,6 +22,7 @@ from typing import Optional
 
 from . import framework
 from .framework import BlockFiles, GameObject, register_group
+from .ini import IniSettings
 import osi_vm
 from osi_vm import NOTHING, T_FLOAT, T_INT, T_STRING, Variant, VmError, f32_bits
 
@@ -362,10 +363,13 @@ DEFAULT_RESOLUTION = (640.0, 480.0)      # "640" / "480" at 0x7475a2 / 0x7475a6,
 
 
 class Screen:
-    """The screen object at [0x70fa64]: width at +0x10 and height at +0x14, floats. INI -> M2a-3."""
+    """The screen object at [0x70fa64]: width at +0x10 and height at +0x14, floats. M2a-3 T5b: from Bionicle.ini
+    [GraphicsOptions] ResolutionW/H (GetScreenData 0x5d5080, u16 each; that these reach the screen floats is INFERRED,
+    hud.md §6.2); no INI gives DEFAULT_RESOLUTION."""
 
     def __init__(self, ctx):
-        self.width, self.height = DEFAULT_RESOLUTION
+        ini = ctx.subsystem(IniSettings)
+        self.width, self.height = ini.resolution() if ini.entries else DEFAULT_RESOLUTION
 
 
 def _float(x: float) -> Variant:

@@ -491,7 +491,7 @@ def test_addtoa_asm_pins(disasm, image):
     # the Toa's character id (+0x100) is [0x7cb1cc] = 'cnt1' (static init 0x570be3), and +0x1d0 starts at 0
     pin(disasm, 0x570bc0, 0x570c00, {0x570be3: "mov dword ptr [0x7cb1cc], 0x636e7431"})
     pin(disasm, 0x40b520, 0x40c000, {0x40b73e: "mov dword ptr [ebx + 0x100], edx", 0x40bbba: "mov dword ptr [edx + 0x1d0], 0x0"})
-    # the 'unreachable' INI branch behind the Call: GcSaver INI test (false on the owner's install, ini -> M2a-3)
+    # the 'unreachable' INI branch behind the Call: GcSaver INI test (gate true on the owner's install, but not script-visible, hud.md §6.3)
     cited("gcmodeldirector.addtoa", 0x47cc30, 0x47e170, 0x567d10, 0x568a59, 0x567e27, 0x47e4ca, 0x47e61e, 0x419330)
 
 
