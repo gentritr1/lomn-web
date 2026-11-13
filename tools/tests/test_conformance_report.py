@@ -144,9 +144,9 @@ TASK_IDS = re.compile(r"T\d+[ab]?(/T\d+[ab]?)*$")      # e.g. "T3/T4": the task(
 
 
 def _readme_status():
-    """{program id: "pending" | "active"} from the group-n table of tests/osi/conformance/README.md."""
+    """{program id: "pending" | "active"} from the group-n and group-h tables of tests/osi/conformance/README.md."""
     text = (CORPUS / "README.md").read_text()
-    return dict(re.findall(r"^\| `(n-[a-z0-9-]+)` \| (pending|active) \|", text, re.M))
+    return dict(re.findall(r"^\| `([nh]-[a-z0-9-]+)` \| (pending|active) \|", text, re.M))
 
 
 def test_pending_marks_are_task_ids_and_match_the_readme():
@@ -157,7 +157,7 @@ def test_pending_marks_are_task_ids_and_match_the_readme():
         doc = json.loads(p.read_text())
         if "pending" in doc:
             assert isinstance(doc["pending"], str) and TASK_IDS.match(doc["pending"]), (p.name, doc["pending"])
-        if p.parent.name == "n":
+        if p.parent.name in ("n", "h"):
             files[doc["id"]] = "pending" if "pending" in doc else "active"
     assert files and _readme_status() == files
 

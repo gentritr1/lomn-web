@@ -843,3 +843,110 @@ There are two ways to record a run. They give opposite pictures.
   - **Early death** (third event at frame ≤ 2, or at frame 3 with pre order): **a normal fly-in WITH a dead or dying Onua.** The spline is set and mode 3 is set after the death, so the flight runs. That OnEvent(6) then fires at 604 and the menu appears is INFERRED; the oracle does not model the camera.
 - **What rules the event out:** a screenshot of the original menu that shows the camera at the end of the fly-in, with the menu items up **and Onua standing**, means the event did not fire three times. Both conditions are needed: the early-death case also shows the fly-in. The port's no-event state is then right.
 - A single event, or two, leaves no visible trace after frame 4 except the code life (40 or 20). That is not visible on the menu (INFERRED).
+
+## §9 The `Z` snapshot record (Decision 6; contract, M2a-3 Task 3)
+
+The `Z` block shows the state the A9 digest cannot see: engine reference counts, HUD object state that only the renderer reads, the camera, and native state nothing reads. Both engines that run natives write it (C++ native, C++ wasm32, the Python own-models engine). A **replay** run (trace.md §6) runs no native, so it has no HUD or cinema state: it writes **no** `Z` lines, and the `Z` comparison is three-way.
+
+### §9.1 Where and when
+- One block per frame, in the trace, after the frame's last record: after the camera step (priority 3, §2.4), so the frame's `OnEvent(6)` and everything it caused come before it. The block has no `Z` before frame 0 (Setup is not a frame).
+- Every run that writes `K` lines writes the blocks (A6, A9, the menu runs, conformance group `h`).
+- The block is **not** part of the frame's `D` hash (controller ruling on Decision 6): A6/A9 `D` lines stay byte-identical. Digest mode writes one line per block instead (trace.md §6).
+- `natives.log` carries no `Z` line, so the replay log is unchanged.
+
+### §9.2 Lines
+- Header: `Z %6d` (the frame number, as the `K` line).
+- Then one line per item below, **sorted bytewise over the whole line** (C `strcmp`, Python `sorted` on the bytes), so no engine needs to agree on an iteration order.
+- Value formats (trace.md §1): f32 `%08x` bits; double `%016x` bits; byte `%02x`; word `%04x`; int `%d`; a game object `%04x:%08x` (its minting type, as on `H` lines; natives.md §3.1); a byte string `%d <hex>` as on `S` lines (empty: `0` and nothing after it); **`-`** for a field no native has written since the object was created and whose constructor default is not cited (§4.4, §7.3 gaps). A `-` replaces the whole value, even a multi-word one.
+- A subsystem writes lines only for state that exists: no camera lines in a run whose host models no camera (conformance group `h`), no `cs` line before the first `playcinematic`.
+
+| Line | One per | Value | Source |
+|---|---|---|---|
+| `Z ref <type>:<handle> %d` | live game handle | the engine's references: total minus every script variant (the `G` meaning, natives.md §3.1); may be 0 | natives.md §2, §3 |
+| `Z hud.node %08x <kind> <type>:<handle> <order>` | node the HUD director wrapped (`addbigsprite`, `addtextobject`) and has not removed | `%08x` = the id the add native returned; kind `sprite` / `text`; the wrapped object; order = `%d` index in the shown vector (draw order) or `-` when hidden | §3.1 (INFERRED from the decomp), §4.2 |
+| `Z sprite.rect <type>:<handle> <x1> <y1> <x2> <y2>` | GcBigSprite | 4 f32 | `loadhudsprite`, `sethudposition` (§4.1) |
+| `Z sprite.alpha <…> %02x` | GcBigSprite | low byte of w1 | `enablealphachannel` |
+| `Z sprite.color <…> <r> <g> <b> <a>` | GcBigSprite | 4 f32 = f32(low byte × f32 0x3b808081) | `setcolor` |
+| `Z sprite.zdepth <…> <z>` | GcBigSprite | f32 | `setzdepth` (no render effect, §4.1; compared anyway) |
+| `Z sprite.file <…> %d <hex>` | GcBigSprite | the name argument's bytes | `loadhudsprite` |
+| `Z sprite.b6 <…> %02x` | GcBigSprite | low byte of w5 (3×3 mode) | `loadhudsprite` |
+| `Z text.pos <…> <x> <y> <z>` | ScTextObject | 3 f32 (+0x13c..+0x144) | `setposition` (§4.3) |
+| `Z text.scale <…> <sx> <sy>` | ScTextObject | 2 f32 (+0x15c, +0x160) | `setscale` |
+| `Z text.just <…> %04x` | ScTextObject | low 16 bits of w1 (+0x2a) | `setjustification` |
+| `Z text.juston <…> %02x` | ScTextObject | low byte of w1 (+0x28) | `enablejustification` |
+| `Z text.string <…> %d <hex>` | ScTextObject | the string (+0x30) | `setstring` |
+| `Z text.font <…> <type>:<handle>` | ScTextObject | the font object (+0x2c) | `setfont` |
+| `Z font.color <…> <r> <g> <b> <a>` | ScTileFont | 4 f32 = f32(int w × f32 0x3b808081) | `sctilefont.setcolor` (§4.4) |
+| `Z font.transp <…> %02x` | ScTileFont | low byte of w1 (+0xb0) | `enabletransparency` |
+| `Z font.file <…> %d <hex>` | ScTileFont | the name argument's bytes | `sctilefont.create` |
+| `Z camera.mode %02x` | the viewport camera | `[cam+0x3a1]` | §1.1, §1.2 |
+| `Z camera.spline <type>:<handle>` | | `+0x3a4`'s script handle, or `-` (none, or released, §1.2) | |
+| `Z camera.index %02x %02x` | | low bytes of `+0x3b8`, `+0x3bc` | |
+| `Z camera.duration %016x` / `Z camera.start %016x` | | doubles `+0x3a8`, `+0x3b0` | |
+| `Z camera.flags %02x %02x` | | `+0x460` forward, `+0x461` look-ahead | |
+| `Z camera.eye <x> <y> <z>` / `Z camera.target <x> <y> <z>` | | f32 `+0x150..`, `+0x15c..` | |
+| `Z cs.playing %d` | the cinema state | 0 / 1 (natives.md §5.3: written, never read) | M2a-2 directors |
+
+- The `sprite.*`, `text.*`, `font.*` lines are written for every live object of that game type that the HUD model knows, shown or not. An object of one of those types that a **conformance test native** minted (conformance.md §6 rule 23) is known with every field `-`.
+- Ownership (I6): Task 4 owns `ref` and `camera`; Task 6 owns `hud`, `sprite`, `text`, `font`; `cs` stays with the M2a-2 directors code. Adding a line kind means amending this table first.
+- `Z` is compared, never tainted (natives.md §7.3).
+
+### §9.3 Worked example
+A test native mints an `ScTextObject` (type 0x2e) as handle 1 with no engine reference; the script keeps it in a global, and in frame 0 calls `setposition(o, 400.0, 320.0, 0.0)`, `setscale(o, 1.5, 2.0)` and `setjustification(o, 0x10002)`. The block of frame 0 (this is conformance program `h-z-hud`):
+```
+Z      0
+Z ref 002e:00000001 0
+Z text.font 002e:00000001 -
+Z text.just 002e:00000001 0002
+Z text.juston 002e:00000001 -
+Z text.pos 002e:00000001 43c80000 43a00000 00000000
+Z text.scale 002e:00000001 3fc00000 40000000
+Z text.string 002e:00000001 -
+```
+- `ref … 0`: the only reference is the global's variant.
+- `just 0002`: the low 16 bits of 0x00010002 (§4.3: a word store at +0x2a).
+- In digest mode the block becomes `Z      0        8 a948cf67ffb8462c` (8 lines, FNV-1a 64 of the 8 lines above, LFs included; computed by a scratch script over these bytes, and the sort order checked by the same script).
+
+## §10 The HUD lines of the D3D8 state log (contract for Tasks 8 and 9)
+
+The A9 state log of M1a-3 (`--state-log`) keeps its grammar for the area: `RS`, `TSS<n>`, `TEXTURE`, `XFORM <type> sum=%08x`, `DRAW`, `CLEAR`, `BEGINSCENE`/`ENDSCENE`, `MATERIAL`, `LIGHT`, `LIGHTENABLE`, `# node`, `# SrPushRenderMode 0x%05x`. **Everything up to the HUD pass stays byte-identical** to that grammar (F11's 626-line `frnt` log is the pin). The HUD pass adds the lines below; nothing else changes.
+
+### §10.1 Records
+- **`# viewport HdDr`**: the HUD viewport starts (§3.1, the second viewport, drawn last). Then `# SrPushRenderMode 0x8c034` and the ScDxStates writes the diff produces against the last mode (§3.2), as ordinary `RS`/`TSS` lines.
+- **`XFORM PROJECTION sum=…` / `XFORM VIEW sum=…`** for the ortho camera's device calls (§3.3), with the existing checksum (31-hash over the 64 little-endian f32 bytes).
+- **`RS` / `TSS` / `TEXTURE` / `XFORM WORLD`**: one line per device call that reaches the device, as today. Both writers count: ScDxStates (gated on the device's current value, §3.2) and the raw calls of `ScTileFont::Draw` (§3.6).
+- **`TEXTURE <stage> <name>`**: `<name>` is the VFS path the texture was loaded from, case preserved, `/` separators, with the extension the loader matched (e.g. `Root/Data/Art/MenuArt/cursor0000.tga`; a multi-tile sprite's tile `…/name0_1.tga` per §3.4); `NULL` for no texture (a missing file, §7.1).
+- **`DRAW hud.<kind> <type>:<handle> <where> call=<DIP|DP> prim=%d count=%d fvf=0x%03x vsum=%08x`**, one per primitive call:
+  - kind and `<where>`: `sprite … tile=%d,%d` (row, column; §3.4); `glyph … ch=%02x` (the text object; the byte code; a 2-byte code prints `%04x`; §3.6); `fill …` and `line …` (`gcfilledrectangle`, `gcline`/`gcrectangle`; unreachable from Base.osi, §3.7, kept for completeness) with `<where>` = `-`;
+  - `call=DIP` for DrawIndexedPrimitive, `DP` for DrawPrimitive; `prim` the D3DPT number (5 TRIANGLESTRIP, 6 TRIANGLEFAN, 2 LINELIST); `count` the primitive count;
+  - `fvf` the vertex format set by the last SetVertexShader (0x112 sprites and glyphs, 0x42 lines and fills, §3.4, §3.7). SetVertexShader writes no line of its own, so the area part of the log does not change;
+  - `vsum`: the 31-hash of `mat_sum` over the little-endian f32 bytes of each vertex's **transformed** position (x′, y′, z′), vertices in vertex-buffer order (§3.4: v0..v3; §3.7: its four corners; lines: buffer order). Each coordinate is `((x·m0j + y·m1j) + z·m2j) + m3j` with WORLD `m` (row vectors), every product and sum rounded to f32. This is what makes "cursor under the pointer" and "text in its hit box" checkable from the log (Review focus 3).
+- A deferred item (priority 100, §3.4, §3.6) logs its lines where it really draws: after every non-deferred item, in deferral order. A multi-tile big sprite whose last tile defers draws its non-deferring tiles twice (§3.4): both draws are logged.
+
+### §10.2 Worked example (hand-computed from §3.4; zeros are +0.0)
+The cursor, `loadhudsprite(50, 50, 82, 82, "Root/Data/Art/MenuArt/cursor0000", 0)` (F6), a 1×1 sprite: w = h = 32, t = (82 − 16, 82 − 16, −7499) = (66, 66, −7499), s = 8.742278e−08 (`33bbbd2e`).
+- WORLD = [[32,0,0,0],[0,−32,32·s,0],[0,−s,−1,0],[66,66,−7499,1]], bits `42000000 0 0 0  0 c2000000 363bbd2e 0  0 b3bbbd2e bf800000 0  42840000 42840000 c5ea5800 3f800000`.
+- Vertices: v0 (50, 50, −7499), v1 (82, 50, −7499), v2 (50, 82, −7499), v3 (82, 82, −7499): the top-left is (x1, y1), as §3.4 says.
+- The draw's lines, after the §3.5 states:
+```
+TEXTURE 0 Root/Data/Art/MenuArt/cursor0000.tga
+XFORM WORLD sum=381857c2
+DRAW hud.sprite 0026:<handle> tile=0,0 call=DIP prim=5 count=2 fvf=0x112 vsum=9f18392c
+TEXTURE 0 NULL
+```
+- The `RS SOFTWAREVERTEXPROCESSING 0` of §3.4 step 2 appears only when the device held another value (ScDxStates). Computation: the scratch f32 script of this task (struct round-trips; each op rounded to f32), not an engine.
+
+## §11 MOUSESPEC (Decision 4; `tools/osi/keys.py` `expand_mouse`, `tools/tests/test_keys.py`)
+
+A MOUSESPEC is a space-separated list of tokens. Each takes effect at its frame and holds until the next token of the same kind:
+- `x,y@f`: the cursor, in client pixels at the game resolution (scale 1.0, probe 3 S5), each in 0..65535 (the driver's u16 `[0x83b396]`/`[0x83b394]`, §5.1).
+- `lmb+@f` / `lmb-@f`: button 1 down / up; `rmb` = 2, `mmb` = 3, `xmb` = 4 (rgbButtons[0..3], §5.1). lmb = 1 and rmb = 2 are the menu's activate/back (probe 3); mmb/xmb follow the DirectInput order (INFERRED).
+- Refused: a malformed token, a negative frame, a coordinate outside 0..65535, an unknown button, and two tokens of one kind (the position, or one button) at one frame.
+
+Expansion, frames 0..N−1 (hud.md §5.1, EXECUTED there):
+- **No MOUSESPEC → no mouse source.** A6/A9 have none, so their logs do not change (Decision 12).
+- **Any MOUSESPEC → every frame** `OnEvent(int 26, int x, int y)`, from frame 0 on. Before the first position token the cursor is (0, 0): a host choice, since the windowed driver reads `GetCursorPos`, so any value is a possible input.
+- Then, in the same mouse step, buttons 1, 2, 3, 4 in that order: `OnEvent(int 23, int b)` on the first frame the button is down, `OnEvent(int 24, int b)` on every later frame it stays down, `OnEvent(int 25, int b)` on the first frame it is up again. A release of an up button or a press of a down one is not a transition, so it sends nothing new.
+- Every argument is an int (0x10): the event id through `CreateVariant` 0x413ed0, x and y through 0x4183f0, the button through 0x42a5b0 (`mov word [ebx], 0x10`, EXECUTED at 0x42a5b5); the other arguments are nothing.
+- Position in the frame: the mouse step of §2.4 (priority 1, after the key mapper, before the script's `Process`). natives.log writes each of these calls as `C -1` (trace.md §6).
+- `keys.py --mouse "MOUSESPEC" N` prints the expansion (`<frame> OnEvent <v> …`), as `keys.py "KEYSPEC"` does for the keys; the C++ `--mouse` printer must match it line for line (Task 4a).

@@ -7,7 +7,14 @@ state 2 on frame f, state 1 on frame f+1 (the action state machine; a held key w
 C1 = 0x636e7431 ('cnt1'). Calls of one frame keep the KEYSPEC order; they run after the frame's K record and before
 Process. `lomn_osi_run --print-keys --keys SPEC` prints the same listing (ctest osi_a6_digest compares the two).
 
-Usage: keys.py "SPEC"   prints one line per call: `<frame> Input <v> ...` (variants as trace.md `%04x:%08x`)."""
+MOUSESPEC (M2a-3, docs/osi/hud.md §11): space-separated tokens, each holding from its frame on:
+  x,y@f        the cursor (client pixels at the game resolution, 0..65535 each); (0, 0) before the first one
+  lmb+@f lmb-@f  button 1 down / up (rmb = 2, mmb = 3, xmb = 4)
+A non-empty MOUSESPEC starts the mouse source: every frame OnEvent(26, x, y), then per button 1..4 OnEvent(23, b) on
+its first frame down, 24 on every later frame down, 25 on its first frame up (hud.md §5.1, GcMouseDriver 0x55c160).
+
+Usage: keys.py "SPEC"   prints one line per call: `<frame> Input <v> ...` (variants as trace.md `%04x:%08x`).
+       keys.py --mouse "MOUSESPEC" N   the same for frames 0..N-1: `<frame> OnEvent <v> ...`."""
 from __future__ import annotations
 
 import sys
@@ -34,12 +41,53 @@ def expand(spec: str) -> list[tuple[int, list[tuple[int, int]]]]:
     return sorted(out, key=lambda c: c[0])
 
 
+BUTTONS = {"lmb": 1, "rmb": 2, "mmb": 3, "xmb": 4}
+
+
+def expand_mouse(spec: str, frames: int) -> list[tuple[int, list[tuple[int, int]]]]:
+    """The mouse source's OnEvent calls for frames 0..frames-1, [(frame, [(type, value), ...]), ...]; [] if spec is empty."""
+    pos, down, seen = {}, {b: {} for b in BUTTONS.values()}, set()
+    for tok in spec.split():
+        what, _, f = tok.partition("@")
+        if not f.isdigit():
+            raise ValueError("bad mouse token %r" % tok)
+        f = int(f)
+        if what[-1:] in "+-" and what[:-1] in BUTTONS:
+            key, table, val = what[:-1], down[BUTTONS[what[:-1]]], what[-1] == "+"
+        else:
+            x, _, y = what.partition(",")
+            if not (x.isdigit() and y.isdigit() and int(x) < 65536 and int(y) < 65536):
+                raise ValueError("bad mouse token %r" % tok)
+            key, table, val = "pos", pos, (int(x), int(y))
+        if (key, f) in seen:
+            raise ValueError("two %s tokens at frame %d" % (key, f))
+        seen.add((key, f))
+        table[f] = val
+    if not seen:
+        return []
+    out, xy, state = [], (0, 0), {b: False for b in down}
+    for f in range(frames):
+        xy = pos.get(f, xy)
+        out.append((f, [(0x10, 26), (0x10, xy[0]), (0x10, xy[1])]))
+        for b in sorted(down):
+            was, now = state[b], down[b].get(f, state[b])
+            ev = 24 if was and now else 23 if now else 25 if was else None
+            if ev:
+                out.append((f, [(0x10, ev), (0x10, b)]))
+            state[b] = now
+    return out
+
+
 def main(argv: list[str]) -> int:
-    if len(argv) != 1:
+    if len(argv) == 3 and argv[0] == "--mouse" and argv[2].isdigit():
+        calls, name = expand_mouse(argv[1], int(argv[2])), "OnEvent"
+    elif len(argv) == 1:
+        calls, name = expand(argv[0]), "Input"
+    else:
         print(__doc__)
         return 2
-    for frame, args in expand(argv[0]):
-        print("%d Input %s" % (frame, " ".join("%04x:%08x" % a for a in args)))
+    for frame, args in calls:
+        print("%d %s %s" % (frame, name, " ".join("%04x:%08x" % a for a in args)))
     return 0
 
 

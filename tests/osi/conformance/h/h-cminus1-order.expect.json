@@ -1,0 +1,139 @@
+{
+  "id": "h-cminus1-order",
+  "rows": [
+    "0x60",
+    "0x70",
+    "0x72"
+  ],
+  "falsifier": "the host calls of one frame run in process-map order (hud.md 2.4; trace.md 6 Version 3): VK Input (priority 0), key-mapper Input (1), mouse OnEvent (1, after the key mapper), Process (2), camera OnEvent(6) (3), whatever the list order",
+  "alternative": "list order (camera, mouse, key mapper, VK) then Process: g = 53214; camera before Process: 12354; mouse before the key mapper (first added first): 13245",
+  "pending": "T4a/T4b",
+  "entry": "main",
+  "args": [],
+  "frames": 1,
+  "host_events": [
+    {
+      "frame": 0,
+      "position": "camera",
+      "name": "OnEvent",
+      "args": [
+        {
+          "type": "0x10",
+          "value": 6
+        },
+        {
+          "game": "GcLegoCamera",
+          "object": "cam",
+          "engine_refs": 1
+        },
+        {
+          "type": "0x10",
+          "value": 0
+        }
+      ]
+    },
+    {
+      "frame": 0,
+      "position": "mouse",
+      "name": "OnEvent",
+      "args": [
+        {
+          "type": "0x10",
+          "value": 26
+        },
+        {
+          "type": "0x10",
+          "value": 450
+        },
+        {
+          "type": "0x10",
+          "value": 330
+        }
+      ]
+    },
+    {
+      "frame": 0,
+      "position": "keymapper",
+      "name": "Input",
+      "args": [
+        {
+          "type": "0x10",
+          "value": 1668183089
+        },
+        {
+          "type": "0x10",
+          "value": 251
+        },
+        {
+          "type": "0x10",
+          "value": 2
+        }
+      ]
+    },
+    {
+      "frame": 0,
+      "position": "vk",
+      "name": "Input",
+      "args": [
+        {
+          "type": "0x10",
+          "value": 1668183089
+        },
+        {
+          "type": "0x10",
+          "value": 13
+        },
+        {
+          "type": "0x10",
+          "value": 2
+        },
+        {
+          "type": "0x12",
+          "bits": "00000000"
+        },
+        {
+          "type": "0x12",
+          "bits": "00000000"
+        }
+      ]
+    }
+  ],
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 1
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24,
+    "globals": {
+      "g": {
+        "type": "0x10",
+        "value": 12345
+      }
+    },
+    "heap": {
+      "live": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 1
+      },
+      "allocs": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 1
+      }
+    },
+    "z": {
+      "0": [
+        "Z ref 002a:00000001 1"
+      ]
+    }
+  },
+  "note": "Hand-derived (expect_calc.arith / compare). Setup: g = 0, returns int 1. Frame 0 in rule-23 order, each handler doing g = g*10 + d (0x72 then 0x70, int): VK Input(C1, 13, 2, 0.0, 0.0): d = 1 + (13 == 251) = 1 -> 1; key mapper Input(C1, 251, 2): d = 1 + 1 = 2 -> 12; mouse OnEvent(26, 450, 330): d = 3 + 2*(26 == 6) = 3 -> 123; Process: d = 4 -> 1234; camera OnEvent(6, cam, 0): d = 3 + 2*1 = 5 -> 12345 (fits int32). The camera's game argument: CreateVariant mints handle 1 (GcLegoCamera 0x2a, engine_refs 1, total 2); the reference moves onto the stack with the argument (SetPCAndArgs, no Duplicate; trace.md 6 Version 3), and onevent's Return disposes it: total 1, no H, no F g. So Z ref 002a:00000001 1, heap live.g 1, allocs.g 1. The alternative 'the host keeps its own +1' (Decision 3's H pair) gives Z ref ... 2. Ints only and no string->float: fpu_pc 24. input declares 5, so the key mapper's 3 arguments arrive with 2 nothings."
+}

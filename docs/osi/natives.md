@@ -280,7 +280,7 @@ checks.
 | `C` | `C %08d <name> <a0> <a1> … <a9>` | native seq N starts an engine → script call here. `<name>` is a name token of **the query name the engine passed to `Call`**, not the function-table entry that `FindFunction`'s prefix match chose (opcodes.md "Engine calls"; controller ruling, review m-6; this rules `natives.log` only, the trace's `C` line keeps its trace.md §2 definition). The 10 arguments use the `<v>` notation, each 0x16 followed by ` S %d <hex>` and each game value by ` G %d` |
 | `X` | `X %08d` | native seq N swallowed the error of its last nested call here (D16; only the three `LoadArea` blocks swallow, §5.2). Written at the swallow point, where the trace has the swallowed `E` line |
 | `K` | `K %6d` | the start of frame N (the trace's `K` frame number), written for every frame, also for one that calls no native. Setup has no `K` |
-| `C -1` (reserved) | `C -1 <name> <a0> … <a9>` | a host-originated engine call, outside any native |
+| `C -1` | `C -1 <name> <a0> … <a9>` | a host-originated engine call, outside any native: since M2a-3 the mouse and camera sources write it (trace.md §6 "Version 3") |
 
 **What writes `H`.** Every engine-side `AddRef`/`Release` on an object that has a live handle, whoever makes it:
 - *inside a native:* for example `gcmodeldirector.show('cnt1')` +1 on the Toa (`GcBAGroup::SetCharacter`, 0x54b344),
@@ -297,7 +297,7 @@ An object that has no handle yet (never passed through `CreateVariant`) is not s
 carried by the `G` of the record that mints its handle. An `H` that takes the total to 0 frees the object: `F g` in the
 trace, at that event.
 
-`C -1` stays reserved: §6.2 found no host-originated engine call on the 600-frame path.
+`C -1` was reserved in M2a-2: §6.2 found no host-originated engine call on the 600-frame path. M2a-3 writes it for the mouse driver and the camera (trace.md §6 "Version 3"; position rule hud.md §2.4); A9 still has none (no MOUSESPEC, and the first `OnEvent(6)` is at frame 604, hud.md §1.6).
 
 ### 3.2 Order
 
@@ -600,8 +600,8 @@ The map's key order between processes, set by the priority byte that `ScProcessM
 | `ScSLOSIProcess::Process` → `Process(time, dt, frame)` | the script's own process (`AddProcess` 0x4392f8) | M2a-2 (A6 frame) |
 | `GcKeyMapper` → `Input(...)` | the KEYSPEC key calls | M2a-2 |
 | `GcTimer::Trigger` → `OnEvent(8, …)` | **no started timer**: `gctimer.create(0, 0, 5.0)` passes arg1 0. The ctor reads `byte [ebp+0xc]` = w1 (0x445523, 0x445906), and `je` 0x44590a skips `GcTimer::Start` 0x445990. It is the only `gctimer.*` call in 600 frames | none |
-| `GcMouseDriver::Process` → `OnEvent(26, x, y)` | host input | M2a-3 |
-| `GcLegoCamera::Process` → `OnEvent(6)` | camera spline | M2a-3 |
+| `GcMouseDriver::Process` → `OnEvent(26, x, y)`, then 23/24/25 per button | host input; none on A9 (no MOUSESPEC) | **M2a-3**: contract done (hud.md §5.1, §11; `C -1`, trace.md §6), engines Task 4a/4b |
+| `GcLegoCamera::Process` → `OnEvent(6)` | camera spline; first at frame 604, after the A9 window (hud.md §1.6) | **M2a-3**: contract done (hud.md §1.3, §1.6, §2.4; `C -1`, trace.md §6), engines Task 4a/4b |
 | **The Toa process path** | live, see 6.3 | **M3, a documented host-source gap** |
 
 ### 6.3 D8: the Toa process path is a documented host-source gap (ACCEPTED, controller ruling round 3)
@@ -726,6 +726,11 @@ last two are added.
 - **name**: a 0x18/0x1a member name, or a 0x19/0x83 name, that is tainted.
 - **refstore**: a store through a tainted reference: 0x10/0x1a into a tainted object, 0x15 into a tainted this, 0x93–0x96 into a tainted array or at a tainted index.
 - **errpath**: a tainted array index (0x91/0x93/0x95/0x96) or divisor (0x73/0x75), which can change the error path.
+
+**`Z` is not a sink (M2a-3).** The end-of-frame `Z` snapshot (hud.md §9) adds no sink to the list above. Its state is
+written by `tier1` natives (Decision 5 of the M2a-3 plan), whose arguments are already sink 3, and by the host; the
+snapshot itself is **compared** between engines (native, wasm32, Python own models) frame by frame, never tainted. What
+the renderer does with that state is checked by A12/A13, not by the taint pass.
 
 A native whose sinks are all type checks (== nothing, or a type test) is reported "type-only": its exact value may be a cited placeholder, but its type and nothing-vs-something must match the original exactly (controller ruling, 2026-10-09).
 
