@@ -7,6 +7,10 @@
 //   x          parse_x (binary .x)
 //   dds, tga   decode_dds, decode_tga
 //   osi        OsiFile::parse + check_all + sampled eval_calls
+//   col        ColFile::open_bytes, then every (capped) entry read: stored and LZSS (M2a-3 T7a; the tile-font collectives and
+//              the HUD sprite collectives of the install are real seeds)
+//   fnt        TileFont::parse, then get_str_len / get_str_height over every byte value and every glyph code at four scales
+//              (M2a-3 T7a; real seeds are the .fnt entries of the install's font collectives)
 // Seeds: each format's synthetic unit-test inputs (rebuilt here from the builders in tests/test_sage_*.cpp,
 // sage_test_util.h and osi_builder.h), plus, with --data <install>, real files sampled per format with a deterministic
 // RNG (read only; no game bytes are ever written except a finding's input, into --crash-dir, which must lie under
@@ -33,6 +37,7 @@
 //                          [--test-hang-seed K]
 // How to run: tools/research/fuzz_formats.md (make fuzz-formats; ctest fuzz_formats_smoke).
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -49,6 +54,7 @@
 
 #include "fuzz_fragments.h"
 #include "lomn/sage/blockfile.h"
+#include "lomn/sage/colfont.h"
 #include "lomn/sage/image.h"
 #include "lomn/sage/osi.h"
 #include "lomn/sage/slb.h"
@@ -199,6 +205,7 @@ uint64_t hash_str(const std::string& s) {
 struct Field {
   uint32_t off;
   uint8_t width;  // 2 or 4
+  bool be = false;  // M2a-3: a big-endian field (the .col header and directory)
 };
 struct Seed {
   Bytes bytes;
@@ -585,6 +592,91 @@ Result run_tga(const Bytes& in, Rng&) {
   return r;
 }
 
+// ------------------------------------------------------------------------------------------------------------- COL
+// M2a-3 T7a. An accepted .col satisfies the directory invariants and every entry (capped at 64 per input) reads or fails
+// cleanly. deep = accepted: the header and the whole directory passed (the entry loop is the body).
+Result run_col(const Bytes& in, Rng&) {
+  Result r;
+  Exact e(in);
+  ColFile c;
+  std::string err;
+  if (!c.open_bytes(Bytes(e.p.get(), e.p.get() + e.n), &err)) {
+    REQUIRE_INV(!err.empty(), "col: rejected without an error");
+    REQUIRE_INV(!c.is_open() && c.entries().empty(), "col: rejected open left state");
+    return r;
+  }
+  r.accepted = r.deep = true;
+  const std::vector<ColEntry>& es = c.entries();
+  REQUIRE_INV(es.size() <= kMaxColEntries, "col: more than kMaxColEntries accepted");
+  REQUIRE_INV(kColHeaderSize + uint64_t(es.size()) * kColEntrySize <= in.size(), "col: directory larger than the file");
+  const uint64_t data_start = kColHeaderSize + uint64_t(es.size()) * kColEntrySize;
+  size_t n = 0;
+  for (size_t i = 0; i < es.size(); ++i) {
+    const ColEntry& en = es[i];
+    REQUIRE_INV(i == 0 || es[i - 1].hash <= en.hash, "col: accepted hashes do not ascend");
+    REQUIRE_INV(en.offset >= data_start && uint64_t(en.offset) + en.stored <= in.size(), "col: accepted entry outside the data area");
+    REQUIRE_INV(i == 0 || es[i - 1].offset <= en.offset, "col: accepted offsets decrease");
+    REQUIRE_INV(en.size <= kMaxColEntrySize, "col: accepted entry above the cap");
+    REQUIRE_INV((en.flags & 0xf0) == 0 || (en.flags & 0xf0) == 0x10, "col: accepted unknown codec");
+    if (n++ >= 64) continue;
+    Bytes out = {1};
+    std::string rerr;
+    if (c.read(i, out, &rerr)) {
+      REQUIRE_INV(out.size() == en.size, "col: a read entry is not its declared size");
+    } else {
+      REQUIRE_INV(out.empty() && !rerr.empty(), "col: a failed read left bytes or no error");
+    }
+  }
+  Bytes none = {1};
+  std::string nerr;
+  REQUIRE_INV(!c.read(es.size(), none, &nerr) && none.empty() && !nerr.empty(), "col: an out-of-range read succeeded or left bytes");
+  return r;
+}
+
+// ------------------------------------------------------------------------------------------------------------- FNT
+Result run_fnt(const Bytes& in, Rng&) {
+  Result r;
+  Exact e(in);
+  TileFont f;
+  std::string err;
+  if (!f.parse(e.p.get(), e.n, &err)) {
+    REQUIRE_INV(!err.empty(), "fnt: rejected without an error");
+    REQUIRE_INV(f.rows == 0 && f.columns == 0 && f.count == 0 && f.glyphs.empty() && f.max_width == 0 && f.min_width == 0, "fnt: rejected parse left state");
+    return r;
+  }
+  r.accepted = r.deep = true;
+  REQUIRE_INV(f.count >= 1 && f.count <= int32_t(kMaxFontGlyphs) && f.glyphs.size() == size_t(f.count), "fnt: glyph count outside the caps or not the record count");
+  REQUIRE_INV(uint64_t(kFntHeaderSize) + uint64_t(f.count) * kFntRecordSize <= in.size(), "fnt: records past the data");
+  REQUIRE_INV(f.rows >= 1 && f.columns >= 1 && int64_t(f.rows) * f.columns == f.count, "fnt: rows * columns != count");
+  REQUIRE_INV(f.char_width >= 1 && f.char_width <= kMaxFontTile && f.char_height >= 1 && f.char_height <= kMaxFontTile, "fnt: tile size outside the caps");
+  uint32_t mx = 0, mn = 0xffffffffu;
+  for (const FontGlyph& g : f.glyphs) {
+    mx = std::max(mx, uint32_t(g.width));
+    mn = std::min(mn, uint32_t(g.width));
+  }
+  REQUIRE_INV(uint32_t(f.max_width) == mx && uint32_t(f.min_width) == mn, "fnt: max / min width differ from the unsigned recomputation");
+  // The queries must not crash or trip a sanitizer on any content: one string of every byte value, one of every
+  // glyph's code (a 2-byte code as lead + next), at four scales.
+  std::string all, codes;
+  for (int c = 0; c < 256; ++c) all.push_back(static_cast<char>(c));
+  for (const FontGlyph& g : f.glyphs) {
+    if (g.ascii > 0xff) codes.push_back(static_cast<char>(g.ascii >> 8));
+    codes.push_back(static_cast<char>(g.ascii & 0xff));
+  }
+  for (float sc : {1.0f, 0.0f, -2.5f, 1e9f}) {
+    for (const std::string* s : {&all, &codes}) {
+      (void)f.get_str_len(*s, sc);
+      int h = 0;
+      float ab = 0;
+      (void)f.get_str_height(*s, sc, &h, &ab);
+    }
+    (void)f.get_width(0x20, sc);
+    (void)f.get_width(0xf141, sc);
+  }
+  for (int i = 0; i < f.count; i += 7) REQUIRE_INV(f.find(f.glyphs[size_t(i)].ascii) >= 0 && f.find(f.glyphs[size_t(i)].ascii) <= i, "fnt: find lost a glyph or is not first-match");
+  return r;
+}
+
 // ------------------------------------------------------------------------------------------------------------- OSI
 Result run_osi(const Bytes& in, Rng& rng, bool real) {
   Result r;
@@ -782,6 +874,22 @@ std::vector<Field> osi_fields(const Bytes& b) {
 }
 std::vector<Field> dds_fields(const Bytes&) { return {{12, 4}, {16, 4}, {24, 4}, {28, 4}, {88, 4}}; }
 std::vector<Field> tga_fields(const Bytes&) { return {{5, 2}, {12, 2}, {14, 2}}; }
+// .col: the BE header (version, count, flags, total) and each BE directory entry (hash, flags, offset, usize).
+std::vector<Field> col_fields(const Bytes& b) {
+  std::vector<Field> f = {{0, 4, true}, {4, 4, true}, {8, 4, true}, {12, 4, true}};
+  const uint32_t count = b.size() >= 8 ? uint32_t(b[4]) << 24 | uint32_t(b[5]) << 16 | uint32_t(b[6]) << 8 | b[7] : 0;
+  for (uint32_t i = 0; i < count && i < 32 && 0x24 + 16 * (i + 1) <= b.size(); ++i)
+    for (uint32_t k = 0; k < 4; ++k) f.push_back({0x24 + 16 * i + 4 * k, 4, true});
+  return f;
+}
+// .fnt: the eight LE header fields and the first records' width / height / offsets.
+std::vector<Field> fnt_fields(const Bytes& b) {
+  std::vector<Field> f;
+  for (uint32_t k = 0; k < 8; ++k) f.push_back({4 * k, 4});
+  for (uint32_t i = 0; i < 8 && 32 + 18 * (i + 1) <= b.size(); ++i)
+    for (uint32_t k = 0; k < 4; ++k) f.push_back({32 + 18 * i + 2 + 4 * k, 4});
+  return f;
+}
 
 // --- synthetic seeds per format
 std::vector<Bytes> syn_blk() {
@@ -1049,6 +1157,72 @@ std::vector<Bytes> syn_tga() {
   v.push_back(big);
   return v;
 }
+// M2a-3 T7a: a .col in hash mode (BE) with stored and literal-LZSS entries; and .fnt tables.
+Bytes col_seed(const std::vector<std::pair<std::string, std::pair<Bytes, uint32_t>>>& es) {  // name -> (decoded bytes, flags 1 or 0x11)
+  struct E {
+    uint32_t hash, flags;
+    Bytes stored;
+    uint32_t usize;
+  };
+  std::vector<E> v;
+  for (const auto& e : es) {
+    E x{col_hash(e.first), e.second.second, e.second.first, uint32_t(e.second.first.size())};
+    if (x.flags == 0x11) {  // literal-only LZSS: a flag byte 0xff / partial mask per 8 bytes
+      Bytes lz;
+      for (size_t i = 0; i < e.second.first.size(); i += 8) {
+        const size_t k = std::min<size_t>(8, e.second.first.size() - i);
+        lz.push_back(uint8_t((1u << k) - 1));
+        lz.insert(lz.end(), e.second.first.begin() + std::ptrdiff_t(i), e.second.first.begin() + std::ptrdiff_t(i + k));
+      }
+      x.stored = lz;
+    }
+    v.push_back(x);
+  }
+  std::sort(v.begin(), v.end(), [](const E& a, const E& b) { return a.hash < b.hash; });
+  Bytes b;
+  auto be32 = [&](uint32_t x) { for (int i = 3; i >= 0; --i) b.push_back(uint8_t(x >> (8 * i))); };
+  be32(2);
+  be32(uint32_t(v.size()));
+  be32(4);
+  be32(0);
+  for (int i = 0; i < 20; ++i) b.push_back(0xff);
+  uint32_t off = uint32_t(0x24 + 16 * v.size());
+  for (const E& x : v) {
+    be32(x.hash);
+    be32(x.flags);
+    be32(off);
+    be32(x.usize);
+    off += uint32_t(x.stored.size());
+  }
+  for (const E& x : v) b.insert(b.end(), x.stored.begin(), x.stored.end());
+  for (int i = 0; i < 4; ++i) b[12 + size_t(i)] = uint8_t(uint32_t(b.size()) >> (8 * (3 - i)));
+  return b;
+}
+Bytes fnt_seed(int32_t rows, int32_t cols, int32_t cw, int32_t ch, int32_t kern, int32_t base, int32_t space, const std::vector<std::array<int32_t, 5>>& rs) {
+  Bytes b;
+  for (int32_t v : {rows, cols, int32_t(rs.size()), cw, ch, kern, base, space}) put32(b, uint32_t(v));
+  for (const auto& r : rs) {
+    put16(b, uint16_t(r[0]));
+    for (int k = 1; k < 5; ++k) put32(b, uint32_t(r[size_t(k)]));
+  }
+  return b;
+}
+std::vector<Bytes> syn_col() {
+  std::vector<Bytes> v;
+  v.push_back(col_seed({{"a.bin", {Bytes{'h', 'e', 'l', 'l', 'o'}, 1}}, {"b.bin", {fox(300), 0x11}}, {"c.fnt", {Bytes{1, 2, 3, 4}, 1}}}));
+  v.push_back(col_seed({}));  // header only (the .col packed inside the font collectives)
+  v.push_back(col_seed({{"x.tga", {fox(70), 0x11}}, {"y.tga", {fox(9), 0x11}}, {"z.bin", {Bytes(40, 7), 1}}, {"w.bin", {Bytes{}, 1}}}));
+  return v;
+}
+std::vector<Bytes> syn_fnt() {
+  std::vector<Bytes> v;
+  // the same shape as BionicleFont: one row, kerning 0, baseline 12, a space of 8
+  v.push_back(fnt_seed(1, 4, 16, 16, 0, 12, 8, {{'N', 11, 12, 0, 1}, {'e', 9, 9, 0, 4}, {'w', 13, 9, 0, 4}, {'Q', 13, 14, 0, 2}}));
+  // duplicate ascii (first match wins), a 2-byte code, negative kerning and a yOffset past the baseline
+  v.push_back(fnt_seed(1, 5, 32, 32, -4, 12, 16, {{'A', 6, 8, 0, 0}, {'A', 9, 8, 0, 0}, {0xf141, 7, 3, 0, 6}, {'j', 4, 5, 0, 20}, {'x', -2, 4, 0, 12}}));
+  v.push_back(fnt_seed(2, 2, 8, 8, 1, 7, 4, {{'a', 3, 4, 0, 1}, {'b', 5, 4, 0, 2}, {0x20, 2, 2, 0, 3}, {0xff, 1, 1, 0, 0}}));
+  return v;
+}
 std::vector<Bytes> syn_osi() {
   std::vector<Bytes> v = {lomn::test::statt_osi()};
   lomn::test::OsiSpec s;  // fuzz_osi.cpp's cap-edge program
@@ -1098,7 +1272,7 @@ void mutate(Rng& r, const Seed& seed, bool real, Bytes& b) {
           case 6: v = f.width == 4 ? 0x80000000ull : 0x8000; break;
           default: v = 1ull << r.below(f.width * 8); break;
         }
-        for (uint32_t i = 0; i < f.width; ++i) b[f.off + i] = static_cast<uint8_t>(v >> (8 * i));
+        for (uint32_t i = 0; i < f.width; ++i) b[f.off + (f.be ? f.width - 1u - i : i)] = static_cast<uint8_t>(v >> (8 * i));
         break;
       }
       case 3: {  // chunk duplication
@@ -1194,6 +1368,7 @@ bool load_real(const std::string& install, uint64_t seed, size_t per_format, std
   }
   std::sort(files.begin(), files.end());
   std::map<std::string, std::vector<Candidate>> cand;
+  std::vector<Seed> fnt_seeds;  // M2a-3 T7a: extracted from the font collectives, not files of their own
   for (const auto& f : files) {
     const std::string rel = lower(f.first);
     std::error_code e2;
@@ -1222,6 +1397,20 @@ bool load_real(const std::string& install, uint64_t seed, size_t per_format, std
       }
     } else if (ends_with(rel, ".tga") && size <= kSeedMax) {
       cand["tga"].push_back({f.first, f.second, -1, size});
+    } else if (ends_with(rel, ".col") && size <= (4u << 20)) {  // M2a-3 T7a: font and HUD sprite collectives
+      if (size <= kSeedMax) cand["col"].push_back({f.first, f.second, -1, size});
+      Bytes whole;
+      ColFile cf;
+      std::string cerr;
+      if (read_range(f.second, 0, size, whole) && cf.open_bytes(whole, &cerr)) {  // the .fnt entry of a font collective
+        std::string stem = f.first.substr(f.first.find_last_of('/') + 1);
+        stem.resize(stem.size() - 4);
+        Seed fs_;
+        if (cf.read_named(stem + ".fnt", fs_.bytes, &cerr)) {
+          fs_.label = f.first + ":" + stem + ".fnt";
+          fnt_seeds.push_back(std::move(fs_));
+        }
+      }
     } else if (ends_with(rel, ".osi") && size <= kMaxOsiBytes) {
       cand["osi"].push_back({f.first, f.second, -1, size});
     }
@@ -1243,6 +1432,7 @@ bool load_real(const std::string& install, uint64_t seed, size_t per_format, std
       }
     }
   }
+  for (Seed& fs_ : fnt_seeds) out["fnt"].push_back(std::move(fs_));  // at most 8 tiny seeds: all of them
   return true;
 }
 
@@ -1257,6 +1447,8 @@ void add_fields(const std::string& fmt, Seed& s) {
   else if (fmt == "dds") s.fields = dds_fields(s.bytes);
   else if (fmt == "tga") s.fields = tga_fields(s.bytes);
   else if (fmt == "osi") s.fields = osi_fields(s.bytes);
+  else if (fmt == "col") s.fields = col_fields(s.bytes);
+  else if (fmt == "fnt") s.fields = fnt_fields(s.bytes);
 }
 
 Result run_one(const std::string& fmt, const Bytes& in, Rng& r, bool real) {
@@ -1269,6 +1461,8 @@ Result run_one(const std::string& fmt, const Bytes& in, Rng& r, bool real) {
   if (fmt == "x") return run_x(in, r);
   if (fmt == "dds") return run_dds(in, r);
   if (fmt == "tga") return run_tga(in, r);
+  if (fmt == "col") return run_col(in, r);
+  if (fmt == "fnt") return run_fnt(in, r);
   return run_osi(in, r, real);
 }
 
@@ -1402,7 +1596,8 @@ int main(int argc, char** argv) {
 
   std::vector<Format> formats = {
       {"blk", {}, {}, 2},     {"lzss", {}, {}, 2},      {"slb.obj", {}, {}, 2}, {"slb.pos", {}, {}, 2}, {"slb.light", {}, {}, 2},
-      {"slb.tex", {}, {}, 2}, {"x", {}, {}, 2},         {"dds", {}, {}, 2},     {"tga", {}, {}, 2},     {"osi", {}, {}, 16}};
+      {"slb.tex", {}, {}, 2}, {"x", {}, {}, 2},         {"dds", {}, {}, 2},     {"tga", {}, {}, 2},     {"osi", {}, {}, 16},
+      {"col", {}, {}, 2},     {"fnt", {}, {}, 2}};
   std::map<std::string, std::vector<Bytes>> syn = {{"blk", syn_blk()},
                                                    {"lzss", syn_lzss()},
                                                    {"slb.obj", {make_obj({{"wllv", 0x10}, {"ehcr", 0x110}, {"bmov", 0x30}})}},
@@ -1412,7 +1607,9 @@ int main(int argc, char** argv) {
                                                    {"x", syn_x()},
                                                    {"dds", syn_dds()},
                                                    {"tga", syn_tga()},
-                                                   {"osi", syn_osi()}};
+                                                   {"osi", syn_osi()},
+                                                   {"col", syn_col()},
+                                                   {"fnt", syn_fnt()}};
   std::map<std::string, std::vector<Seed>> real;
   if (!data.empty() && !load_real(data, seed, per_format, real)) return 3;
   for (Format& f : formats) {

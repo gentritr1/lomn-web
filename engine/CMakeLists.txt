@@ -23,7 +23,7 @@ target_compile_options(lomn_core PUBLIC -ffp-contract=off)
 
 # M1a-1 data path (no GPU): SAGE blockfiles, lookup chain, SLB tables, binary .x meshes, DDS/TGA decoders.
 add_library(lomn_sage STATIC src/sage/blockfile.cpp src/sage/blockchain.cpp src/sage/slb.cpp src/sage/xfile.cpp src/sage/image.cpp
-            src/sage/osi.cpp)
+            src/sage/osi.cpp src/sage/colfont.cpp)  # M2a-3 T7a: .col / .fnt tile fonts
 target_link_libraries(lomn_sage PUBLIC lomn_core)
 target_compile_options(lomn_sage PRIVATE -Wall -Wextra)
 
@@ -147,6 +147,10 @@ else()
   add_executable(lomn_datacheck tools/lomn_datacheck.cpp)
   target_link_libraries(lomn_datacheck PRIVATE lomn_sage)
   target_compile_options(lomn_datacheck PRIVATE -Wall -Wextra)
+  # M2a-3 T7a: the glyph table of every tile font of an install (diffed against the Python side's table by the controller).
+  add_executable(lomn_font_table tools/lomn_font_table.cpp)
+  target_link_libraries(lomn_font_table PRIVATE lomn_sage)
+  target_compile_options(lomn_font_table PRIVATE -Wall -Wextra)
   # M1a-2: lomn_view renders an area to PNG (webgpu) or a call log (null); --synthetic 1 is the A7 scene.
   add_executable(lomn_view tools/lomn_view.cpp)
   target_link_libraries(lomn_view PRIVATE lomn_area lomn_osi $<$<BOOL:${LOMN_WEBGPU}>:lomn_webgpu>)  # M2a-2 T6: --script 1
@@ -329,7 +333,8 @@ add_executable(lomn_tests tests/test_main.cpp tests/test_fs.cpp tests/test_rhi_n
                tests/test_rhi_mesh.cpp tests/test_view_mips.cpp tests/test_view_area.cpp tests/test_d3d.cpp tests/test_sage_osi.cpp
                tests/test_area_states.cpp tests/test_sage_frame.cpp tests/test_view_texture_cache.cpp tests/test_fuzz_fragments.cpp
                tests/test_rhi_destroy.cpp tests/test_prefetch_fs.cpp tests/test_fly_camera.cpp  # M1b
-               tests/test_osi_vm.cpp tests/test_osi_natives.cpp tests/test_osi_services.cpp tests/test_osi_directors.cpp tests/test_osi_objects.cpp)  # M2a-1, M2a-2 T3, T7a, T8a, T9a
+               tests/test_osi_vm.cpp tests/test_osi_natives.cpp tests/test_osi_services.cpp tests/test_osi_directors.cpp tests/test_osi_objects.cpp  # M2a-1, M2a-2 T3, T7a, T8a, T9a
+               tests/test_sage_colfont.cpp)  # M2a-3 T7a
 # wasm32 stack for the OSI VM (I2): a native re-entering the VM costs 1,648 bytes of C++ stack per engine call
 # (measured 2026-10-09, Vm::call -> call_impl -> run -> dispatch -> 0x82 -> native -> Vm::call), 116,240 bytes in use at
 # the 65th call's nesting-cap throw in lomn_osi_conform. 512 KiB was 4.5x that; M2a-2 T10 re-measured 1,984 B per level by trap, 138,000 at the cap, so 576 KiB (the default 64 KiB runs out near level 33:
@@ -352,8 +357,8 @@ add_test(NAME unit COMMAND lomn_tests)
 # rejections), which otherwise run Release-only and could not see an out-of-bounds read or a UB-shift in a rejected path.
 if(NOT EMSCRIPTEN)
   add_executable(lomn_tests_asan tests/test_main.cpp tests/test_sage_xfile.cpp tests/test_fuzz_fragments.cpp
-                 tests/test_sage_blockfile.cpp tests/test_sage_slb.cpp tests/test_sage_image.cpp
-                 src/sage/blockfile.cpp src/sage/blockchain.cpp src/sage/slb.cpp src/sage/xfile.cpp src/sage/image.cpp src/sage/osi.cpp
+                 tests/test_sage_blockfile.cpp tests/test_sage_slb.cpp tests/test_sage_image.cpp tests/test_sage_colfont.cpp
+                 src/sage/blockfile.cpp src/sage/blockchain.cpp src/sage/slb.cpp src/sage/xfile.cpp src/sage/image.cpp src/sage/osi.cpp src/sage/colfont.cpp
                  tests/test_osi_vm.cpp src/osi/heap.cpp src/osi/convert.cpp src/osi/registry.cpp src/osi/trace.cpp
                  src/osi/vm.cpp src/osi/vm_handlers.cpp  # M2a-1: the VM's unit cases under ASan + UBSan
                  tests/test_osi_natives.cpp src/osi/natives/framework.cpp src/osi/natives/groups.cpp

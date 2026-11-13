@@ -1,0 +1,124 @@
+Root/Data/Art/MenuArt/cursor0000
+Root/data/art/hud/16x16circle__clr
+Root/data/art/hud/16x16end__clr
+Root/data/art/hud/16x16frntend__clr
+Root/data/art/hud/Black
+Root/data/art/hud/elemrotate/genhfbtahu0000
+Root/data/art/hud/elemrotate/genhfbtahu0001
+Root/data/art/hud/elemrotate/genhfbtahu0002
+Root/data/art/hud/elemrotate/genhfbtahu0003
+Root/data/art/hud/elemrotate/genhfbtahu0004
+Root/data/art/hud/elemrotate/genhfbtahu0005
+Root/data/art/hud/elemrotate/genhfbtahu0006
+Root/data/art/hud/elemrotate/genhfbtahu0007
+Root/data/art/hud/elemrotate/genhfbtahu0008
+Root/data/art/hud/elemrotate/genhfbtahu0009
+Root/data/art/hud/elemrotate/genhfbtahu0010
+Root/data/art/hud/elemrotate/genhfbtahu0011
+Root/data/art/hud/elemrotate/genhfbtahu0012
+Root/data/art/hud/greeneyesoff
+Root/data/art/hud/greeneyeson
+Root/data/art/hud/littleWhiteLight
+Root/data/art/hud/mask rotate/mask10000
+Root/data/art/hud/mask rotate/mask10001
+Root/data/art/hud/mask rotate/mask10002
+Root/data/art/hud/mask rotate/mask10003
+Root/data/art/hud/mask rotate/mask10004
+Root/data/art/hud/mask rotate/mask10005
+Root/data/art/hud/mask rotate/mask10006
+Root/data/art/hud/mask rotate/mask10007
+Root/data/art/hud/mask rotate/mask10008
+Root/data/art/hud/mask rotate/mask10009
+Root/data/art/hud/mask rotate/mask10010
+Root/data/art/hud/mask rotate/mask10011
+Root/data/art/hud/mask rotate/mask10012
+Root/data/art/hud/mask rotate/mask10013
+Root/data/art/hud/mask rotate/mask10014
+Root/data/art/hud/mask rotate/mask10015
+Root/data/art/hud/mask rotate/mask10016
+Root/data/art/hud/mask rotate/mask10017
+Root/data/art/hud/mask rotate/mask10018
+Root/data/art/hud/mask rotate/mask10019
+Root/data/art/hud/mask rotate/mask10020
+Root/data/art/hud/mask rotate/mask10021
+Root/data/art/hud/mask rotate/mask10022
+Root/data/art/hud/mask rotate/mask10023
+Root/data/art/hud/mask rotate/mask80000
+Root/data/art/hud/mask rotate/mask80001
+Root/data/art/hud/mask rotate/mask80002
+Root/data/art/hud/mask rotate/mask80003
+Root/data/art/hud/mask rotate/mask80004
+Root/data/art/hud/mask rotate/mask80005
+Root/data/art/hud/mask rotate/mask80006
+Root/data/art/hud/mask rotate/mask80007
+Root/data/art/hud/mask rotate/mask80008
+Root/data/art/hud/mask rotate/mask80009
+Root/data/art/hud/mask rotate/mask80010
+Root/data/art/hud/mask rotate/mask80011
+Root/data/art/hud/mask rotate/mask80012
+Root/data/art/hud/mask rotate/mask80013
+Root/data/art/hud/mask rotate/mask80014
+Root/data/art/hud/mask rotate/mask80015
+Root/data/art/hud/mask rotate/mask80016
+Root/data/art/hud/mask rotate/mask80017
+Root/data/art/hud/mask rotate/mask80018
+Root/data/art/hud/mask rotate/mask80019
+Root/data/art/hud/mask rotate/mask80020
+Root/data/art/hud/mask rotate/mask80021
+Root/data/art/hud/mask rotate/mask80022
+Root/data/art/hud/mask rotate/mask80023
+Root/data/art/hud/mask rotate/mask90000
+Root/data/art/hud/mask rotate/mask90001
+Root/data/art/hud/mask rotate/mask90002
+Root/data/art/hud/mask rotate/mask90003
+Root/data/art/hud/mask rotate/mask90004
+Root/data/art/hud/mask rotate/mask90005
+Root/data/art/hud/mask rotate/mask90006
+Root/data/art/hud/mask rotate/mask90007
+Root/data/art/hud/mask rotate/mask90008
+Root/data/art/hud/mask rotate/mask90009
+Root/data/art/hud/mask rotate/mask90010
+Root/data/art/hud/mask rotate/mask90011
+Root/data/art/hud/mask rotate/mask90012
+Root/data/art/hud/mask rotate/mask90013
+Root/data/art/hud/mask rotate/mask90014
+Root/data/art/hud/mask rotate/mask90015
+Root/data/art/hud/mask rotate/mask90016
+Root/data/art/hud/mask rotate/mask90017
+Root/data/art/hud/mask rotate/mask90018
+Root/data/art/hud/mask rotate/mask90019
+Root/data/art/hud/mask rotate/mask90020
+Root/data/art/hud/mask rotate/mask90021
+Root/data/art/hud/mask rotate/mask90022
+Root/data/art/hud/mask rotate/mask90023
+Root/data/art/hud/turnhead0024
+Root/data/art/pickups/onuatoken/onua_token0000
+Root/data/art/pickups/onuatoken/onua_token0001
+Root/data/art/pickups/onuatoken/onua_token0002
+Root/data/art/pickups/onuatoken/onua_token0003
+Root/data/art/pickups/onuatoken/onua_token0004
+Root/data/art/pickups/onuatoken/onua_token0005
+Root/data/art/pickups/onuatoken/onua_token0006
+Root/data/art/pickups/onuatoken/onua_token0007
+Root/data/art/pickups/onuatoken/onua_token0008
+Root/data/art/pickups/onuatoken/onua_token0009
+Root/data/art/pickups/onuatoken/onua_token0010
+Root/data/art/pickups/onuatoken/onua_token0011
+Root/data/art/pickups/onuatoken/onua_token0012
+Root/data/art/pickups/onuatoken/onua_token0013
+Root/data/art/pickups/onuatoken/onua_token0014
+Root/data/art/pickups/onuatoken/onua_token0015
+Root/data/art/pickups/onuatoken/onua_token0016
+Root/data/art/pickups/onuatoken/onua_token0017
+Root/data/art/pickups/onuatoken/onua_token0018
+Root/data/art/pickups/onuatoken/onua_token0019
+Root/data/art/pickups/onuatoken/onua_token0020
+Root/data/art/pickups/onuatoken/onua_token0021
+Root/data/art/pickups/onuatoken/onua_token0022
+Root/data/art/pickups/onuatoken/onua_token0023
+Root/data/art/pickups/onuatoken/onua_token0024
+Root/data/art/pickups/onuatoken/onua_token0025
+Root/data/art/pickups/onuatoken/onua_token0026
+Root/data/art/pickups/onuatoken/onua_token0027
+Root/data/art/pickups/onuatoken/onua_token0028
+Root/data/art/pickups/onuatoken/onua_token0029
