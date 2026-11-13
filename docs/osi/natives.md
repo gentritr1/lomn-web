@@ -58,8 +58,9 @@ Decision text differs from a ruling in §2–§9, the ruling here wins. The diff
     (`b-eng-reenter-depth` with `calls.depth` = 16, 32, 48, 63, 64, wasm32, `STACK_OVERFLOW_CHECK=2`) is linear at
     **1,984 bytes per level** (trap / pass at d = 16: 42,736 / 42,768; at d = 64: 137,968 / 138,000), 23 % above the
     stack-pointer figure. With it, 4.5 × 64 × 1,984 = **571,392 > 524,288**: the rule as written needs `STACK_SIZE` ≥
-    571,392 (576 KiB = 589,824). The cap chain itself traps only below 138,000, so 512 KiB is 3.8 × that. `STACK_SIZE` is
-    **not** changed by the fix round (a link option shared by every wasm executable): the controller decides.
+    571,392 (576 KiB = 589,824). The cap chain itself traps only below 138,000, so 512 KiB is 3.8 × that. Controller ruling
+    (2026-11-13): `STACK_SIZE` is raised to **589,824** (576 KiB), the rule applied to the larger, trap-measured figure
+    (571,392 ≤ 589,824); the cost is 64 KiB of linear memory per wasm instance.
 12. **`-fwasm-exceptions` scope.** `lomn_view` (the wasm32 node tool) inherits the flag once it links `lomn_osi`.
     `lomn_web` does not link `lomn_osi` until M2b.
 13. **Close-out review:** Opus 5.5 medium.

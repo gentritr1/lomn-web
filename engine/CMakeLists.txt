@@ -46,8 +46,8 @@ target_compile_options(lomn_osi PRIVATE -Wall -Wextra)
 if(EMSCRIPTEN)
   target_compile_options(lomn_osi PUBLIC -fwasm-exceptions)
   target_link_options(lomn_osi PUBLIC -fwasm-exceptions)
-  # 512 KiB stack travels with the VM library (INTERFACE): every wasm executable linking lomn_osi inherits it; see LOMN_OSI_WASM_STACK.
-  target_link_options(lomn_osi INTERFACE -sSTACK_SIZE=524288)
+  # 576 KiB stack (Decision 11: 4.5 x cap 64 x 1,984 bytes per level = 571,392) travels with the VM library (INTERFACE): every wasm executable linking lomn_osi inherits it; see LOMN_OSI_WASM_STACK.
+  target_link_options(lomn_osi INTERFACE -sSTACK_SIZE=589824)
 endif()
 
 # M1a-3 faithful states: the D3D8 fixed-function state shim (state log) and its compiler to rhi (uber-shader + pipeline
