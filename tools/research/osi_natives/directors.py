@@ -616,7 +616,14 @@ class AreaDirector:
         nothing (natives.md §5.2): LoadObjects 0x4ff93e, LoadCharacters 0x5002ec, LoadHives 0x500c0b. Inside them an
         object whose motion id is the main character's runs SetUnderWater (0x574ef1 guard), whose `Call` is the nested
         engine call; an error ends that block (the unwound LoadObjects) and loading goes on with the next block."""
-        objs = self.area_source(area_id) if self.area_source is not None else []
+        if self.area_source is not None:
+            objs = self.area_source(area_id)
+        elif ctx.vfs is not None:                                                # M2a-3 T11b: the characters block from the area's own _char.slb
+            from . import areachars, services
+            objs = areachars.area_characters(ctx.vfs, services.identifier_to_string(self.level).decode("latin-1"),
+                                             services.identifier_to_string(area_id).decode("latin-1"))
+        else:
+            objs = []
         for block in ("objects", "characters", "hives"):
             for o in objs:
                 if o.block != block:
@@ -637,6 +644,10 @@ class AreaDirector:
                 # block (swallowed further out, D16) leaves the slot at the character's block. A refused Add (an existing key) leaves
                 # it too, at 0x47ef9c; that path is not modelled (the new character is freed there: a dangling slot, UNVERIFIED).
                 window = block == "characters" and not o.director
+                if window and o.obj_id & M32 != self.main_character_id:
+                    from . import objects as _objects
+                    if ctx.subsystem(_objects.ModelDirector).get(o.obj_id) is not None:
+                        continue        # natives.md F7a item 2: a tracked id gets a numbered unique id (0x480362-0x480490), not modelled: both engines skip the record
                 if window:
                     from . import objects, services
                     slots = ctx.subsystem(services.BlockFileSlots)

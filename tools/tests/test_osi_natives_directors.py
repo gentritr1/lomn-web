@@ -1918,8 +1918,10 @@ def test_h_lines_of_a_held_toa_across_load_and_removal():
     _char_world(vm, ctx, [d.AreaObject("characters", CNT1, 1)])
     assert vm.call("main", []).ok
     hs = [l.split(" ", 1)[1] for l in log if l.startswith("H ")]
+    # M2a-3 T11b: Hide's found child takes a temporary reference around its search (cnt1 path `inc [edx+4]` 0x47fd51 ... `dec [ecx+4]`
+    # 0x47fd77; the other path 0x47fdf3 / 0x47fe1f; objdump of the install exe, natives.md "Hide on removal"): +1 -1 before the erase.
     assert hs == ["0037:00000001 +1", "0037:00000001 +1", "0037:00000001 -1", "0037:00000001 +1",
-                  "0037:00000001 -1", "0037:00000001 -1", "0037:00000001 -1"], hs
+                  "0037:00000001 -1", "0037:00000001 +1", "0037:00000001 -1", "0037:00000001 -1", "0037:00000001 -1"], hs
     assert vm.heap.engine(1) == 0
 
 

@@ -499,6 +499,8 @@ def hide(ctx, ident: int) -> None:
         return
     idx = next((i for i, c in enumerate(group.items) if c is ch), None)  # the find loop compares the pointers
     if idx is not None:
+        ctx.add_ref(ch)                                                  # natives.md "Hide on removal": the found child's temporary +1 (0x47fdf3),
+        ctx.release(ch)                                                  # the search, the temporary -1 (0x47fe1f); logs +1 -1 on a script-held character
         ch.parent = None                                                 # [esi+0x28](0), 0x47fe44 (INFERRED SetParent)
         del group.items[idx]                                             # 0x4197c0
         ctx.release(ch)
