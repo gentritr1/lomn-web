@@ -1,0 +1,33 @@
+# kind<TAB>section<TAB>key<TAB>default<TAB>bufsize<TAB>expected; S = GetPrivateProfileStringA, I = GetPrivateProfileIntA (bufsize unused)
+S	case	mixedkey	D	255	Value1
+S	CASE	MIXEDKEY	D	255	Value1
+S	Case	spaced	D	255	padded value
+S	Quotes	dq	D	255	hello world
+S	Quotes	sq	D	255	single
+S	Quotes	mismatch	D	255	"open'
+S	Quotes	lone	D	255	"
+S	Quotes	empty	D	255	
+S	Quotes	padq	D	255	  keep  
+S	Quotes	inner	D	255	a"b
+S	Dup	k	D	255	first
+S	Other	k	D	255	other
+S	Long	v	D	255	xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+S	Long	v	D	512	xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+S	Long	v	D	301	xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+S	Long	v	D	300	xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+S	Long	v	D	1	
+S	Long	v	D	0	
+S	Nosuch	k	dflt	255	dflt
+S	Case	nokey	dflt	255	dflt
+S	Case	nokey	abcdef	4	abc
+S	Comments	c	dflt	255	dflt
+S	Comments	d	dflt	255	dflt
+S	Comments	e	dflt	255	dflt
+S	Comments	real	dflt	255	1
+S	Comments	inline	dflt	255	5 ; not a comment
+S	Comments	k	dflt	255	dflt
+I	Ints	n	7	0	640
+I	Ints	bad	7	0	0
+I	Ints	zero	7	0	0
+I	Ints	missing	7	0	7
+I	Nosuch	n	7	0	7
