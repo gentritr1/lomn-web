@@ -78,7 +78,7 @@ Function extents come from flow-following the binary to every `ret` and the next
 - param = rem / duration; the mode-2 look-ahead subtracts 0.01 (`[0x706730]`);
 - **fire when rem ≤ 0.0**: mode 2 at 0x4528d5 (`fcomp [0x706738]`); mode 3 at 0x452f04/0x452f10 (`[0x706740]`; `test ah,4` / `test ah,0x41`).
 
-**The four `OnEvent(6)` guards** (mode 2 and mode 3, each forward and reverse) read only time, start, duration and the mode and flag bytes. None reads Toa, physics or collision state. **F18 is confirmed, so the stop condition does not fire.** A fifth `OnEvent` call at 0x45502f is outside these four guards and was not followed.
+**The four `OnEvent(6)` guards** (mode 2 and mode 3, each forward and reverse) read only time, start, duration and the mode and flag bytes. None reads Toa, physics or collision state. **F18 is confirmed, so the stop condition does not fire.** A fifth `OnEvent` call at 0x45502f lies in the branch gated by `cmp byte [cam+0x3a1], 8; jne 0x455600` (0x454e86–0x454e8d), so it runs in **mode 8 only**. No jump from outside lands inside 0x454e8d–0x45502f in the linear listing (EXECUTED; jump tables were not scanned). That `+0x3a1` is the current-mode byte is INFERRED from `SetCameraAIMode`'s write.
 
 **The `OnEvent(6)` arguments** (0x452c1a–0x452d24; the VM is `[0x83877c]` and the name "OnEvent" is at 0x7072f8):
 - `CreateVariant(6)` 0x413ed0 (int, `movzx`);
@@ -296,9 +296,20 @@ So, within a frame, VK triggers (priority 0), key-mapper and mouse events (prior
 - **Who fires them** (EXECUTED):
   - `GcControllerProcess::Process` 0x44a7a0 (to `ret 0x10` at 0x44a7b8), **priority 0**, calls `ScInputManager::GoCacheYourself` 0x4973d0, then `ScTriggerManager::ProcessTriggers` 0x4c2bf0, then returns 1.
   - The trigger's action `ScSLOSIAnalogControllerAction::Fire` 0x613f80 (to `ret 4` at 0x61407a) sends `Input(C1 [act+0x28], VK [act+0x8], state byte [act+0x18], f, f)` at 0x61406f. Its only guard is `[act+0x20]` ≠ 0, the VM pointer (0x613f8f).
-- **Camera mode and pause:** the direct-call closure of 0x44a7a0 and 0x613f80 (73 functions, 24 indirect calls not followed; `reads.py`) never reads `[0x7032c4]` (pause), `[cam+0x3a1]`, `[0x7032bc]` or `[0x7032b8]`. **So the VK triggers fire in every camera mode, including during the spline flight (mode 3)**, unlike the key mapper (§5.2).
-- **Open:** which trigger tree `ProcessTriggers` walks depends on the context providers (`[0x79908c]`, the maps at `[0x799040]` / `[0x79903c]`, `ScContextManager` 0x4d4300). That the 'scrP'/'scrp' context is active on the front end is INFERRED. The oracle's Task 1 run shows Enter at frame 220 reaching the script (a new spline at 258).
-- **Ruling** (EXECUTED path, INFERRED context): **Enter, Space and the arrows reach the menu** as `Input(C1, VK, state, f, f)` at priority 0, before the script's `Process` in the same pass, in every camera mode. Whether pausing stops `GcControllerProcess` itself (the pm's `[proc+9]`) was not read.
+- **The gate is the trigger context** (CITED from the re-review's asm reading, not re-run here):
+  - The VK triggers are registered under provider **'Prcs'** (`[0x83aecc]` = 0x73637250, set at 0x43cb98) with context **'prcs'** (`[0x779718]` = 0x73637270, set at 0x43c139).
+  - That context is pushed **once**, in `SetUpScripting` 0x439288–0x4392b1 (0x4d4300 create, then 0x4d4730 push). The handle at `[ebp-0x1c]` is never referenced again.
+  - 'Prcs' is read only at the 23 sites 0x4372a1–0x439288 and at shutdown (0x43acf8 → `ClearByContextProvider` 0x4c2f00). So nothing pops or switches the 'Prcs' context while the game runs.
+  - EXECUTED here: the direct-call closure of 0x44a7a0 and 0x613f80 (73 functions, 24 indirect calls not followed; `reads.py`) reads none of `[0x7032c4]`, `[cam+0x3a1]`, `[0x7032bc]`, `[0x7032b8]`. Supporting evidence only; the context gate is the reason.
+- **How this squares with §5.2 and with the camera** (CITED):
+  - The camera's context switches (0x4152d0, called from 0x4550af and 0x455bcd with 'pnin' / 'none') push onto the **Toa's** provider `[toa+0x100]` (set by ctor 0x40b520 arg5: 'cnt1' / 'niia'). They gate Toa movement, not 'Prcs'.
+  - 0x5d1bf6 gates only the key mapper's ids 0xe3..0xfb.
+  - No key is delivered twice: mapper id 0xe7 (Space) goes to the conversation engine (§5.2), while VK 0x20 goes to `Input`.
+- **Still INFERRED:**
+  - that no provider key passed as a parameter or loaded from data equals 'Prcs';
+  - that `GcControllerProcess` is live on the front end (registered at 0x4394a4, priority 0; nothing seen removing it);
+  - that the menu's `Input` handler consumes 0x26/0x28. The oracle evidence for this (Task 1: Enter at 220 → a new spline at 258) is **circular**, because the oracle delivers keys by this same assumed path.
+- **Ruling** (EXECUTED path; context gate CITED; liveness INFERRED): **Enter, Space and the arrows reach the menu** as `Input(C1, VK, state, f, f)` at priority 0, before the script's `Process` in the same pass, in every camera mode. Whether pausing stops `GcControllerProcess` itself (the pm's `[proc+9]`) was not read.
 
 ## §6 INI reads (EXECUTED)
 
@@ -373,7 +384,7 @@ There are two ways to record a run. They give opposite pictures.
 - Every other first-round number in this section is superseded by §8.2.
 
 ### §8.2 What the event does (EXECUTED, handler-recorded `menu_probe`, diffs against the no-event run)
-- **Each event costs 20 code life.**
+- **Each event costs 20 code life.** The recorded `setcodelife` values are 40 → 20 → 0. There is no `getcodelife` native, so the counter is script state. Its starting value (60 if the step is constant) is INFERRED: no `setcodelife` occurs in the no-event run.
   - 1st event: the handler tints a sprite red (`gcbigsprite.setcolor(255,0,0,255)`), blinks life light 15 (`show` / `hide` 13–15), then `setcodelife(40)`.
   - 2nd: `hide(15)` + `remove(15)`, the same blink on 14, then `setcodelife(20)`.
   - 3rd: `hide(14)` + `remove(14)`, `show` / `hide(13)`, then the death path in the table above (`toamustdie` … `setcodelife(0)`).
@@ -386,12 +397,19 @@ There are two ways to record a run. They give opposite pictures.
   - `toamustdie`;
   - mask spin 1.2;
   - collisions disabled;
-  - **camera mode 7**. The script never sets mode 3 again after frame 3, so this sticks (frames 5–699 contain no camera call).
-  - Exception: if the third event lands *before* frame 3 (frames 0, 1, 2), the script's own frame-3 `setcameraaimode(cam, 3)` restarts the flight.
+  - **camera mode 7**. Whether it sticks depends on when the third event lands relative to the script's frame-3 `setcameraaimode(cam, 3)` + spline setters. That in-frame order of `CheckWallCloseness` (Toa/physics) vs the script's `Process` has **no asm basis** in this doc, so both orders are given (EXECUTED, `menu_probe` recorded mode):
+
+| Third event | pre (before Process) | post (after Process) |
+|---|---|---|
+| frame ≤ 2 | death, then frame-3 mode 3: **flight runs** (0,1,2 → death at 2, mode 3 at 3) | same: **flight runs** |
+| frame 3 | death, mode 7, then the script's mode 3 in the same frame: **flight runs** (1,2,3 pre) | mode 3, then death + mode 7: **flight cancelled**, mode 7 sticks (1,2,3:post) |
+| frame ≥ 4 | mode 7 sticks (2,3,4; 100,101,102) | mode 7 sticks (2,3,4:post) |
+
+  - After frame 3 the script never sets mode 3 again (frames 5–699 of the no-event and event runs contain no camera call).
 - **What mode 7 does in the camera** (EXECUTED reads, §1):
   - **Spline released:** `SetCameraAIMode` 0x45b490 releases the spline (old 3 → new 7, not 2 or 3).
   - **Target only:** Process's mode-7 branch (0x455bf7–0x455c51) only calls `SetTargetPosition` with a point whose y gets `+ [cam+0x3d4]`. The eye is never moved. That the point is the Toa's position is INFERRED.
-  - **No OnEvent(6):** mode 7 never reaches the four spline guards (§1.3), so OnEvent(6) is never sent. The script's camera-event handler (`setcameraaimode(0)`, `gchuddirector.show(141)`, `startnewscreen`) never runs (INFERRED from the guard census; the 5th site 0x45502f was not followed).
+  - **No OnEvent(6):** mode 7 never reaches the four spline guards (§1.3), so OnEvent(6) is never sent. The script's camera-event handler (`setcameraaimode(0)`, `gchuddirector.show(141)`, `startnewscreen`) never runs (EXECUTED guard census: the 5th site 0x45502f is mode-8-only, §1.3; INFERRED that the handler is not reached any other way).
 
 ### §8.3 The tell for owner check O6 / Decision 7
 - **HUD visibility cannot tell the cases apart.** In the 3-event case, the handler hides exactly the indices the script's frame-4 block would hide:
@@ -401,8 +419,10 @@ There are two ways to record a run. They give opposite pictures.
   - Either way, the same elements end up invisible.
   - The only HUD trace is transient: the red tint and the life-light blinks in frames 2–4, about 20 ms of screen time.
 - **The tell is the death / camera-mode-7 path.** If the event fired three times in the original, the owner would SEE:
-  1. **No camera fly-in.** The 4-second sweep (z 279.9 → 110.6) stops near its start, because mode 7 releases the spline in frame 4. The camera then turns to look at the Toa (INFERRED target).
-  2. **Onua dying** (the `toamustdie` path, with the mask spinning; the exact animation is INFERRED).
-  3. **No menu reset.** Because OnEvent(6) is never sent, `show(141)` and `startnewscreen` never happen (INFERRED).
-- **What rules the event out:** a screenshot of the original menu that shows the camera at the end of the fly-in, with the menu items up and Onua standing, means the event did not fire three times. The port's no-event state is then right.
+  - **Late death** (third event at frame ≥ 4, or at frame 3 with post order):
+    1. **No camera fly-in.** The 4-second sweep (z 279.9 → 110.6) stops near its start, because mode 7 releases the spline. The camera then turns to look at the Toa (INFERRED target).
+    2. **Onua dying** (the `toamustdie` path, with the mask spinning; the exact animation is INFERRED).
+    3. **No menu reset.** Because OnEvent(6) is never sent, `show(141)` and `startnewscreen` never happen (INFERRED).
+  - **Early death** (third event at frame ≤ 2, or at frame 3 with pre order): **a normal fly-in WITH a dead or dying Onua.** The spline is set and mode 3 is set after the death, so the flight runs. That OnEvent(6) then fires at 604 and the menu appears is INFERRED; the oracle does not model the camera.
+- **What rules the event out:** a screenshot of the original menu that shows the camera at the end of the fly-in, with the menu items up **and Onua standing**, means the event did not fire three times. Both conditions are needed: the early-death case also shows the fly-in. The port's no-event state is then right.
 - A single event, or two, leaves no visible trace after frame 4 except the code life (40 or 20). That is not visible on the menu (INFERRED).
