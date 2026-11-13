@@ -33,7 +33,7 @@ target_compile_options(lomn_sage PRIVATE -Wall -Wextra)
 # Fix round 1 (M3): kept PUBLIC for now; to be revisited in M2a-2, when natives living in other libraries call vm.call
 # and their frames must unwind too (those libraries would then need the flag as well).
 # M2a-2 T6, Decision 12 (docs/osi/natives.md §1.1): stays PUBLIC. lomn_view (the wasm32 node tool) inherits the flag
-# (and the 512 KiB stack) now that it links lomn_osi for --script; the natives live in lomn_osi itself, so no other
+# (and the 576 KiB stack) now that it links lomn_osi for --script; the natives live in lomn_osi itself, so no other
 # library needs it. lomn_web does not link lomn_osi until M2b, which revisits the scope with a size and perf entry. The
 # lomn_view.wasm size before/after is in docs/knowledge/measurements.md; datacheck-wasm keeps M1's null logs
 # native == wasm32.
@@ -332,7 +332,7 @@ add_executable(lomn_tests tests/test_main.cpp tests/test_fs.cpp tests/test_rhi_n
                tests/test_osi_vm.cpp tests/test_osi_natives.cpp tests/test_osi_services.cpp tests/test_osi_directors.cpp tests/test_osi_objects.cpp)  # M2a-1, M2a-2 T3, T7a, T8a, T9a
 # wasm32 stack for the OSI VM (I2): a native re-entering the VM costs 1,648 bytes of C++ stack per engine call
 # (measured 2026-10-09, Vm::call -> call_impl -> run -> dispatch -> 0x82 -> native -> Vm::call), 116,240 bytes in use at
-# the 65th call's nesting-cap throw in lomn_osi_conform. 512 KiB = 4.5x that (the default 64 KiB runs out near level 33:
+# the 65th call's nesting-cap throw in lomn_osi_conform. 512 KiB was 4.5x that; M2a-2 T10 re-measured 1,984 B per level by trap, 138,000 at the cap, so 576 KiB (the default 64 KiB runs out near level 33:
 # 65,152 bytes in use there). STACK_OVERFLOW_CHECK=2 makes any future overflow a clean trap instead of a write below the stack.
 # STACK_SIZE itself is INTERFACE on lomn_osi (above); only the instrumenting check (tests/tools, not production) is set here.
 set(LOMN_OSI_WASM_STACK -sSTACK_OVERFLOW_CHECK=2)
