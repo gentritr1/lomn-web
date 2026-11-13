@@ -17,7 +17,7 @@ Task 2b sections only (§3, §4, §7). Task 2a writes §1, §2, §5, §6 and §8
 
 - **The viewport list (EXECUTED).** `ScScreen::AddViewPort` and `MoveViewToFront` insert at the sentinel at screen+0x2a3fc. `insert_nodes` 0x4e0f30 inserts before the position, so both calls are a push_back. `RenderLoop` 0x49d550 starts at the head [screen+0x2a404] and follows node+8. The node layout is {data +0, prev +4, next +8}.
 - **The main view is added first (EXECUTED).** `SetUpView` calls the GcViewPort ctor at 0x43a54c, and the ctor calls AddViewPort at 0x447f65.
-- **The HUD view is added second and drawn last (EXECUTED).** The HUD view is an ScViewPort (vtable 0x7037c8) with id 'HdDr' 0x48644472, stored at [0x8390ac]. AddViewPort at 0x43a85a adds it, then MoveViewToFront at 0x43a872 puts it at the end. **The HUD is drawn after the area, every frame.** `gcviewport.moveviewtofront` (FUN_00447920) is not called by Base.osi (natives.json).
+- **The HUD view is added second and drawn last (EXECUTED).** The HUD view is an ScViewPort (vtable 0x7037c8) with id 'HdDr' 0x48644472, stored at [0x8390ac]. AddViewPort at 0x43a85a adds it, then MoveViewToFront at 0x43a872 puts it at the end. **The HUD is drawn after the area, every frame.** The script cannot reorder or add viewports: `gcviewport.moveviewtofront` 0x447920, `gcviewport.moveviewtoback` 0x447960 and `gcviewport.create` 0x447470 are all `called_by_base_osi: false` in natives.json.
 - **DoSetUp order (EXECUTED).** SetUpRenderer 0x436bb9, SetUpCamera 0x436bbe, SetUpDatabase, SetUpView 0x436bc8.
 - **RenderLoop per frame (INFERRED, decomp 0x49d550).** Clear(…, 0xff000000, …), then BeginScene, then each viewport's vfunc+8 (`ScViewPort::Render`) in list order, then EndScene and Swap.
 - **The HUD viewport (EXECUTED).**
@@ -52,24 +52,54 @@ Task 2b sections only (§3, §4, §7). Task 2a writes §1, §2, §5, §6 and §8
 
 ### 3.2 The HUD pass's base states, `SrPushRenderMode` 0x531100 (EXECUTED; all through ScDxStates)
 
-ScDxStates (INFERRED, decomp 0x64b1e0 / 0x64b250) calls GetRenderState into `sRenderStates[s]`. It sets the state only when the value differs, and it keeps the previous value for Restore*.
+**ScDxStates (EXECUTED).**
+- `SetRenderState` 0x64b1e0 re-reads the device on every call (GetRenderState at 0x64b201). It compares that value with the requested one (0x64b217) and calls Set only when they differ (0x64b239). `SetTextureStageState` 0x64b250 does the same per stage.
+- Only `RestoreRenderState` 0x64b340 and `RestoreTextureStageState` 0x64b380 work from cached values. They compare without a device read (0x64b358) and then Set (0x64b36e).
 
-Mode bits are diffed against `gLastRenderMode`. HUD mode 0x8c034 has bits 0x80000, 0x8000, 0x4000, 0x20, 0x10 and 0x4. The main mode 0x10635 has none of the 0x80000 or 0x8000/0x4000 group. So the main → HUD transition sets:
+**The mode push is a diff, so the HUD's states depend on the last mode pushed before it (EXECUTED).** HUD mode 0x8c034 has bits 0x80000, 0x8000, 0x4000, 0x20, 0x10 and 0x4.
 
-- **0x80000 on (main had it off), 0x531128–0x53119a:**
-  - TSS0 ALPHAOP(4) = 2 and ALPHAARG1(5) = 2 (TEXTURE).
-  - ALPHABLENDENABLE(0x1b) = 1, SRCBLEND(0x13) = 5 (SRCALPHA), DESTBLEND(0x14) = 6 (INVSRCALPHA).
-  - ALPHAREF(0x18) = 0, ALPHATESTENABLE(0xf) = 1, ZWRITEENABLE(0xe) = 0.
-  - TSS0 COLOROP(1) = 4 (MODULATE) and COLORARG1(2) = 2 (TEXTURE).
-- **The reverse transition (HUD → main next frame), 0x5311b0–0x5311d5:** ALPHABLENDENABLE = 0, ALPHAREF = 1, ALPHATESTENABLE = 0, ZWRITEENABLE = 1.
-- **ZENABLE(7):** bit 0x10000 is clear.
-  - If `GcGraphicsOptions::CanUseW` (0x531277), bit 0x8000 gives ZENABLE = 0 (0x53129d), so there is no depth test.
-  - Otherwise ZENABLE = 1 (0x531284).
-  - The main mode sets ZENABLE = 2 (W) when CanUseW (0x53126e).
-- **FILLMODE(8) = 3 (SOLID)** from bit 0x4000 (0x5312cd).
-- **LIGHTING(0x89) = 0**, because bit 1 is clear (0x5312e8).
-- **CULLMODE(0x16) = 1 (NONE)**, because bits 0x400 and 0x800 are clear (0x531324).
-- **Fog:** bit 0x200 is clear. If FOGENABLE(0x1c) reads non-zero (a raw GetRenderState at 0x53133a), `GcGraphicsOptions::SetFog(false)` runs (compare at 0x531362, `push 0` at 0x531368).
+What pushes modes:
+- `SrPushRenderMode` 0x531100 has two callers in the whole listing: `ScRenderer::Start` 0x53042a, which pushes the viewport renderer's own mode at the start of each viewport, and `ScRenderer::SetRenderMode` 0x5308f6 (when its second argument is true). Nothing pops or restores a mode.
+- `ScRenderer::SetRenderMode` is virtual (+0x10). Among the 50 functions that read `_sCurrentRenderer` [0x839214], only `GcRenderNodeGroup::Render` 0x516b30 calls +0x10 within the 40 instructions after the read. That census is a floor: it would miss a call made through another register copy.
+- `GcRenderNodeGroup::Render` pushes the group's mode [+0x50] with argument 1 before rendering its children (0x516bcf). The pushed value is:
+  - wireframe: (mode | 0x2000) & ~0x4000 (0x516b4a, push 0x516b5b);
+  - `gUseCaustics` [0x7032a8] set and (mode & 1 or mode & 0x200): mode | 0x40200 (0x516b80, push 0x516b8c);
+  - caustics set otherwise: mode | 0x200 (0x516bae, push 0x516bba). The guard at 0x516ba4 ORs with 0x10030, so it is always non-zero;
+  - else the mode as stored (0x516bca).
+  - `gUseCaustics` is 0 in `.data`. Only `GcLightDirector::SetUnderWaterLighting` writes it: 1 at 0x48e7d7, 0 at 0x48e904.
+
+The group modes, from `GcGame::SetUpDatabase` (`GcRenderNodeGroup::SetRenderMode` 0x516be0 stores +0x50):
+
+| Group | Mode | Address |
+|---|---|---|
+| sMainBackNode | 0x10234 | 0x43a237 |
+| sMainAreaNode | 0x14634 | 0x43a247 (ebx) |
+| sMainNoLightNode | 0x14634 | 0x43a253 (ebx) |
+| sMainNode | the main renderer's mode (`ScRenderer::GetRenderMode` 0x49a9b0 at 0x43a220, so 0x10635) | 0x43a25f |
+| sMainTransNode | 0x10034 | 0x43a26b (edi) |
+| sMainShadowNode | 0x4400 | 0x43a277 |
+
+So at the HUD viewport's `Start`, `gLastRenderMode` = L, the mode of the last group rendered in the main view (any of the above with the OR variants), or 0x10635 if no group rendered. **Which group renders last on lev0/frnt is not read here; it is the open input Task 8 measures.** The diff rules below are what the port must apply against L. Every candidate L above is EXECUTED to lack 0x80000, so with that census the first block always fires.
+
+The diff `SrPushRenderMode` 0x531100 applies for HUD mode 0x8c034 against L (EXECUTED):
+- **0x80000 (HUD has it):**
+  - If L lacks it, which is every candidate above: the alpha block 0x531128–0x53119a runs, all through ScDxStates:
+    - TSS0 ALPHAOP(4) = 2 and ALPHAARG1(5) = 2 (TEXTURE).
+    - ALPHABLENDENABLE(0x1b) = 1, SRCBLEND(0x13) = 5 (SRCALPHA), DESTBLEND(0x14) = 6 (INVSRCALPHA).
+    - ALPHAREF(0x18) = 0, ALPHATESTENABLE(0xf) = 1, ZWRITEENABLE(0xe) = 0.
+    - TSS0 COLOROP(1) = 4 (MODULATE) and COLORARG1(2) = 2 (TEXTURE).
+  - If L has it, the block is skipped and the HUD inherits the device state.
+  - The reverse block 0x5311b0–0x5311d5 (ALPHABLENDENABLE = 0, ALPHAREF = 1, ALPHATESTENABLE = 0, ZWRITEENABLE = 1) runs on the first push after the HUD, for a mode that lacks 0x80000.
+- **0x40000 (HUD lacks it):**
+  - If L has it, which happens only under caustics through `| 0x40200`: TSS1 COLOROP(1) = 1 (DISABLE) at 0x531242 and TSS1 ALPHAOP(4) = 1 at 0x531250.
+  - Otherwise nothing. The "on" block 0x5311f1–0x531221 sets stage 1 for a mode that has the bit: COLORARG1 = 2, COLOROP = 5, COLORARG2 = 1, ALPHAOP = 1.
+- **The rest are set on every push, not diffed:**
+  - **ZENABLE(7):** bit 0x10000 is clear. If `GcGraphicsOptions::CanUseW` (0x531277), bit 0x8000 gives ZENABLE = 0 (0x53129d), so there is no depth test. Otherwise ZENABLE = 1 (0x531284). A mode with 0x10000 sets ZENABLE = 2 (W) when CanUseW (0x53126e).
+  - **FILLMODE(8) = 3 (SOLID)** from bit 0x4000 (0x5312cd).
+  - **LIGHTING(0x89) = mode & 0x1** (mask at 0x5312d6, set at 0x5312e8), which is 0 for the HUD.
+  - **CULLMODE(0x16) = 1 (NONE)**, because bits 0x400 and 0x800 are clear (0x531324).
+  - **Fog:** bit 0x200 is clear. If FOGENABLE(0x1c) reads non-zero (a raw GetRenderState at 0x53133a), `GcGraphicsOptions::SetFog(false)` runs (compare at 0x531362, `push 0` at 0x531368).
+- **The state log** must record these as ScDxStates writes, gated on the device's current value, never as fixed per-pass values.
 
 ### 3.3 The HUD transform
 
@@ -80,19 +110,35 @@ Mode bits are diffed against `gLastRenderMode`. HUD mode 0x8c034 has bits 0x8000
     - top [0x703388] = 0.0 → +0x1c8, bottom = height → +0x1d0 (stores 0x406e2c–0x406e4a).
   - Width and height come from GetResolutionWidth/Height (calls 0x4398e9 / 0x4398da).
   - Near = 0.0 (0x6fe604) and far = 15000.0 (0x6fe600) come through the ScCamera ctor 0x492df0 (+0xfc / +0x100).
-- **BuildOrthoMatrix 0x406f20 (EXECUTED; the double 2.0 at 0x6fe610, the f32 1.0 at 0x6fe628).** Row-vector matrix:
+- **BuildOrthoMatrix 0x406f20 (EXECUTED; the doubles 2.0 at 0x6fe610 for m00 (0x406f46), 0x6fe618 for m11 (0x406f66) and 0x6fe620 for m22 (0x406f86); the f32 1.0 at 0x6fe628).** It is built lazily: `GcOrthoCamera::Render` builds it only while the dirty byte +0x105 is set (0x406ecd). The ScCamera ctor sets that byte to 1 (0x492e41), and BuildOrthoMatrix clears it (0x40700c). l/r/t/b are written only in the ctor, so the matrix is built at the first HUD render and never rebuilt. Row-vector matrix:
   - m00 = 2/W, m11 = 2/(0 − H) = −2/H, m22 = 2/15000;
   - m30 = −1, m31 = +1, m32 = (f+n)/(f−n) = 1, m33 = 1;
   - all other entries 0.
   - Hence **x_ndc = 2x/W − 1, y_ndc = 1 − 2y/H, z_ndc = 1 + z/7500**. HUD space is in pixels, with the origin at the top-left and y pointing down.
 - **Device calls (EXECUTED).** `GcOrthoCamera::Render` 0x406ec0 → `ScRenderer::SetProjectionTransform` 0x530640 → SetTransform(3, PROJECTION), and `SetViewTransform` 0x530560 → SetTransform(2, VIEW). Both go straight to the device [0x73232c], not through ScDxStates.
-- **The view matrix (INFERRED, decomp of BuildViewMatrix 0x406030; constants EXECUTED at 0x6fe2b8 = 1.0).** The view matrix is identity, with −0.0 in m30/m31/m32. The asm stores are not pinned.
+- **The HUD view matrix: identity, with −0.0 translation.**
+  - **The ctor leaves identity at +0x184 (INFERRED, decomp of the GcLookatCamera ctor 0x405d10: `MakeIdentity(+0x184)`).** The ctor also sets the view-dirty byte +0x1c4 = 1 (EXECUTED 0x405e2b), so the first `GcOrthoCamera::Render` runs BuildViewMatrix (test at 0x406edd, call at 0x406ee8). The only other writers of +0x1c4 on a GcLookatCamera are SetCameraPosition (0x405ee7) and SetTargetPosition (0x405f97), plus BuildViewMatrix's clear (0x4065b7). The other writers are GcLegoCamera methods (the area camera), so the HUD view is built exactly once.
+  - **Inputs (ctor arguments EXECUTED from the constants 0x703364/0x703370/0x70337c; the field stores INFERRED from the decomp ctor).** Pos +0x150 = (0,0,0), up +0x168 = (0,1,0), dir +0x174 = target − pos = (0,0,−1500), scale +0x180 = 1.0 ([0x6fe2b8]).
+  - **BuildViewMatrix 0x406030 (true extent to `ret` at 0x4065cc).** The stores (EXECUTED):
+    - right r → +0x184/+0x194/+0x1a4 (0x40641a/0x406425/0x406430);
+    - up u → +0x188/+0x198/+0x1a8 (0x406474/0x40647f/0x40648a);
+    - forward f → +0x18c/+0x19c/+0x1ac (0x4064ce/0x4064d9/0x4064e4);
+    - −dot(pos,r) → +0x1b4 (0x406469); −dot(pos,u) → +0x1b8 (0x4064c3); −dot(pos,f)·[+0x180] → +0x1bc (0x406523);
+    - +0x190/+0x1a0/+0x1b0 = 0.0 (0x6fe31c/20/24) and +0x1c0 = 1.0 (0x6fe328).
+  - **The arithmetic (INFERRED from the decomp formula; operands EXECUTED).**
+    - f = normalize(−dir) = (0,0,1) (fchs 0x4060bf–0x4060cf, then sqrt 0x406100).
+    - r = normalize(up × f) = (1,0,0).
+    - u = normalize(r × dir) = (0,1,0) (sqrt 0x40636d).
+  - **The result.** Rows (1,0,0,0), (0,1,0,0), (0,0,1,0), (−0,−0,−0,1): identity, with −0.0 translation because pos = 0.
+  - The function also negates +0x174 in place (0x40655d–0x406581), which matters only if the matrix is rebuilt, and it never is for the HUD.
+  - This covers the HUD camera only. The area camera belongs to Task 2a.
 - **HUD space does not scale with resolution (EXECUTED).**
-  - The ortho camera is built once, in DoSetUp, from the current resolution.
+  - The ortho camera's l/r/t/b are set once, in its ctor (called from DoSetUp's SetUpCamera), from the current resolution.
   - No HUD sprite or text function calls GetResolutionWidth/Height (0x43ae50 / 0x43ae70): their caller census contains none.
   - `GcBigSprite::SetHudPosition` 0x441860 passes the raw coordinates.
   - So at 1280×720, text placed at x = 400 stays at pixel 400.
 - **The z values (EXECUTED).** Sprite tiles are placed at tz = zDepth − 7500.0 (0x72ef80) in the ctor, which is −7499 for the default zDepth 1.0 (0x72ef60). `GcHudSprite::SetPosition` 0x526fd0 sets tz = 0.0 + [0x72efbc] = −7499.0 and ignores mZDepth. Glyphs use −7499.0 (0x758218). So z_ndc = 1/7500 ≈ 0.000133, at the near plane.
+- **Note for Tasks 8 and 10 (stable knowledge, not read from the exe): pixel centres.** D3D8 rasterisation puts pixel centres on integer coordinates, while WebGPU puts them at +0.5. A port that reuses this ortho matrix unchanged shifts every HUD quad and glyph by half a pixel against the original. Compensate in the projection (−0.5 px in x and y in pixel space), or accept and measure the difference in the pixel comparison.
 
 ### 3.4 The sprite quad (GcBigSprite / GcHudSprite)
 
@@ -106,7 +152,7 @@ Mode bits are diffed against `gLastRenderMode`. HUD mode 0x8c034 has bits 0x8000
   - v2 (−0.5, −0.5, 0) uv (0,1);
   - v3 (0.5, −0.5, 0) uv (1,1).
 - **`ScDrawableTexture::Draw` 0x5569f0 (EXECUTED, device [0x738bc4]).** In order:
-  1. SetStreamSource(0, [0x7380e4], 0x20) and SetVertexShader(0x112).
+  1. SetStreamSource(0, [0x7380e4], 0x20) and SetVertexShader([this+0x94]). That field is 0x112 after a full Load (store at 0x556941). It is still 0 if Load took the early `ret 0x4` at 0x55645f, before that store.
   2. ScDxStates RS 0x99 SOFTWAREVERTEXPROCESSING = 0.
   3. SetIndices([0x7380e8], 0) and SetTexture(stage, [this+0x98]).
   4. If the matrix count is not 0: SetTransform(0x100 WORLD, matrix).
@@ -124,6 +170,26 @@ Mode bits are diffed against `gLastRenderMode`. HUD mode 0x8c034 has bits 0x8000
   - Rows go to +0xd8 and columns to +0xdc. The tile size is ((x2−x1)/cols, (y2−y1)/rows).
   - Tile files are "%d_%d.tga" (0x703dcc), or the plain ".tga" name for a 1×1 sprite.
   - Each tile is a GcHudSprite (0x2a0 bytes). Multi-tile sprites call SetLinear(false) (0x440337); a 1×1 sprite keeps linear = true.
+- **`GcBigSprite::Render` 0x440570 (EXECUTED; true extent to `ret 0x4` at 0x4407e3).** This is the object +0x24 that the HUD ScRenderNode calls.
+  - **Loops.** The outer loop is i over rows [+0xd8] (test 0x4407d0); the inner loop is j over cols [+0xdc] (test 0x4407be). Tile = array[i][j] (pointer-to-row array).
+  - **Which array.** The array is +0xec when byte +0x29 is set (0x440597 branch) and +0xe8 otherwise.
+  - **Before each tile draw, it writes the tile's +0x30 / +0x34.** The decomp names these ScSprite mRepeatS/mRepeatT (ScSprite ctor stores 0x49ef89/0x49ef95). Per +0x29 path:
+    - If byte +0x2d is set:
+      - tile (1,1) gets (+0x20c, +0x210) (0x4405b7/0x4406c6);
+      - tiles (1,0) and (1,2) get (1.0, +0x218); the 1.0 is 0x703c74 on the +0xec path and 0x703c7c on the +0xe8 path;
+      - tiles (0,1) and (2,1) get (+0x214, 1.0); the 1.0 is 0x703c78 / 0x703c80;
+      - corners are untouched.
+    - Then, if byte +0x2e is set: every tile gets (+0x214, +0x218) (0x440661/0x440770).
+    - INFERRED: these are nine-slice repeat factors for the 3×3 mode (+0x2d = loadhudsprite's b6).
+    - A census of `[reg+0x30]`/`[reg+0x34]` reads in every *Sprite*/ScDrawable* function found **no GcHudSprite reader**. The only readers are GcAnimSprite, GcBigSprite's own fields, and ScDrawableMaterial's own fields. So these writes have no observed effect on the HUD draw (INFERRED; the reader census is a pattern grep).
+  - **Draw.** Each tile's vfunc+0x24(node) is called at 0x4406a6 (+0xec path) or 0x4407b5 (+0xe8 path).
+  - **Return value.** eax is never written after the calls, so Render returns the **last tile's** `GcHudSprite::Render` result (rows−1, cols−1).
+  - **Rule for the port and the state log (EXECUTED control flow; consequence INFERRED):**
+    - The deferral of a multi-tile big sprite is decided by its **last tile only**.
+    - At priority 0 every tile runs: a tile with neither transparency nor alpha draws; a tile with either returns 100 and draws nothing.
+    - If the last tile returned 100, the whole big sprite is queued for priority 100 and every tile runs again there: the deferring tiles draw, and the non-deferring tiles **draw a second time**.
+    - If the last tile did not defer, the big sprite is not queued, and any earlier deferring tile never draws that frame.
+    - `enablealphachannel` sets every tile alike (§4.1), so mixed tiles need per-tile flags. The rule is still what the code does.
 
 ### 3.5 Sprite states (GcHudSprite::Render 0x527210, EXECUTED; ScDxStates unless noted)
 
@@ -177,6 +243,11 @@ Defaults (INFERRED, decomp of the ScSprite ctor 0x49ef40):
   - The font scale [+0xcc] = diag(w, h, 1.0 [0x75820c], 1). The multiply is R·S (A = rotate [+0x14c], B = scale, at 0x628630).
   - The font's rotate is RotX(+π_f32) [0x7581c8] (ctor call 0x627b1f), so s = −8.742278e−08.
   - World = [[w,0,0,0],[0,−h,−8.74e−8,0],[0,8.74e−8·h,−1,0],[x+w/2, y−h/2, −7499.0, 1]].
+  - **The glyph's screen box (EXECUTED: translation 0x628650–0x62868c with 0.5 at 0x758210/0x758214, w at [ebp−0x144] from 0x62841c, h at [ebp−0x13c] from 0x628444; baseline add at 0x627e0e–0x627e1a stored back into the y argument [ebp+0xc]).**
+    - R·S has row 3 = (0,0,0,1), and row 3 += (x + 0.5w, y − 0.5h, −7499).
+    - Quad vertex v0 (−0.5, 0.5) (uv 0,0) lands at (x, y − h). v2 (−0.5, −0.5) (uv 0,1) lands at (x, y). v1 lands at (x + w, y − h) and v3 at (x + w, y).
+    - Here y = the caller's pen y + baseline·yScale, so **that y is the glyph's bottom edge** and the glyph spans [y − h, y] in screen pixels. x is the pen x after the xOffset step.
+    - Hand check, with w = 10, h = 20, x = 100, y = 50: row 3 = (105, 40). v0: x' = −0.5·10 + 105 = 100 and y' = 0.5·(−20) + 40 = 30 = y − h. v2: y' = −0.5·(−20) + 40 = 50 = y. v1/v3: x' = 0.5·10 + 105 = 110.
   - Draw: [font+0x18c][i] vfunc+0x14(ctx [0x83aa90], &m, 1, 0.0 [0x75821c], 0). Those objects come from the single `ScDrawableMaterial::Create` (0x627a02) stored at 0x6273f6, so this is the §3.4 quad path, FVF 0x112 (INFERRED from that census).
 - **Advance:**
   - A glyph: x += ((u32)(xOffset + width) + kerning [+0x34]) · xScale.
@@ -189,13 +260,25 @@ Defaults (INFERRED, decomp of the ScSprite ctor 0x49ef40):
   - MIN and MAG, both to the saved MINFILTER value.
   - If transparency or alpha: ALPHABLENDENABLE = 0. If alpha && [+0xc8] == 1, also ALPHATESTENABLE = 0 and ALPHAREF = 1. Then ZWRITEENABLE = 1.
   - Return −1.
-- **Restores bypass ScDxStates.** Draw restores with raw device calls, so ScDxStates' cached `sRenderStates` can go stale after text draws (INFERRED consequence; the port's state log must model both writers).
+- **Draw bypasses ScDxStates (EXECUTED).** Its sets and restores are raw device calls.
+  - ScDxStates' `Set*` re-reads the device on every call (§3.2), so a later `Set*` sees the true value.
+  - Only `RestoreRenderState` 0x64b340 / `RestoreTextureStageState` 0x64b380 compare cached values without a read. A Restore issued after a text draw changed the same state can therefore skip a needed write (INFERRED consequence).
+  - The port's state log must model both writers.
 
 ### 3.7 Lines and rectangles: FVF 0x42 (EXECUTED)
 
 - **`ScRenderer::DrawTriangles` 0x531380 is not on the HUD path.** Its only callers are `GcSurfaceOctree::RenderOctNode` (0x464b99, 0x464d90).
 - **`ScRenderer::DrawLine` 0x530920** is called by `GcLine::Render` 0x40509e, by `ScCamera::Render` (12 sites, 0x492feb–0x49334f), by `GcToa::Render` 0x56acb9 and by `GcMotionSystem::RenderMotion` (0x58a72a, 0x58a7b3).
-- **`GcRectangle::Render` 0x402350 calls `ScRenderer::DrawLines` 0x530d50 (0x402601).** That path is on the HUD: `gcrectangle.*`, `gcfilledrectangle.*` and `gchuddirector.addline/addrectangle/addfilledrectangle` are all `called_by_base_osi: true` in natives.json. Whether the M1/M2 front-end screens actually reach them was **not established** here (no runtime trace).
+- **`GcRectangle::Render` 0x402350 calls `ScRenderer::DrawLines` 0x530d50 (0x402601).** That path is on the HUD: `gcrectangle.*`, `gcfilledrectangle.*` and `gchuddirector.addline/addrectangle/addfilledrectangle` are all `called_by_base_osi: true` in natives.json. **Static answer: not reached, not from the menu, not from Options, not from anywhere (EXECUTED; `tools/research/osi.py` parse/disasm plus the `tools/osi/reach.py` `Walk` closure over Base.osi, scratch scripts `rect_reach.py`/`sf.py`).**
+  - `osi.py --plain-calls` over all 17 natives (4 gcrectangle, 6 gcfilledrectangle, 4 gcline and the three `gchuddirector.add*`) finds call sites only in:
+    - `ss_baseline.*` (addline at file offset 401491),
+    - `ss_baserect.*` (addrectangle 402335; gcrectangle.create 402237),
+    - `ss_basefilledrect.*` (addfilledrectangle 416863; gcfilledrectangle.create 416786),
+    - `ss_gradrect.*` (gcfilledrectangle.create 417426).
+  - Only five classes own those method bodies: those four and `ss_shoefittersoundmarkerclass`. No 0x13 CreateObject constructs the four base classes anywhere.
+  - The marker class is constructed only in `ss_shoefitterbottombar.addsound` and `ss_shoefittercharacterwindow.createsaveablesounds`. Those are constructed only in `setupshoefitterscreen()`, whose offset (144463) no 0x40/0x41/0x42 immediate pushes.
+  - Every one of these subroutines is **unreachable** from the engine roots setup/process/input/onevent under the reach.py rule, **including the wild closure**. The main menu and Options screens are inside that closure, so they do not reach these natives.
+  - Caveat (reach.py's own): objects deserialised by `ScSLOSIFileIO::GetVariantFromBuffer` 0x6160a0 are invisible to the walk.
 - **DrawLine and DrawLines** both:
   1. Set TSS0 COLOROP = 2 (SELECTARG1) and COLORARG1 = 0 (DIFFUSE) through ScDxStates (0x5309a4/0x5309b2; 0x530dd1/0x530ddf).
   2. **Create a vertex buffer on every call:** CreateVertexBuffer(n, usage 8, **FVF 0x42** XYZ|DIFFUSE, pool 1), stride 0x10.
@@ -212,6 +295,7 @@ Defaults (INFERRED, decomp of the ScSprite ctor 0x49ef40):
   - World = (+0x68)·(+0xa8) (multiply at 0x524062), with row 3 += (+0x118, +0x11c, +0x120).
   - Then SetStreamSource(0, vb, 0x10), SetVertexShader(0x42), SetTransform(WORLD), **DrawPrimitive(6 TRIANGLEFAN, 0, 2)** (0x524266).
   - Release; RestoreTSS 4/5 (if +0x54) and RestoreTSS 1; SetStreamSource(0, 0, 0).
+  - **It returns −1 unconditionally** (`mov eax, 0xffffffff` at 0x5242ba), so a filled rectangle never defers to priority 100, even with alpha enabled.
 - **DrawBox 0x6288f0 is not a rectangle.** It is `ScTileFont::DrawBox`, the box-fit text path, called only from ScTextObject::Render (0x610fff).
 
 ## §4 Render-visible native state
@@ -304,6 +388,9 @@ The names come from the decomp. The catch tables come from `tools/osi/exc.py --f
    - Load probes `SrBlockFileExists` (0x55627a, 0x556310) for the name and for each known extension.
    - The call census of Load to its true end, 0x556961, contains **no SrThrow, ___throw or ScFileManager::Open**.
    - With no match, mTextureType stays 0 and no texture is created (decomp). Load returns normally, and the sprite later binds a null texture (SetTexture(stage, null)).
+   - **What a missing .tga draws (INFERRED, not run).** The quad still draws with the §3.2 HUD states: TSS0 COLOROP = MODULATE (4), COLORARG1 = TEXTURE, plus the sprite's COLORARG2 / TFACTOR and alpha states (§3.5), all against stage 0 holding no texture.
+     - Fixed-function D3D8 treats a stage with no texture in a driver-defined way. The usual results are opaque white for the TEXTURE argument, giving a diffuse- or TFACTOR-coloured rectangle, or black.
+     - Neither result was verified here. Task 8's capture should include one missing-tile case to pin it.
    - The GcHudSprite ctor call sites (0x4402f4, 0x4403a4) have only a `delete` record, with no catch.
 4. **The native and the VM (EXECUTED).** The native body 0x43dad0 has a short `.exc` record with **0 catches**. So:
    - A missing ReadMe.bin or a missing .tga **does not** error: the native returns the GcBigSprite variant as usual.
@@ -322,8 +409,8 @@ The names come from the decomp. The catch tables come from `tools/osi/exc.py --f
 ### 7.3 Gaps (not read in this task)
 
 - PlatformViewSet / SetViewport values (§3.1).
-- The BuildViewMatrix asm stores (§3.3).
 - DrawJust's flags (§4.3).
 - The ScTileFont ctor defaults (§4.4).
 - The id that a missing .col raises through ScCollectiveFile::Open 0x4cf150 (§7.1).
-- Whether the front-end screens reach GcRectangle/GcFilledRectangle at runtime (§3.7).
+- Which area node group renders last on lev0/frnt, and so the mode the HUD diffs against (§3.2). This is the open input for Task 8.
+- What a null texture renders as on the reference driver (§7.1).
