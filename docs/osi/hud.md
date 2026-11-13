@@ -616,6 +616,15 @@ The ctor defaults for +0xb0, +0xb1, +0xb2, +0xc8 and the colour were **not read*
   - The readers are GcModelDirector::GetNearest (0x47d90c), and GcCinemaEngine::Play (0x593d2f, which saves it and writes 0xa at 0x593d41) and Stop (0x5941c1, which restores it).
   - It has no HUD effect.
 
+### §4.9 ScTileFont::GetStrHeight 0x628bf0: a character with no record (ruling 2026-11-14, M2a-3 T7 pair)
+
+- **Caller:** the only call is at 0x62892d inside 0x6288f0, whose only call is at 0x610fff (the HUD text draw). EXECUTED: an objdump call census of the whole `.text`.
+- **Lookup:** a linear 16-bit compare over `[this+0x58]` (0x628d10), stride 0x24·8 = 0x120, count `[this+0x38]`. A miss leaves index -1 (0x628d31). Every later read then takes `[[this+0x58] - 0x110]` as y_offset (0x628d45 / 0x628d72 / 0x628daa). That is heap memory before the record array: **unpredictable**.
+- **Effect:** GetHeight 0x628a50 gives 0 for ' ', so `above` cannot grow. `below` grows to base - yo only if the stray dword is ≤ base. The fonts have no space record, so every space takes this path.
+- **Ruling (INFERRED, both engines):** a code with no record contributes nothing (it is skipped), so "Play Game" gets a height. This is a shared divergence only when the stray dword is ≤ baseline.
+- **Result:** truncated (x87 RC chop 0x628ccd, `fistp qword`, low dword), not rounded.
+- `'\n'` returns early (0x628cc0), and 0xFF skips itself plus the next character (0x628c6c).
+
 ## §5 Input tuples (EXECUTED unless marked)
 
 ### §5.1 Mouse: `GcMouseDriver::Process` 0x55c160
