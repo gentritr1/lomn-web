@@ -43,7 +43,7 @@ int main(int argc, char** argv) {
     return 3;
   }
   std::sort(names.begin(), names.end());
-  std::printf("# lomn_font_table v1: font NAME dir= glyphs= rows= cols= cw= ch= kern= base= space= maxw= minw= tga=WxH | glyph NAME IDX ASCII(4 hex) W H XOFF YOFF | str NAME 'TEXT' len= height=(N|na); fonts in ASCII order\n");
+  std::printf("# lomn_font_table v1: font NAME dir= glyphs= rows= cols= cw= ch= kern= base= space= maxw= minw= tga=WxH | glyph NAME IDX ASCII(4 hex) W H XOFF YOFF | str NAME 'TEXT' len= height=N; fonts in ASCII order\n");
   for (const std::string& name : names) {
     LoadedFont lf;
     std::string err;

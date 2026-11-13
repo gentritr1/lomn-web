@@ -457,6 +457,18 @@ TEST_CASE("colfont width: negative sums use the original's UNSIGNED conversions 
 }
 
 // =========================================================================================== heights (synthetic)
+// The asm gates are unsigned (0x628d76 jb, 0x628dae jbe): baseline 4 against yOffset -2 (0xfffffffe) is baseline < yOffset,
+// so below stays 0 and above = h = 3. A signed compare would give below = 6 and height 9.
+TEST_CASE("colfont height: GetStrHeight compares baseline and a negative yOffset unsigned") {
+  TileFont f;
+  const Bytes b = make_fnt(1, 1, 8, 10, 1, 4, 4, {{'A', 6, 3, 0, -2}});
+  std::string err;
+  REQUIRE_MESSAGE(f.parse(b.data(), b.size(), &err), err);
+  int v = -999;
+  CHECK(f.get_str_height("A", 1.0f, &v));
+  CHECK(v == 3);
+}
+
 TEST_CASE("colfont height: GetStrHeight (below = max baseline - yOffset, above = height - d or height)") {
   const TileFont f = synth_font();
   auto h = [&](const std::string& s, float ys, bool* ok = nullptr, float* above = nullptr) {
@@ -488,7 +500,6 @@ TEST_CASE("colfont height: GetStrHeight (below = max baseline - yOffset, above =
   // 0xFF skips the next character
   CHECK(h(std::string("A\xff") + "z", 1.0f, &ok) == 8);
   CHECK(ok);
-  // no record: false, *height untouched (a space included: the original reads the record before the table)
   // hud.md §4.9 (INFERRED): a code with no record, a space included, is skipped; the other glyphs' height is unchanged
   CHECK(h("A g", 1.0f, &ok, &above) == h("Ag", 1.0f));
   CHECK(ok);

@@ -33,7 +33,7 @@ constexpr uint64_t kMaxColFileSize = 64u << 20;   // same as kMaxEntrySize
 constexpr uint64_t kMaxColEntrySize = 64u << 20;  // a decoded entry
 constexpr uint32_t kMaxFontGlyphs = 1024;
 constexpr int32_t kMaxFontTile = 128;       // charWidth / charHeight
-constexpr int32_t kMaxFntValue = 1 << 16;   // |every other i32|, so no sum over a string can leave a float's exact range
+constexpr int32_t kMaxFntValue = 1 << 16;   // |every other i32|; a string's sums can leave float's exact range (u32 widths), chop_low32 guards the conversion
 
 // SrHashString 0x4f6af0.
 uint32_t col_hash(std::string_view name);
