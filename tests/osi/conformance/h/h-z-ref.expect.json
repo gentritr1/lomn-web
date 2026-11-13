@@ -1,0 +1,100 @@
+{
+  "id": "h-z-ref",
+  "rows": [
+    "0x82",
+    "0x35",
+    "0x30",
+    "0x22"
+  ],
+  "falsifier": "Z ref prints each live handle's ENGINE references (minting G plus every H since; natives.md 3.1) at the END of the frame (hud.md 9), also for a handle no script variant holds",
+  "alternative": "H ignored: handle 1 freed when the script drops it (no Z ref line, live.g 1) and handle 2 at 2; total references: 1 and 4; snapshot before Process: handle 2 at 1",
+  "pending": "T4a/T4b",
+  "entry": "main",
+  "args": [],
+  "frames": 1,
+  "natives": [
+    {
+      "cls": "t",
+      "name": "make",
+      "min": 0,
+      "max": 0,
+      "types": [],
+      "returns": {
+        "game": "GcTimer"
+      }
+    },
+    {
+      "cls": "t",
+      "name": "held2",
+      "min": 0,
+      "max": 0,
+      "types": [],
+      "returns": {
+        "game": "GcTimer",
+        "engine_refs": 2
+      }
+    },
+    {
+      "cls": "t",
+      "name": "hold",
+      "min": 1,
+      "max": 1,
+      "types": [
+        "type:GcTimer"
+      ],
+      "refs": [
+        {
+          "arg": 0,
+          "delta": 1
+        }
+      ]
+    },
+    {
+      "cls": "t",
+      "name": "drop",
+      "min": 1,
+      "max": 1,
+      "types": [
+        "type:GcTimer"
+      ],
+      "refs": [
+        {
+          "arg": 0,
+          "delta": -1
+        }
+      ]
+    }
+  ],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 1
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24,
+    "heap": {
+      "live": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 2
+      },
+      "allocs": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 2
+      }
+    },
+    "z": {
+      "0": [
+        "Z ref 0027:00000001 1",
+        "Z ref 0027:00000002 3"
+      ]
+    }
+  },
+  "note": "Hand-derived (D13 counting, natives.md 2-3; rule 23). Setup: t.make mints handle 1 (GcTimer 0x27) engine 0, total 1; Dup 2; t.hold: H +1 -> engine 1, total 3; its pop disposes the argument: 2; Pop (nothing); Pop: 1 (engine only, still live). t.held2 mints handle 2 with engine 2, total 3; Dup 4; t.drop: H -1 -> engine 1, total 3; pop 2; Pop (nothing); SetVariableValue moves the variant into s: total 2. Frame 0 Process: twice GetVariableValue s (+1), t.hold (H +1), pop (-1): engine 1 -> 3, total 4. Z at the end of frame 0, sorted: handle 1 engine 1, handle 2 engine 3 (expect_calc.arith: 2 - 1 + 2 = 3). Both live: heap live.g 2, allocs.g 2. Process returns 1, no re-run; ints only, fpu_pc 24."
+}

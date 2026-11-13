@@ -1,0 +1,62 @@
+{
+  "id": "h-z-hud",
+  "rows": [
+    "0x82"
+  ],
+  "falsifier": "the tier-1 ScTextObject setters store raw f32 positions/scales and the LOW 16 bits of setjustification's int (hud.md 4.3, a word store at +0x2a), and Z prints never-written fields as '-' (hud.md 9.2)",
+  "alternative": "the whole int stored: just 00010002; unwritten fields printed as zeros: Z text.font ... 0000:00000000 and Z text.juston ... 00",
+  "pending": "T4a/T4b/T6a/T6b",
+  "entry": "main",
+  "args": [],
+  "frames": 1,
+  "natives_impl": "tier1",
+  "natives": [
+    {
+      "cls": "t",
+      "name": "text",
+      "min": 0,
+      "max": 0,
+      "types": [],
+      "returns": {
+        "game": "ScTextObject"
+      }
+    }
+  ],
+  "registry": "natives.json",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 1
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24,
+    "heap": {
+      "live": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 1
+      },
+      "allocs": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 1
+      }
+    },
+    "z": {
+      "0": [
+        "Z ref 002e:00000001 0",
+        "Z text.font 002e:00000001 -",
+        "Z text.just 002e:00000001 0002",
+        "Z text.juston 002e:00000001 -",
+        "Z text.pos 002e:00000001 43c80000 43a00000 00000000",
+        "Z text.scale 002e:00000001 3fc00000 40000000",
+        "Z text.string 002e:00000001 -"
+      ]
+    }
+  },
+  "note": "Hand-derived (hud.md 4.3 stores, 9.2 grammar; the worked example of hud.md 9.3). t.text mints handle 1, ScTextObject 0x2e, engine 0, kept in global o (total 1, engine 0 -> Z ref ... 0). Frame 0: setposition(o, 400.0, 320.0, 0.0) -> +0x13c/+0x140/+0x144 raw f32 (expect_calc Flt: 43c80000 43a00000 00000000); setscale(o, 1.5, 2.0) -> 3fc00000 40000000; setjustification(o, 0x10002) -> word 0x10002 & 0xffff = 0002. font, juston and string were never written: '-'. Lines sorted bytewise ('just ' < 'juston', ' ' 0x20 < 'o'). The float arguments are 0x12 already (no conversion), the int argument 0x10: fpu_pc 24. Each setter returns nothing; heap live.g 1, allocs.g 1. Needs Task 6's tier-1 setters and HUD model as well as Task 4's frame runner."
+}

@@ -116,6 +116,46 @@ each key added by Task 2b (`pc_after`, `then`, `swallowed`, `expect.top`, `retur
 `calls.depth`, `swallow`), corrupted once in a copy of a program that uses it, must make that program fail on both
 runners.
 
+### Host-event fields (M2a-3 Task 3; runners implement them in Tasks 4a/4b)
+
+These fields serve corpus group `h` (`tests/osi/conformance/h/`): a program that runs **frames** with declared host
+events, not one engine call. The real camera and mouse models are not used (Task 4 tests those with the synthetic spline
+of the plan's Review focus 1). The rules are §6 rule 23.
+
+**Program keys:**
+- `frames`: an int ≥ 1. After the `entry` call (it stands for `Setup`), the runner runs frames 0 … `frames` − 1.
+- `host_events`: a list of `{"frame", "position", "name", "args"}`.
+  - `frame`: 0 … `frames` − 1.
+  - `position`: the host process that makes the call, one of `"vk"` (priority 0, the VK triggers, hud.md §5.3),
+    `"keymapper"` (priority 1, hud.md §5.2), `"mouse"` (priority 1, after the key mapper, hud.md §5.1) and `"camera"`
+    (priority 3, after `Process`, hud.md §1.3). The list order does **not** decide the order in the frame (rule 23).
+  - `name`: the query name passed to `Call` (`"Input"`, `"OnEvent"`).
+  - `args`: at most 10 values; the missing ones are nothing `{0x0f, 0}`. Each is a variant (`type` + `value`/`bits`),
+    `{"text": …}` / `{"hex": …}` (a fresh dynamic string, as rule 2 of §6), or a host game object
+    `{"game": "<Class>", "object": "<name>", "engine_refs": k}` with the identity rules of `returns.object` (§1,
+    "Native-framework fields").
+- `mouse`: a MOUSESPEC (hud.md §11). The runner expands it with the `tools/osi/keys.py` `expand_mouse` semantics into
+  `"mouse"` events, before the declared `"mouse"` events of the same frame. Absent or empty: no mouse source.
+- `natives_impl`: `"stubs"` (the default when absent) or `"tier1"`. With `"tier1"`, a registry native (`"registry":
+  "natives.json"`) whose merged tier is `tier1` runs its engine body, as in the A9 run; every other registry row runs its
+  typed stub. With `"registry": "natives.json"`, the program's test natives are added to the registry; a test native's
+  `cls.name` must not equal a registry key.
+- `natives[*].refs`: a list of `{"arg": i, "delta": ±1}`. Before the test native returns, the engine references of its
+  game argument `i` change by `delta`, in list order, one `H` event each (natives.md §3.1 rule r-m1). It mirrors
+  `gchuddirector.addbigsprite`'s +1 on its argument (natives.md §2.4). A change that takes the total to 0 frees the
+  object (`F g`).
+
+**Expectations:**
+- `expect.z`: `{"<frame>": [<line>, …]}`. Each list is the frame's whole `Z` block after its `Z %6d` header (hud.md §9),
+  exact lines in their sorted order. Frames not named are not compared.
+- With `frames`, `expect.ok` and `expect.result` describe the `entry` call; `depth`, `context_depth`, `fpu_pc`,
+  `globals`, `top` and `heap` are read after the last frame. A group-`h` program raises no error: `expect_error` with
+  `frames` is not defined, and any error in any call fails the program.
+
+**Pending:** every group-`h` program carries `"pending": "T4a/T4b"` (both runners), and `h-z-hud` also needs the HUD
+model and the `tier1` HUD setters of Task 6: `"pending": "T4a/T4b/T6a/T6b"`. The key is removed when the program passes
+on both runners (§6 rule 21).
+
 ### Coverage metadata (read by `tools/osi/conformance_report.py`, which reads nothing else)
 
 | field | meaning |
@@ -371,7 +411,9 @@ Both runners (`lomn_osi_conform`, `osi_vm.py --conform`) implement these. They c
 22. **Fail-closed expectation keys** (2026-10-09, M2a-2). A runner must not let a program pass on a field nobody compares.
     - Each runner keeps an explicit list of the key paths it compares and a list of descriptive keys it ignores. A key
       path is the chain of object keys from the top of the `.expect.json`, with `[*]` after a key whose value is an array
-      of objects and `*` for the name of a global under `expect.globals` / `expect_error.globals`. Scalars inside an
+      of objects, `*` for the name of a global under `expect.globals` / `expect_error.globals`, and `*` for the frame
+      number under `expect.z` (so `expect.z.0` is the path `expect.z.*`; osi_vm's `_key_paths` yields `expect.z.0` today, so Task 4a
+      folds frame keys to `*` in both runners). Scalars inside an
       array add no path (`natives[*].types` is one path).
     - A NON-pending program with a key path in neither list FAILS, before it runs and with no trace:
       `FAIL <path>: uncompared key <key path>` (the oracle prints it among the reasons of its `FAIL` line). A pending
@@ -388,6 +430,38 @@ Both runners (`lomn_osi_conform`, `osi_vm.py --conform`) implement these. They c
       `natives[*].writes[*].arg`, `natives[*].returns.arg`; `expect.{ok,depth}`; `expect_error.{message,pc,op,depth}`;
       and, under both `expect` and `expect_error`, `context_depth`, `fpu_pc`, `globals`, `heap.{live,allocs}.{o,a,s,g}`.
       (`natives[*].calls` is one object, not an array.)
+    - **Added for group `h` (M2a-3 Task 3; compared once Tasks 4a/4b land, until then only pending programs use them):**
+      `frames`, `mouse`, `natives_impl`; `host_events`, `host_events[*].{frame,position,name,args}`, and under
+      `host_events[*].args[*]` the value forms `text`, `hex`, `game`, `type`, `value`, `bits` plus `object` and
+      `engine_refs`; `natives[*].refs`, `natives[*].refs[*].{arg,delta}`; `expect.z`, `expect.z.*` (`*` = the frame key).
     - Before this amendment the C++ runner did not compare `expect_error.{context_depth,globals,heap}` (the oracle did;
       one corpus program, `b/b-eng-reenter-depth`, uses `expect_error.context_depth`) and it checked `expect.found` (the
       oracle did not). Both now compare the same set; `found` is gone.
+23. **Frames and host events (M2a-3, group `h`).** A program with `frames` runs:
+    - the `entry` call, as today (the `Setup` stand-in);
+    - then, for each frame f = 0 … `frames` − 1, in this order (hud.md §2.4, the process-map walk; trace.md §6
+      "Version 3"):
+      1. the `K` record (trace and natives.log), with the A6 host's time, dt and counter for frame f;
+      2. the `"vk"` events of frame f, in list order;
+      3. the `"keymapper"` events of frame f, in list order;
+      4. the `"mouse"` events of frame f: the `mouse` MOUSESPEC's calls for f first, then the declared ones in list order;
+      5. `Process(float time, float dt, int f)` with the values of step 1, re-run up to 10 more times while it returns
+         false, as the A6 host does (spec §3.1);
+      6. the `"camera"` events of frame f, in list order;
+      7. the frame's `Z` block (hud.md §9).
+    - Each host event is one engine call (`Call`): the host disposes its result, and its arguments go through
+      `SetPCAndArgs` (the declared argc is pushed, the rest disposed). A `{"game": …}` argument is passed through
+      `CreateVariant` (+1, minted on its first pass, as `returns.object`); that reference moves onto the stack with the
+      argument (trace.md §6 "Version 3", the camera's game argument), so it writes no `H`.
+    - A runner that writes natives.log writes `C -1` for the `"mouse"` and `"camera"` events and nothing for `"vk"` and
+      `"keymapper"` (trace.md §6).
+    - With `"natives_impl": "tier1"`, a game object of type `ScTextObject`, `GcBigSprite` or `ScTileFont` that a test
+      native mints is known to the HUD model with every field `-` (hud.md §9.2), so the `tier1` setters can act on it.
+    - An unknown `position` fails the program before it runs (`FAIL <path>: bad position <p>`), like an unknown key.
+    - Three more edge cases fail the program (controller ruling, Task 3 fix 1):
+      - a `natives_impl` other than `"stubs"` or `"tier1"`, before it runs: `FAIL <path>: bad natives_impl <v>`;
+      - a `refs[*].arg` whose argument is not a game object when the native runs (a non-game value, or no such
+        argument): the call errors, and a group-`h` program raises no error (§1 "Expectations"):
+        `FAIL <path>: refs arg <i> is not a game object`;
+      - `then` together with `frames`, before it runs: `then` is not defined with frames (`FAIL <path>: then with
+        frames`), as `expect_error` is not.

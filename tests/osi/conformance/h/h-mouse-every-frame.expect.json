@@ -1,0 +1,69 @@
+{
+  "id": "h-mouse-every-frame",
+  "rows": [
+    "0x53",
+    "0x60",
+    "0x70",
+    "0x72"
+  ],
+  "falsifier": "a MOUSESPEC sends OnEvent(26, x, y) on EVERY frame from frame 0 (cursor (0,0) before the first position token), then per button 23 on the first frame down, 24 on each later frame down, 25 on the first frame up, all after the frame's 26 (hud.md 5.1, 11)",
+  "alternative": "26 only from the first position token: n 5; 26 only when the position changes: n 3; no held event: log 2325, bs 11, ys 700; buttons before 26: ys 1030",
+  "pending": "T4a/T4b",
+  "entry": "main",
+  "args": [],
+  "frames": 6,
+  "mouse": "450,330@1 lmb+@2 450,370@3 lmb-@4",
+  "natives": [],
+  "registry": "none",
+  "expect": {
+    "ok": true,
+    "result": {
+      "type": "0x10",
+      "value": 1
+    },
+    "depth": 0,
+    "context_depth": 0,
+    "fpu_pc": 24,
+    "globals": {
+      "n": {
+        "type": "0x10",
+        "value": 6
+      },
+      "xs": {
+        "type": "0x10",
+        "value": 2250
+      },
+      "my": {
+        "type": "0x10",
+        "value": 370
+      },
+      "ys": {
+        "type": "0x10",
+        "value": 1070
+      },
+      "log": {
+        "type": "0x10",
+        "value": 232425
+      },
+      "bs": {
+        "type": "0x10",
+        "value": 111
+      }
+    },
+    "heap": {
+      "live": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      },
+      "allocs": {
+        "o": 0,
+        "a": 0,
+        "s": 0,
+        "g": 0
+      }
+    }
+  },
+  "note": "Hand-derived from hud.md 11 (not from keys.py's output, which was compared afterwards and agrees). Calls per frame: f0 26(0,0); f1 26(450,330); f2 26(450,330), 23(1); f3 26(450,370), 24(1); f4 26(450,370), 25(1); f5 26(450,370). onevent: a0 == 26 -> n += 1, xs += x, my = y; else log = log*100 + a0, bs = bs*10 + a1, ys += my. n = 6; xs = 0 + 5*450 = 2250; my = 370; log = (23*100 + 24)*100 + 25 = 232425; bs = 111; ys = 330 + 370 + 370 = 1070 (f3's 24 sees my = 370 only because 26 runs first). Int arithmetic (expect_calc.arith, pc 24): no float, fpu_pc 24. Every call's arguments are ints, disposed by Return: heap 0."
+}

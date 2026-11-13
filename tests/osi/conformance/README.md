@@ -44,6 +44,25 @@ keys is new: `pc_after`, `then`, `swallowed`, `expect.top`, `returns.object`, `r
 | `n-name-256` | active | the strlen name read of a 0x11 literal with the 255 bound (kOutOfRange; a hostile file's non-NUL terminator), `pc_after`, `then` |
 | `n-name-255` | active | `pc_after`, `then` (the boundary control for `n-name-256`, same 0x11 path) |
 
+## Group `h/` (M2a-3 Task 3): frames and host events
+
+The fields are in `docs/osi/conformance.md` §1 ("Host-event fields") and §6 rule 23: `frames`, `host_events`, `mouse`
+(a MOUSESPEC, `docs/osi/hud.md` §11), `natives_impl`, `natives[*].refs` and `expect.z` (the `Z` block, hud.md §9).
+Every expectation was derived by hand from hud.md §2/§5/§9/§11 and natives.md §2–§3 with `tools/osi/expect_calc.py`,
+and each `note` shows the derivation. Neither engine was run. The programs use declared host events, not the real camera
+or mouse models (Task 4 tests those).
+
+**Pending.** All four need the frame runner of Tasks 4a (C++) and 4b (oracle): `"pending": "T4a/T4b"`. `h-z-hud` also
+needs Task 6's HUD model and `tier1` text-object setters: `"pending": "T4a/T4b/T6a/T6b"`. Each task removes the key once
+the program passes on both runners.
+
+| program | status | needs |
+|---|---|---|
+| `h-cminus1-order` | pending | `frames`, `host_events` (all four positions, a host game argument), `expect.z` |
+| `h-mouse-every-frame` | pending | `frames`, `mouse` |
+| `h-z-ref` | pending | `frames`, `natives[*].refs`, `expect.z` |
+| `h-z-hud` | pending | `frames`, `natives_impl`, `expect.z`; Task 6's HUD model |
+
 ## Authoring rules (copied from docs/osi/conformance.md §2; that file wins if they ever differ)
 
 1. The author reads **only** `docs/osi/opcodes.md`, `docs/osi/types.md`, this file, `docs/osi/trace.md`,
