@@ -1006,3 +1006,11 @@ m2:
     vm.trace = vm.heap.trace = tr
     assert vm.call("main2", []).ok
     assert tr.lines[1] == "I %08x 45    1    1 00ff:00000000" % info["labels"]["m2"]
+
+
+def test_run_cli_rc4_on_a_vm_error(tmp_path, capsys):                # Decision 11: --run exits 4 on a VM error
+    """Setup pops an empty stack (Stack underflow), so run_base stops with an error and the CLI must return 4."""
+    p = tmp_path / "s.osi"
+    p.write_bytes(osiasm.assemble(".function Setup 0\n    Pop\n    Return\n")[0])
+    assert osi_vm.main(["--run", str(p), "--frames", "1"]) == 4
+    assert "stop: error \"Stack underflow\" in Setup" in capsys.readouterr().out

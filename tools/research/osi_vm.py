@@ -3080,6 +3080,8 @@ def run_base(a) -> int:
     print("engine-call nesting: max %d (cap %d)" % (vm.max_nesting, MAX_ENGINE_NESTING))
     print("stop: %s" % stop)
     print("script sha256 unchanged: %s" % (hashlib.sha256(vm.image).hexdigest() == hashlib.sha256(script).hexdigest()))
+    if stop.startswith("error"):          # Decision 11: a VM error ends the run with rc 4 (as the C++ CLIs)
+        return 4
     return 1 if stop.startswith("replay desync") else 0
 
 
