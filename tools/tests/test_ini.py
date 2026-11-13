@@ -6,7 +6,8 @@ a missing section, comment lines) with every expectation written by hand from th
 
 Fixed output format, one line per case, for `diff` against the C++ side (run `python tools/tests/test_ini.py`):
     INI <id> <fn> sec=<section> key=<key> def=<default hex> size=<n> -> len=<n> hex=<value hex>
-(`fn` is `str` for the string form and `int` for the Int form; the Int form prints `size=0`, `len=4` and the u32 as 8 hex digits
+LOADINI <id> rebuilt=<0|1> n=<entries> Windowed=<u32 hex> ResolutionH=<u32 hex> Urinate=<hex of value, "-" = 2d if lost> Fog=<u32 hex> Language=<u32 hex>
+(the LOADINI lines come after the INI lines; `fn` is `str` for the string form and `int` for the Int form; the Int form prints `size=0`, `len=4` and the u32 as 8 hex digits
 big-endian.)
 """
 import sys
@@ -54,7 +55,11 @@ CRAFTED = b"\r\n".join([
     b"Word=abc",
     b"Big=4294967297",
     b"Quoted=\"42\"",
+    b"Plus=+1",
+    b"PlusSp=+",
 ]) + b"\r\n"
+
+CR = b"[S]\rk=v\r;c=x\rj=\"q\"\r\n[T]\rk=t\n\rm=1\r"
 
 # id, fn, section, key, default, size -> expected bytes (hand-written from the contract)
 CASES = [
@@ -95,14 +100,79 @@ CASES = [
     ("int-nondigit",     "int", b"Gamma Sec", b"Word",        b"7", 0, b"\0\0\0\0"),
     ("int-wraps-u32",    "int", b"Gamma Sec", b"Big",         b"7", 0, b"\0\0\0\1"),
     ("int-quoted",       "int", b"Gamma Sec", b"Quoted",      b"7", 0, b"\0\0\0\x2a"),
+    ("int-plus",         "int", b"Gamma Sec", b"Plus",        b"7", 0, b"\0\0\0\1"),
+    ("int-plus-only",    "int", b"Gamma Sec", b"PlusSp",      b"7", 0, b"\0\0\0\0"),
+    ("default-trailing-blanks", "str", b"Nope", b"x", b"default  \t", 255, b"default"),
     ("int-missing",      "int", b"Gamma Sec", b"Nope",        b"7", 0, b"\0\0\0\7"),
     ("int-missing-sec",  "int", b"Nope",      b"x",           b"7", 0, b"\0\0\0\7"),
 ]
 
 
-def _ini():
+# CR-only line ends (and CR LF, LF mixed): each ends one line
+CR_CASES = [
+    ("cr-first",   "str", b"S", b"k", b"D", 255, b"v"),
+    ("cr-comment",  "str", b"S", b"c", b"D", 255, b"D"),
+    ("cr-quoted",   "str", b"S", b"j", b"D", 255, b"q"),
+    ("cr-crlf-sec", "str", b"T", b"k", b"D", 255, b"t"),
+    ("cr-lf-cr",    "str", b"T", b"m", b"D", 255, b"1"),
+]
+
+# LoadIni: (id, ResolutionW line or None, rebuilt?). The input also holds Windowed=0 and [Cheat] Urinate=Pohatu.
+LOADINI = [
+    ("w-640", b"ResolutionW=640", False), ("w-zero", b"ResolutionW=0", True), ("w-missing", None, True),
+    ("w-empty", b"ResolutionW=", True), ("w-word", b"ResolutionW=abc", True), ("w-neg5", b"ResolutionW=-5", False),
+    ("w-65536", b"ResolutionW=65536", False), ("w-spaced-zero", b"ResolutionW= 0 ", True),
+    ("w-zero-junk", b"ResolutionW=0x10", True), ("w-plus1", b"ResolutionW=+1", False),
+]
+
+
+def _loadini_text(w):
+    return b"[GraphicsOptions]\n" + (w + b"\n" if w is not None else b"") + b"Windowed=0\n[Cheat]\nUrinate=Pohatu\n"
+
+
+def render_loadini():
     from osi_natives.ini import IniSettings
-    return IniSettings.from_text(CRAFTED)
+    out = []
+    for cid, w, want in LOADINI:
+        i = IniSettings.from_text(_loadini_text(w))
+        rebuilt = i.loadini()
+        out.append("LOADINI %s rebuilt=%d n=%d Windowed=%08x ResolutionH=%08x Urinate=%s Fog=%08x Language=%08x"
+                   % (cid, rebuilt, len(i.entries), i.get_int(b"GraphicsOptions", b"Windowed", 9),
+                      i.get_int(b"GraphicsOptions", b"ResolutionH", 999), i.get_private_profile_string(b"Cheat", b"Urinate", b"-").hex(),
+                      i.get_int(b"GraphicsOptions", b"Fog", 7), i.get_int(b"Misc", b"Language", 7)))
+    return out
+
+
+@pytest.mark.parametrize("case", LOADINI, ids=[c[0] for c in LOADINI])
+def test_loadini_rebuild(case):
+    from osi_natives.ini import IniSettings
+    cid, w, want = case
+    i = IniSettings.from_text(_loadini_text(w))
+    assert i.loadini() is want, cid
+    if want:                                              # exactly the 14 keys; Windowed 1; Cheat lost
+        assert len(i.entries) == 14
+        assert i.get_int(b"GraphicsOptions", b"Windowed", 9) == 1
+        assert i.get_int(b"GraphicsOptions", b"Gamma", 9) == 256 and i.get_int(b"Misc", b"MusicVolume", 9) == 100
+        assert i.get_private_profile_string(b"Cheat", b"Urinate", b"-") == b"-" and not i.bad_cheat()
+        assert i.resolution() == (640.0, 480.0)
+    else:                                                 # untouched
+        assert i.get_int(b"GraphicsOptions", b"Windowed", 9) == 0 and i.bad_cheat()
+
+
+def test_rebuild_through_the_vfs_and_file_untouched(tmp_path):
+    from osi_natives import framework
+    from osi_natives.ini import IniSettings
+    raw = _loadini_text(b"ResolutionW=0")
+    (tmp_path / "Bionicle.ini").write_bytes(raw)
+    ctx = type("C", (), {"vfs": framework.Vfs(tmp_path)})()
+    i = IniSettings(ctx)
+    assert len(i.entries) == 14 and not i.bad_cheat()
+    assert (tmp_path / "Bionicle.ini").read_bytes() == raw          # never written
+
+
+def _ini(text=None):
+    from osi_natives.ini import IniSettings
+    return IniSettings.from_text(CRAFTED if text is None else text)
 
 
 def _run(ini, fn, sec, key, dflt, size):
@@ -112,12 +182,13 @@ def _run(ini, fn, sec, key, dflt, size):
 
 
 def render_table():
-    ini, out = _ini(), []
-    for cid, fn, sec, key, dflt, size, _ in CASES:
+    out = []
+    for ini, cases in ((_ini(), CASES), (_ini(CR), CR_CASES)):
+      for cid, fn, sec, key, dflt, size, _ in cases:
         v = _run(ini, fn, sec, key, dflt, size)
         out.append("INI %s %s sec=%s key=%s def=%s size=%d -> len=%d hex=%s"
                    % (cid, fn, sec.decode(), key.decode(), dflt.hex(), size, len(v), v.hex()))
-    return out
+    return out + render_loadini()
 
 
 @pytest.mark.parametrize("case", CASES, ids=[c[0] for c in CASES])
@@ -126,9 +197,15 @@ def test_crafted_case(case):
     assert _run(_ini(), fn, sec, key, dflt, size) == want, cid
 
 
+@pytest.mark.parametrize("case", CR_CASES, ids=[c[0] for c in CR_CASES])
+def test_cr_only_case(case):
+    cid, fn, sec, key, dflt, size, want = case
+    assert _run(_ini(CR), fn, sec, key, dflt, size) == want, cid
+
+
 def test_crafted_table_is_stable_and_printed(capsys):
     lines = render_table()
-    assert len(lines) == len(CASES)
+    assert len(lines) == len(CASES) + len(CR_CASES) + len(LOADINI)
     with capsys.disabled():
         print("\n".join(lines))
 

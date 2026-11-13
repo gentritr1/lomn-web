@@ -11,7 +11,7 @@ engine references every native takes or drops on them (one `H` record per AddRef
 included), the nested `OnEvent` calls of `addtoa` and `setupmoveable`, and the state another native reads back (the
 camera AI mode, the character's motion system, the model-director map, the HUD item index). What it does not model:
 rendering and file formats (M2a-3), the Toa process path (the documented D8 host gap), the INI (`GcSaver` debug test
-0x5d4e40: false on the owner's install, ini -> M2a-3) and the host clock (`GetTime` 0x4fa460).
+0x5d4e40: true on the owner's install, but the block is not script-visible, hud.md §6.3) and the host clock (`GetTime` 0x4fa460).
 
 Divergences from the plan text, found on the asm (reported to the controller):
 - `gcmodeldirector.show('cnt1')` adds the Toa to a render group's child vector (temp AddRef 0x47f9df, push_back copy
@@ -516,8 +516,7 @@ def add_toa(ctx, name: bytes, flag: int = 0) -> int:
     toa = GcToa(_tid(ctx, "GcToa"), ident)                               # 0x47e1ac new 0x430, ctor 0x47e1d0
     saver = ctx.subsystem(directors.Saver)
     saver.ammo = toa.ammo & 0xFFFF                                       # 0x56898b: [0x7474c8] = [toa+0x380] (a word)
-    # INI-gated block 0x568a5e -> 0x5d4e40 ([Cheat] Urinate == "Pohatu", body 0x568a6b-0x568c02): modelled as INI-absent
-    # (false) until M2a-3, so it is skipped here.
+    # INI-gated block 0x568a5e -> 0x5d4e40 ([Cheat] Urinate == "Pohatu", body 0x568a6b-0x568c02): not modelled (gate true on the owner's install, block not script-visible, hud.md §6.3); skipped here.
     ctx.engine_call("OnEvent", [Variant(T_INT, 0x32), Variant(T_INT, toa.ammo & 0xFFFF)])   # 0x568a59, unconditional
     toa.node_id = toa.char_id                                            # 0x47e1db-0x47e1eb: [toa+0x10] = [toa+0x100]
     slots = ctx.subsystem(services.BlockFileSlots)

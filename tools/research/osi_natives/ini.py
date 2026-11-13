@@ -10,8 +10,18 @@ Contract (docs/superpowers/plans/2026-11-13-lomn-web-m2a3.md, Task 5):
 - `[name]` is the text up to the first `]` (not trimmed); a `[` line with no `]` is ignored;
 - the value is trimmed, then unquoted when it starts and ends with the same quote (`"` or `'`, length >= 2);
 - the result is cut to size - 1 bytes (size 0 gives b""); a missing file, section or key gives the default (also cut);
-- the Int form returns the default when the key is missing, else the leading decimal integer of the value (optional `-`,
-  0 when there are no digits) as a 32-bit unsigned value.
+- the default string loses its trailing blanks (spaces and tabs) before it is cut: "default  " -> "default" (MS docs, Wine);
+- the Int form returns the default when the key is missing, else the leading decimal integer of the value (optional `+` or
+  `-`, 0 when there are no digits) as a 32-bit unsigned value: "+1" -> 1, "-5" -> 0xfffffffb;
+- line ends are CR, LF or CRLF, each ending one line;
+- LoadIni (`loadini()`, hud.md §6.2a): if the 32-bit Int of [GraphicsOptions] ResolutionW (default 0) is 0 the original
+  rebuilds the file, so every later read sees ONLY the 14 written keys (Cheat and every other section lost). Modelled in
+  memory only; the user's file is never written. A missing, empty, non-numeric or "0" ResolutionW rebuilds; "-5" and
+  "65536" do not (the test is on the 32-bit value).
+Wine-only behaviours, deliberately NOT implemented (all INFERRED as Windows behaviour, not cited from the exe or MS docs):
+an empty Int value returning the default, `0x` hex Ints, quoted Ints, searching only the first of two same-named sections,
+trimming inside `[ Sp ]`, taking the LAST `]` of a section line, quotes inside the default string, truncation applied to a
+quoted value before unquoting, a key before any section, and whitespace-only values.
 NOT specified (and so not tested): whether a key absent from the FIRST of two same-named sections is searched in the second
 (this reader does search it, "first match in file order").
 Citations: GetPrivateProfileStringA [0x771424], GetPrivateProfileIntA [0x77141c]; call sites listed in hud.md §6.2.
@@ -44,6 +54,7 @@ class IniSettings:
             data = vfs.read("Root/Bionicle.ini")                       # read-only: LoadIni's write branch is never run
             if data is not None:
                 self.parse(data)
+                self.loadini()
 
     def parse(self, text: bytes) -> "IniSettings":
         self.entries = []
@@ -69,6 +80,23 @@ class IniSettings:
         self.language = self.get_int(b"Misc", b"Language", 0) & 0xFF
         return self
 
+    LOADINI_KEYS = [(b"graphicsoptions", b"resolutionw", b"640"), (b"graphicsoptions", b"resolutionh", b"480"),
+                    (b"graphicsoptions", b"windowed", b"1"), (b"graphicsoptions", b"bitdepth", b"32"),
+                    (b"graphicsoptions", b"svpother", b"0"), (b"graphicsoptions", b"svprad", b"0"),
+                    (b"graphicsoptions", b"fog", b"1"), (b"graphicsoptions", b"particledetail", b"100"),
+                    (b"graphicsoptions", b"shadowdetail", b"2"), (b"graphicsoptions", b"gamma", b"256"),
+                    (b"misc", b"language", b"0"), (b"misc", b"controloption", b"1"),
+                    (b"misc", b"soundvolume", b"100"), (b"misc", b"musicvolume", b"100")]
+
+    def loadini(self) -> bool:
+        """LoadIni 0x5d4890 (hud.md §6.2a): rebuilds the entries to the 14 written keys when the 32-bit Int of
+        GraphicsOptions/ResolutionW (default 0) is 0 (`test eax,eax` 0x5d4a2a). In memory only. Returns True if rebuilt."""
+        if self.get_int(b"GraphicsOptions", b"ResolutionW", 0) != 0:
+            return False
+        self.entries = list(self.LOADINI_KEYS)
+        self.language = 0
+        return True
+
     @classmethod
     def from_text(cls, text: bytes) -> "IniSettings":
         return cls().parse(text)
@@ -91,7 +119,7 @@ class IniSettings:
 
     def get_private_profile_string(self, section: bytes, key: bytes, default: bytes, size: int = 0xFF) -> bytes:
         v = self._find(section, key)
-        v = _cut(default if v is None else v)
+        v = _cut(default.rstrip(b" \t") if v is None else v)
         return v[:max(size - 1, 0)]
 
     def get_int(self, section: bytes, key: bytes, default: int) -> int:
@@ -100,8 +128,8 @@ class IniSettings:
             return default & M32
         v = _cut(v)
         i, neg = 0, False
-        if v[:1] == b"-":
-            neg, i = True, 1
+        if v[:1] in (b"-", b"+"):
+            neg, i = v[:1] == b"-", 1
         j = i
         while j < len(v) and 0x30 <= v[j] <= 0x39:
             j += 1
