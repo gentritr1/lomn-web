@@ -5,8 +5,7 @@
         hash = h*0x83 + byte (u32, case-sensitive); flags 0x11 = LZSS, 0x01 = stored; csize = next.offset - offset (last: total - offset).
   .fnt  (LE, inside the .col as <Name>.fnt): 8 x i32 {rows, columns, numberOfCharacters, charWidth, charHeight, kerning, baseline,
         spaceWidth}, then n x 18 B {u16 ascii, i32 width, height, xOffset, yOffset}. Record i owns <Name><i//columns>_<i%columns>.tga.
-Labels (probe 2 / hud.md): everything here is EXECUTED against the install except the 2-byte-code (lead 0xF0..0xFE) byte order
-and the empty-string width (INFERRED, no shipped font uses them).
+Labels: everything here is EXECUTED against the install except the paths no shipped font reaches (2-byte codes, 0xFF escape, unsigned wraps), which are read from the asm (GetStrLen 0x628ae0, GetStrHeight 0x628bf0) and the terminator read (INFERRED 0) and the empty-string width (INFERRED).
 
 CLI:  python tools/research/colfont.py table [--install DIR]   (prints the glyph table, see TABLE_FORMAT_LINE)
 """
@@ -25,6 +24,14 @@ TABLE_FORMAT_LINE = ("# colfont-table v1 | font NAME dir=N glyphs=N rows=R cols=
 TABLE_STRINGS = ("New Game", "Options", "Quit", "Play Game")
 
 
+M32 = 0xFFFFFFFF
+
+
+def f32(x: float) -> float:
+    """x87 `fstp dword`: store as binary32 (round-to-nearest-even)."""
+    return struct.unpack("<f", struct.pack("<f", x))[0]
+
+
 class ColError(Exception):
     pass
 
@@ -37,7 +44,8 @@ def hash_name(name: str | bytes) -> int:
 
 
 def lzss_decode(data: bytes, usize: int) -> bytes:
-    ring = bytearray(b" " * 4096)
+    # 0x4d2955..0x4d2965 fills only 0..0xFED with 0x20; 0xFEE..0xFFF are uninitialised heap (value there INFERRED, modelled 0)
+    ring = bytearray(b" " * 0xFEE + bytes(18))
     w = 0xFEE
     out = bytearray()
     i = 0
@@ -93,10 +101,17 @@ class Col:
             end = raw[i + 1][2] if i + 1 < count else self.total
             self.entries.append(Entry(h, fl, off, us, end - off))
         self.sorted_by_hash = all(self.entries[i].hash < self.entries[i + 1].hash for i in range(count - 1))
-        self._by_hash = {e.hash: e for e in self.entries}
 
     def find(self, name: str):
-        return self._by_hash.get(hash_name(name))
+        """GetInfo 0x4cfc20: lower-bound binary search over the directory (unsigned `ja` at 0x4cfc6d), so the lowest of equal hashes wins."""
+        h, lo, hi = hash_name(name), -1, len(self.entries) - 1
+        while hi - lo > 1:
+            mid = (hi + lo) >> 1
+            if h > self.entries[mid].hash:
+                lo = mid
+            else:
+                hi = mid
+        return self.entries[hi] if hi >= 0 and self.entries[hi].hash == h else None
 
     def entry_for(self, name: str) -> Entry:
         e = self.find(name)
@@ -129,70 +144,81 @@ class Fnt:
             raise ColError("bad glyph count")
         self.raw_size = len(data)
         self.records = [struct.unpack_from("<Hiiii", data, 32 + 18 * i) for i in range(self.n)]  # (ascii, w, h, xoff, yoff)
-        ws = [r[1] for r in self.records]
-        self.max_width = max(ws, default=0)
-        self.min_width = min(ws, default=0)
+        ws = [r[1] & M32 for r in self.records]                 # unsigned compares: 0x6277e0 jbe, 0x627810 jae
+        self.max_width = max(ws, default=0)                     # init 0 (0x626d71)
+        self.min_width = min(ws, default=M32)                   # init 0xffffffff (0x626d7e)
         self._first = {}
         for i, r in enumerate(self.records):
             self._first.setdefault(r[0], i)  # linear search, first match wins
 
     def codes(self, s):
-        """Split a string into glyph codes: 0xF0..0xFE lead byte + next byte = 2-byte code (INFERRED order, lo|hi<<8);
-        0xFF is the script-callback marker (no width, skipped); stops at newline."""
+        """Walk of GetStrLen 0x628ae0 / GetStrHeight 0x628bf0 (same walk). Lead 0xF0..0xFE: code = lead<<8 + next byte (0x628b20), also
+        when the lead is last (the byte read is then the ScString terminator, INFERRED 0). 0xFF / '\\n' are tested on the byte at the
+        CURRENT index, i.e. the trail byte after a lead. 0xFF skips itself and the next char (+ its trail if that is a lead): no code."""
         b = s.encode("latin-1") if isinstance(s, str) else bytes(s)
+        at = lambda i: b[i] if i < len(b) else 0
         out, i = [], 0
         while i < len(b):
-            c = b[i]
-            if c == 0x0A:
-                break
-            if c == 0xFF:
+            c = at(i)
+            if 0xF0 <= c <= 0xFE:
                 i += 1
-                continue
-            if 0xF0 <= c <= 0xFE and i + 1 < len(b):
-                out.append(c | b[i + 1] << 8)
-                i += 2
-                continue
-            out.append(c)
+                c = (c << 8) + at(i)
+            if at(i) == 0xFF:
+                i += 1
+                if 0xF0 <= at(i) <= 0xFE:
+                    i += 1
+            elif at(i) == 0x0A:
+                break
+            else:
+                out.append(c)
             i += 1
         return out
 
     def _width(self, code, xs):
-        if code == 0x20:
-            return (self.space + self.kerning) * xs
-        i = self._first.get(code)
-        if i is None:
-            return (self.max_width + self.kerning) * xs
-        return (self.kerning + self.records[i][1]) * xs
+        xs = f32(xs)
+        if code & 0xFFFF == 0x20:                                # GetWidth 0x6289a0: fild dword (signed)
+            s = (self.space + self.kerning + 2**31) % 2**32 - 2**31
+            return s * xs
+        i = self._first.get(code & 0xFFFF)
+        if i is None:                                            # fild qword of a zero-extended u32 (0x628a20 / 0x6289f9)
+            return ((self.max_width + self.kerning) & M32) * xs
+        return ((self.kerning + self.records[i][1]) & M32) * xs
 
     def get_width(self, c, xscale: float = 1.0):
         code = c if isinstance(c, int) else self.codes(c)[0]
         return self._width(code, xscale)
 
     def get_str_len(self, s, xscale: float = 1.0) -> int:
-        tot = 0.0
+        """0x628ae0: the sum is stored as f32 after each add (0x628ba0); result = sum - kerning*xScale, x87 chop (or 0xc00 at
+        0x628b76 / 0x628bc1) then fistp qword, low dword. int() truncates toward zero."""
+        tot = 0.0                                                # [0x75822c] = 0.0
         for code in self.codes(s):
-            tot += self._width(code, xscale)
-        return round(tot - self.kerning * xscale)  # x87 round-to-nearest-even == Python round
+            tot = f32(self._width(code, xscale) + tot)
+        return int(tot - self.kerning * f32(xscale))
 
     def has_unknown(self, s) -> bool:
         return any(c != 0x20 and c not in self._first for c in self.codes(s))
 
     def get_str_height(self, s, yscale: float = 1.0) -> int:
-        """GetStrHeight 0x628bf0 (hud.md §4.9): a code with no record (every space; unknown codes) is skipped, ruling INFERRED
-        (the original reads [[this+0x58]-0x110], heap). The sum is truncated (x87 chop 0x628ccd), not rounded."""
-        below, above = 0.0, 0.0
+        """GetStrHeight 0x628bf0 (hud.md 4.9): a code with no record is skipped (ruling INFERRED: the original reads heap at
+        [[this+0x58]-0x110]); a code WITH a record (space included, GetHeight(' ') = 0.0 at 0x628a67) still feeds below. Stores are f32.
+        d = u32(baseline - yOffset); below = d if d > below and base >= yo unsigned (0x628d5b, 0x628d76 jb); cand = h - d if base > yo
+        unsigned (0x628dae jbe) else h; above = cand if cand > above (strict). Result chopped (0x628ccd)."""
+        ys, below, above = f32(yscale), 0.0, 0.0
         for code in self.codes(s):
-            i = self._first.get(code)
-            if code == 0x20 or i is None:
+            i = self._first.get(code & 0xFFFF)
+            if i is None:
                 continue
             _, _, h, _, yo = self.records[i]
-            if yo <= self.baseline:
-                below = max(below, self.baseline - yo)
-            if yo < self.baseline:
-                above = max(above, h * yscale - (self.baseline - yo))
-            else:
-                above = max(above, h * yscale)
-        return int(above + below)                                      # chop toward zero; both terms >= 0
+            base, yo = self.baseline & M32, yo & M32
+            d = (base - yo) & M32
+            hh = 0.0 if code & 0xFFFF == 0x20 else f32((h & M32) * ys)
+            if d > below and base >= yo:
+                below = f32(d)
+            cand = f32(hh - d) if base > yo else hh
+            if cand > above:
+                above = cand
+        return int(above + below)                                # chop toward zero; both terms >= 0
 
 
 class Tga:

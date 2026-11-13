@@ -34,6 +34,32 @@ def test_lzss_ring_literals_and_backref():
     assert colfont.lzss_decode(bytes([0x00, 0x00, 0x01]), 4) == b"    "
 
 
+def test_lzss_ring_tail_not_spaces():
+    # M6: decoder 0x4d2920 fills only 0..0xFED with 0x20 (0x4d2955..0x4d2965); 0xFEE..0xFFF are uninitialised heap (modelled 0, INFERRED)
+    assert colfont.lzss_decode(bytes([0x00, 0xEE, 0xF0]), 3) == b"\0\0\0"      # ref pos 0xFEE len 3, nothing written yet
+    assert colfont.lzss_decode(bytes([0x00, 0xED, 0xE0]), 3) == b"   "          # pos 0xFED is still a space
+
+
+def _col(entries):
+    """entries: [(name, data)] -> .col bytes, stored (flags 0x01), directory sorted nondecreasing by hash (stable)."""
+    ents = sorted(entries, key=lambda e: colfont.hash_name(e[0]))
+    off = 0x24 + 16 * len(ents)
+    d, body = b"", b""
+    for n, data in ents:
+        d += struct.pack(">4I", colfont.hash_name(n), 1, off + len(body), len(data))
+        body += data
+    return struct.pack(">4I", 0, len(ents), 4, off + len(body)) + bytes(0x14) + d + body
+
+
+def test_col_duplicate_hash_returns_lowest_entry():
+    # M6: GetInfo 0x4cfc6b is a lower-bound search (ja -> lo = mid, else hi = mid): the LOWEST of equal hashes wins
+    col = colfont.Col(_col([("x", b"AAAA"), ("x", b"BBBB"), ("y", b"CC"), ("w", b"D")]))
+    assert [e.hash for e in col.entries] == sorted(e.hash for e in col.entries)
+    assert col.read("x") == b"AAAA"
+    assert col.read("y") == b"CC" and col.read("w") == b"D"
+    assert col.find("nope") is None
+
+
 def _fnt(rows, cols, n, cw, ch, kern, base, space, recs):
     b = struct.pack("<8i", rows, cols, n, cw, ch, kern, base, space)
     for a, w, h, xo, yo in recs:
@@ -50,9 +76,49 @@ def test_fnt_parse_and_widths_synthetic():
     assert f.get_width(b"Z") == f.max_width + 2         # unknown: maxWidth + kerning
     assert f.get_str_len(b"AB") == (12 + 7) - 2         # minus trailing kerning
     assert f.get_str_len(b"A\nBBBB") == 10              # stops at newline
-    assert f.get_str_len(b"A\xffB") == f.get_str_len(b"AB")  # 0xFF callback byte has no width
     assert f.get_str_len(b"AB", 2.0) == 34              # round((12+7)*2 - 2*2)
     assert f.get_str_len(b"") == -2                     # initial sum 0, minus kerning (formula as read; INFERRED edge)
+
+
+def _kab():
+    return colfont.Fnt(_fnt(1, 3, 3, 16, 16, 2, 12, 8, [(65, 10, 11, 0, 1), (66, 5, 11, 0, 1), (0xF1, 4, 1, 0, 0)]))
+
+
+def test_get_str_len_chops_f32_sum():
+    # I1: x87 RC = chop (0x628b76/0x628bc1), fistp qword, low dword. f32 steps (0x628ba0): 8.4 -> 8.3999996, +4.9 -> 13.299999; minus 2*0.7
+    assert _kab().get_str_len(b"AB", 0.7) == 11        # 11.899999 chops to 11; round() gave 12
+    big = colfont.Fnt(_fnt(1, 2, 2, 16, 16, 0, 12, 8, [(65, 2**24, 1, 0, 0), (66, 1, 1, 0, 0)]))
+    assert big.get_str_len(b"AB") == 2**24             # the running sum is binary32: 2^24 + 1 is not representable (0x628ba0)
+
+
+def test_escape_skips_next_char_and_its_trail():
+    # I2: 0xFF skips itself AND the next char (0x628b2c..0x628b5c, then idx++ at 0x628ba6); a lead next also skips its trail
+    f = _kab()
+    assert f.get_str_len(b"A\xffB") == 10 == f.get_str_len(b"A")          # (2+10) - 2: only A counts
+    assert f.get_str_len(b"A\xff\xf1ZB") == (12 + 7) - 2                   # F1 and its trail Z skipped, B counts
+    assert f.codes(b"A\xff") == [65] and f.codes(b"\xffAB") == [66]
+
+
+def test_two_byte_code_is_lead_shl8_plus_trail():
+    # I3: 0x628b0b..0x628b25: code = lead<<8 + next; the trail byte is at the CURRENT idx afterwards, so it is what 0xFF / 0x0A test
+    f = _kab()
+    assert f.codes(b"\xf1A") == [0xF141]
+    assert f.codes(b"\xf1") == [0xF100]                  # lead last: the byte past the end (terminator, INFERRED 0) is the trail
+    assert f.codes(b"\xf1\n") == [] and f.codes(b"\xf1\xffAB") == [66]
+    assert f.get_str_len(b"\xf1") == (10 + 2) - 2         # 0xF100 is unknown (the 0xF1 record is code 0x00F1): maxWidth + kerning
+
+
+def test_unsigned_widths_and_bounds():
+    # M4: glyph width = u32(kerning + width) (0x6289f9/0x628a05), unknown = u32(maxWidth + kerning) (0x628a20), space stays i32 (0x6289b7)
+    f = colfont.Fnt(_fnt(1, 1, 1, 16, 16, -4, 12, 8, [(65, 3, 11, 0, 1)]))
+    assert f.get_width(b"A") == 4294967295.0
+    assert f.get_width(b"Z") == (3 - 4) % 2**32        # u32(max 3 + kern -4)
+    assert f.get_width(b" ") == 4.0                    # signed: 8 + -4
+    g = colfont.Fnt(_fnt(1, 2, 2, 16, 16, 0, 12, -8, [(65, 5, 1, 0, 0), (66, -1, 1, 0, 0)]))
+    assert g.get_width(b" ") == -8.0
+    assert (g.max_width, g.min_width) == (0xFFFFFFFF, 5)   # unsigned compares, 0x6277e0 jbe / 0x627810 jae
+    e = colfont.Fnt(_fnt(0, 0, 0, 16, 16, 0, 12, 8, []))
+    assert (e.max_width, e.min_width) == (0, 0xFFFFFFFF)   # init 0x626d71 / 0x626d7e
 
 
 def test_str_height_skips_unknown_and_space():
@@ -61,6 +127,19 @@ def test_str_height_skips_unknown_and_space():
     assert f.get_str_height(b"A") == 11
     assert f.get_str_height(b"A A") == 11               # space skipped (hud.md §4.9 ruling)
     assert f.get_str_height(b"A", 1.6) == 17             # 6.6 + 11 = 17.6: truncated (0x628ccd chop), round gives 18
+
+
+def test_str_height_unsigned_gates():
+    # M4: baseline 4, glyph h 3, yOffset -2: d = u32(6) but base < yo unsigned (0x628d76 jb) so below stays 0; cand = h (0x628dae jbe)
+    f = colfont.Fnt(_fnt(1, 1, 1, 16, 16, 0, 4, 8, [(65, 5, 3, 0, -2)]))
+    assert f.get_str_height(b"A") == 3
+
+
+def test_str_height_space_with_record_updates_below():
+    # M5: GetHeight(' ') = 0.0 (0x628a67) but the record's yOffset still feeds below; only a code with NO record is skipped (hud.md 4.9)
+    f = colfont.Fnt(_fnt(1, 2, 2, 16, 16, 0, 10, 8, [(0x20, 5, 9, 0, 2), (65, 5, 4, 0, 9)]))
+    assert f.get_str_height(b" A") == 11               # below 10-2=8, above 4-(10-9)=3
+    assert f.get_str_height(b"A") == 3 + 1             # without the space record: below 1
 
 
 # ---- data-dependent ----
