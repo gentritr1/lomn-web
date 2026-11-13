@@ -3028,6 +3028,7 @@ def uncompared_keys(spec) -> list[str]:
 def conform(directory, trace_dir=None) -> int:
     """Runs every program under DIR. A program whose expect.json has a non-empty string "pending" (the task id) is not run:
     it prints `PENDING <group>/<id> (<task>)` and is counted apart; it needs no .asm, writes no trace and never fails."""
+    from conform_pending import pending_task
     d = Path(directory)
     passed, pending, total = 0, 0, 0
     for exp in sorted(d.rglob("*.expect.json")):
