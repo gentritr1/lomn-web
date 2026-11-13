@@ -6,3 +6,4 @@ model uses (game objects, HostContext, the group registry, the VFS and the block
 from . import services  # noqa: E402,F401  (M2a-2 T7b: services and time)
 from . import directors  # noqa: E402,F401  (M2a-2 T8b: directors, saver and the Beta 1.5.0 mods)
 from . import objects  # noqa: E402,F401  (M2a-2 T9b: objects, model director, camera, HUD)
+from . import host_sources  # noqa: E402,F401  (M2a-3 T4b: host sources, after `objects`: it wraps the camera natives)
