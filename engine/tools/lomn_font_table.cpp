@@ -4,8 +4,8 @@
 //   line 1: this format description (the diff strips it)
 //   font NAME dir=N glyphs=N rows=R cols=C cw=W ch=H kern=K base=B space=S maxw=M minw=m tga=WxH
 //   glyph NAME IDX ASCII W H XOFF YOFF          one per record, record order; ASCII = 4 lowercase hex digits, rest decimal
-//   str NAME 'TEXT' len=L height=H              "New Game", "Options", "Quit", "Play Game"; height=na when a character of the
-//                                               string has no record (a space included: the original reads out of bounds)
+//   str NAME 'TEXT' len=L height=H              "New Game", "Options", "Quit", "Play Game"; a character with no record is skipped
+//                                               in the height (hud.md §4.9, INFERRED)
 // Exit codes: 0 ok, 2 usage, 3 the install or a font could not be read.
 #include <algorithm>
 #include <cstdio>
@@ -61,9 +61,8 @@ int main(int argc, char** argv) {
     }
     for (const char* text : {"New Game", "Options", "Quit", "Play Game"}) {
       int h = 0;
-      const bool ok = f.get_str_height(text, 1.0f, &h);
-      if (ok) std::printf("str %s '%s' len=%d height=%d\n", name.c_str(), text, f.get_str_len(text), h);
-      else std::printf("str %s '%s' len=%d height=na\n", name.c_str(), text, f.get_str_len(text));
+      f.get_str_height(text, 1.0f, &h);
+      std::printf("str %s '%s' len=%d height=%d\n", name.c_str(), text, f.get_str_len(text), h);
     }
   }
   return 0;

@@ -204,7 +204,7 @@ bool TileFont::get_str_height(std::string_view s, float yscale, int* height, flo
     if (t == Tok::Newline) break;
     if (t == Tok::Skip) continue;
     const int idx = find(code);
-    if (idx < 0) return false;  // charInfo = -1: the original reads the record before the table
+    if (idx < 0) continue;  // hud.md §4.9 (INFERRED): the original reads record -1, heap before the array; both engines skip the character
     const FontGlyph& g = glyphs[static_cast<size_t>(idx)];
     // GetHeight 0x628a50: ' ' = 0.0 [0x758228], else height * yScale (height zero-extended), stored as f32
     const float a = (code & 0xffff) == 0x20 ? 0.0f : static_cast<float>(static_cast<double>(static_cast<uint32_t>(g.height)) * yscale);

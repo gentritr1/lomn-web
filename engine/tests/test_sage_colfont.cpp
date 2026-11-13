@@ -489,12 +489,15 @@ TEST_CASE("colfont height: GetStrHeight (below = max baseline - yOffset, above =
   CHECK(h(std::string("A\xff") + "z", 1.0f, &ok) == 8);
   CHECK(ok);
   // no record: false, *height untouched (a space included: the original reads the record before the table)
-  CHECK(h("A g", 1.0f, &ok) == -999);
-  CHECK_FALSE(ok);
-  CHECK(h("Az", 1.0f, &ok) == -999);
-  CHECK_FALSE(ok);
-  CHECK(h(" ", 1.0f, &ok) == -999);
-  CHECK_FALSE(ok);
+  // hud.md §4.9 (INFERRED): a code with no record, a space included, is skipped; the other glyphs' height is unchanged
+  CHECK(h("A g", 1.0f, &ok, &above) == h("Ag", 1.0f));
+  CHECK(ok);
+  CHECK(h("Az", 1.0f, &ok) == h("A", 1.0f));
+  CHECK(h("zA z ", 1.0f) == 8);
+  CHECK(h(" ", 1.0f, &ok, &above) == 0);  // nothing counted: trunc(0 + 0)
+  CHECK(ok);
+  CHECK(above == 0.0f);
+  CHECK(h("", 1.0f) == 0);
 }
 
 // ================================================================================ real data (native; needs LOMN_DATA)
@@ -525,18 +528,18 @@ struct FontExpect {
   uint32_t maxw, minw;
   uint64_t alpha_sum;  // sum of the alpha byte over every glyph TGA (this task's own Python over the raw TGA bytes)
   int len_new, len_opt, len_quit, len_play;  // GetStrLen "New Game" / "Options" / "Quit" / "Play Game", scale 1.0
-  int h_opt, h_quit;                         // GetStrHeight, -1 = a glyph has no record (not computable)
+  int h_new, h_opt, h_quit, h_play;          // GetStrHeight, glyphs with no record (spaces) skipped
 };
 // ASCII order of the names (what the printer sorts by). Measured 2026-11-13 with a Python reader of this task's own.
 const FontExpect kFonts[] = {
-    {"BionicleFont", 153, 1, 145, 145, 16, 16, 0, 12, 8, 15, 3, 2074656, 84, 57, 32, 82, 11, 11},
-    {"BionicleFontHi", 86, 1, 79, 79, 32, 32, 4, 12, 16, 25, 2, 1682921, 165, 113, 57, 165, 20, 15},
-    {"BionicleFontSh", 87, 1, 79, 79, 32, 32, 4, 12, 16, 25, 3, 1682921, 167, 115, 58, 170, 20, 16},
-    {"BionicleFontshad", 87, 1, 79, 79, 32, 32, 4, 12, 16, 26, 3, 2941419, 170, 120, 61, 172, 22, 17},
-    {"Tech_Demo_Font01", 102, 1, 46, 46, 32, 32, 8, 12, 16, 22, 2, 984059, 210, 195, 105, 239, -1, -1},
-    {"Tech_Demo_Font_Highlighted", 104, 1, 46, 46, 32, 32, 8, 12, 16, 22, 2, 984059, 210, 195, 105, 239, -1, -1},
-    {"tech_font_01", 167, 1, 79, 79, 32, 32, 8, 12, 16, 30, 2, 1763431, 250, 243, 129, 287, -1, -1},
-    {"tech_font_01_hilight", 170, 1, 79, 79, 32, 32, 8, 12, 16, 30, 2, 1763431, 250, 243, 129, 287, -1, -1},
+    {"BionicleFont", 153, 1, 145, 145, 16, 16, 0, 12, 8, 15, 3, 2074656, 84, 57, 32, 82, 10, 11, 11, 11},
+    {"BionicleFontHi", 86, 1, 79, 79, 32, 32, 4, 12, 16, 25, 2, 1682921, 165, 113, 57, 165, 15, 20, 15, 20},
+    {"BionicleFontSh", 87, 1, 79, 79, 32, 32, 4, 12, 16, 25, 3, 1682921, 167, 115, 58, 170, 16, 20, 16, 20},
+    {"BionicleFontshad", 87, 1, 79, 79, 32, 32, 4, 12, 16, 26, 3, 2941419, 170, 120, 61, 172, 17, 22, 17, 22},
+    {"Tech_Demo_Font01", 102, 1, 46, 46, 32, 32, 8, 12, 16, 22, 2, 984059, 210, 195, 105, 239, 12, 11, 13, 11},
+    {"Tech_Demo_Font_Highlighted", 104, 1, 46, 46, 32, 32, 8, 12, 16, 22, 2, 984059, 210, 195, 105, 239, 12, 11, 13, 11},
+    {"tech_font_01", 167, 1, 79, 79, 32, 32, 8, 12, 16, 30, 2, 1763431, 250, 243, 129, 287, 12, 11, 13, 11},
+    {"tech_font_01_hilight", 170, 1, 79, 79, 32, 32, 8, 12, 16, 30, 2, 1763431, 250, 243, 129, 287, 12, 11, 13, 11},
 };
 
 std::string fonts_dir() { return data_root() + "/install/data/Art/Fonts"; }
@@ -739,15 +742,14 @@ TEST_CASE("colfont real: A11 menu string widths and heights, scale 1.0 (and prob
     CHECK(f.get_str_len("Quit") == e.len_quit);
     CHECK(f.get_str_len("Play Game") == e.len_play);
     int h = -7;
-    const bool ok_opt = f.get_str_height("Options", 1.0f, &h);
-    CHECK(ok_opt == (e.h_opt >= 0));
-    if (ok_opt) CHECK(h == e.h_opt);
-    const bool ok_quit = f.get_str_height("Quit", 1.0f, &h);
-    CHECK(ok_quit == (e.h_quit >= 0));
-    if (ok_quit) CHECK(h == e.h_quit);
-    // "New Game" and "Play Game" hold a space and the shipped fonts have no ' ' record: height not computable
-    CHECK_FALSE(f.get_str_height("New Game", 1.0f, &h));
-    CHECK_FALSE(f.get_str_height("Play Game", 1.0f, &h));
+    CHECK(f.get_str_height("New Game", 1.0f, &h));
+    CHECK(h == e.h_new);
+    CHECK(f.get_str_height("Options", 1.0f, &h));
+    CHECK(h == e.h_opt);
+    CHECK(f.get_str_height("Quit", 1.0f, &h));
+    CHECK(h == e.h_quit);
+    CHECK(f.get_str_height("Play Game", 1.0f, &h));
+    CHECK(h == e.h_play);
   }
 }
 

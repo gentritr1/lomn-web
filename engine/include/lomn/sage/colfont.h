@@ -108,8 +108,8 @@ struct TileFont {
   // GetStrHeight 0x628bf0 (and GetHeight 0x628a50). Same string walk as get_str_len ('\n' ends it early). Per character:
   // h = height * yscale of its record, d = baseline - yOffset (u32); `below` = max d over records with baseline >= yOffset
   // (unsigned); the candidate `above` is h - d when baseline > yOffset, else h; *above_baseline = max candidate. Result:
-  // trunc(*above_baseline + below). Returns false when a character has no record (a space included: the original reads
-  // the record before the table, hud.md / probe 2 §3.2); *height is then untouched. None of the shipped fonts has a ' '.
+  // trunc(*above_baseline + below). A character with no record (a space included) is SKIPPED, contributing nothing: the original reads record -1 there (heap before the
+  // array), hud.md §4.9 rules the skip, INFERRED. Always returns true.
   bool get_str_height(std::string_view s, float yscale, int* height, float* above_baseline = nullptr) const;
 };
 
