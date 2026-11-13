@@ -361,6 +361,8 @@ TEST_CASE("host sources spline: the synthetic pins of hud.md §1.5 under pc24 an
   CHECK(spline_interpolate(c, 1.0f, 24) == 2.0f);
 }
 
+// native only: the disk file system (fs::open_disk) is not linked into the wasm32 unit tests
+#ifndef __EMSCRIPTEN__
 TEST_CASE("host sources spline: FRNT_CAM (levels/lev0/frnt.blk) pins of hud.md §1.5 under pc24 and pc53") {
   SKIP_WITHOUT(!lomn_data().empty());
   const std::string user = std::string(std::getenv("TMPDIR") ? std::getenv("TMPDIR") : "/tmp") + "/lomn_t4a_user";
@@ -389,6 +391,7 @@ TEST_CASE("host sources spline: FRNT_CAM (levels/lev0/frnt.blk) pins of hud.md �
   CHECK(bits(spline_interpolate(c53[1], 0.86f, 53)) == "417adeb5");
   std::filesystem::remove_all(user);
 }
+#endif  // __EMSCRIPTEN__
 
 // ============================== MOUSESPEC ==============================
 
@@ -624,6 +627,8 @@ TEST_CASE("host sources re-fire: a handler that sets mode 0 freezes the camera, 
   CHECK(fire_frames(true, 1900) == std::vector<long>{604});
 }
 
+// native only: the disk file system (fs::open_disk) is not linked into the wasm32 unit tests
+#ifndef __EMSCRIPTEN__
 // ============================== the real Base.osi ==============================
 
 namespace {
@@ -781,3 +786,4 @@ TEST_CASE("host sources real Base.osi: the camera-event frame has no `H 002a:` l
   CHECK_MESSAGE(r.z_ref_mismatch == 0, r.first_mismatch);
   CHECK(r.z_ref_unknown == 0);
 }
+#endif  // __EMSCRIPTEN__

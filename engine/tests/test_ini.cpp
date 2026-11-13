@@ -159,6 +159,8 @@ TEST_CASE("ini natives: gcsaver.cheatmenu and gcgame.getresolutionwidth/height r
   CHECK(cheat(&cheatlost) == osi::make_int(0));       // ResolutionW missing: the rebuild drops [Misc] CheatMenu
 }
 
+// native only: the disk file system (fs::open_disk) is not linked into the wasm32 unit tests
+#ifndef __EMSCRIPTEN__
 TEST_CASE("ini: the owner's Bionicle.ini: cheatmenu 0, the Urinate gate true, 640x480 (F12/F13)") {
   const char* ld = std::getenv("LOMN_DATA");
   if (!ld || !*ld) {
@@ -178,3 +180,4 @@ TEST_CASE("ini: the owner's Bionicle.ini: cheatmenu 0, the Urinate gate true, 64
   const std::string text = slurp(root + "/Bionicle.ini");
   CHECK(text.size() == 250);                                           // read, byte count equal to the file's
 }
+#endif  // __EMSCRIPTEN__
