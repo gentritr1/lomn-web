@@ -85,7 +85,7 @@ struct SaverState {
   uint32_t condition = 0;           // dword [0x8391a0], the legacy condition bits (ResetData 0x5d54ec)
   std::array<uint8_t, 7> quests{};  // bytes [0x83b37f + level], GcSaver::SetQuest 0x5d5e20 (bits 1/2/4)
   // GetPrivateProfileStringA("Misc", "CheatMenu", "", buf, 0xff, [0x83b410]) (0x5d4fca-0x5d4fea). The owner's INI has no
-  // CheatMenu key, so the default "" is what the call yields; reading the INI is M2a-3.
+  // CheatMenu key, so "" is what the call yields; ScriptHost reads the INI through the VFS (M2a-3 T5a, ini.h).
   std::string ini_cheat_menu;
   bool cheat_menu() const;                     // GcSaver::CheatMenu 0x5d4fc0
   void set_quest(uint8_t lev, uint8_t quest);  // GcSaver::SetQuest 0x5d5e20

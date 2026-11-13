@@ -23,6 +23,8 @@
 #include <sstream>
 #include <stdexcept>
 
+#include "lomn/ini.h"
+#include "lomn/osi/directors.h"
 #include "lomn/osi/json.h"
 #include "lomn/osi/services.h"
 
@@ -209,6 +211,21 @@ ScriptHost::ScriptHost(const sage::OsiFile& script, std::string_view natives_jso
   heap_ = std::make_unique<Heap>(trace_);
   vm_ = std::make_unique<Vm>(script_, reg_, *heap_, trace_);
   ctx_ = std::make_unique<HostContext>(*vm_, *heap_, vfs, opt_.flags, log_);
+  if (opt_.real_natives && vfs) {
+    // M2a-3 T5a: the INI reads on the menu runs (hud.md §6.2), through the VFS, never written. A missing file keeps the
+    // defaults the natives already hold (the original's LoadIni would write them, 0x5d4a24: recorded, not run).
+    ini::File f;
+    if (ini::load(*vfs, f)) {
+      // GetScreenData 0x5d5080: GraphicsOptions ResolutionW / ResolutionH, defaults 0x280 / 0x1e0, stored as u16. load() has
+      // already applied LoadIni's rebuild (a 32-bit ResolutionW of 0 gives the 14 default keys: 640 x 480, hud.md 6.2a).
+      DisplayState& d = ctx_->subsystem<DisplayState>();
+      d.width = static_cast<float>(static_cast<uint16_t>(f.get_int("GraphicsOptions", "ResolutionW", 0x280)));
+      d.height = static_cast<float>(static_cast<uint16_t>(f.get_int("GraphicsOptions", "ResolutionH", 0x1e0)));
+      d.language = f.get_int("Misc", "Language", 0);  // GetLanguage 0x5d4c10 (read; the area director still loads eng)
+      // GcSaver::CheatMenu 0x5d4fc0: GetPrivateProfileStringA("Misc", "CheatMenu", "", buf, 0xff, ...)
+      ctx_->subsystem<SaverState>().ini_cheat_menu = f.get_string("Misc", "CheatMenu", "", 0xff);
+    }
+  }
   if (opt_.real_natives) {  // fails closed (review I-1): never a silent stub run
     const BindReport rep = bind_natives(reg_, *ctx_);
     if (rep.game_bodies == 0)  // R-1 (M2a-2 T7a): the selftest group's body does not satisfy the check

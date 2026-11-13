@@ -14,7 +14,7 @@ option(LOMN_WEBGPU "build the WebGPU backend" ON)
 set(LOMN_WEB_INITIAL_MEMORY 100663296)
 enable_testing()
 
-add_library(lomn_core STATIC src/fs/memory_fs.cpp src/fs/prefetch_fs.cpp src/rhi/null_device.cpp src/app/loop.cpp)
+add_library(lomn_core STATIC src/fs/memory_fs.cpp src/fs/ini.cpp src/fs/prefetch_fs.cpp src/rhi/null_device.cpp src/app/loop.cpp)
 target_include_directories(lomn_core PUBLIC include PRIVATE "${LOMN_TOOLCHAIN_DIR}/include")
 target_compile_options(lomn_core PRIVATE -Wall -Wextra)
 # Native clang fuses a*b+c into FMA by default and wasm never does; forbid it so native == wasm32 bit for bit.
@@ -37,6 +37,9 @@ target_compile_options(lomn_sage PRIVATE -Wall -Wextra)
 # library needs it. lomn_web does not link lomn_osi until M2b, which revisits the scope with a size and perf entry. The
 # lomn_view.wasm size before/after is in docs/knowledge/measurements.md; datacheck-wasm keeps M1's null logs
 # native == wasm32.
+add_executable(lomn_ini tools/lomn_ini.cpp)  # M2a-3 T5a: the INI pair-comparison CLI
+target_link_libraries(lomn_ini PRIVATE lomn_core)
+
 add_library(lomn_osi STATIC src/osi/heap.cpp src/osi/convert.cpp src/osi/registry.cpp src/osi/trace.cpp src/osi/vm.cpp
             src/osi/vm_handlers.cpp src/osi/natives/framework.cpp src/osi/natives/groups.cpp src/osi/natives/selftest.cpp
             src/osi/natives/services.cpp src/osi/natives/directors.cpp src/osi/natives/objects.cpp
@@ -329,7 +332,8 @@ add_executable(lomn_tests tests/test_main.cpp tests/test_fs.cpp tests/test_rhi_n
                tests/test_rhi_mesh.cpp tests/test_view_mips.cpp tests/test_view_area.cpp tests/test_d3d.cpp tests/test_sage_osi.cpp
                tests/test_area_states.cpp tests/test_sage_frame.cpp tests/test_view_texture_cache.cpp tests/test_fuzz_fragments.cpp
                tests/test_rhi_destroy.cpp tests/test_prefetch_fs.cpp tests/test_fly_camera.cpp  # M1b
-               tests/test_osi_vm.cpp tests/test_osi_natives.cpp tests/test_osi_services.cpp tests/test_osi_directors.cpp tests/test_osi_objects.cpp)  # M2a-1, M2a-2 T3, T7a, T8a, T9a
+               tests/test_osi_vm.cpp tests/test_osi_natives.cpp tests/test_osi_services.cpp tests/test_osi_directors.cpp tests/test_osi_objects.cpp
+               tests/test_ini.cpp)  # M2a-1, M2a-2 T3, T7a, T8a, T9a; M2a-3 T5a
 # wasm32 stack for the OSI VM (I2): a native re-entering the VM costs 1,648 bytes of C++ stack per engine call
 # (measured 2026-10-09, Vm::call -> call_impl -> run -> dispatch -> 0x82 -> native -> Vm::call), 116,240 bytes in use at
 # the 65th call's nesting-cap throw in lomn_osi_conform. 512 KiB was 4.5x that; M2a-2 T10 re-measured 1,984 B per level by trap, 138,000 at the cap, so 576 KiB (the default 64 KiB runs out near level 33:
@@ -358,7 +362,8 @@ if(NOT EMSCRIPTEN)
                  src/osi/vm.cpp src/osi/vm_handlers.cpp  # M2a-1: the VM's unit cases under ASan + UBSan
                  tests/test_osi_natives.cpp src/osi/natives/framework.cpp src/osi/natives/groups.cpp
                  src/osi/natives/selftest.cpp src/osi/natives/services.cpp src/osi/natives/directors.cpp src/osi/natives/objects.cpp src/osi/host.cpp
-                 tests/test_osi_services.cpp tests/test_osi_directors.cpp tests/test_osi_objects.cpp src/fs/memory_fs.cpp src/fs/disk_fs.cpp)  # M2a-2 T3: the native framework; T7a: services; T8a: directors; T9a: objects
+                 tests/test_osi_services.cpp tests/test_osi_directors.cpp tests/test_osi_objects.cpp src/fs/memory_fs.cpp src/fs/disk_fs.cpp
+                 tests/test_ini.cpp src/fs/ini.cpp)  # M2a-2 T3: the native framework; T7a: services; T8a: directors; T9a: objects
   target_include_directories(lomn_tests_asan PRIVATE include "${LOMN_TOOLCHAIN_DIR}/include")
   target_compile_definitions(lomn_tests_asan PRIVATE "LOMN_TESTS_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/tests\"" "LOMN_OSI_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/../data/osi\"")
   target_compile_options(lomn_tests_asan PRIVATE -Wall -Wextra -ffp-contract=off -O1 -g -fno-omit-frame-pointer

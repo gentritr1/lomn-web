@@ -66,11 +66,12 @@ struct RealDeltaTime {
 };
 
 // GcGame::GetResolutionWidth / Height 0x43ae50 / 0x43ae70: [[0x70fa64] + 0x10] and [+0x14], floats. The screen's size is
-// the INI's ResolutionW/H (INI -> M2a-3); until then the default INI values (640, 480).
+// the INI's ResolutionW/H, read by ScriptHost through the VFS (M2a-3 T5a); the default INI values (640, 480) without a file.
 struct DisplayState {
   explicit DisplayState(HostContext&) {}
   float width = 640.0f;
   float height = 480.0f;
+  uint32_t language = 0;  // [Misc] Language, default 0 (GetLanguage 0x5d4c10)
 };
 
 // SrBlockFileExists 0x54ddc0 over the VFS: Art.blk (0x83b0b8, "Root/Data/Art/Art.blk") first, then the current/second
