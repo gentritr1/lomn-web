@@ -1,0 +1,308 @@
+"""Independent .col / .fnt reader (tile fonts), written from probe 2's tables
+(docs/knowledge/research/2026-10-08-m2a0-probe2-fonts.md) and docs/osi/hud.md 3.6 / 4.4. Oracle for engine/src/sage/colfont.cpp.
+
+  .col  (BE): u32 version, count, flags (0x4 = hash mode), total, 0x14 raw bytes; then count x {hash, flags, offset, usize}.
+        hash = h*0x83 + byte (u32, case-sensitive); flags 0x11 = LZSS, 0x01 = stored; csize = next.offset - offset (last: total - offset).
+  .fnt  (LE, inside the .col as <Name>.fnt): 8 x i32 {rows, columns, numberOfCharacters, charWidth, charHeight, kerning, baseline,
+        spaceWidth}, then n x 18 B {u16 ascii, i32 width, height, xOffset, yOffset}. Record i owns <Name><i//columns>_<i%columns>.tga.
+Labels (probe 2 / hud.md): everything here is EXECUTED against the install except the 2-byte-code (lead 0xF0..0xFE) byte order
+and the empty-string width (INFERRED, no shipped font uses them).
+
+CLI:  python tools/research/colfont.py table [--install DIR]   (prints the glyph table, see TABLE_FORMAT_LINE)
+"""
+from __future__ import annotations
+
+import argparse
+import os
+import struct
+import sys
+from pathlib import Path
+
+MAX_ENTRIES = 1 << 16
+TABLE_FORMAT_LINE = ("# colfont-table v1 | font NAME dir=N glyphs=N rows=R cols=C cw=W ch=H kern=K base=B space=S maxw=X minw=Y tga=WxH"
+                     " | glyph NAME IDX ASCII(hex4) W H XOFF YOFF | str NAME 'TEXT' len=L height=H|na"
+                     " | fonts sorted by name (ASCII), glyphs in record order, ints decimal, one space between fields")
+TABLE_STRINGS = ("New Game", "Options", "Quit", "Play Game")
+
+
+class ColError(Exception):
+    pass
+
+
+def hash_name(name: str | bytes) -> int:
+    h = 0
+    for b in (name.encode("latin-1") if isinstance(name, str) else name):
+        h = (h * 0x83 + b) & 0xFFFFFFFF
+    return h
+
+
+def lzss_decode(data: bytes, usize: int) -> bytes:
+    ring = bytearray(b" " * 4096)
+    w = 0xFEE
+    out = bytearray()
+    i = 0
+    while len(out) < usize and i < len(data):
+        flags = data[i]
+        i += 1
+        for bit in range(8):
+            if len(out) >= usize:
+                break
+            if flags >> bit & 1:
+                if i >= len(data):
+                    break
+                c = data[i]
+                i += 1
+                out.append(c)
+                ring[w] = c
+                w = (w + 1) & 0xFFF
+            else:
+                if i + 1 >= len(data):
+                    i = len(data)
+                    break
+                b0, b1 = data[i], data[i + 1]
+                i += 2
+                pos = b0 | (b1 & 0xF0) << 4
+                for k in range((b1 & 0xF) + 3):
+                    c = ring[(pos + k) & 0xFFF]
+                    out.append(c)
+                    ring[w] = c
+                    w = (w + 1) & 0xFFF
+    if len(out) < usize:
+        raise ColError(f"lzss: short output {len(out)} < {usize}")
+    return bytes(out[:usize])
+
+
+class Entry:
+    def __init__(self, hash_, flags, offset, usize, csize):
+        self.hash, self.flags, self.offset, self.usize, self.csize = hash_, flags, offset, usize, csize
+
+
+class Col:
+    def __init__(self, data: bytes):
+        if len(data) < 0x24:
+            raise ColError("short header")
+        self.data = data
+        self.version, count, self.flags, self.total = struct.unpack_from(">4I", data, 0)
+        if count > MAX_ENTRIES or 0x24 + 16 * count > len(data):
+            raise ColError("bad count")
+        if self.flags & 0xE != 4:
+            raise ColError("not hash mode")
+        raw = [struct.unpack_from(">4I", data, 0x24 + 16 * i) for i in range(count)]
+        self.entries = []
+        for i, (h, fl, off, us) in enumerate(raw):
+            end = raw[i + 1][2] if i + 1 < count else self.total
+            self.entries.append(Entry(h, fl, off, us, end - off))
+        self.sorted_by_hash = all(self.entries[i].hash < self.entries[i + 1].hash for i in range(count - 1))
+        self._by_hash = {e.hash: e for e in self.entries}
+
+    def find(self, name: str):
+        return self._by_hash.get(hash_name(name))
+
+    def entry_for(self, name: str) -> Entry:
+        e = self.find(name)
+        if e is None:
+            raise ColError(f"no entry {name}")
+        return e
+
+    def read_entry(self, e: Entry) -> bytes:
+        if e.csize < 0 or e.offset + e.csize > len(self.data):
+            raise ColError("entry out of range")
+        raw = self.data[e.offset:e.offset + e.csize]
+        kind = e.flags & 0xF0
+        if kind == 0x10:
+            return lzss_decode(raw, e.usize)
+        if kind == 0x00:
+            return raw[:e.usize]
+        raise ColError(f"unknown compression {e.flags:#x}")
+
+    def read(self, name: str) -> bytes:
+        return self.read_entry(self.entry_for(name))
+
+
+class Fnt:
+    def __init__(self, data: bytes):
+        if len(data) < 32:
+            raise ColError("short fnt")
+        (self.rows, self.columns, self.n, self.char_w, self.char_h,
+         self.kerning, self.baseline, self.space) = struct.unpack_from("<8i", data, 0)
+        if self.n < 0 or self.n > MAX_ENTRIES or 32 + 18 * self.n > len(data):
+            raise ColError("bad glyph count")
+        self.raw_size = len(data)
+        self.records = [struct.unpack_from("<Hiiii", data, 32 + 18 * i) for i in range(self.n)]  # (ascii, w, h, xoff, yoff)
+        ws = [r[1] for r in self.records]
+        self.max_width = max(ws, default=0)
+        self.min_width = min(ws, default=0)
+        self._first = {}
+        for i, r in enumerate(self.records):
+            self._first.setdefault(r[0], i)  # linear search, first match wins
+
+    def codes(self, s):
+        """Split a string into glyph codes: 0xF0..0xFE lead byte + next byte = 2-byte code (INFERRED order, lo|hi<<8);
+        0xFF is the script-callback marker (no width, skipped); stops at newline."""
+        b = s.encode("latin-1") if isinstance(s, str) else bytes(s)
+        out, i = [], 0
+        while i < len(b):
+            c = b[i]
+            if c == 0x0A:
+                break
+            if c == 0xFF:
+                i += 1
+                continue
+            if 0xF0 <= c <= 0xFE and i + 1 < len(b):
+                out.append(c | b[i + 1] << 8)
+                i += 2
+                continue
+            out.append(c)
+            i += 1
+        return out
+
+    def _width(self, code, xs):
+        if code == 0x20:
+            return (self.space + self.kerning) * xs
+        i = self._first.get(code)
+        if i is None:
+            return (self.max_width + self.kerning) * xs
+        return (self.kerning + self.records[i][1]) * xs
+
+    def get_width(self, c, xscale: float = 1.0):
+        code = c if isinstance(c, int) else self.codes(c)[0]
+        return self._width(code, xscale)
+
+    def get_str_len(self, s, xscale: float = 1.0) -> int:
+        tot = 0.0
+        for code in self.codes(s):
+            tot += self._width(code, xscale)
+        return round(tot - self.kerning * xscale)  # x87 round-to-nearest-even == Python round
+
+    def has_unknown(self, s) -> bool:
+        return any(c != 0x20 and c not in self._first for c in self.codes(s))
+
+    def get_str_height(self, s, yscale: float = 1.0) -> int:
+        """Probe 2 3.2 over non-space glyphs. The original reads mChar[-1] (UB) for spaces and unknown chars: skipped here."""
+        below, above = 0.0, 0.0
+        for code in self.codes(s):
+            i = self._first.get(code)
+            if code == 0x20 or i is None:
+                continue
+            _, _, h, _, yo = self.records[i]
+            if yo <= self.baseline:
+                below = max(below, self.baseline - yo)
+            if yo < self.baseline:
+                above = max(above, h * yscale - (self.baseline - yo))
+            else:
+                above = max(above, h * yscale)
+        return round(above + below)
+
+
+class Tga:
+    def __init__(self, data: bytes):
+        if len(data) < 18:
+            raise ColError("short tga")
+        idlen, cmap, typ = data[0], data[1], data[2]
+        self.w, self.h = struct.unpack_from("<HH", data, 12)
+        self.bpp, self.descriptor = data[16], data[17]
+        if typ != 2 or cmap != 0 or self.bpp != 32:
+            raise ColError(f"unsupported tga type={typ} bpp={self.bpp}")
+        n = self.w * self.h * 4
+        o = 18 + idlen
+        if o + n > len(data):
+            raise ColError("tga pixels truncated")
+        self.pixels = data[o:o + n]  # BGRA, rows in file order (bottom-up when descriptor bit 5 is clear)
+
+
+class TileFont:
+    def __init__(self, name: str, col: Col):
+        self.name, self.col = name, col
+        self.fnt = Fnt(col.read(name + ".fnt"))
+
+    def glyph_name(self, i: int) -> str:
+        return f"{self.name}{i // self.fnt.columns}_{i % self.fnt.columns}.tga"
+
+    def glyph_dir_names(self):
+        return [self.glyph_name(i) for i in range(self.fnt.n) if self.col.find(self.glyph_name(i))]
+
+    def glyph_tga(self, i: int) -> Tga:
+        return Tga(self.col.read(self.glyph_name(i)))
+
+    def tga_entries(self) -> int:
+        """Directory entries that decode as a char_w x char_h 32 bpp TGA (content-based, independent of the names)."""
+        n = 0
+        for e in self.col.entries:
+            try:
+                t = Tga(self.col.read_entry(e))
+            except ColError:
+                continue
+            n += (t.w, t.h) == (self.fnt.char_w, self.fnt.char_h)
+        return n
+
+    def ink_extent(self, s):
+        """(min, max) inclusive pixel columns with alpha >= 128, laying tiles out like Draw: tile left = pen - xOffset."""
+        f, pen, lo, hi = self.fnt, 0, None, None
+        for code in f.codes(s):
+            i = f._first.get(code)
+            if code == 0x20 or i is None:
+                pen += int(f._width(code, 1.0))
+                continue
+            _, w, _, xo, _ = f.records[i]
+            t = self.glyph_tga(i)
+            for x in range(t.w):
+                if any(t.pixels[(y * t.w + x) * 4 + 3] >= 128 for y in range(t.h)):
+                    X = pen - xo + x
+                    lo = X if lo is None else min(lo, X)
+                    hi = X if hi is None else max(hi, X)
+            pen += w + f.kerning
+        return lo, hi
+
+
+def load_font(path, name: str | None = None) -> TileFont:
+    path = Path(path)
+    return TileFont(name or path.stem, Col(path.read_bytes()))
+
+
+def list_fonts(fontdir):
+    return sorted((p.stem, p) for p in Path(fontdir).iterdir() if p.name.lower().endswith(".col"))
+
+
+def info_charset(info: bytes):
+    """The charset line (7th non-comment line) of a TiffSpliter .info: bytes, \\xHH escapes for >= 0xA0."""
+    lines = [ln for ln in info.decode("latin-1").splitlines() if not ln.startswith("//")]
+    line, out, i = lines[6], [], 0
+    while i < len(line):
+        if line.startswith("\\x", i) and i + 4 <= len(line):
+            out.append(int(line[i + 2:i + 4], 16))
+            i += 4
+        else:
+            out.append(ord(line[i]))
+            i += 1
+    return out
+
+
+def table(fontdir) -> str:
+    out = [TABLE_FORMAT_LINE]
+    for name, path in list_fonts(fontdir):
+        ft = load_font(path, name)
+        f = ft.fnt
+        t0 = ft.glyph_tga(0) if f.n else None
+        sizes = {(t.w, t.h) for t in (ft.glyph_tga(i) for i in range(f.n))}
+        tga = f"{t0.w}x{t0.h}" if len(sizes) == 1 else "mixed"
+        out.append(f"font {name} dir={len(ft.col.entries)} glyphs={f.n} rows={f.rows} cols={f.columns} cw={f.char_w} ch={f.char_h}"
+                   f" kern={f.kerning} base={f.baseline} space={f.space} maxw={f.max_width} minw={f.min_width} tga={tga}")
+        for i, (a, w, h, xo, yo) in enumerate(f.records):
+            out.append(f"glyph {name} {i} {a:04x} {w} {h} {xo} {yo}")
+        for s in TABLE_STRINGS:
+            hh = "na" if f.has_unknown(s) else str(f.get_str_height(s))
+            out.append(f"str {name} '{s}' len={f.get_str_len(s)} height={hh}")
+    return "\n".join(out) + "\n"
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    t = sub.add_parser("table")
+    t.add_argument("--install", default=os.path.join(os.environ.get("LOMN_DATA", ""), "install"))
+    a = ap.parse_args(argv)
+    sys.stdout.write(table(Path(a.install) / "data" / "Art" / "Fonts"))
+
+
+if __name__ == "__main__":
+    main()
