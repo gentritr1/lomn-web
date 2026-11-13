@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 430" width="960" height="430" font-family="-apple-system, Segoe UI, Helvetica, Arial, sans-serif">
+  <title>LOMN Web progress on 2026-11-13: the script engine runs the game's menu script; the menu itself renders next</title>
+  <rect width="960" height="430" rx="12" fill="#14161a"/>
+  <text x="32" y="40" fill="#f2f2f2" font-size="20" font-weight="700">Where we are</text>
+  <text x="32" y="62" fill="#9aa3ad" font-size="13">2026-11-13. Every number below comes from a test run on that day's code (m2-osi-vm @ 80bc109).</text>
+
+  <!-- now / next -->
+  <rect x="32" y="82" width="440" height="92" rx="8" fill="#1f2328" stroke="#f0883e" stroke-width="2"/>
+  <text x="48" y="106" fill="#f0883e" font-size="12" font-weight="700">NOW: M2a-3, MENU SYSTEMS</text>
+  <text x="48" y="128" fill="#f2f2f2" font-size="13">Plan written and reviewed: 13 tasks.</text>
+  <text x="48" y="148" fill="#f2f2f2" font-size="13">Fonts, HUD sprites and text, camera spline, mouse,</text>
+  <text x="48" y="166" fill="#f2f2f2" font-size="13">and Bionicle.ini, until the main menu renders.</text>
+
+  <rect x="488" y="82" width="440" height="92" rx="8" fill="#1f2328" stroke="#3a3f47" stroke-width="2"/>
+  <text x="504" y="106" fill="#9aa3ad" font-size="12" font-weight="700">FIRST NEW PICTURE</text>
+  <text x="504" y="128" fill="#f2f2f2" font-size="13">The real main menu, drawn by this project,</text>
+  <text x="504" y="148" fill="#f2f2f2" font-size="13">compared with screenshots of the original game.</text>
+  <text x="504" y="166" fill="#9aa3ad" font-size="13">Until then the script engine runs headless.</text>
+
+  <!-- proven -->
+  <text x="32" y="210" fill="#f2f2f2" font-size="14" font-weight="700">Proven so far</text>
+  <g font-size="13">
+    <circle cx="44" cy="234" r="6" fill="#3fb950"/>
+    <text x="60" y="239" fill="#f2f2f2">Script VM: 541 of 541 test programs give byte-identical traces in C++ and in an independent Python version.</text>
+    <circle cx="44" cy="262" r="6" fill="#3fb950"/>
+    <text x="60" y="267" fill="#f2f2f2">The game's Base.osi runs setup + 600 frames: native, WebAssembly and Python agree on all 601 frame digests.</text>
+    <circle cx="44" cy="290" r="6" fill="#3fb950"/>
+    <text x="60" y="295" fill="#f2f2f2">69 engine functions the script calls: 35 rebuilt from the original's code, 34 proven not to change the run.</text>
+    <circle cx="44" cy="318" r="6" fill="#3fb950"/>
+    <text x="60" y="323" fill="#f2f2f2">Planted bugs caught by the tests: 46 of 46 in the VM, 6 of 6 in the engine functions.</text>
+    <circle cx="44" cy="346" r="6" fill="#3fb950"/>
+    <text x="60" y="351" fill="#f2f2f2">Browser viewer: 60 of 60 checks on the real game files, pixel-identical to the desktop build.</text>
+  </g>
+
+  <!-- M2 bar -->
+  <text x="32" y="392" fill="#9aa3ad" font-size="12">M2 (script engine to the main menu)</text>
+  <rect x="250" y="381" width="678" height="14" rx="7" fill="#3a3f47"/>
+  <rect x="250" y="381" width="339" height="14" rx="7" fill="#3fb950"/>
+  <text x="250" y="416" fill="#9aa3ad" font-size="12">3 of 6 steps done: citations, VM + oracle, engine functions. Next: menu, hardening, menu in the browser.</text>
+</svg>

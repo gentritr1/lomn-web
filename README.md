@@ -6,6 +6,12 @@ An unofficial, non-commercial fan project that brings **BIONICLE: The Legend of 
 
 ![Roadmap](docs/media/roadmap.svg)
 
+## Where we are
+
+![Progress on 2026-11-13](docs/media/progress.svg)
+
+This panel is updated each time a step closes. The script engine has no picture of its own yet: it runs headless until the main menu renders (M2a-3), and that menu becomes the next screenshot here.
+
 ## Screenshots
 
 These are rendered in the browser from the game's own files. Each one is pixel-identical to the project's native desktop build of the same scene.
@@ -24,7 +30,7 @@ These are rendered in the browser from the game's own files. Each one is pixel-i
   - GPU memory stays flat across 30 area switches;
   - areas load only the bytes they need;
   - a second visit loads instantly from a local copy.
-- **The game's script engine, in progress.** The script VM is rewritten in C++ and, separately, in Python. The game's own `Base.osi` runs its setup and 600 frames with byte-identical traces in native C++, in WebAssembly and in Python. A 527-program conformance suite pins every one of the 96 instructions. Tests are proven to catch deliberately planted bugs (47 checked).
+- **The game's script engine, in progress.** The script VM is rewritten in C++ and, separately, in Python. The game's own `Base.osi` runs its setup and 600 frames with byte-identical traces in native C++, in WebAssembly and in Python, with 69 of the engine's native functions either rebuilt from the original's code or proven not to change the run. A 541-program conformance suite pins every one of the 96 instructions. Tests are proven to catch deliberately planted bugs (46 of 46 in the VM, 6 of 6 in the native functions).
 
 ## What is left
 
