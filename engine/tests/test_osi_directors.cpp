@@ -1932,6 +1932,47 @@ TEST_CASE("osi directors T12 I-2: setting the slot again clears the freed mark (
   CHECK_FALSE(r.ctx().block_chain()->current_freed());
 }
 
+// Fix 3 m-a: the two `check_slot_readable` guards in AreaDirector::run_block. An objects-block OnEvent (an 'lbld' record, 'lbld'
+// the main character) calls a refused addtoa, which leaves the slot freed (0x47e4ca, no restore); the characters block then
+// asks for its SLK: the lookup past Art.blk (0x54ddf0, guard 1) or SrBlockFileLoad's read of the current slot (guard 2) is undefined.
+static std::string freed_slot_in_characters_block(bool slb_in_art) {
+  fs::MemoryFileSystem mem;
+  const Bytes chars = id_slb({"lbld"}, 0x34);
+  REQUIRE(mem.mount("Root/Data/Art/Art.blk", slb_in_art ? blk({{"frnt_char.slb", chars}, {"frnt_hive.slb", id_slb({"lbld"}, 0x3c)}})  // the hive SLK too: its guard-1 would mask guard 2
+                                  : blk({{"art.tga", {1}}})));
+  REQUIRE(mem.mount("Root/Data/Levels/lev0/lev0.blk", blk({{"inlev.txt", {1}}})));
+  std::vector<std::pair<std::string, Bytes>> area = {{"frnt_obj.slb", obj_slb({{"lbld", 0x30}})}};
+  if (!slb_in_art) area.push_back({"frnt_char.slb", chars});
+  REQUIRE(mem.mount("Root/Data/Levels/lev0/frnt.blk", blk(std::move(area))));
+  Asm a;
+  a.fn("setup", 0).s("onua").call("gcmodeldirector", "addtoa", 1).pop();
+  a.i8(1).op(0x22).u16(a.glob("g"));  // g = 1: disarmed while the first Toa is added
+  a.s("lev0").call("gcareadirector", "setcurrentlevel", 1).pop();
+  a.i8(0).op(0x22).u16(a.glob("g"));  // armed: the first OnEvent of the area load does the refused addtoa
+  a.s("frnt").call("gcareadirector", "setcurrentarea", 1).ret();
+  a.fn("onevent", 10).op(0x21).u16(a.glob("g")).rel(0x53, "first").nothing().ret();
+  a.label("first").i8(1).op(0x22).u16(a.glob("g"));
+  a.s("gali").call("gcmodeldirector", "addtoa", 1).pop().nothing().ret();
+  std::string msg;
+  Run r(a, &mem, HostFlags{}, [&](ScriptHost& h) {
+    main_is(h, "lbld");
+    keep_native_error(h, "gcareadirector", "setcurrentarea", msg);
+  });
+  CHECK_FALSE(r.res.ok);  // nothing swallows it: the undefined read ends the script (the area load's pads only catch SrThrow)
+  CHECK(r.ctx().block_chain()->current_freed());
+  return msg;
+}
+
+TEST_CASE("osi directors T12 m-a: a freed slot makes the characters block's SLK lookup undefined (guard 1: not in Art.blk)") {
+  CHECK(freed_slot_in_characters_block(false) ==
+        "Undefined behaviour: block-file slot [0x736128] points into a freed object (0x54ddf0 -> ScBlockFile::Find)");
+}
+
+TEST_CASE("osi directors T12 m-a: a freed slot makes SrBlockFileLoad undefined even when Art.blk holds the SLK (guard 2)") {
+  CHECK(freed_slot_in_characters_block(true) ==
+        "Undefined behaviour: block-file slot [0x736128] points into a freed object (0x54ddf0 -> ScBlockFile::Find)");
+}
+
 TEST_CASE("osi directors T12 R2: a refused character Add (0x47ef9a -> 0x47efda) fires no OnEvent and leaves the slot as found") {
   // Known divergence, open for M2a-3: the original returns without the restore and the slot points at the freed character;
   // both engines leave the slot at its pre-call value (natives.md §5.4).
