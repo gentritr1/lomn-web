@@ -752,14 +752,14 @@ def test_run_base_replay_keeps_VM_error_when_log_unconsumed(tmp_path):  # m3b: V
     # Run without replay first to confirm the divide-by-zero error
     py = [sys.executable, str(REPO / "tools" / "research" / "osi_vm.py"), "--run", str(osi), "--frames", "1"]
     a = subprocess.run(py, capture_output=True, text=True, timeout=110)
-    assert a.returncode == 0, a.stderr
+    assert a.returncode == 4, a.stderr                              # Decision 11: a VM error ends the run with rc 4
     assert 'error "Divide by 0" in Setup' in a.stdout
 
     # Now run with replay that has unconsumed records
     c = subprocess.run(py + ["--replay", str(log)], capture_output=True, text=True, timeout=110)
     # The VM error should be reported before replay_finish() is called, so the stop line must show the VM error
     # (not the replay desync that would have masked it before the fix)
-    assert c.returncode == 0, c.stderr
+    assert c.returncode == 4, c.stderr                              # 4 (VM error), not 1 (replay desync)
     assert 'error "Divide by 0" in Setup' in c.stdout
     # Verify the VM error is reported, not the replay desync
     assert "replay desync:" not in c.stdout
