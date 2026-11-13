@@ -7,9 +7,9 @@
   <!-- now / next -->
   <rect x="32" y="82" width="440" height="92" rx="8" fill="#1f2328" stroke="#f0883e" stroke-width="2"/>
   <text x="48" y="106" fill="#f0883e" font-size="12" font-weight="700">NOW: M2a-3, MENU SYSTEMS</text>
-  <text x="48" y="128" fill="#f2f2f2" font-size="13">Stages 1-2 of 5 done: the original's menu logic read</text>
-  <text x="48" y="148" fill="#f2f2f2" font-size="13">from its code, test formats fixed. Now: camera,</text>
-  <text x="48" y="166" fill="#f2f2f2" font-size="13">mouse, INI and fonts, each built twice (C++, Python).</text>
+  <text x="48" y="128" fill="#f2f2f2" font-size="13">Stages 1-2 of 5 done. Stage 3: camera, mouse and</text>
+  <text x="48" y="148" fill="#f2f2f2" font-size="13">INI built twice (C++, Python) and merged; fonts</text>
+  <text x="48" y="166" fill="#f2f2f2" font-size="13">built twice, back for one fix round (Python).</text>
 
   <rect x="488" y="82" width="440" height="92" rx="8" fill="#1f2328" stroke="#3a3f47" stroke-width="2"/>
   <text x="504" y="106" fill="#9aa3ad" font-size="12" font-weight="700">FIRST NEW PICTURE</text>
