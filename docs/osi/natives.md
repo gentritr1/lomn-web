@@ -642,8 +642,8 @@ The map's key order between processes, set by the priority byte that `ScProcessM
 
 **The non-lethal threshold: `(0x28, int 2, 'impc')`, from `CheckWallCloseness` 0x587240** (new in fix round 1).
 - A single shot at any frame is SAME.
-- **Two or more injections in frames 0–1** (repeat at 0,1,10,100,599) change frame 4 by −32 instructions, with the same natives.
-- **Injection at every frame from frame 2** (repeat at 2-599, or all) skips **3 `gchuddirector.hide` calls in frame 4** (−1159).
+- **Two or more injections in frames 0–1** (repeat at 0,1,10,100,599) change frame 4 by −32 instructions and drop **1** native there (27 → 26). *(Corrected 2026-11-13, M2a-3 Task 1: the earlier text said "with the same natives"; command in measurements.md, "M2a-3 baseline".)*
+- **Injection at every frame from frame 2** (repeat at 2-599, or all) skips **26 `gchuddirector.hide` calls in frame 4** (27 → 1 natives; −1159 instructions), HUD indices 0–18, 23, 49, 50, 58, 67–69. Injecting at every frame 0–599 also changes frames 2 (6 → 1) and 3 (73 → 68). *(Corrected 2026-11-13, M2a-3 Task 1: the earlier text said 3; the instruction deltas −32/−1159/−1775 were right, the native counts were not.)*
 
 **Where it re-converges.** Every change stays inside frames 0–4, the script's HUD set-up frames. From frame 5 on, every run is identical to the baseline in its PC sequence and its native calls, including the runs that inject at every frame through 599. No injection gives ERROR. Every other tuple is SAME in every mode.
 
@@ -654,8 +654,8 @@ The map's key order between processes, set by the priority byte that `ScProcessM
 
 **M2a-3 risk: the wall-closeness event.**
 - `(0x28, int 2, 'impc')` from `CheckWallCloseness` 0x587240 is **non-lethal**. It is **plausible** for a Toa standing on the front end.
-- If it fires twice in frames 0–1, or every frame from frame 2, the script skips 3 `gchuddirector.hide` calls in frame 4. The script path re-converges, but the skipped hide calls change **engine HUD state**, so persistent HUD visibility may differ from the original.
-- **M2a-3 must either** model `CheckWallCloseness` for the front-end Toa, **or** settle the question against the owner's menu screenshots.
+- If it fires twice in frames 0–1, the script skips 1 native in frame 4; if it fires every frame from frame 2, it skips 26 `gchuddirector.hide` calls in frame 4 (corrected 2026-11-13, see above). The script path re-converges, but the skipped hide calls change **engine HUD state**, so persistent HUD visibility may differ from the original.
+- **M2a-3 must either** model `CheckWallCloseness` for the front-end Toa, **or** settle the question against the owner's menu screenshots. *(M2a-3 Decision 7: settled against the owner's screenshots, owner check O6.)*
 
 **Re-checks:**
 - Task 10 re-runs `event_probe.py --repeat --at all --natives-impl real` with the real natives. **Done (Task 10, 2026-11-13, EXECUTED):** 47 repeated runs, CHANGED 4 / SAME 43, divergences at frames 0 and 2 only; the single-shot and `2-599` runs agree with Task 2a's counts (measurements.md, "M2a-2 Task 10");

@@ -90,7 +90,7 @@ Controller-verified 2026-10-08: the page loads to the folder picker with 0 conso
 - **A9 blind spots.** A9 cannot see per-handle refcounts or native state that is never read (`cs.playing`).
 - **Script errors.** On a script error the C++ CLI returns rc 4 and the Python CLI returns 0 (a harness convention).
 
-**Risk carried from M2a-2 (natives.md §6.3):** the front-end Toa runs its physics every frame, which the headless M2a-2 frame omits as a documented gap. A non-lethal wall-closeness event (`OnEvent(0x28, 2, 'impc')`, CheckWallCloseness 0x587240), if it fires repeatedly, skips 3 HUD `hide` calls at frame 4, so HUD visibility could differ from the original. M2a-3 must model CheckWallCloseness for the front-end Toa, or settle it against the owner's menu screenshots.
+**Risk carried from M2a-2 (natives.md §6.3):** the front-end Toa runs its physics every frame, which the headless M2a-2 frame omits as a documented gap. A non-lethal wall-closeness event (`OnEvent(0x28, 2, 'impc')`, CheckWallCloseness 0x587240), if it fires repeatedly, skips 26 HUD `hide` calls at frame 4 (corrected 2026-11-13 by M2a-3 Task 1; the earlier count was 3), so HUD visibility could differ from the original. M2a-3 Decision 7 settles it against your menu screenshots. M2a-3 must model CheckWallCloseness for the front-end Toa, or settle it against the owner's menu screenshots.
 
 Tile fonts (binary `.fnt`), HUD sprites, text and rectangles through the D3D8 shim (FVF 0x42, textured quads, HUD transform, drawn after the area), camera spline, SDL3 input, and `Bionicle.ini` via the VFS.
 - Acceptance: a pixel comparison against **your screenshots of the real menu**. This review cannot close without them.
