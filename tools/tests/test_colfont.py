@@ -59,7 +59,8 @@ def test_str_height_skips_unknown_and_space():
     # glyph: height 11, yOffset 1, baseline 12: below = 12-1 = 11, above = 11-(12-1) = 0 -> 11
     f = colfont.Fnt(_fnt(1, 1, 1, 16, 16, 0, 12, 8, [(65, 10, 11, 0, 1)]))
     assert f.get_str_height(b"A") == 11
-    assert f.get_str_height(b"A A") == 11               # space skipped (original reads mChar[-1]: UB, probe 2 3.2)
+    assert f.get_str_height(b"A A") == 11               # space skipped (hud.md §4.9 ruling)
+    assert f.get_str_height(b"A", 1.6) == 17             # 6.6 + 11 = 17.6: truncated (0x628ccd chop), round gives 18
 
 
 # ---- data-dependent ----

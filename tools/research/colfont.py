@@ -20,7 +20,7 @@ from pathlib import Path
 
 MAX_ENTRIES = 1 << 16
 TABLE_FORMAT_LINE = ("# colfont-table v1 | font NAME dir=N glyphs=N rows=R cols=C cw=W ch=H kern=K base=B space=S maxw=X minw=Y tga=WxH"
-                     " | glyph NAME IDX ASCII(hex4) W H XOFF YOFF | str NAME 'TEXT' len=L height=H|na"
+                     " | glyph NAME IDX ASCII(hex4) W H XOFF YOFF | str NAME 'TEXT' len=L height=H"
                      " | fonts sorted by name (ASCII), glyphs in record order, ints decimal, one space between fields")
 TABLE_STRINGS = ("New Game", "Options", "Quit", "Play Game")
 
@@ -178,7 +178,8 @@ class Fnt:
         return any(c != 0x20 and c not in self._first for c in self.codes(s))
 
     def get_str_height(self, s, yscale: float = 1.0) -> int:
-        """Probe 2 3.2 over non-space glyphs. The original reads mChar[-1] (UB) for spaces and unknown chars: skipped here."""
+        """GetStrHeight 0x628bf0 (hud.md §4.9): a code with no record (every space; unknown codes) is skipped, ruling INFERRED
+        (the original reads [[this+0x58]-0x110], heap). The sum is truncated (x87 chop 0x628ccd), not rounded."""
         below, above = 0.0, 0.0
         for code in self.codes(s):
             i = self._first.get(code)
@@ -191,7 +192,7 @@ class Fnt:
                 above = max(above, h * yscale - (self.baseline - yo))
             else:
                 above = max(above, h * yscale)
-        return round(above + below)
+        return int(above + below)                                      # chop toward zero; both terms >= 0
 
 
 class Tga:
@@ -290,7 +291,7 @@ def table(fontdir) -> str:
         for i, (a, w, h, xo, yo) in enumerate(f.records):
             out.append(f"glyph {name} {i} {a:04x} {w} {h} {xo} {yo}")
         for s in TABLE_STRINGS:
-            hh = "na" if f.has_unknown(s) else str(f.get_str_height(s))
+            hh = str(f.get_str_height(s))                          # §4.9: no-record codes skipped
             out.append(f"str {name} '{s}' len={f.get_str_len(s)} height={hh}")
     return "\n".join(out) + "\n"
 
