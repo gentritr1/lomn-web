@@ -131,11 +131,11 @@ Every implemented native carries one citation comment, in both engines, in this 
   for citations. **The reference copy** (`$LOMN_DATA/reference/LEGOBionicle.exe`, `09b55e62…`, "canonical" in
   `tools/builds.json`) was hand-patched after linking; it stays usable for names and tooling.
 - The two are the same size and differ in **798 bytes** (EXECUTED in T12 fix a: a byte compare of the two files). The
-  first differing file offset is 417,185 (0-based; VA 0x4669a1). The bytes form 16 runs of consecutive bytes, or **7
+  first differing file offset is 417,185 (0-based; VA 0x4669a1, the reference copy's byte). The bytes form 16 runs of consecutive bytes, or **7
   runs** when runs at most 8 bytes apart are merged, all in `.text` inside 6 functions: `GcSurfaceOctree::GetLeaf`
   0x4669a0, `GcAreaDirector::Hide` 0x488e80, `ScPrinter::DoPrint` 0x5ecd30, `GcMudBoss::Reset` 0x6448b0,
-  `GcMudBoss::CleanUp` 0x6449a0, `GcRockBoss::CleanUp` 0x64d3b0 (merged runs: 0x4669a1-0x466aaf, 0x488ed2-0x488edf,
-  0x5ed019-0x5ed01d, 0x5ed0c5, 0x6448e6-0x6448ed, 0x6449a9-0x644a7a, 0x64d3b9-0x64d4eb). `.reloc` is identical, and
+  `GcMudBoss::CleanUp` 0x6449a0, `GcRockBoss::CleanUp` 0x64d3b0 (merged runs of the reference copy: 0x4669a1-0x466aaf, 0x488ed2-0x488edf,
+  0x5ed019-0x5ed01d, 0x5ed0c5, 0x6448e6-0x6448ed, 0x6449a9-0x644a7a, 0x64d3b9-0x64d4eb; install copy unpatched). `.reloc` is identical, and
   three relocation entries (0x6449ab, 0x64d3bb, 0x64d463) land mid-instruction in the reference copy (reviewer's reading).
 - No current citation falls inside those ranges (reviewer's census; side b's test pins it). Tests that read the exe as
   data may use either copy outside the ranges; the T12 pins read the install copy.
