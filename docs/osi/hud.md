@@ -44,7 +44,7 @@ Function extents come from flow-following the binary to every `ret` and the next
 | `+0x3a4` | spline object (ref-counted) | SetCameraSpline / SetTargetSpline |
 | `+0x3a8` | duration, double = (double) f32 argument | both |
 | `+0x3b0` | start time, double = `SrGetSeconds(0)` | 0x45b3d5 (camera), 0x45b45e (target); also SetCameraAIMode 0x45b53d–0x45b545 for modes 2 and 3 |
-| `+0x3b8` | camera spline index (u8 in use) | SetCameraSpline arg 2 |
+| `+0x3b8` | camera spline index (u8 in use) | SetCameraSpline arg 2 (0x45b3c6) **and** SetTargetSpline arg 2 (0x45b446, EXECUTED 2026-11-14; found by T4b) |
 | `+0x3bc` | target spline index | SetTargetSpline only (0x45b44c) |
 | `+0x460` | forward flag (1 = forward, 0 = reverse) | both |
 | `+0x461` | look-ahead flag | both |
