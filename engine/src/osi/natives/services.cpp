@@ -84,9 +84,22 @@ double RealDeltaTime::step(double now) {
 
 // ---- block files ----
 
+const char* const kFreedSlotMessage =
+    "Undefined behaviour: block-file slot [0x736128] points into a freed object (0x54ddf0 -> ScBlockFile::Find)";
+
+void check_slot_readable(const sage::BlockChain& chain, std::string_view name, bool after_art) {
+  if (!chain.current_freed()) return;
+  if (after_art) {
+    const sage::BlockFile* art = chain.blockfile(sage::Source::Art);
+    if (art && art->find(name) >= 0) return;  // Art.blk answers first (0x54ddc7-0x54dde4): the slot is never read
+  }
+  throw VmError(kFreedSlotMessage);  // cmp [0x736128], 0 (0x54ddf0): non-null, then Find on the freed header
+}
+
 bool BlockFiles::exists(const std::string& name) {
   sage::BlockChain* chain = ctx_.block_chain();  // Art.blk opened there (path 0x703523, LoadArtBlockHeader 0x43b030)
   if (!chain) return false;  // no volumes mounted: FileExists finds nothing (its no-volume error is caught, 0x54df60)
+  check_slot_readable(*chain, name, true);
   return chain->exists(name);
 }
 

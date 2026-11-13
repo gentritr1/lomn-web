@@ -1872,22 +1872,83 @@ TEST_CASE("osi directors T12 I-2: a successful addtoa leaves the current slot as
   CHECK(r.ctx().block_chain()->path(sage::Source::Current) == "Root/Data/Levels/lev0/lev0.blk");
 }
 
-TEST_CASE("osi directors T12 I-2: a failed addtoa (the key is taken) is undefined: the slot points into the freed Toa") {
+TEST_CASE("osi directors T12 I-2: a failed addtoa returns int 0; the slot is freed and the first read of it is undefined") {
   fs::MemoryFileSystem mem;
   REQUIRE(mem.mount("Root/Data/Art/Art.blk", blk({{"art.tga", {1}}})));
   REQUIRE(mem.mount("Root/Data/Characters/gali.blk", blk({{"inchar.txt", {1}}})));
+  REQUIRE(mem.mount("Root/Data/loose.txt", {1}));
   Asm a;
   a.fn("setup", 0).s("onua").call("gcmodeldirector", "addtoa", 1).pop();
   a.s("gali").call("gcmodeldirector", "addtoa", 1).ret();
+  a.fn("ex_art", 0).s("x/art.tga").call("scslosifileio", "doesfileexist", 1).ret();
+  a.fn("ex_loose", 0).s("Root/Data/loose.txt").call("scslosifileio", "doesfileexist", 1).ret();
+  a.fn("add2", 0).s("lewa").call("gcmodeldirector", "addtoa", 1).ret();
   add_onevent(a);
   std::string msg;
-  Run r(a, &mem, HostFlags{}, [&](ScriptHost& h) { keep_native_error(h, "gcmodeldirector", "addtoa", msg); });
-  CHECK_FALSE(r.res.ok);
-  CHECK(starts_with(msg, "Undefined behaviour:"));
+  Run r(a, &mem, HostFlags{}, [&](ScriptHost& h) { keep_native_error(h, "scslosifileio", "doesfileexist", msg); });
+  // (a) AddToa returns normally (0x47e4ca -> 0x47e508): int 0, the script goes on
+  REQUIRE(r.res.ok);
+  CHECK(r.res.result == make_int(0));
   CHECK(r.log_count("C ") == 2);  // the second constructor's OnEvent ran before the Add (0x568a59)
   ModelDirector& md = r.ctx().subsystem<ModelDirector>();
   REQUIRE(md.map.size() == 1);
   CHECK(dynamic_cast<GcToa*>(md.get(kIdCnt1))->name() == "onua");
+  REQUIRE(r.ctx().block_chain());
+  CHECK(r.ctx().block_chain()->current_freed());
+  // (c) a name Art.blk holds is answered before the slot is read (0x54ddc7)
+  CHECK(r.call("ex_art").result == make_int(1));
+  CHECK(msg.empty());
+  // (b) any other name reads the freed slot (0x54ddf0 -> ScBlockFile::Find): undefined, the exact message both engines use
+  CHECK_FALSE(r.call("ex_loose").ok);
+  CHECK(msg == "Undefined behaviour: block-file slot [0x736128] points into a freed object (0x54ddf0 -> ScBlockFile::Find)");
+  // (d) a later successful addtoa saves and restores the dangling pointer (0x47e1f1 / 0x47e61e): the slot stays freed.
+  // The 'cnt1' key is freed by hand here (the scripted route is RemoveArea's 0x2b OnEvent, which needs an area load, and
+  // every area load sets the slot itself).
+  GcCharacter* toa = md.get(kIdCnt1);
+  md.map.erase(kIdCnt1);
+  md.s_toa = nullptr;
+  r.ctx().release(toa);
+  const CallResult add2 = r.call("add2");
+  REQUIRE(add2.ok);
+  CHECK(add2.result == make_int(1));
+  CHECK(r.ctx().block_chain()->current_freed());
+  msg.clear();
+  CHECK_FALSE(r.call("ex_loose").ok);
+  CHECK(msg == "Undefined behaviour: block-file slot [0x736128] points into a freed object (0x54ddf0 -> ScBlockFile::Find)");
+}
+
+TEST_CASE("osi directors T12 I-2: setting the slot again clears the freed mark (setcurrentlevel after a failed addtoa)") {
+  fs::MemoryFileSystem mem;
+  mount_area(mem, {{"inarea.txt", {1}}});
+  Asm a;
+  a.fn("setup", 0).s("onua").call("gcmodeldirector", "addtoa", 1).pop();
+  a.s("gali").call("gcmodeldirector", "addtoa", 1).pop();
+  a.s("lev0").call("gcareadirector", "setcurrentlevel", 1).pop();
+  a.s("x/inlev.txt").call("scslosifileio", "doesfileexist", 1).ret();
+  add_onevent(a);
+  Run r(a, &mem);
+  REQUIRE(r.res.ok);
+  CHECK(r.res.result == make_int(1));
+  CHECK_FALSE(r.ctx().block_chain()->current_freed());
+}
+
+TEST_CASE("osi directors T12 R2: a refused character Add (0x47ef9a -> 0x47efda) fires no OnEvent and leaves the slot as found") {
+  // Known divergence, open for M2a-3: the original returns without the restore and the slot points at the freed character;
+  // both engines leave the slot at its pre-call value (natives.md §5.4).
+  fs::MemoryFileSystem mem;
+  mount_area(mem, {{"frnt_char.slb", id_slb({"cnt1"}, 0x34)}, {"inarea.txt", {1}}});
+  REQUIRE(mem.mount("Root/Data/Characters/cnt1.blk", blk({{"inchar.txt", {1}}})));
+  Asm a;
+  a.fn("setup", 0).s("onua").call("gcmodeldirector", "addtoa", 1).pop();
+  a.s("lev0").call("gcareadirector", "setcurrentlevel", 1).pop();
+  a.s("frnt").call("gcareadirector", "setcurrentarea", 1).ret();
+  add_onevent(a);
+  Run r(a, &mem);  // MainCharacterID is 'cnt1' (no holder): an added 'cnt1' would fire
+  REQUIRE(r.res.ok);
+  CHECK(r.log_count("C ") == 1);  // only addtoa's own OnEvent(0x32): no InitializeCollisionPhysics / SetupMoveable call
+  CHECK(r.ctx().subsystem<AreaDirector>().block_stats(AreaDirector::kCharacters).nested_calls == 0);
+  CHECK(r.ctx().block_chain()->path(sage::Source::Current) == "Root/Data/Levels/lev0/frnt.blk");
+  CHECK_FALSE(r.ctx().block_chain()->current_freed());
 }
 
 TEST_CASE("osi directors T12 M-1 asm pin (install exe): RemoveArea calls CleanUpArea on a null loader; CleanUpArea reads [this+0x10]") {

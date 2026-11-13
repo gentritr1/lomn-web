@@ -77,6 +77,11 @@ struct DisplayState {
 // block files (the slots [0x736128] / [0x73612c]; both 0 at every call on the Base.osi path), then FileExists 0x54de70
 // on the mounted volumes only while no current block file is set. Reuses sage::BlockChain::find_exists over the host's
 // ONE chain, HostContext::block_chain() (shared with every native that sets the current block file, m-7).
+// M2a-2 T12 I-2: a lookup that would read a freed current slot (sage::BlockChain::current_freed) throws this VmError message:
+// SrBlockFileExists reaches the slot when Art.blk (0x54ddc7) has not answered (`after_art`), SrBlockFileLoad always.
+extern const char* const kFreedSlotMessage;
+void check_slot_readable(const sage::BlockChain& chain, std::string_view name, bool after_art);
+
 class BlockFiles {
  public:
   explicit BlockFiles(HostContext& c) : ctx_(c) {}

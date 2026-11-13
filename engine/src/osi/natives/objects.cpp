@@ -5,6 +5,7 @@
 // reference a body takes or drops is one add_ref/release here, so natives.log gets one `H` line per event (temporaries
 // included, natives.md §3.1).
 #include "lomn/osi/objects.h"
+#include "lomn/sage/blockchain.h"
 
 #include <cstring>
 #include <string>
@@ -129,9 +130,11 @@ Variant n_spline_create(NativeCall& c, void* user) {
 // (SrGetCurBlockFile 0x47e1f1 -> [ebp-0x134]) after the constructor, LoadCharBlockHeader 0x419330 (0x47e1fe) sets it to the
 // Toa's header [toa+0x228] (0x419403), and success restores the saved value (0x47e618 / 0x47e61e): no net change, and no
 // call between 0x47e1fe and 0x47e61e reaches Call (calls.jsonl closures), so no script sees the Toa's file. A failed Add
-// returns at 0x47e508 without the restore, the Toa already freed by Add's temporary -1 (0x480f08): the slot points into
-// freed memory (and the queued AddProcess, 0x568262, is a dangling pointer): Undefined behaviour, raised after the
-// release. Not modelled: the camera, the collision physics, the event handlers and the sounds.
+// returns int 0 at 0x47e508 without the restore, the Toa already freed by Add's temporary -1 (0x480f08): the slot points
+// into freed memory. The native returns normally and the slot is marked freed; the undefined read happens at the first
+// lookup that reaches the slot (check_slot_readable, services.cpp). A later save / restore keeps it freed. The queued
+// AddProcess (0x568262) is a dangling pointer too (not modelled). Not modelled: the camera, the collision physics, the
+// event handlers and the sounds.
 Variant n_addtoa(NativeCall& c, void* user) {
   HostContext& ctx = host(user);
   ModelDirector& md = ctx.subsystem<ModelDirector>();
@@ -150,8 +153,10 @@ Variant n_addtoa(NativeCall& c, void* user) {
     ctx.add_ref(toa);  // the map's ScAutoRefPtr copy
   }
   ctx.release(toa);  // the temporary -1 (0x480f08): a failed Add frees the new Toa here
-  if (!inserted)  // 0x47e4ca -> 0x47e508: int 0 in the original, with the slot left on the freed Toa's header
-    throw VmError("Undefined behaviour: AddToa's failed Add leaves the block-file slot on the freed GcToa (0x47e508)");
+  if (!inserted) {  // 0x47e4ca -> 0x47e508: int 0, the slot left on the freed Toa's header [toa+0x228] (0x419403)
+    if (sage::BlockChain* bc = ctx.block_chain()) bc->set_freed_current("<freed GcToa block header of '" + name + "'>");
+    return make_int(0);
+  }
   md.s_toa = toa;                     // 0x47e527
   return make_int(1);                 // CreateVariant 0x407f30: {0x10, movzx byte}
 }

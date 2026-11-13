@@ -30,22 +30,34 @@ class BlockChain {
   bool open_art(std::string_view path, std::string* err);       // GcGame::LoadArtBlockHeader (0x0043b030)
   bool open_current(std::string_view path, std::string* err);   // e.g. LoadAreaBlockHeader (0x0048bc10)
   bool open_second(std::string_view path, std::string* err);    // e.g. LoadLevelBlockHeader (0x0048bd10)
-  void clear_current() { current_ = BlockFile(); current_path_.clear(); }
+  void clear_current() { current_ = BlockFile(); current_path_.clear(); current_freed_ = false; }
   void clear_second() { second_ = BlockFile(); second_path_.clear(); }
   // M2a-2 T8a: the slot points at a block header object that is closed or failed to open (ScBlockFile::Close 0x60ff70
   // zeroes the entry count, 0x60ffdb): the slot counts as set (SrBlockFileExists skips FileExists, 0x54ddf7) but Find
   // gives -1 for every name (0x60fedb). `tag` is the path() reported for the slot.
   void set_unloaded(Source s, std::string_view tag);
   // M2a-2 T12: SrGetCurBlockFile 0x54db30 / SrSetCurBlockFile 0x54db20 as a save / restore pair of the current slot.
+  // They copy the pointer without dereferencing it, so a freed slot is saved and restored as freed.
   struct Slot {
     BlockFile bf;
     std::string path;
+    bool freed = false;
   };
-  Slot save_current() const { return {current_, current_path_}; }
+  Slot save_current() const { return {current_, current_path_, current_freed_}; }
   void restore_current(Slot s) {
     current_ = std::move(s.bf);
     current_path_ = std::move(s.path);
+    current_freed_ = s.freed;
   }
+  // M2a-2 T12 I-2: the current slot points into a freed header object (a failed AddToa). It is set (non-null) but must not
+  // be read: callers check current_freed() before any lookup that reaches it (SrBlockFileExists after Art.blk misses,
+  // SrBlockFileLoad always). Any later set of the slot clears the mark.
+  void set_freed_current(std::string_view tag) {
+    current_ = BlockFile();
+    current_path_ = std::string(tag);
+    current_freed_ = true;
+  }
+  bool current_freed() const { return current_freed_; }
   // Area entry as GcAreaLoader::LoadArea (0x004fedd0) sets it up: second = <lev>.blk, current = <area>.blk.
   bool enter_area(std::string_view level, std::string_view area, std::string* err);
 
@@ -68,6 +80,7 @@ class BlockChain {
   const fs::FileSystem& fs_;
   BlockFile current_, second_, art_;
   std::string current_path_, second_path_, art_path_, none_;
+  bool current_freed_ = false;
 };
 
 // Texture path resolution of ScDrawableTexture::Load (0x005561c0): the request is

@@ -267,9 +267,12 @@ void AreaDirector::load_area(const std::string& name) {
 // are not loaded, and LoadArea goes on with the next block (D16).
 void AreaDirector::run_block(Block b, const std::string& file) {
   sage::BlockChain* c = chain();
-  if (!c || !c->exists(file)) return;  // SrBlockFileExists 0x54ddc0 (0x40339e), then SrThrow
+  if (!c) return;
+  check_slot_readable(*c, file, true);  // a freed slot (T12 I-2) is read past Art.blk
+  if (!c->exists(file)) return;  // SrBlockFileExists 0x54ddc0 (0x40339e), then SrThrow
   std::vector<uint8_t> bytes;
   std::string err;
+  check_slot_readable(*c, file, false);  // SrBlockFileLoad reads the current slot first when it is set
   if (!c->load(file, bytes, nullptr, &err)) return;  // SrBlockFileLoad 0x54db60 (0x4033d4)
   sage::Slb slb;
   if (!slb.parse(std::move(bytes), &err)) return;  // a table that does not fit its buffer: not modelled, skipped
