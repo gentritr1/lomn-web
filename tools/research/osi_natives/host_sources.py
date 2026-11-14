@@ -19,6 +19,7 @@ What is modelled (everything INFERRED is marked at its place):
 Not modelled: the camera's other modes (no OnEvent(6), no spline), the HUD lines of `Z` (Task 6b), the spline's first-derivative table (GetFirstDerivative is not on any path)."""
 from __future__ import annotations
 
+import math
 import struct
 from fractions import Fraction
 from pathlib import Path
@@ -77,8 +78,27 @@ SIXTH = Fraction(struct.unpack("<f", struct.pack("<I", 0x3E2AAAAB))[0])     # [0
 LOOKAHEAD = Fraction(0.01)                                                   # [0x706728] (fld qword), hud.md §1.3
 
 
+def fb32(bits: int) -> float:
+    return struct.unpack("<f", struct.pack("<I", bits & M32))[0]
+
+
 def f32v(bits: int) -> Fraction:
     return Fraction(struct.unpack("<f", struct.pack("<I", bits & M32))[0])
+
+
+PC64_MSG = "unmodelled: spline maths at pc64 (hud.md §1.5a)"
+
+
+def _fdiv(a: Fraction, b: Fraction) -> "Fraction | float":
+    """An x87 divide with the exceptions masked (hud.md §1.5a): x/0 is +-inf, 0/0 is NaN. Never ZeroDivisionError."""
+    if b != 0:
+        return a / b
+    return float("nan") if a == 0 else (float("inf") if a > 0 else float("-inf"))
+
+
+def _quiet(bits: int) -> int:
+    """`fld`/`fstp dword` quiets a signalling NaN (hud.md §1.5a): bit 22 is set."""
+    return bits | 0x400000 if (bits & 0x7F800000) == 0x7F800000 and bits & 0x7FFFFF else bits
 
 
 def _f32_store(x: Fraction) -> Fraction:
@@ -100,6 +120,8 @@ class Spline:
         self.y2: Optional[list[Fraction]] = None
 
     def accelerate(self, pc: int) -> list[Fraction]:
+        if pc not in (24, 53):
+            raise VmError(PC64_MSG)
         r = lambda x: round_p(x, pc)                                                  # noqa: E731
         t, v, n = self.t, self.v, len(self.t)
         y2, u = [Fraction(0)] * n, [Fraction(0)] * n                                   # y2[0] = u[0] = 0 (0x7041ec)
@@ -109,8 +131,8 @@ class Spline:
             y2[i] = _f32_store(r(r(sig - 1) / p))                                      # 1.0 (0x7041f4)
             a = r(r(v[i + 1] - v[i]) / r(t[i + 1] - t[i]))
             b = r(r(v[i] - v[i - 1]) / r(t[i] - t[i - 1]))
-            d = r(a - b)
-            num = r(r(r(6 * d) / r(t[i + 1] - t[i - 1])) - r(sig * u[i - 1]))          # 6.0 (0x7041f8)
+            u[i] = _f32_store(r(a - b))                                                # 0x443763: fstp dword [edx]
+            num = r(r(r(6 * u[i]) / r(t[i + 1] - t[i - 1])) - r(sig * u[i - 1]))       # 6.0 (0x7041f8); u[i] read back as f32 (0x443787)
             u[i] = _f32_store(r(num / p))
         y2[n - 1] = Fraction(0)                                                        # 0x7041fc
         for k in range(n - 2, -1, -1):
@@ -120,19 +142,25 @@ class Spline:
 
     def interpolate(self, t_bits: int, pc: int) -> int:
         """The f32 bits of the spline at t (an f32), rounded as the x87 does at precision control `pc`."""
+        if pc not in (24, 53):
+            raise VmError(PC64_MSG)
         r = lambda x: round_p(x, pc)                                                  # noqa: E731
         if self.y2 is None:
             self.accelerate(pc)
         tk, vk, y2 = self.t, self.v, self.y2
-        t = f32v(t_bits)
+        tf = fb32(t_bits)
         lo, hi = 0, len(tk) - 1
+        finite = math.isfinite(tf)
+        t = Fraction(tf) if finite else tf
         while hi - lo > 1:                                                             # 0x443a70: knot_t > t -> hi = mid
             mid = (hi + lo) >> 1
-            if tk[mid] > t:
+            if tk[mid] > t:                                                            # a NaN compare is unordered: `test ah,0x45` -> lo
                 hi = mid
             else:
                 lo = mid
         h = r(tk[hi] - tk[lo])
+        if h == 0 or not finite:                                                       # IEEE inf / NaN (hud.md §1.5a): evaluated in doubles
+            return osi_vm.f32_bits(self._ieee(tk, vk, y2, lo, hi, tf))
         A = r(r(tk[hi] - t) / h)
         B = r(r(t - tk[lo]) / h)
         a3 = r(r(r(A * A) * A) - A)
@@ -141,6 +169,19 @@ class Spline:
         t2 = r(r(a3 * y2[lo]) + r(b3 * y2[hi]))
         t3 = r(r(t2 * r(h * h)) * SIXTH)
         return osi_vm.exact_round_f32(t1 + t3, pc)
+
+    @staticmethod
+    def _ieee(tk, vk, y2, lo, hi, t) -> float:
+        f = lambda x: float(x)                                                         # noqa: E731
+
+        def div(a, b):
+            if b == 0:
+                return float("nan") if a == 0 or a != a else math.copysign(float("inf"), a)
+            return a / b
+        h = f(tk[hi]) - f(tk[lo])
+        A, B = div(f(tk[hi]) - t, h), div(t - f(tk[lo]), h)
+        a3, b3 = A * A * A - A, B * B * B - B
+        return (A * f(vk[lo]) + B * f(vk[hi])) + (a3 * f(y2[lo]) + b3 * f(y2[hi])) * (h * h) * float(SIXTH)
 
 
 class SplineFile:
@@ -168,8 +209,9 @@ class SplineFile:
 
     def interpolate(self, index: int, t_bits: int, pc: int) -> int:
         i = index & 0xFF                                       # the wrapper takes the low byte (0x61a6e8)
-        if i >= len(self.splines):
-            raise VmError("Undefined behaviour: spline index %d is outside the file (%d splines)" % (i, len(self.splines)))
+        if i >= self.count or i >= len(self.splines):     # beyond the accelerated count (a byte) or the records loaded (hud.md §1.5a)
+            raise VmError("Undefined behaviour: spline index %d is outside the file (%d accelerated, %d loaded)"
+                          % (i, self.count, len(self.splines)))
         sp = self.splines[i]
         if sp.y2 is None:
             sp.accelerate(self.pc)                             # tabulated once, at construction
@@ -274,11 +316,11 @@ def bind(reg, ctx) -> None:
         return Variant(T_FLOAT, osi_vm.NAN_BITS if (b & 0x7F800000) == 0x7F800000 and b & 0x7FFFFF else b)
 
     def setcampos(call):                                                     # 0x44e8a0: f32 stores, then SetCameraPosition
-        hs.state(_cam(ctx, call)).eye = (_f(call, 1), _f(call, 2), _f(call, 3))
+        hs.state(_cam(ctx, call)).eye = tuple(_quiet(_f(call, k)) for k in (1, 2, 3))
         return NOTHING
 
     def settargpos(call):
-        hs.state(_cam(ctx, call)).target = (_f(call, 1), _f(call, 2), _f(call, 3))
+        hs.state(_cam(ctx, call)).target = tuple(_quiet(_f(call, k)) for k in (1, 2, 3))
         return NOTHING
 
     def addyaw(call):                     # 0x44ecb0 -> AddYaw 0x45c2b0: rotates only +0x174 (no Z line reads it); the camera check
@@ -307,6 +349,8 @@ def bind(reg, ctx) -> None:
     orig_create = reg.entries[reg._key("scslosislkcubicspline", "create")].fn
 
     def create(call):                                                        # AfterConstruction 0x4435b0 runs at this precision
+        if call.vm.fpu_pc not in (24, 53):
+            raise VmError(PC64_MSG)
         v = orig_create(call)
         obj = ctx._objects.get(v.value)
         if obj is not None:
@@ -357,12 +401,16 @@ def camera_step(hs: HostSources, cam, time: float, pc: int) -> CameraStep:
     INFERRED (not read to the bit): mode 2 writes the eye like mode 3 and its look-ahead target uses the camera splines."""
     mode = cam.aimode
     st = hs.state(cam)
-    if mode not in (2, 3) or cam.spline_holder is None or st.duration is None:
+    if mode not in (2, 3):
         return CameraStep(False)
+    if cam.spline_holder is None:                                                    # the wrapper 0x61a6e0 reads [[null+8]+0x9c]
+        raise VmError("Undefined behaviour: camera AI mode %d with no spline held" % mode)
+    if st.duration is None:
+        return CameraStep(False)
+    if pc not in (24, 53):
+        raise VmError(PC64_MSG)
     r = lambda x: round_p(x, pc)                                                     # noqa: E731
     dur = st.duration
-    if dur == 0.0:
-        raise VmError("Undefined behaviour: the camera spline duration is 0 (a division by zero in the original)")
     spl = hs.spline_file(cam.spline_holder)
     if spl is None:
         return CameraStep(False)
@@ -373,7 +421,11 @@ def camera_step(hs: HostSources, cam, time: float, pc: int) -> CameraStep:
     if not forward:                                                                  # reverse: rem = duration - elapsed
         elapsed = float(r(Fraction(dur) - Fraction(elapsed)))
     fe, fd = Fraction(elapsed), Fraction(dur)
-    param = exact_round_f32(r(fe / fd), pc)                                          # 0x452a74: f32(elapsed / duration)
+
+    def div_bits(num, den) -> int:                                                   # x87 divide, masked exceptions (hud.md §1.5a)
+        q = _fdiv(num, den)
+        return osi_vm.f32_bits(q) if isinstance(q, float) else exact_round_f32(r(q), pc)
+    param = div_bits(fe, fd)                                                         # 0x452a74: f32(elapsed / duration)
     i = st.idx
     eye = (spl.interpolate(i, param, pc), spl.interpolate(i + 1, param, pc), spl.interpolate(i + 2, param, pc))
     st.eye = eye                                                                     # SetCameraPosition (0x452b41)
@@ -381,7 +433,7 @@ def camera_step(hs: HostSources, cam, time: float, pc: int) -> CameraStep:
         j = st.tidx
         st.target = (spl.interpolate(j, param, pc), spl.interpolate(j + 1, param, pc), spl.interpolate(j + 2, param, pc))
     elif st.look:                                                                    # mode 2 with look-ahead: camera splines at param2
-        p2 = exact_round_f32(r(r(fe + LOOKAHEAD) / fd) if forward else r(r(fe - LOOKAHEAD) / fd), pc)
+        p2 = div_bits(r(fe + LOOKAHEAD) if forward else r(fe - LOOKAHEAD), fd)
         st.target = (spl.interpolate(i, p2, pc), spl.interpolate(i + 1, p2, pc), spl.interpolate(i + 2, p2, pc))
     fire = elapsed >= dur if forward else elapsed <= 0.0                             # 0x452bfa / reverse: rem <= 0.0
     if fire:

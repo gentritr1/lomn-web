@@ -486,9 +486,24 @@ def test_a_camera_in_another_mode_does_nothing():
 
 
 def test_setcameraaimode_to_2_or_3_stamps_the_start_time_with_the_pass_time():
-    vm, ctx, tr, log, host = run_cam(cam_script(stamp_only=True, mode=3, at=5), 8)
-    t5 = struct.unpack("<Q", struct.pack("<d", fb(int(k_bits(tr, 5), 16))))[0]
-    assert "Z camera.start %016x" % t5 in host.z[5] and "Z camera.start -" in host.z[4]      # 0x45b52b-0x45b545; unwritten before
+    asm = """.globals c
+.function main 0
+    CallGameFunction gcgame.getmainview 0
+    CallGameFunction gcviewport.getcamera 1
+    SetVariableValue global:c
+    GetVariableValue global:c
+    PushConstanti8 %d
+    CallGameFunction gclegocamera.setcameraaimode 2
+    Pop
+    PushConstanti8 1
+    Return
+"""
+    for mode, want in ((3, 12.5), (2, 12.5), (1, None), (0xB, None)):
+        vm, ctx, tr, log = make(asm % mode)
+        hs = ctx.subsystem(hsm.HostSources)
+        hs.pass_time = 12.5
+        assert vm.call("main", []).ok
+        assert hs.state(hs.camera_obj()).start == want, mode                       # 0x45b52b-0x45b545; other modes stamp nothing
 
 
 def test_abs_setcampos_and_settargpos_bodies():
@@ -926,3 +941,168 @@ def test_a_group_h_program_with_an_error_in_a_frame_fails_with_its_frame(tmp_pat
     (tmp_path / "e.expect.json").write_text(json.dumps(ex))
     fails = osi_vm.run_program(tmp_path / "e.asm")
     assert len(fails) == 1 and fails[0].startswith("frame 0: error")
+
+
+# ===============================================================================================================
+# 7. T4b fix round 1 (hud.md §1.5a): u stored as f32, pc64 fail-closed, faults vs IEEE, SNaN, the survivors of the review
+# ===============================================================================================================
+NAN = 0xFFC00000
+SYN2_K = [0, 0.175, 0.3, 0.475, 1.0]
+SYN2_V = [0.07431466604224977, 5.158236962328227, -0.6555084107596217, 1.4723800264828166, 1.0062035643149398]
+
+
+def test_accelerate_stores_u_as_f32_synthetic_spline_pc53_data_free():
+    # found by a search against a reference that stores u[i] as f32 (0x443763) and reads it back as f32 (0x443787);
+    # the old code fed the unrounded difference into the recurrence and gave 3ecbf4a8
+    sp = hsm.Spline([tof(k) for k in SYN2_K], [tof(v) for v in SYN2_V])
+    sp.accelerate(53)
+    assert sp.interpolate(tof(Fraction(7, 16)), 53) == 0x3ECBF4A6
+
+
+def test_accelerate_stores_u_as_f32_frnt_cam_spline_7_pc53(lomn_data):
+    _, splines = _frnt_cam(lomn_data)
+    sp = hsm.Spline(*splines[7])
+    sp.accelerate(53)
+    assert sp.interpolate(tof(Fraction("0.44")), 53) == 0xBFC6883A       # the old code gave bfc68839
+
+
+def test_accelerate_rounding_asm_pins(disasm):
+    pin(disasm, 0x443731, 0x44373D, {0x443731: "fld st(0)", 0x443733: "fsub dword ptr [0x7041f4]", 0x443739: "fdiv st, st(2)",
+                                     0x44373B: "fstp dword ptr [edx]"})          # sig - 1 rounded at pc, then the divide, then the f32 store
+    pin(disasm, 0x443761, 0x443765, {0x443761: "fsubrp st(1), st", 0x443763: "fstp dword ptr [edx]"})   # u[i] = a - b stored as f32
+    pin(disasm, 0x443781, 0x443789, {0x443781: "fld dword ptr [0x7041f8]", 0x443787: "fmul dword ptr [ebx]"})   # read back as f32
+
+
+def _fail_msg(vm):
+    return vm.last_error.message
+
+
+def test_pc64_spline_maths_fails_closed_at_create_and_in_the_camera_step():
+    asm = cam_script()
+    vm, ctx, tr, log = make(asm, pc=64)
+    r = vm.call("main", [])
+    # a native's VmError is wrapped by the VM's catch(...) (0x601dd3), so the message is the wrapper's; pc24 runs the same script fine
+    assert not r.ok and _fail_msg(vm) == "Script is calling scslosislkcubicspline.create"
+    assert make(asm, pc=24)[0].call("main", []).ok
+    vm, ctx, tr, log = make(asm, pc=24)
+    hs = ctx.subsystem(hsm.HostSources)
+    hs.preloaded[b"cam.slb"] = synthetic_file()
+    assert vm.call("main", []).ok
+    host = hsm.FrameHost(vm, tr, ctx, {}, camera_model=True)
+    for k in range(4):
+        assert host.frame(k)
+    vm.fpu_pc = 64                                                           # gcscripttools.stringtofloat sets it
+    assert not host.frame(4) and host.error.message == "unmodelled: spline maths at pc64 (hud.md §1.5a)"
+
+
+def test_mode_3_with_no_spline_held_is_undefined_behaviour():
+    vm, ctx, tr, log = make(cam_script(stamp_only=True, mode=3, at=2))
+    ctx.subsystem(hsm.HostSources).preloaded[b"cam.slb"] = synthetic_file()
+    assert vm.call("main", []).ok
+    host = hsm.FrameHost(vm, tr, ctx, {}, camera_model=True)
+    assert host.frame(0) and host.frame(1) and not host.frame(2)
+    assert host.error.message.startswith("Undefined behaviour")
+
+
+def _file_bytes(count, nrec):
+    """A spline file header of `count` with `nrec` 2-knot records (0,0) (1,k+1)."""
+    recs = 8
+    data = 8 + 12 * nrec
+    out = struct.pack("<II", count, recs)
+    out += b"".join(struct.pack("<III", 2, data + 16 * i, 0) for i in range(nrec))
+    out += b"".join(struct.pack("<ffff", 0.0, 0.0, 1.0, float(i + 1)) for i in range(nrec))
+    return out
+
+
+def test_spline_index_beyond_the_accelerated_count_or_the_records_is_undefined():
+    f = hsm.SplineFile(_file_bytes(257, 257))                               # count & 0xff = 1: all 257 records load, one is accelerated
+    assert len(f.splines) == 257 and f.count == 1
+    assert f.interpolate(0, tof(0.5), 24) == tof(0.5)
+    with pytest.raises(osi_vm.VmError, match="Undefined behaviour"):
+        f.interpolate(1, tof(0.5), 24)
+    g = hsm.SplineFile(_file_bytes(3, 3))
+    with pytest.raises(osi_vm.VmError, match="Undefined behaviour"):
+        g.interpolate(3, tof(0.5), 24)
+    assert not any(s.y2 for s in f.splines[1:])                             # nothing past the first record was accelerated
+
+
+def test_a_missing_slk_file_is_undefined_behaviour(tmp_path):
+    vm, ctx, tr, log = make(cam_script(), install=tmp_path)
+    assert vm.call("main", []).ok
+    host = hsm.FrameHost(vm, tr, ctx, {}, camera_model=True)
+    assert host.frame(0) and host.frame(1) and host.frame(2) and not host.frame(3)
+    assert host.error.message.startswith("Undefined behaviour")
+
+
+def test_duration_0_is_ieee_param_nan_and_the_guard_fires_every_frame():
+    vm, ctx, tr, log, host = run_cam(cam_script(dur="0.0"), 9)
+    assert event_frames(log) == [3, 4, 5, 6, 7, 8]
+    assert "Z camera.eye ffc00000 ffc00000 ffc00000" in host.z[5]           # NaN goes to lo; A = NaN
+    assert "Z camera.target ffc00000 ffc00000 ffc00000" in host.z[5]
+
+
+def test_a_one_knot_spline_is_ieee_never_a_host_exception():
+    sp = hsm.Spline([tof(0)], [tof(1)])
+    sp.accelerate(24)
+    assert sp.interpolate(tof(0.5), 24) == NAN                               # h = 0: A = -inf, B = +inf, a3 = NaN
+    sp = hsm.Spline([tof(0), tof(1)], [tof(0), tof(1)])
+    assert sp.interpolate(NAN, 24) == NAN and sp.interpolate(0x7F800000, 24) == NAN
+
+
+def test_snan_arguments_of_setcampos_and_settargpos_are_quieted():
+    asm = """.globals c
+.function main 0
+    CallGameFunction gcgame.getmainview 0
+    CallGameFunction gcviewport.getcamera 1
+    SetVariableValue global:c
+    GetVariableValue global:c
+    PushConstantf32 bits:0x7f800001
+    PushConstantf32 bits:0xff800001
+    PushConstantf32 1.0
+    CallGameFunction gclegocamera.setcampos 4
+    Pop
+    GetVariableValue global:c
+    PushConstantf32 1.0
+    PushConstantf32 bits:0x7f800001
+    PushConstantf32 bits:0x7fc00001
+    CallGameFunction gclegocamera.settargpos 4
+    Pop
+    PushConstanti8 1
+    Return
+"""
+    vm, ctx, tr, log = make(asm)
+    assert vm.call("main", []).ok
+    block = hsm.z_block(vm, ctx, True)
+    assert "Z camera.eye 7fc00001 ffc00001 3f800000" in block and "Z camera.target 3f800000 7fc00001 7fc00001" in block
+
+
+def test_reverse_look_ahead_subtracts_0_01():
+    # mode 2, reverse, look-ahead, frame 3: elapsed 0, rem = 4.0; param2 = f32((rem - 0.01) / 4) (hud.md §1.3); a sign flip gives > 1
+    vm, ctx, tr, log, host = run_cam(cam_script(mode=2, fwd=0, look=1), 5)
+    rem = round_p(Fraction(4) - Fraction(0.01), 24)
+    p2 = osi_vm._f32_bits_fraction(rem / 4)
+    assert fb(p2) < 1.0
+    assert "Z camera.target %08x %08x %08x" % (p2, tof(2 * fb(p2)), tof(3 * fb(p2))) in host.z[3]
+
+
+def test_z_ref_prints_a_handle_whose_engine_count_is_0():
+    # hud.md §9.2: `Z ref` "may be 0" and one line per live handle: the spline is held only by the script variant (global spl)
+    vm, ctx, tr, log, host = run_cam(cam_script(handler_sets_mode=0), 1)
+    assert "Z ref 0023:00000003 0" in host.z[0]
+
+
+def test_settargetspline_alone_stores_both_indices():
+    # asm 0x45b446: SetTargetSpline also stores its first index at +0x3b8; before it only SetCameraSpline did
+    body = """    GetVariableValue global:cam
+    GetVariableValue global:spl
+    PushConstanti8 5
+    PushConstanti8 3
+    PushConstantf32 4.0
+    PushConstanti8 1
+    PushConstanti8 1
+    CallGameFunction gclegocamera.settargetspline 7
+    Pop
+"""
+    asm = cam_script(stamp_only=True, mode=0, at=1).replace("    GetVariableValue global:cam\n    PushConstanti8 0\n    CallGameFunction gclegocamera.setcameraaimode 2\n    Pop\n", body)
+    vm, ctx, tr, log, host = run_cam(asm, 3)
+    assert "Z camera.index -" in host.z[0] and "Z camera.index 05 03" in host.z[1]
