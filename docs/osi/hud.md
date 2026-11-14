@@ -129,7 +129,7 @@ Function extents come from flow-following the binary to every `ret` and the next
   - y2[0] = u[0] = 0 (`[0x7041ec]`); constants 2.0 (0x7041f0), 1.0 (0x7041f4), 6.0 (0x7041f8); y2[n−1] = 0 (0x7041fc).
   - y2 and u are stored as f32.
   - Then a first-derivative pass with h = 1e-4 (`[0x704200]`), stored as f32 at entry+4.
-- **`AfterConstruction` 0x4435b0** calls `Accelerate` for each record. The counter is a **byte**: `mov byte [ebp-8],0` (0x4435b9), `inc byte [ebp-8]` (0x4435d2), `cmp byte [ebp-8], dl` against `[this+0x98]` (0x4435db, `jb`). So a file with 256 or more splines would loop forever, and only the low byte of the count matters (FRNT_CAM has 60).
+- **`AfterConstruction` 0x4435b0** calls `Accelerate` for each record. The counter is a **byte**: `mov byte [ebp-8],0` (0x4435b9), `inc byte [ebp-8]` (0x4435d2), `cmp byte [ebp-8], dl` against `[this+0x98]` (0x4435db, `jb`). The compare is against `dl`, the **low byte** of the count, so the loop stops after count & 0xff records (an earlier draft said a 256+ file loops forever: wrong, T4 review 2026-11-14). FRNT_CAM has 60.
 - **`GetFirstDerivative`**:
   - Wrapper: `ScSLOSISLKCubicSpline::GetFirstDerivative` 0x61a750 (to `ret 8` at 0x61a770). It takes record = `[[this+8]+0x9c]` + 12 × u8 index, then calls `ScCubicSpline<float,float>::GetFirstDerivative` 0x61a7d0 (to `ret 4` at 0x61a859). Its caller is 0x61a4a5, the native body.
   - Search: the same binary search as `Interpolate` (`test ah,0x45` at 0x61a7f9: knot_t > t → hi = mid), with no clamp.
@@ -151,6 +151,25 @@ Function extents come from flow-following the binary to every `ret` and the next
 
 - The synthetic pins belong to the last knot **(1, 2)**. With (1, 1) the values would be `3f38590b` / `bcb21640` (pc24).
 - On the (1, 2) case, linear interpolation gives 0.5 / 1.0 and Catmull-Rom 0.5625 / 0.9375, so a wrong model fails these pins. On (1, 1), linear gives 0.5 / 0.5.
+
+### §1.5a Port rulings after the T4 blind review (2026-11-14; both engines)
+
+- **Accelerate rounding (EXECUTED objdump):** `sig − 1` is rounded at the precision control before the divide: `fld st(0)` 0x443731, `fsub dword [0x7041f4]` 0x443733, `fdiv` 0x443739. u[i] is stored as f32 (`fstp dword [edx]` 0x443763) and read back as f32 (`fmul dword [ebx]` 0x443787). Every x87 op rounds at pc; every store is f32.
+  - At pc24 the missing `sig − 1` rounding changes y2 on 24 of the 60 FRNT_CAM splines. Example: spline 6 at t = `3ef258bf` gives `c2d30ae4`. The hud.md pins above do not see it.
+- **pc64:** neither engine emulates the 64-bit extended mantissa. Spline maths (Accelerate at `spline.create`, Interpolate in the camera step) at pc64 **fails closed** in both, with "unmodelled: spline maths at pc64 (hud.md §1.5a)".
+  - `gcscripttools.stringtofloat` sets pc64 and Base.osi calls it. Whether a camera flight follows it on the menu runs is UNVERIFIED; the A9 600 frames never call it.
+- **Faults (Undefined behaviour in both):**
+  - mode 2 or 3 with no spline held: the wrapper 0x61a6e0 reads `[[null+8]+0x9c]`;
+  - no SLK file;
+  - a spline index ≥ the accelerated count (count & 0xff, above) or ≥ the records loaded.
+- **IEEE, no fault (both):**
+  - duration 0.0 with a spline: param = elapsed/0 is inf, or NaN when elapsed is 0. The search's `test ah,0x45` sends NaN to lo, and the guards fire as the asm says, every frame. This assumes the x87 exceptions stay masked (the Windows default control word 0x27F; INFERRED that the game keeps it).
+  - a one-knot spline: h = 0 gives inf/NaN as the asm computes. Never a host exception.
+- **NaN results:** `scslosimath.abs` follows D9 (opcodes.md): a NaN result is stored as 0xffc00000 in both engines. The original's fabs would give 7fc00000; D9 is our choice.
+- **SNaN arguments to setcampos / settargpos:** the original's `fld`/`fstp dword` quiets them (0x7f800001 → 0x7fc00001). Both engines set bit 22 of an SNaN before storing.
+- **Not modelled yet (shared, recorded):**
+  - The pause gate 0x451a2b-0x451a60: when `gcgame.pausegame` becomes real, the camera step returns early when `[0x7032c4]` ≠ 0 and mode ≠ 0xd.
+  - Modes other than 2 and 3 are not stepped, so their eye and target go stale. Mode 8's OnEvent (0x45502f) is not modelled.
 
 ### §1.6 F_evt and F_act (EXECUTED, `fevt.py`, `fevt2.py`)
 - **Time.** t_n = round24(t_{n−1} + dt), with dt = 0.006666666828095913 (`[0x712d68]`).
