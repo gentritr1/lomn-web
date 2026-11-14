@@ -433,6 +433,9 @@ TEST_CASE("colfont width: GetStrLen = sum of widths minus the trailing kerning, 
   CHECK(slen(f, std::string("\xf2\x41")) == 9);            // 0xF241 has no record: unknown, 10 - 1
   // a lead byte as the last byte: the next byte reads as 0, the code is 0xF100 (unknown)
   CHECK(slen(f, "\xf1") == 9);
+  // the TRAIL byte of a 2-byte code is tested too: idx points at it when 0xFF (0x628b2c) and '\n' (0x628b65) compare
+  CHECK(slen(f, std::string("\xf1\nB")) == -1);           // trail '\n' ends the string: 0 - 1
+  CHECK(slen(f, std::string("\xf1\xff") + "Aq") == 3);   // trail 0xFF escapes itself and A: only q, 4 - 1
   // the string is length-delimited: an embedded NUL is an ordinary (unknown) character
   CHECK(slen(f, std::string("A\0A", 3)) == 7 + 10 + 7 - 1);
   // truncation toward zero at a fractional scale (a round-to-nearest would give 4 and 6)
