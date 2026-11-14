@@ -355,7 +355,14 @@ bool ScriptHost::frame() {
       if (capped) skip_frame_ = k + 1;
     }
   }
-  if (stats_.stop == "none") failed(camera_process(*ctx_, time_));
+  if (stats_.stop == "none") {
+    // a fault of the camera step itself (hud.md §1.5a: Undefined, or pc64 fail-closed) stops the run like a script error
+    try {
+      failed(camera_process(*ctx_, time_));
+    } catch (const VmError& e) {
+      stats_.stop = "error \"" + fmt_message(e.message) + "\" at frame " + std::to_string(k);
+    }
+  }
   // the Z block (hud.md §9.1): after the frame's last record; none for a frame whose call errored (the oracle's choice)
   if (trace_ && stats_.stop == "none") {
     std::snprintf(kb, sizeof kb, "Z %6ld", k);

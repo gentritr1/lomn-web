@@ -126,6 +126,11 @@ std::string bits(float f) {
   std::snprintf(b, sizeof b, "%08x", f32_bits(f));
   return b;
 }
+float f32_from_bits(uint32_t u) {
+  float f;
+  std::memcpy(&f, &u, 4);
+  return f;
+}
 std::string dbits(double d) {
   uint64_t u;
   std::memcpy(&u, &d, 8);
@@ -177,6 +182,7 @@ const char* const kRows = R"([
  {"cls": "GcLegoCamera", "name": "SetCamPos", "min": 4, "max": 4, "types": ["type:GcLegoCamera", "float", "float", "float"], "ret": "none", "winner": true},
  {"cls": "GcLegoCamera", "name": "SetTargPos", "min": 4, "max": 4, "types": ["type:GcLegoCamera", "float", "float", "float"], "ret": "none", "winner": true},
  {"cls": "GcLegoCamera", "name": "AddYaw", "min": 2, "max": 2, "types": ["type:GcLegoCamera", "float"], "ret": "none", "winner": true},
+ {"cls": "GcScriptTools", "name": "StringToFloat", "min": 1, "max": 1, "types": ["string"], "ret": "float", "winner": true, "sets_fpu_pc64": true},
  {"cls": "ScSLOSIMath", "name": "Abs", "min": 1, "max": 1, "types": ["float"], "ret": "float", "winner": true}
 ])";
 const char* const kTypes = R"({"types": [
@@ -208,10 +214,11 @@ struct Host {
   StringTrace tr, log;
   std::unique_ptr<ScriptHost> host;
   CallResult res;
-  Host(Asm& a, const std::string& keys, const std::string& mouse, bool trace = true) {
+  Host(Asm& a, const std::string& keys, const std::string& mouse, bool trace = true,
+       const std::vector<std::vector<std::pair<float, float>>>& recs = {kKnots, kKnots, kKnots, kKnots, kKnots, kKnots}) {
     std::string err;
     REQUIRE_MESSAGE(file.parse(a.build(), &err), err);
-    REQUIRE(vfs.mount("Root/Data/cam.slb", make_slb({kKnots, kKnots, kKnots, kKnots, kKnots, kKnots})));
+    REQUIRE(vfs.mount("Root/Data/cam.slb", make_slb(recs)));
     ScriptHost::Options opt;
     opt.real_natives = true;
     opt.keys = keys;
@@ -389,6 +396,11 @@ TEST_CASE("host sources spline: FRNT_CAM (levels/lev0/frnt.blk) pins of hud.md �
   CHECK(bits(spline_interpolate(c53[48], 0.75f, 53)) == "425b120b");
   CHECK(bits(spline_interpolate(c53[1], 0.13f, 53)) == "417c70f8");
   CHECK(bits(spline_interpolate(c53[1], 0.86f, 53)) == "417adeb5");
+  // fix 1 (hud.md §1.5a): `sig - 1` rounded at pc before the divide (0x443731-0x443739); the unrounded reading gives
+  // c2d30ae5 / c2d459b4. The second value is the asm reading's, cross-checked by a scratch Python emulation of the
+  // 0x4435f0 / 0x443a70 op sequence on the frnt.blk bytes (tools/research/blk.py offsets).
+  CHECK(bits(spline_interpolate(c24[6], f32_from_bits(0x3ef258bfu), 24)) == "c2d30ae4");
+  CHECK(bits(spline_interpolate(c24[6], f32_from_bits(0x3ef4e81bu), 24)) == "c2d459b3");
   std::filesystem::remove_all(user);
 }
 #endif  // __EMSCRIPTEN__
@@ -787,3 +799,205 @@ TEST_CASE("host sources real Base.osi: the camera-event frame has no `H 002a:` l
   CHECK(r.z_ref_unknown == 0);
 }
 #endif  // __EMSCRIPTEN__
+
+// ============================== fix 1 (hud.md §1.5a) ==============================
+
+TEST_CASE("host sources spline fix 1: sig - 1 is rounded at pc24 before the divide (data-free pin)") {
+  // knots found by a scratch search where the two readings differ; the unrounded `(sig - 1) / p` gives 40d2a0c6
+  SplineCurve c;
+  for (auto [t, v] : std::vector<std::pair<float, float>>{{0.0f, 2.0f}, {0.1f, 6.0f}, {0.2f, 9.0f}, {0.6f, -9.0f}, {1.0f, 7.0f}})
+    c.t.push_back(t), c.v.push_back(v);
+  spline_accelerate(c, 24);
+  CHECK(bits(spline_interpolate(c, 0.3125f, 24)) == "40d2a0c8");
+}
+
+TEST_CASE("host sources spline fix 1: pc64 fails closed in Accelerate and Interpolate") {
+  SplineCurve c;
+  for (auto [t, v] : kKnots) c.t.push_back(t), c.v.push_back(v);
+  const std::string msg = "unmodelled: spline maths at pc64 (hud.md §1.5a)";
+  SplineCurve d = c;
+  try {
+    spline_accelerate(d, 64);
+    FAIL("Accelerate at pc64 did not throw");
+  } catch (const VmError& e) {
+    CHECK(e.message == msg);
+  }
+  spline_accelerate(c, 24);
+  try {
+    spline_interpolate(c, 0.5f, 64);
+    FAIL("Interpolate at pc64 did not throw");
+  } catch (const VmError& e) {
+    CHECK(e.message == msg);
+  }
+  // through the host: spline.create after stringtofloat (pc64) errors in Setup ...
+  {
+    Asm a;
+    a.fn("setup", 0).s("1").call("gcscripttools", "stringtofloat", 1).pop();
+    cam_and_spline(a);
+    a.nothing().ret();
+    a.fn("process", 3).i8(1).ret();
+    Host h(a, "", "");
+    REQUIRE_FALSE(h.res.ok);  // the native's error, re-raised by 0x82 as its `Script is calling` (0x601dd3)
+    CHECK(h.host->vm().last_error()->message == "Script is calling scslosislkcubicspline.create");
+  }
+  {  // the same Setup without the pc64 switch succeeds
+    Asm a;
+    a.fn("setup", 0);
+    cam_and_spline(a);
+    a.nothing().ret();
+    a.fn("process", 3).i8(1).ret();
+    Host h(a, "", "");
+    CHECK(h.res.ok);
+  }
+  // ... and the camera step at pc64 stops the frame
+  {
+    Asm a;
+    a.fn("setup", 0);
+    cam_and_spline(a);
+    fly(a, 0, 0, 3, 4.0f);
+    a.nothing().ret();
+    a.fn("process", 3).s("1").call("gcscripttools", "stringtofloat", 1).pop().i8(1).ret();
+    Host h(a, "", "");
+    REQUIRE(h.res.ok);
+    CHECK_FALSE(h.host->frame());
+    CHECK(h.host->stats().stop.rfind("error \"unmodelled: spline maths at pc64", 0) == 0);
+  }
+}
+
+TEST_CASE("host sources spline fix 1: a one-knot spline gives IEEE NaN (h = 0), never v[0]") {
+  SplineCurve c;
+  c.t = {0.5f};
+  c.v = {3.0f};
+  spline_accelerate(c, 24);
+  CHECK(bits(spline_interpolate(c, 0.25f, 24)) == "ffc00000");  // A = +inf, B = -inf: -inf + inf
+  CHECK(bits(spline_interpolate(c, 0.5f, 24)) == "ffc00000");   // A = B = 0/0
+}
+
+namespace {
+const std::vector<std::pair<float, float>> kLin = {{0.0f, 0.0f}, {1.0f, 1.0f}};  // y = t exactly (y2 = 0, B = t)
+// setcameraspline(cam, s, ci, d, fwd, la); setcameraaimode(cam, mode)
+void fly2(Asm& a, int mode, int ci, float d, int fwd, int la) {
+  gget(a, "cam");
+  gget(a, "s").i8(static_cast<int8_t>(ci)).f(d).i8(static_cast<int8_t>(fwd)).i8(static_cast<int8_t>(la));
+  a.call("gclegocamera", "setcameraspline", 6).pop();
+  gget(a, "cam").i8(static_cast<int8_t>(mode)).call("gclegocamera", "setcameraaimode", 2).pop();
+}
+struct Fly {
+  std::unique_ptr<Host> h;
+  Fly(int mode, int ci, float d, int fwd, int la, const char* slb = "Root/Data/cam.slb", bool set_spline = true) {
+    Asm a;
+    a.fn("setup", 0).call("gcgame", "getmainview", 0).call("gcviewport", "getcamera", 1);
+    gset(a, "cam").s(slb).call("scslosislkcubicspline", "create", 1);
+    gset(a, "s");
+    if (set_spline) fly2(a, mode, ci, d, fwd, la);
+    else gget(a, "cam").i8(static_cast<int8_t>(mode)).call("gclegocamera", "setcameraaimode", 2).pop();
+    a.nothing().ret();
+    a.fn("process", 3).i8(1).ret();
+    h = std::make_unique<Host>(a, "", "", true, std::vector<std::vector<std::pair<float, float>>>(6, kLin));
+    REQUIRE(h->res.ok);
+  }
+  std::string z(long k, const char* key) const {
+    for (const auto& l : h->z_block(k))
+      if (l.rfind(key, 0) == 0) return l.substr(std::strlen(key));
+    return "<none>";
+  }
+  long sixes(long k) const {
+    long n = 0;
+    for (const auto& l : h->log_frame(k)) n += l.rfind("C -1 OnEvent 0010:00000006 ", 0) == 0;
+    return n;
+  }
+};
+std::string f3(float x) { return bits(x) + " " + bits(x) + " " + bits(x); }
+const double kT0 = fadd_pc(0.0, 0.006666666828095913, 24);  // frame 0's pass time
+}  // namespace
+
+TEST_CASE("host sources camera fix 1: the reverse guard fires at rem == 0 (<=, not <), modes 2 and 3") {
+  for (int mode : {2, 3}) {
+    Fly f(mode, 0, 0.001f, 0, 0);
+    REQUIRE(f.h->host->frame());
+    CHECK_MESSAGE(f.sixes(0) == 1, "mode " << mode);
+    CHECK(f.z(0, "Z camera.eye ") == f3(0.0f));  // rem = 0: param 0
+  }
+}
+
+TEST_CASE("host sources camera fix 1: mode-2 look-ahead is (elapsed + 0.01) forward and (rem - 0.01) reverse") {
+  {
+    Fly f(2, 0, 1.0f, 1, 1);
+    REQUIRE(f.h->host->frame());
+    CHECK(f.z(0, "Z camera.eye ") == f3(static_cast<float>(kT0)));
+    CHECK(f.z(0, "Z camera.target ") == f3(static_cast<float>(fadd_pc(kT0, 0.01, 24))));
+    CHECK(f.sixes(0) == 0);
+  }
+  {
+    Fly f(2, 0, 1.0f, 0, 1);
+    REQUIRE(f.h->host->frame());
+    const double rem = static_cast<float>(1.0 - kT0);
+    CHECK(f.z(0, "Z camera.eye ") == f3(static_cast<float>(rem)));
+    CHECK(f.z(0, "Z camera.target ") == f3(static_cast<float>(fadd_pc(rem, -0.01, 24))));
+  }
+  {  // no look-ahead: mode 2 leaves the target unwritten
+    Fly f(2, 0, 1.0f, 1, 0);
+    REQUIRE(f.h->host->frame());
+    CHECK(f.z(0, "Z camera.target") == " -");
+  }
+}
+
+TEST_CASE("host sources camera fix 1: duration 0.0 is IEEE (param 0/0 = NaN), the forward guard fires every frame") {
+  Fly f(3, 0, 0.0f, 1, 1);
+  for (long k = 0; k < 3; ++k) {
+    REQUIRE(f.h->host->frame());
+    CHECK(f.sixes(k) == 1);
+    CHECK(f.z(k, "Z camera.eye ") == "ffc00000 ffc00000 ffc00000");
+  }
+}
+
+TEST_CASE("host sources camera fix 1: faults are Undefined errors (no spline held, no SLK file, index past the records)") {
+  auto stop_of = [](Fly& f) {
+    CHECK_FALSE(f.h->host->frame());
+    CHECK(f.sixes(0) == 0);
+    CHECK(f.h->z_block(0).empty());
+    return f.h->host->stats().stop;
+  };
+  for (int mode : {2, 3}) {
+    Fly none(mode, 0, 4.0f, 1, 1, "Root/Data/cam.slb", false);
+    CHECK(stop_of(none).rfind("error \"Undefined: ", 0) == 0);
+    Fly nofile(mode, 0, 4.0f, 1, 1, "Root/Data/missing.slb");
+    CHECK(stop_of(nofile).rfind("error \"Undefined: ", 0) == 0);
+    Fly past(mode, 4, 4.0f, 1, 1);  // records 4, 5, 6 of 6
+    CHECK(stop_of(past).rfind("error \"Undefined: ", 0) == 0);
+  }
+  Fly last(3, 3, 4.0f, 1, 1);  // records 3, 4, 5 (target index 0 for SetCameraSpline only: unwritten -> 0)
+  CHECK(last.h->host->frame());
+}
+
+TEST_CASE("host sources fix 1: abs stores a NaN result as 0xffc00000 (D9); setcampos / settargpos quiet an SNaN") {
+  Asm a;
+  a.fn("setup", 0).call("gcgame", "getmainview", 0).call("gcviewport", "getcamera", 1);
+  gset(a, "cam");
+  a.fbits(0x7fc00001u).call("scslosimath", "abs", 1);
+  gset(a, "n1").fbits(0xffc00000u).call("scslosimath", "abs", 1);
+  gset(a, "n2");
+  gget(a, "cam").fbits(0x7f800001u).fbits(0xff800001u).f(1.0f).call("gclegocamera", "setcampos", 4).pop();
+  gget(a, "cam").fbits(0x7fa00000u).fbits(0x7fc00002u).f(2.0f).call("gclegocamera", "settargpos", 4).pop();
+  a.nothing().ret();
+  a.fn("process", 3).i8(1).ret();
+  Host h(a, "", "");
+  REQUIRE(h.res.ok);
+  CHECK(h.host->vm().find_global("n1")->value == 0xffc00000u);
+  CHECK(h.host->vm().find_global("n2")->value == 0xffc00000u);
+  REQUIRE(h.host->frame());
+  const auto z = h.z_block(0);
+  CHECK(std::find(z.begin(), z.end(), "Z camera.eye 7fc00001 ffc00001 3f800000") != z.end());
+  CHECK(std::find(z.begin(), z.end(), "Z camera.target 7fe00000 7fc00002 40000000") != z.end());
+}
+
+TEST_CASE("host sources Z fix 1: a ref whose engine count is 0 is printed (hud.md §9.2: `may be 0`)") {
+  Asm a;
+  a.fn("setup", 0).s("Root/Data/cam.slb").call("scslosislkcubicspline", "create", 1);
+  gset(a, "s").nothing().ret();
+  a.fn("process", 3).i8(1).ret();
+  Host h(a, "", "");
+  REQUIRE(h.res.ok);
+  REQUIRE(h.host->frame());
+  CHECK(h.z_block(0) == std::vector<std::string>{"Z      0", "Z ref 0023:00000001 0"});
+}
