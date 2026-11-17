@@ -957,6 +957,31 @@ TEST_CASE("osi directors getscriptfluffstring: hits, the XXX fallbacks, the shar
   }
 }
 
+TEST_CASE("osi directors getscriptfluffstring: the table and block file follow [Misc] Language (0x487855 / 0x487a42)") {
+  // GetLanguage 0x5d4c10 -> 0x48b200 stores the LOW BYTE (movb %dl, 0x70b384 at 0x48b278). Init picks one of eight table
+  // names (0x70b3f4 + 0x24 * n: fluff_eng/frn/ger/dan/dut/ita/spa/swe.slb) and the matching Lang_<x>.blk (0x70b514 +
+  // 0x21 * n) by `cmpb $n` chains; any other byte sets neither name, so no table loads and every string is "XXX".
+  const uint32_t fend = id4("fend");
+  auto run = [&](const char* ini) {
+    fs::MemoryFileSystem mem;
+    REQUIRE(mem.mount("Root/Data/Art/Art.blk", blk({{"art.tga", {1}}})));
+    REQUIRE(mem.mount("Root/Data/Languages/Lang_eng.blk", blk({{"Fluff_eng.slb", fluff_slb({{fend, 1, {"english"}}})}})));
+    REQUIRE(mem.mount("Root/Data/Languages/Lang_frn.blk", blk({{"Fluff_frn.slb", fluff_slb({{fend, 1, {"francais"}}})}})));
+    // ResolutionW present: without it LoadIni rebuilds the file to its 14 default keys (hud.md 6.2a) and Language is 0
+    const std::string text = std::string("[GraphicsOptions]\r\nResolutionW=640\r\n[Misc]\r\nLanguage=") + ini + "\r\n";
+    REQUIRE(mem.mount("Root/Bionicle.ini", std::vector<uint8_t>(text.begin(), text.end())));
+    Asm a;
+    a.fn("setup", 0).i32(static_cast<int32_t>(fend)).i8(1).i8(0).call("gcareadirector", "getscriptfluffstring", 3).ret();
+    Run r(a, &mem);
+    REQUIRE(r.res.ok);
+    return r.res.result_text;
+  };
+  CHECK(run("0") == "english");
+  CHECK(run("1") == "francais");
+  CHECK(run("257") == "francais");  // the low byte: 257 & 0xff == 1
+  CHECK(run("8") == "XXX");         // no name set: no table
+}
+
 // native only: the disk file system (fs::open_disk) is not linked into the wasm32 unit tests
 #ifndef __EMSCRIPTEN__
 TEST_CASE("osi directors getscriptfluffstring: an independent 10-line reader of the install's Lang_eng.blk agrees on every slot") {

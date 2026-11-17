@@ -16,6 +16,9 @@ namespace lomn::osi {
 
 const char* const kFluffLangBlk = "Root/Data/Languages/Lang_eng.blk";   // 0x70b514 (GcAreaDirector::Init 0x487a42)
 const char* const kFluffTable = "Root/Data/Levels/lev1/fluff_eng.slb";  // 0x70b3f4 (GcAreaDirector::Init 0x487855)
+// The eight languages of Init's `cmpb $n, 0x70b384` chains: table 0x70b3f4 + 0x24 * n (0x487855..0x4879a9), block file
+// 0x70b514 + 0x21 * n (0x487a42..0x487b89). Language 0 gives the two names above.
+const char* const kLangSuffix[8] = {"eng", "frn", "ger", "dan", "dut", "ita", "spa", "swe"};
 
 // ---------------------------------------------------------------------------------------------- the singletons
 
@@ -355,13 +358,19 @@ void AreaDirector::load_fluff() {
   fluff_tried_ = true;
   const fs::FileSystem* vfs = ctx_.vfs();
   if (!vfs) return;
+  // [Misc] Language: SetLanguage 0x48b200 keeps the low byte (0x48b278 movb %dl, 0x70b384). A byte past 7 matches no
+  // `cmpb` arm: both names stay empty, no table loads ([0x8391c0] = 0), every string is "XXX".
+  const uint8_t lang = static_cast<uint8_t>(ctx_.subsystem<DisplayState>().language);
+  if (lang >= 8) return;
+  const std::string blk = std::string("Root/Data/Languages/Lang_") + kLangSuffix[lang] + ".blk";
+  const std::string table = std::string("Root/Data/Levels/lev1/fluff_") + kLangSuffix[lang] + ".slb";
   sage::BlockChain c(*vfs);
   std::string err;
   c.open_art("Root/Data/Art/Art.blk", &err);
-  c.open_current(kFluffLangBlk, &err);
-  if (!c.exists(kFluffTable)) return;
+  c.open_current(blk, &err);
+  if (!c.exists(table)) return;
   std::vector<uint8_t> bytes;
-  if (!c.load(kFluffTable, bytes, nullptr, &err)) return;
+  if (!c.load(table, bytes, nullptr, &err)) return;
   if (!fluff_.parse(std::move(bytes), &err)) return;
   fluff_present_ = true;
   // InitStrings: for each of the [data+0] entries (16 bytes, from the pointer at data+4: [this+0x98] / [this+0x9c], the
@@ -489,7 +498,7 @@ Variant n_setcurrentarea(NativeCall& c, void* user) {
 
 // body 0x487250, method 0x48acc0 <GcAreaDirector::GetScriptFluffString> -> 0x5e86e0 <GcStringTableLoader::GetString>; asm
 // pin: 0x48ad29 cmp [0x8391c0], 0 / 0x48ad32 the w1, w0 tests, "XXX" 0x70b7e7, 0x5e8709 the unsigned index test, 0x5e8675
-// InitStrings' inc; the table "Root/Data/Levels/lev1/fluff_eng.slb" 0x70b3f4 in Lang_eng.blk 0x70b514 (language 0)
+// InitStrings' inc; the table "Root/Data/Levels/lev1/fluff_eng.slb" 0x70b3f4 in Lang_eng.blk 0x70b514 for language 0 (load_fluff picks the pair by the language byte)
 Variant n_getscriptfluffstring(NativeCall& c, void* user) {
   HostContext& ctx = host(user);
   const std::string s = ctx.subsystem<AreaDirector>().script_fluff_string(c.args[0]->value, c.args[1]->value, c.args[2]->value);

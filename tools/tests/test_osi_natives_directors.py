@@ -992,7 +992,7 @@ def test_language_byte_picks_the_block_file_and_the_entry(tmp_path):
     inst = _write_lang_install(tmp_path, "eng", slb_eng, extra=[("Other_eng.slb", b"junk")])
     (inst / "data" / "Languages" / "Lang_ger.blk").write_bytes(
         (_write_lang_install(tmp_path / "g", "ger", slb_ger) / "data" / "Languages" / "Lang_ger.blk").read_bytes())
-    for lang, want in ((0, b"english"), (2, b"deutsch")):
+    for lang, want in ((0, b"english"), (2, b"deutsch"), (8, b"XXX")):  # 8: no cmpb arm, no table (0x4879a0)
         vm, ctx, tr, log = make_vm(".function main 0\nReturn\n", install=inst)
         ctx.subsystem(d.IniSettings).language = lang
         assert d.get_script_fluff_string(ctx, 5, 1, 0) == want, lang

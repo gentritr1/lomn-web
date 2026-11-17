@@ -223,7 +223,7 @@ ScriptHost::ScriptHost(const sage::OsiFile& script, std::string_view natives_jso
       DisplayState& d = ctx_->subsystem<DisplayState>();
       d.width = static_cast<float>(static_cast<uint16_t>(f.get_int("GraphicsOptions", "ResolutionW", 0x280)));
       d.height = static_cast<float>(static_cast<uint16_t>(f.get_int("GraphicsOptions", "ResolutionH", 0x1e0)));
-      d.language = f.get_int("Misc", "Language", 0);  // GetLanguage 0x5d4c10 (read; the area director still loads eng)
+      d.language = f.get_int("Misc", "Language", 0);  // GetLanguage 0x5d4c10; the area director picks its fluff table by it
       // GcSaver::CheatMenu 0x5d4fc0: GetPrivateProfileStringA("Misc", "CheatMenu", "", buf, 0xff, ...)
       ctx_->subsystem<SaverState>().ini_cheat_menu = f.get_string("Misc", "CheatMenu", "", 0xff);
     }
