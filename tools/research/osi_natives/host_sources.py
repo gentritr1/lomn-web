@@ -124,6 +124,8 @@ class Spline:
             raise VmError(PC64_MSG)
         r = lambda x: round_p(x, pc)                                                  # noqa: E731
         t, v, n = self.t, self.v, len(self.t)
+        if n == 0:                                                                     # y2[0] = u[0] = 0 stored unchecked (0x4436b3/0x4436b7)
+            raise VmError("Undefined: spline record with no knots (0x4436b3)")
         y2, u = [Fraction(0)] * n, [Fraction(0)] * n                                   # y2[0] = u[0] = 0 (0x7041ec)
         for i in range(1, n - 1):
             sig = r(r(t[i] - t[i - 1]) / r(t[i + 1] - t[i - 1]))

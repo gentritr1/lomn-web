@@ -1106,3 +1106,8 @@ def test_settargetspline_alone_stores_both_indices():
     asm = cam_script(stamp_only=True, mode=0, at=1).replace("    GetVariableValue global:cam\n    PushConstanti8 0\n    CallGameFunction gclegocamera.setcameraaimode 2\n    Pop\n", body)
     vm, ctx, tr, log, host = run_cam(asm, 3)
     assert "Z camera.index -" in host.z[0] and "Z camera.index 05 03" in host.z[1]
+
+
+def test_a_record_with_no_knots_is_undefined_at_accelerate():
+    with pytest.raises(osi_vm.VmError, match=r"^Undefined: spline record with no knots \(0x4436b3\)$"):
+        hsm.Spline([], []).accelerate(24)
