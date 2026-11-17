@@ -40,6 +40,8 @@ void check_pc(int pc) {
 void spline_accelerate(SplineCurve& c, int pc) {
   check_pc(pc);
   const size_t n = c.t.size();
+  // y2[0] = u[0] = 0 are stored before any count check (0x4436b3/0x4436b7): no knots writes past an empty array
+  if (n == 0) throw VmError("Undefined: spline record with no knots (0x4436b3)");
   c.y2.assign(n, 0.0f);
   if (n < 3) return;
   std::vector<float> u(n, 0.0f);
@@ -64,7 +66,7 @@ void spline_accelerate(SplineCurve& c, int pc) {
 float spline_interpolate(const SplineCurve& c, float tf, int pc) {
   check_pc(pc);
   const size_t n = c.t.size();
-  if (n == 0) throw VmError("Undefined: spline record with no knots (0x443a70)");
+  if (n == 0) throw VmError("Undefined: spline record with no knots (0x4436b3)");
   size_t lo = 0, hi = n - 1;
   while (hi - lo > 1) {
     const size_t mid = (hi + lo) >> 1;

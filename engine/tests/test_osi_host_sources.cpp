@@ -1001,3 +1001,14 @@ TEST_CASE("host sources Z fix 1: a ref whose engine count is 0 is printed (hud.m
   REQUIRE(h.host->frame());
   CHECK(h.z_block(0) == std::vector<std::string>{"Z      0", "Z ref 0023:00000001 0"});
 }
+
+TEST_CASE("host sources spline fix 2: a record with no knots is Undefined at Accelerate (0x4436b3)") {
+  SplineCurve c;
+  bool threw = false;
+  try {
+    spline_accelerate(c, 24);
+  } catch (const VmError& e) {
+    threw = e.message == "Undefined: spline record with no knots (0x4436b3)";
+  }
+  CHECK(threw);
+}
