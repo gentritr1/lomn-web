@@ -667,4 +667,7 @@ M1 / M2 as in T8 (`make osi-menu`, `OSI_M1` / `OSI_M2`).
     - osi-menu: M1/M2 4/4 + A12, hud_oracle IDENTICAL, coverage and taint gates;
     - mutate_menu `--all`: K1–K7 CAUGHT, CTRL MISSED;
     - mutate_natives `--all`: 6 CAUGHT, CTRL MISSED.
-  - **NOT RUN:** `test-web` and `a13-real`. The host's Playwright browser (chromium-1243 for playwright 1.63.0) is not installed, so the smoke test failed at launch, before any test ran. It needs `npx playwright install chromium`, which is the owner's call (a download).
+  - **Then `test-web` and `a13-real`** (2026-11-17). The host's Playwright browser was missing (chromium-1243 for playwright 1.63.0), so the first run failed at launch. It was installed with the owner's yes (`npx playwright install chromium`) and both targets were re-run:
+    - `test-web`: node tests 59 pass / 0 fail / 0 skip, the smoke test OK, byo_synthetic 123/123;
+    - `a13-real`: 60/60, fps ratios 1.002 / 1.001 / 1.002 at 60 Hz;
+    - loadavg 4.90 → 55.37 by the end, so the fps ratios were measured under load.
