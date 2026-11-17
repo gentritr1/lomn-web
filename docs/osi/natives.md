@@ -667,7 +667,7 @@ The map's key order between processes, set by the priority byte that `ScProcessM
 
 **Re-checks:**
 - Task 10 re-runs `event_probe.py --repeat --at all --natives-impl real` with the real natives. **Done (Task 10, 2026-11-13, EXECUTED):** 47 repeated runs, CHANGED 4 / SAME 43, divergences at frames 0 and 2 only; the single-shot and `2-599` runs agree with Task 2a's counts (measurements.md, "M2a-2 Task 10");
-- M2a-3 settles the risk above;
+- M2a-3 settles the risk above. **Verdict: OPEN (M2a-3 T10, 2026-11-17).** It waits on owner check O6, the owner's menu screenshots, which have not arrived. It is not modelled meanwhile. The menu runs M1/M2 assume no third event. The verdict is recorded here when the shots are read: "ruled out" if they show the end of the fly-in and Onua standing, else a targeted model of the guard (Decision 7);
 - M3 models the physics.
 
 ### 6.4 The 69 / 71 / 144 counts (EXECUTED: grep of the full objdump listing)

@@ -777,7 +777,8 @@ class TaintVm(osi_vm.Vm):
 # ---------------------------------------------------------------------------------------------------------------
 
 def run_base(script: bytes, frames: int, keys: str = "", overrides=None, natives=osi_vm.DEFAULT_NATIVES,
-             mods=osi_vm.DEFAULT_MODS, types=osi_vm.DEFAULT_TYPES, real_natives: bool = False, install=None) -> Report:
+             mods=osi_vm.DEFAULT_MODS, types=osi_vm.DEFAULT_TYPES, real_natives: bool = False, install=None,
+             mouse: str = "") -> Report:
     tt = osi_vm.TypeTable.load(types)
     reg = osi_vm.NativeRegistry.load(natives, mods, tt)
     if overrides:
@@ -793,6 +794,10 @@ def run_base(script: bytes, frames: int, keys: str = "", overrides=None, natives
         framework.bind_natives(reg, ctx)
         if not any(e.tier == "implemented" for e in reg.entries.values()):
             raise NothingBound("--real-natives: nothing is bound (no native group is registered in osi_natives)")
+    if mouse:                                   # M2a-3 T10: the menu runs (mouse, camera model) through the shared FrameHost
+        if not real_natives:
+            raise NothingBound("--mouse needs --real-natives (the camera model reads the native state)")
+        return _run_framehost(vm, ctx, rep, frames, keys, mouse)
     kc = osi_vm.key_calls(keys) if keys else {}
     dt = struct.unpack("<d", struct.pack("<Q", osi_vm.DT_BITS_DOUBLE))[0]
     t = 0.0
@@ -831,6 +836,35 @@ def run_base(script: bytes, frames: int, keys: str = "", overrides=None, natives
             rep.frames = k + 1
             if err is not None:
                 rep.stop = 'error "%s" at frame %d pc %08x op %02x' % (err.message, k, err.pc, err.op)
+                break
+    rep.instructions = vm.instructions
+    return rep
+
+
+def _run_framehost(vm, ctx, rep: Report, frames: int, keys: str, mouse: str) -> Report:
+    """The frame order of osi_vm.run_base (hud.md §2.4): VK, key mapper, mouse, Process passes, camera."""
+    import keys as osi_keys
+    from osi_natives.host_sources import FrameHost
+    events: dict = {}
+    for f, calls in (osi_vm.key_calls(keys).items() if keys else []):
+        for name, args in calls:
+            events.setdefault((f, "keymapper" if args[1].value == 251 else "vk"), []).append((name, args))
+    for f, args in osi_keys.expand_mouse(mouse, frames):
+        events.setdefault((f, "mouse"), []).append(("OnEvent", [Variant(*x) for x in args]))
+    host = FrameHost(vm, None, ctx, events, camera_model=True, write_z=False)
+    vm.taint.frame = -1
+    r = vm.call("Setup", [])
+    if not r.ok:
+        e = vm.last_error
+        rep.stop = 'error "%s" in Setup at pc %08x op %02x' % (e.message, e.pc, e.op)
+    else:
+        for k in range(frames):
+            vm.taint.frame = k
+            ok = host.frame(k)
+            rep.frames = k + 1
+            if not ok:
+                e = host.error
+                rep.stop = 'error "%s" at frame %d pc %08x op %02x' % (e.message, k, e.pc, e.op)
                 break
     rep.instructions = vm.instructions
     return rep
@@ -940,6 +974,7 @@ def main(argv=None) -> int:
     ap.add_argument("--osi", required=True)
     ap.add_argument("--frames", type=int, default=600)
     ap.add_argument("--keys", default="")
+    ap.add_argument("--mouse", default="", help="MOUSESPEC: run through FrameHost with the camera model (needs --real-natives)")
     ap.add_argument("--overrides", help="default: data/osi/native_overrides.json")
     ap.add_argument("--real-natives", action="store_true")
     ap.add_argument("--install", help="the install directory the native models read (with --real-natives)")
@@ -953,7 +988,7 @@ def main(argv=None) -> int:
     t0 = time.monotonic()
     try:
         rep = run_base(Path(a.osi).read_bytes(), a.frames, a.keys, overrides, a.natives, a.mods, a.types,
-                       a.real_natives, a.install)
+                       a.real_natives, a.install, a.mouse)
     except NothingBound as e:
         print("osi_taint.py: %s" % e, file=sys.stderr)
         return 2

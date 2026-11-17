@@ -311,6 +311,12 @@ osi-menu: native wasm $(VENV)/.ok
 	  timeout 600 $(PY) tools/research/oracle/hud_oracle.py --osi "$(LOMN_DATA)/install/data/Base.osi" \
 	    --install "$(LOMN_DATA)/install" --frames $$((of + 1)) --keys "$$k" --mouse "$$m" --frame $$of \
 	    --state-log $$d/oracle.state --out $$d/oracle.hud --native-boxes $$d/native.summary --check | tail -3; \
+	  timeout 60 $(PY) tools/osi/coverage.py --log $$d/native.natives.log > $$d/coverage.txt; \
+	  grep '^coverage' $$d/coverage.txt | sed "s/^/$$r /"; \
+	  grep -q 'stub 0, mod 0, tier3 0), .*unregistered 0' $$d/coverage.txt || { echo "osi-menu $$r: stub, tier3 or unregistered natives"; exit 1; }; \
+	  timeout 300 $(PY) tools/research/osi_taint.py --osi "$(LOMN_DATA)/install/data/Base.osi" --real-natives \
+	    --install "$(LOMN_DATA)/install" --frames $$n --keys "$$k" --mouse "$$m" > $$d/taint.txt; \
+	  head -1 $$d/taint.txt | sed "s/^/$$r /"; ! grep -q 'verdict UNSAFE' $$d/taint.txt || { echo "osi-menu $$r: UNSAFE natives"; exit 1; }; \
 	done
 	@echo "summary (M1 native):"; tail -3 $(OSI_MENU)/M1/native.summary
 

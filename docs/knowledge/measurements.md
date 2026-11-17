@@ -633,3 +633,38 @@ Run cost = the `menu_probe: stop none, N frames, S s` line the probe prints on s
 - **Tests:** `test_hud_oracle.py` has 7 cases: two sprites with exact lines, alpha deferral, the dx gating, the rect corners as boxes, pinned 31-hashes, and refusals (coloured, b6, .dds, FOG).
 - **Shared-reader risk:** the same author wrote the C++ HUD and this oracle from the same hud.md. Agreement shows consistency, not truth. The A13 capture still owes the ground truth.
 - Gate: native 46/46; tools 1207 passed, 0 skip; wasm 46/46 + 18/18; `make osi-menu` all cmp OK plus the oracle IDENTICAL on both runs.
+
+## M2a-3 T10: the menu gate, mutation bite, A13 harness, A15 (2026-11-17; native Release Apple M1 Pro; Beta 1.5.0 install)
+M1 / M2 as in T8 (`make osi-menu`, `OSI_M1` / `OSI_M2`).
+- **Coverage** (`tools/osi/coverage.py --log native.natives.log`): M1 75 distinct (tier1 53, tier2 22, stub 0, mod 0, tier3 0), 4,461 calls, unregistered 0. M2 the same 75, 7,341 calls. The one stub, `gcstaticsoundsptrarray.playtablesound` (F22, the hover sound), is now tier2. Its body 0x58b1d0 calls 0x58b900, which plays table entry 0x839360[i] when non-null, and then returns nothing (type 0x0f at 0x58b1f3). No script-visible state. `make osi-menu` now fails on any stub, tier3 or unregistered native.
+- **Taint** (`osi_taint.py --real-natives --mouse …`, new FrameHost path): M1 and M2 each have 22 tainted natives, **0 sinks, 0 UNSAFE**. M1 5.3 s, M2 9.6 s.
+- **Flip probe on M1** (`flip_probe.py --natives-impl real --keys … --mouse … --frames 905`, new FrameHost path): 75 natives, SAME 56, CHANGED 10, CHANGED-NULL 9, 255.7 s. **Every CHANGED / CHANGED-NULL native is tier1**, so there are 0 flip violations (Review focus 6). `gclegocamera.settargetspline` flipped leaves the camera spline index unset. The camera model then raises; that run's stop records it as a model error (the side-effect caveat).
+- **Pins:** the flip probe's and taint's FrameHost paths run the same instructions as `lomn_view` M1: setup 49,539, total 1,135,590 (`test_menu_drivers.py`).
+- **Mutation bite** (`mutate_menu.py <scratch> --all`): K1 kerning sign, K2 `sethudposition` x/y, K3 `hide` no-op, K4 spline duration × 2, K5 `OnEvent(26)` on even frames only, K6 the Urinate/"Pohatu" compare inverted (Python ini.py, test_ini.py), K7 INI last match. All CAUGHT; CTRL MISSED; every restore `cmp` OK.
+  - K2 and K3 bite on the digest's Z line of frame 0, which is a per-frame hash.
+  - K4 bites on D frame 604.
+  - K5 bites on D frame 1.
+  - K1 changed nothing on M1/M2, because BionicleFont, the menus' only font, has kerning 0. The A11 glyph test also had kerning 0. A new hand-derived unit case with kerning 2 catches it: second glyph quad x1 434; it would be 430 with kerning 0 and 426 with the sign flipped.
+- **A13 harness** `tools/harness/pixel_diff.py A B --mask M.json [--threshold T] [--null]`:
+  - outputs: per-region mismatch fraction, text ink boxes and their delta, exclude rectangles;
+  - 6 synthetic tests; 2 mutants of the tool fail them (5 and 1 failures);
+  - **thresholds are not set:** they are measured on the owner's shots (null control first).
+- **A15** (`perf/osi-menu.jsonl`, 2 rows):
+  - M1 script ms/frame p50 1.095 / p95 1.383, n 905 = window 905, insns/frame p50 1,093 / p95 1,388, natives/frame 3 / 5, stack high-water 59, nesting 2, RSS 83.5 MB;
+  - M2 p50 1.159 / p95 1.677, n 1,761 = window, insns/frame p50 1,169 / p95 1,689;
+  - loadavg 6.51 → 6.56, above the 6.0 limit, so the rows are **provisional**;
+  - render ms/frame: **not measured** (null backend has no timing; the WebGPU HUD is deferred).
+- **CheckWallCloseness (Decision 7): OPEN**, waiting on owner check O6 (natives.md §6.3).
+- **Gate (2026-11-17, loadavg 4.11 → 5.44):**
+  - **Passed:**
+    - test-tools: 1,217 passed, 0 skip;
+    - test-native: 46/46;
+    - test-wasm: 46/46 + 18/18;
+    - datacheck + datacheck-wasm: 78 PASS;
+    - conform-trace-cmp: 545/545;
+    - osi-diff: 4/4;
+    - osi-a9: 4/4;
+    - osi-menu: M1/M2 4/4 + A12, hud_oracle IDENTICAL, coverage and taint gates;
+    - mutate_menu `--all`: K1–K7 CAUGHT, CTRL MISSED;
+    - mutate_natives `--all`: 6 CAUGHT, CTRL MISSED.
+  - **NOT RUN:** `test-web` and `a13-real`. The host's Playwright browser (chromium-1243 for playwright 1.63.0) is not installed, so the smoke test failed at launch, before any test ran. It needs `npx playwright install chromium`, which is the owner's call (a download).

@@ -127,6 +127,33 @@ TEST_CASE("hud frame: a glyph's states, box and advance; restores; a hidden obje
   CHECK(hidden_log.size() == 2);  // PROJECTION + VIEW only
 }
 
+TEST_CASE("hud frame: kerning enters each advance with its sign (hud.md §3.6; hand-derived; M2a-3 T10 bite)") {
+  // BionicleFont, the only font of the menu runs, has kerning 0, so a kerning defect never shows on M1/M2: this pins it.
+  // "P P" at x 400, xs 1, tile 16, P: xOffset 1, width 10, space 5, kerning 2. P1: x = 400 - 1 = 399, quad [399, 415);
+  // advance (1 + 10) + 2 -> 412; space (5 + 2) -> 419; P2: x = 418, quad [418, 434). Kerning 0 gives 430, -2 gives 426.
+  sage::TileFont tf;
+  tf.rows = tf.columns = tf.count = 1;
+  tf.char_width = tf.char_height = 16, tf.baseline = 12, tf.space_width = 5, tf.max_width = 10, tf.kerning = 2;
+  tf.glyphs.push_back({'P', 10, 16, 1, 0});
+  HudFont f;
+  f.font = &tf;
+  f.glyph_tex0 = 1;
+  HudText t;
+  t.x = 400, t.y = 320, t.str = "P P";
+  t.font = 0;
+  std::vector<std::string> log, names = {"F.col/F0_0.tga"};
+  d3d::Device8 d(&log, &names);
+  HudScene sc;
+  sc.fonts.push_back(f);
+  sc.texts.push_back(t);
+  sc.shown.push_back({false, "002e:00000001", 0});
+  HudBoxes boxes;
+  hud_pass(d, sc, &boxes);
+  REQUIRE(boxes.count("002e:00000001") == 1);
+  CHECK(boxes["002e:00000001"].x0 == 399.0f);
+  CHECK(boxes["002e:00000001"].x1 == 434.0f);
+}
+
 TEST_CASE("hud frame: the glyph box (hand-derived) and the scene from Z lines refuses what is not modelled") {
   // Glyph 'P' at pen (399, 332) with w = h = 16 (§3.6): v0 -> (x, y - h), v3 -> (x + w, y).
   sage::TileFont tf;

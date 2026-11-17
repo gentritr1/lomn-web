@@ -129,10 +129,12 @@ def _rejects_nothing(vm, reg, err) -> bool:
 
 
 def run_once(script: bytes, natives, mods, types, frames: int, deadline: float, flip_key: Optional[str] = None,
-             natives_impl: str = "stub", install=None) -> Run:
+             natives_impl: str = "stub", install=None, keys: str = "", mouse: str = "") -> Run:
     """Setup + `frames` Process frames, no keys: the frame loop of osi_vm.run_base (ScProcessManager parity 0x4a92fd,
     the re-run rule 0x4a930d..0x4a957d), copied here because run_base is a print-only driver. The test
     `test_flip_probe_real_driver_matches_run_base` compares the instruction totals of the two."""
+    if (keys or mouse) and natives_impl != "real":
+        raise ValueError("--keys/--mouse need --natives-impl real (the camera model reads the native state)")
     tt = osi_vm.TypeTable.load(types)
     reg = ProbeRegistry.load(natives, mods, tt)
     reg.flip_key = flip_key
@@ -141,8 +143,11 @@ def run_once(script: bytes, natives, mods, types, frames: int, deadline: float, 
     if natives_impl == "real":  # M2a-2 T10: osi_vm.run_base's binding; the flipped key still answers first (invoke)
         from osi_natives import framework
         reg.return_log = []
-        framework.bind_natives(reg, framework.HostContext(vm, heap, framework.Vfs(install) if install else None,
-                                                          framework.HostFlags(), reg.return_log))
+        ctx = framework.HostContext(vm, heap, framework.Vfs(install) if install else None, framework.HostFlags(),
+                                    reg.return_log)
+        framework.bind_natives(reg, ctx)
+        if keys or mouse:  # M2a-3 T10: the menu runs through the shared FrameHost (input, camera model)
+            return _run_framehost(vm, reg, ctx, frames, deadline, keys, mouse)
     vm.pcs_seen = PcSet(time.monotonic() + deadline)
     stop = "none"
     rejected = False
@@ -185,6 +190,48 @@ def run_once(script: bytes, natives, mods, types, frames: int, deadline: float, 
     return Run(setup_insns, vm.instructions, frozenset(vm.pcs_seen), list(reg.hit), dict(reg.rets), stop, rejected)
 
 
+def _run_framehost(vm, reg, ctx, frames, deadline, keys, mouse) -> Run:
+    """osi_vm.run_base's order (hud.md §2.4). FrameHost resets vm.pcs_seen every frame, so the PCs are gathered per frame
+    and the deadline is checked between frames."""
+    import keys as osi_keys
+    from osi_natives.host_sources import FrameHost
+    events: dict = {}
+    for f, calls in (osi_vm.key_calls(keys).items() if keys else []):
+        for name, args in calls:
+            events.setdefault((f, "keymapper" if args[1].value == 251 else "vk"), []).append((name, args))
+    for f, args in (osi_keys.expand_mouse(mouse, frames) if mouse else []):
+        events.setdefault((f, "mouse"), []).append(("OnEvent", [Variant(*x) for x in args]))
+    host = FrameHost(vm, None, ctx, events, camera_model=True, write_z=False)
+    end = time.monotonic() + deadline
+    pcs: set = set()
+    vm.pcs_seen = set()
+    stop, rejected = "none", False
+    r = vm.call("Setup", [])
+    setup_insns = vm.instructions
+    pcs |= vm.pcs_seen
+    if not r.ok:
+        e = vm.last_error
+        stop = 'error "%s" in Setup at pc %08x op %02x' % (e.message, e.pc, e.op)
+        rejected = _rejects_nothing(vm, reg, e)
+    else:
+        for k in range(frames):
+            try:
+                ok = host.frame(k)
+            except (TypeError, ValueError, AttributeError, KeyError) as e:  # a flipped camera native leaves the model's
+                stop = 'model error "%s" at frame %d' % (e, k)              # state unset (the side-effect caveat above)
+                break
+            pcs |= vm.pcs_seen
+            if not ok:
+                e = host.error
+                stop = 'error "%s" at frame %d pc %08x op %02x' % (e.message, k, e.pc, e.op)
+                rejected = _rejects_nothing(vm, reg, e)
+                break
+            if time.monotonic() > end:
+                stop = "deadline"
+                break
+    return Run(setup_insns, vm.instructions, frozenset(pcs), list(reg.hit), dict(reg.rets), stop, rejected)
+
+
 class Result(NamedTuple):
     verdict: str
     key: str
@@ -193,13 +240,13 @@ class Result(NamedTuple):
 
 
 def probe(script: bytes, natives, mods, types, frames: int, deadline: float = 20.0, natives_impl: str = "stub",
-          install=None) -> list[Result]:
-    base = run_once(script, natives, mods, types, frames, deadline, None, natives_impl, install)
+          install=None, keys: str = "", mouse: str = "") -> list[Result]:
+    base = run_once(script, natives, mods, types, frames, deadline, None, natives_impl, install, keys, mouse)
     if base.stop != "none":
         raise RuntimeError("the baseline run does not finish cleanly: %s" % base.stop)
     out = []
     for key in base.natives:
-        r = run_once(script, natives, mods, types, frames, deadline, key, natives_impl, install)
+        r = run_once(script, natives, mods, types, frames, deadline, key, natives_impl, install, keys, mouse)
         changed = r.pcs != base.pcs or r.instructions != base.instructions
         if not changed:
             verdict = "SAME"
@@ -220,13 +267,15 @@ def main(argv=None) -> int:
     ap.add_argument("--natives-impl", choices=("real", "stub"), default="stub")
     ap.add_argument("--deadline", type=float, default=20.0, help="seconds per run")
     ap.add_argument("--install", help="with --natives-impl real: the install directory the models read (Root/ of the VFS)")
+    ap.add_argument("--keys", default="", help="KEYSPEC (with --natives-impl real: the menu runs, M2a-3 T10)")
+    ap.add_argument("--mouse", default="", help="MOUSESPEC (with --natives-impl real)")
     ap.add_argument("--natives", default=str(DATA / "natives.json"))
     ap.add_argument("--mods", default=str(DATA / "natives_beta150.json"))
     ap.add_argument("--types", default=str(DATA / "types.json"))
     a = ap.parse_args(argv)
     script = Path(a.osi).read_bytes()
     t0 = time.monotonic()
-    res = probe(script, a.natives, a.mods, a.types, a.frames, a.deadline, a.natives_impl, a.install)
+    res = probe(script, a.natives, a.mods, a.types, a.frames, a.deadline, a.natives_impl, a.install, a.keys, a.mouse)
     for r in res:
         print(format_line(r))
     counts = {}
