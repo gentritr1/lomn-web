@@ -52,6 +52,23 @@ Mat4 perspective_fov_rh(float fovy, float aspect, float zn, float zf) {
   return r;
 }
 
+Mat4 d3dx_perspective_fov_rh(float fovy, float aspect, float zn, float zf) {
+  // D3dx8cw.dll D3DXMatrixPerspectiveFovRH 0x10008c8d, each x87 op one f32 rounding (pc24): half = fovy * 0.5f
+  // (0x10060818), fsincos with both results stored as f32, ys = cos / sin, xs = ys / aspect, m10 = zf / (zn - zf),
+  // m14 = m10 * zn (not zn*zf/(zn-zf)). sin/cos: double then f32 (x87's extended result rounds the same away from ties).
+  const float half = fovy * 0.5f;
+  const float c = static_cast<float>(std::cos(static_cast<double>(half))), s = static_cast<float>(std::sin(static_cast<double>(half)));
+  const float ys = c / s;
+  Mat4 r;
+  r.m[0] = ys / aspect;
+  r.m[5] = ys;
+  r.m[10] = zf / (zn - zf);
+  r.m[11] = -1.0f;
+  r.m[14] = r.m[10] * zn;
+  r.m[15] = 0.0f;
+  return r;
+}
+
 namespace {
 void normalize3(float v[3]) {
   const float len = static_cast<float>(std::sqrt(static_cast<double>(v[0] * v[0] + v[1] * v[1] + v[2] * v[2])));

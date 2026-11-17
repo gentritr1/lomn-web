@@ -5,7 +5,7 @@ export LOMN_DATA LOMN_CACHE
 VENV := .venv
 PY := $(VENV)/bin/python
 EMSDK_ENV := source .toolchain/emsdk/emsdk_env.sh >/dev/null 2>&1
-.PHONY: setup check-data decomp worklist native wasm site test-tools test-native test-wasm test-web check perf perf-areas datacheck datacheck-wasm fuzz-osi fuzz-osi-vm fuzz-formats fuzz-formats-help a9-sweep a13-real manifest osi-tables osi-diff osi-a9 osi-coverage conform-trace-cmp
+.PHONY: setup check-data decomp worklist native wasm site test-tools test-native test-wasm test-web check perf perf-areas datacheck datacheck-wasm fuzz-osi fuzz-osi-vm fuzz-formats fuzz-formats-help a9-sweep a13-real manifest osi-tables osi-diff osi-a9 osi-menu osi-coverage conform-trace-cmp
 
 setup: $(VENV)/.ok
 	timeout 3600 tools/toolchain.sh
@@ -265,6 +265,47 @@ osi-a9: native wasm $(VENV)/.ok
 	  cmp $(OSI_A9)/native.natives.log $(OSI_A9)/python.natives.log && \
 	  echo "cmp 4/4 coverage report lomn_view == coverage.py --log, natives.log native == Python (own $(OSI_A9_NATIVES) natives): OK"
 	@echo "summary (native):"; cat $(OSI_A9)/native.summary
+
+# M2a-3 T8 (Decision 2, A12): the two menu runs. M1: entry 1 then 2 by mouse, keys down/down; shots at F_act + 60 = 665
+# (A12) and the last frame. M2 (Options): the click on "Options" released at 672, so F_evt2 = 672 + 788 = 1460 (hud.md
+# §1, the 665-725 click region); the Options frame F_evt2 + 60 = 1520; esc at + 120, RMB at + 240, end at + 300.
+# `backspace` (Decision 2) has no KEYSPEC key (keys.py models no such key-mapper site): left out. Legs per run: native and
+# wasm32 lomn_view (digest, natives.log, null-backend state log, stdout with the `hud box` lines); the Python oracle with
+# its own natives; the Python oracle replaying the native natives.log. cmp 1/4..4/4 on the D lines, then the Z lines
+# (native == wasm32 == Python own), the state logs native == wasm32, and the I2/F22 box checks. Controller-only (heavy).
+OSI_MENU := build/osi-menu
+OSI_M1 := 905|down@700 down@760|450,330@0 450,370@755|665,904
+OSI_M2 := 1761|esc@1580|450,330@0 450,370@665 lmb+@670 lmb-@672 rmb+@1700 rmb-@1702|1520
+osi-menu: native wasm $(VENV)/.ok
+	@if [ -z "$(LOMN_DATA)" ]; then echo "osi-menu: LOMN_DATA is not set"; exit 2; fi
+	mkdir -p $(OSI_MENU)
+	set -eo pipefail; for run in "M1|$(OSI_M1)" "M2|$(OSI_M2)"; do \
+	  IFS='|' read -r r n k m s <<< "$$run"; d=$(OSI_MENU)/$$r; mkdir -p $$d; \
+	  timeout 300 build/native/lomn_view --install "$(LOMN_DATA)/install" --script 1 --natives real --frames $$n --keys "$$k" \
+	    --mouse "$$m" --digest $$d/native.digest --natives-log $$d/native.natives.log --state-log $$d/native.state \
+	    --shot-frames $$s > $$d/native.summary; \
+	  ($(EMSDK_ENV) && timeout 600 node build/wasm/lomn_view.js --install "$(LOMN_DATA)/install" --script 1 --natives real \
+	    --frames $$n --keys "$$k" --mouse "$$m" --digest $$d/wasm.digest --natives-log $$d/wasm.natives.log \
+	    --state-log $$d/wasm.state --shot-frames $$s > $$d/wasm.summary); \
+	  timeout 1800 $(PY) tools/research/osi_vm.py --run "$(LOMN_DATA)/install/data/Base.osi" $(OSI_TABLES) --real-natives \
+	    --install "$(LOMN_DATA)/install" --frames $$n --keys "$$k" --mouse "$$m" --digest $$d/python.digest \
+	    --log-out $$d/python.natives.log > $$d/python.summary; \
+	  timeout 1800 $(PY) tools/research/osi_vm.py --run "$(LOMN_DATA)/install/data/Base.osi" $(OSI_TABLES) --frames $$n \
+	    --keys "$$k" --mouse "$$m" --replay $$d/native.natives.log --digest $$d/python_replay.digest > $$d/python_replay.summary; \
+	  for e in native wasm python python_replay; do grep '^D ' $$d/$$e.digest > $$d/$$e.D; grep '^Z ' $$d/$$e.digest > $$d/$$e.Z || true; done; \
+	  [ -s $$d/native.D ] && [ -s $$d/native.Z ] || { echo "osi-menu $$r: no D or Z lines"; exit 1; }; \
+	  cmp $$d/native.D $$d/wasm.D && cmp $$d/native.natives.log $$d/wasm.natives.log && \
+	    echo "$$r cmp 1/4 D lines native == wasm32 ($$(wc -l < $$d/native.D) lines; natives.log identical): OK"; \
+	  cmp $$d/native.D $$d/python_replay.D && echo "$$r cmp 2/4 D lines native == Python replay: OK"; \
+	  cmp $$d/native.D $$d/python.D && cmp $$d/native.natives.log $$d/python.natives.log && \
+	    echo "$$r cmp 3/4 D lines and natives.log native == Python (own natives): OK"; \
+	  cmp $$d/native.Z $$d/wasm.Z && cmp $$d/native.Z $$d/python.Z && \
+	    echo "$$r cmp 4/4 Z lines native == wasm32 == Python (own natives; $$(wc -l < $$d/native.Z) lines): OK"; \
+	  cmp $$d/native.state $$d/wasm.state && cmp $$d/native.summary $$d/wasm.summary && \
+	    echo "$$r A12 state log native == wasm32 ($$(wc -l < $$d/native.state) lines; stdout identical): OK"; \
+	  timeout 60 $(PY) tools/osi/menu_boxes.py $$r $$d/native.summary; \
+	done
+	@echo "summary (M1 native):"; tail -3 $(OSI_MENU)/M1/native.summary
 
 # M2a-2 T1 (A8): the coverage report of a typed-stub run of the real Base.osi in the Python oracle: which natives were hit,
 # by tier (tools/osi/coverage.py; tiers come from data/osi/native_overrides.json once it exists, else every exe row is a

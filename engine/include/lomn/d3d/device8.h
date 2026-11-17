@@ -126,14 +126,28 @@ class Device8 {
   void end_scene();
   // ID3DXMesh::DrawSubset: logs "DRAW ..." and hands the current state to the sink. `what` names the drawn object.
   void draw_subset(const std::string& what, const DrawRef& d);
+  // M2a-3 T8 (hud.md §10.1): SetVertexShader(fvf) writes no line (the area log stays as it was); DrawIndexedPrimitive /
+  // DrawPrimitive log "DRAW <what> call=DIP|DP prim=%d count=%d fvf=0x%03x vsum=%08x" (vsum computed by the caller).
+  void set_vertex_shader(uint32_t fvf) { fvf_ = fvf; }
+  void draw_primitive(const std::string& what, bool indexed, uint32_t prim, uint32_t count, uint32_t vsum);
   void note(const std::string& text);  // "# text" structure line (does not count as a state change)
 
   // ---- ScDxStates (0x0064b1e0 / 0x0064b250): forward only a change ----
   void dx_set_rs(uint32_t state, uint32_t value) {
     if (get_rs(state) != value) set_rs(state, value);
   }
+  // 0x64b250 also keeps two caches (EXECUTED, 0x64b27b-0x64b29f, stage 0 arrays 0x837ec8 cur / 0x838370 saved, .bss so
+  // 0 at start, no other writers in the listing): saved = the device value it read, cur = the value after the call.
   void dx_set_tss(uint32_t stage, uint32_t type, uint32_t value) {
-    if (get_tss(stage, type) != value) set_tss(stage, type, value);
+    const uint32_t was = get_tss(stage, type);
+    if (stage < kStages && type < 32) dx_saved_[stage][type] = was, dx_cur_[stage][type] = value;
+    if (was != value) set_tss(stage, type, value);
+  }
+  // RestoreTextureStageState 0x64b380 (EXECUTED): no device read; if saved != cur, a raw Set to saved. The cache is
+  // left as it was (no write at 0x64b3a3-0x64b3ef).
+  void dx_restore_tss(uint32_t stage, uint32_t type) {
+    if (stage < kStages && type < 32 && dx_saved_[stage][type] != dx_cur_[stage][type])
+      set_tss(stage, type, dx_saved_[stage][type]);
   }
 
   const State& state() const { return s_; }
@@ -149,7 +163,8 @@ class Device8 {
   std::vector<std::string>* log_;
   const std::vector<std::string>* names_;
   DrawSink* sink_ = nullptr;
-  uint32_t state_calls_ = 0, draws_ = 0;
+  uint32_t state_calls_ = 0, draws_ = 0, fvf_ = 0;
+  uint32_t dx_cur_[kStages][32] = {}, dx_saved_[kStages][32] = {};
   bool light_set_[kMaxLights] = {};  // SetLight assigned the index (else LightEnable uses the D3D8 default light; Task 8B B3)
   uint32_t clear_argb_ = 0xff000000u;
   float clear_z_ = 1.0f;

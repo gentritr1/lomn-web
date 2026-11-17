@@ -84,6 +84,9 @@
 #include "lomn/rhi.h"
 #include "lomn/sage/osi.h"
 #include "lomn/view/area.h"
+#include "lomn/osi/services.h"
+#include "lomn/view/hud_frame.h"
+#include "lomn/view/math.h"
 #include "lomn/view/prefetch.h"
 #include "lomn/view/synthetic.h"
 #include "lomn/view/texture_cache.h"
@@ -837,7 +840,8 @@ bool parse_frame_bound(const std::string& s, long& out) {
 int script_mode(std::map<std::string, std::string>& a) {
   auto has = [&](const char* k) { return a.count(k) != 0; };
   static const char* const allowed[] = {"--install", "--script", "--frames", "--keys", "--trace", "--trace-frames", "--digest",
-                                        "--natives-log", "--natives", "--deterministic", "--skip-video", "--out", "--mouse"};
+                                        "--natives-log", "--natives", "--deterministic", "--skip-video", "--out", "--mouse",
+                                        "--state-log", "--shot-frames", "--level", "--area", "--width", "--height", "--backend"};
   for (const auto& kv : a)
     if (std::find_if(std::begin(allowed), std::end(allowed), [&](const char* x) { return kv.first == x; }) == std::end(allowed))
       return usage(("--script cannot be combined with " + kv.first + " (the script mode is headless)").c_str());
@@ -872,8 +876,29 @@ int script_mode(std::map<std::string, std::string>& a) {
     if (has(k) && a[k] != "on" && a[k] != "off") return usage((std::string("bad ") + k + " (on|off)").c_str());
   flags.deterministic = !has("--deterministic") || a["--deterministic"] == "on";
   flags.skip_video = !has("--skip-video") || a["--skip-video"] == "on";
+  // M2a-3 T8: the rendered leg (hud.md §10). With --state-log the area (--level/--area, default lev0/frnt: the front end)
+  // and the HUD are replayed on the D3D8 shim after EVERY script frame that has a camera, so the device state carries
+  // from frame to frame as in the game; the log keeps the device init and the --shot-frames frames only.
+  const bool rendered = has("--state-log");
+  for (const char* k : {"--shot-frames", "--level", "--area", "--width", "--height", "--backend"})
+    if (has(k) && !rendered) return usage((std::string(k) + " needs --state-log").c_str());
+  std::set<long> shots;
+  uint32_t width = 640, height = 480;
+  if (rendered) {
+    if (!has("--shot-frames")) return usage("--state-log needs --shot-frames a[,b...]");
+    std::stringstream ss(a["--shot-frames"]);
+    for (std::string t; std::getline(ss, t, ',');) {
+      uint32_t v = 0;
+      if (!parse_u32(t, 0, frames - 1, v)) return usage("bad --shot-frames (frames 0..N-1, comma-separated)");
+      shots.insert(v);
+    }
+    if (has("--width") && !parse_u32(a["--width"], 16, 8192, width)) return usage("bad --width");
+    if (has("--height") && !parse_u32(a["--height"], 16, 8192, height)) return usage("bad --height");
+    // ponytail: the webgpu leg needs the HUD quads on rhi (a DrawSink for draw_primitive); null only until then
+    if (has("--backend") && a["--backend"] != "null") return usage("--script --state-log takes --backend null (webgpu: not yet)");
+  }
   std::vector<std::pair<std::string, std::string>> outs;  // (option, path)
-  for (const char* k : {"--trace", "--digest", "--natives-log", "--out"})
+  for (const char* k : {"--trace", "--digest", "--natives-log", "--out", "--state-log"})
     if (has(k)) {
       if (a[k].empty()) return usage((std::string("bad ") + k + " (a file)").c_str());
       outs.push_back({k, a[k]});
@@ -975,6 +1000,87 @@ int script_mode(std::map<std::string, std::string>& a) {
   osi::Vm& vm = host->vm();
 
   // The run: lomn_osi_run's loop and statistics.
+  // M2a-3 T8: the area renderer on the null device, the HUD hook fed from each frame's Z lines.
+  view::AreaData area_data;
+  view::AreaRenderer renderer;
+  std::unique_ptr<rhi::Device> rdev;
+  rhi::TextureId rt = 0;
+  std::vector<std::string> state_log, cur_z;
+  view::HudFontCache hud_cache;
+  std::string hud_err;
+  long shot_frame = -1;  // the frame being rendered when it is a --shot-frames frame
+  if (rendered) {
+    std::string e;
+    if (!view::load_area(*fsp, has("--level") ? a["--level"] : "lev0", has("--area") ? a["--area"] : "frnt", view::AreaOptions(),
+                         area_data, &e))
+      return drop_outputs(), std::fprintf(stderr, "lomn_view --script: %s\n", e.c_str()), 3;
+    rdev = rhi::create_null_device(nullptr);
+    rhi::RenderTargetDesc rd;
+    rd.width = width, rd.height = height, rd.depth = true;
+    rt = rdev->create_render_target_ex(rd);
+    view::RenderOptions ro;
+    ro.state_log = &state_log;
+    if (!rt || !renderer.upload(*rdev, area_data, ro, &e))
+      return drop_outputs(), std::fprintf(stderr, "lomn_view --script: upload failed: %s\n", e.c_str()), 4;
+    renderer.set_hud([&](d3d::Device8& d, std::vector<std::string>& names) {
+      const bool shot_now = shot_frame >= 0;
+      view::HudScene sc;
+      if (!hud_err.empty()) return;
+      // Sprite textures through the VM's own SrBlockFileExists model (Art.blk, then the slots), as the loader does.
+      const view::TexExists ex = [&](const std::string& n) { return host->context().subsystem<osi::BlockFiles>().exists(n); };
+      try {
+        if (!view::hud_scene_from_z(cur_z, *fsp, ex, hud_cache, names, sc, &hud_err)) return;
+      } catch (const std::exception& x) {  // the freed-slot VmError of BlockFiles::exists (natives.md §8.2)
+        hud_err = std::string("HUD texture lookup: ") + x.what();
+        return;
+      }
+      sc.width = static_cast<float>(width), sc.height = static_cast<float>(height);
+      view::HudBoxes boxes;
+      view::hud_pass(d, sc, shot_now ? &boxes : nullptr);
+      std::map<std::string, std::string> text_of;
+      for (const auto& it : sc.shown)
+        if (!it.sprite) text_of[it.who] = sc.texts[it.index].str;
+      for (const auto& [who, b] : boxes)  // stdout only: the I2/F22 checks of osi_menu.cmake read these lines
+        std::printf("hud box %ld %s cell %.6g %.6g %.6g %.6g ink %.6g %.6g %.6g %.6g %s\n", shot_frame, who.c_str(), b.x0, b.y0,
+                    b.x1, b.y1, b.ix0, b.iy0, b.ix1, b.iy1, text_of.count(who) ? text_of[who].c_str() : "<sprite>");
+    });
+  }
+  // The viewport camera from the frame's Z lines (hud.md §1.7): LookAtRH(eye, target, (0,1,0)) and PerspectiveFovRH(72
+  // degrees, W/H, 0.01, 4700). False when the script has no camera yet (no Z camera lines) or a mode the port does not
+  // model (1, 6, 0xc, 0xd add a RotateX).
+  auto z_camera = [&](view::Camera& cam) {
+    bool eye = false, at = false;
+    for (const std::string& l : cur_z) {
+      std::istringstream in(l);
+      std::string zz, key;
+      in >> zz >> key;
+      float* dst = key == "camera.eye" ? cam.eye : key == "camera.target" ? cam.at : nullptr;
+      if (key == "camera.mode") {
+        std::string m;
+        in >> m;
+        const unsigned long mv = std::stoul(m, nullptr, 16);
+        if (mv == 1 || mv == 6 || mv == 0xc || mv == 0xd) return hud_err = "unmodelled: camera mode " + m + " (RotateX)", false;
+      }
+      if (!dst) continue;
+      for (int i = 0; i < 3; ++i) {
+        std::string h;
+        in >> h;
+        const uint32_t u = static_cast<uint32_t>(std::stoul(h, nullptr, 16));
+        std::memcpy(&dst[i], &u, 4);
+      }
+      (dst == cam.eye ? eye : at) = true;
+    }
+    if (!eye || !at) return false;
+    const float up[3] = {0, 1, 0};
+    const view::CameraSettings cs;
+    cam.view = view::look_at_rh(cam.eye, cam.at, up);
+    // GcViewPort ctor 0x4479f0: fovy = 72.0f * 0.017453292f (f32 mul), aspect = W/H in f32.
+    cam.proj = view::d3dx_perspective_fov_rh(cs.fov_deg * 0.017453292f,
+                                        static_cast<float>(width) / static_cast<float>(height), cs.near_z, cs.far_z);
+    return true;
+  };
+  long rendered_frames = 0;
+
   auto t0 = Clock::now();
   host->setup();
   const double setup_ms = ms_since(t0);
@@ -994,6 +1100,31 @@ int script_mode(std::map<std::string, std::string>& a) {
     pcs_per_frame.push_back(stats.pcs.size());
     for (uint32_t pc : stats.pcs)
       if (seen.insert(pc).second) flatten = k;
+    if (rendered && host->stats().stop == "none") {
+      cur_z = osi::snapshot_lines(host->context());
+      view::Camera cam;
+      if (z_camera(cam)) {
+        const bool keep = shots.count(k) != 0;
+        shot_frame = keep ? static_cast<long>(k) : -1;
+        if (keep) state_log.push_back("# script frame " + std::to_string(k));
+        const size_t before = state_log.size();
+        if (!renderer.render(*rdev, rt, area_data, cam)) hud_err = hud_err.empty() ? "render refused" : hud_err;
+        ++rendered_frames;
+        if (!keep) {  // keep the device init (before the first "# frame " line), drop the frame itself
+          size_t cut = before;
+          while (cut < state_log.size() && state_log[cut].rfind("# frame ", 0) != 0) ++cut;
+          state_log.resize(cut);
+        }
+      }
+      if (!hud_err.empty()) break;
+    }
+  }
+  if (!hud_err.empty()) return drop_outputs(), std::fprintf(stderr, "lomn_view --script: %s\n", hud_err.c_str()), 4;
+  if (rendered) {
+    std::ofstream f(a["--state-log"]);
+    for (const auto& c : state_log) f << c << '\n';
+    f.close();
+    if (f.fail()) return std::fprintf(stderr, "cannot write %s\n", a["--state-log"].c_str()), 4;
   }
   const osi::HostStats& hs = host->stats();
   if (digest) digest->finish();
@@ -1038,6 +1169,7 @@ int script_mode(std::map<std::string, std::string>& a) {
   o += std::string("script sha256 unchanged: ") + (unchanged ? "True" : "False") + "\n";
   add("flattening: the last frame that executed a new PC is %ld; distinct PCs overall %zu; natives/frame p50 %llu p95 %llu\n",
       flatten, seen.size(), (unsigned long long)pct_u(natives_per_frame, 0.5), (unsigned long long)pct_u(natives_per_frame, 0.95));
+  if (rendered) add("rendered frames %ld, state-log lines %zu\n", rendered_frames, state_log.size());  // M2a-3 T8
   std::fwrite(o.data(), 1, o.size(), stdout);
   std::fflush(stdout);
 
@@ -1076,7 +1208,8 @@ int main(int argc, char** argv) {
                                 "--script", "--keys", "--trace", "--trace-frames", "--digest", "--natives-log", "--natives",
                                 "--deterministic", "--skip-video",
                                 // M2a-3 T4a: MOUSESPEC, and its printer (keys.py --mouse "MOUSESPEC" N)
-                                "--mouse", "--print-mouse"};
+                                "--mouse", "--print-mouse",
+                                "--shot-frames"};  // M2a-3 T8: the rendered script leg
   for (int i = 1; i + 1 < argc; i += 2) {
     std::string k = argv[i];
     if (std::find_if(std::begin(known), std::end(known), [&](const char* x) { return k == x; }) == std::end(known))
@@ -1095,7 +1228,7 @@ int main(int argc, char** argv) {
     return 0;
   }
   if (has("--script")) return script_mode(a);  // exempt from --out (written only when given) and from the area options
-  for (const char* k : {"--keys", "--trace", "--trace-frames", "--digest", "--natives-log", "--natives", "--deterministic", "--skip-video", "--mouse"})
+  for (const char* k : {"--keys", "--trace", "--trace-frames", "--digest", "--natives-log", "--natives", "--deterministic", "--skip-video", "--mouse", "--shot-frames"})
     if (has(k)) return usage((std::string(k) + " needs --script 1").c_str());
   const std::string out = has("--out") ? a["--out"] : "";
   if (out.empty()) return usage("--out is required");

@@ -27,6 +27,8 @@ Mat4 mat_translation(float x, float y, float z);
 // A view-space point at z = -zn gets z_ndc = 0 and at z = -zf gets z_ndc = 1: D3D's [0,1] depth range, which is also
 // WebGPU's, so the matrix is used unchanged (no [-1,1] remap as for OpenGL).
 Mat4 perspective_fov_rh(float fovy_radians, float aspect, float zn, float zf);
+// The game's own D3DX op order (D3dx8cw.dll 0x10008c8d, hud.md §1.7): the script camera uses this one.
+Mat4 d3dx_perspective_fov_rh(float fovy_radians, float aspect, float zn, float zf);
 // D3DXMatrixLookAtRH: z = normalize(eye - at), x = normalize(cross(up, z)), y = cross(z, x);
 //   [x.x y.x z.x 0; x.y y.y z.y 0; x.z y.z z.z 0; -dot(x,eye) -dot(y,eye) -dot(z,eye) 1]
 // Kept as D3DX computes it: when eye - at is parallel to up, x is the zero vector (degenerate view). make_camera keeps

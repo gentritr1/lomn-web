@@ -17,6 +17,7 @@
 // (texture, sampler), one 1024-byte uniform slot per draw. See the M1a-2 and M1a-3 reference REPORTs.
 #pragma once
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -291,6 +292,9 @@ class AreaRenderer {
   // M1b: destroys every GPU object this renderer created (also after a failed upload), bind groups first, and resets
   // the renderer to its never-uploaded state. Returns the objects destroyed; *failures (optional) = rejected destroys.
   uint32_t release(rhi::Device& dev, uint32_t* failures = nullptr);
+  // M2a-3 T8: run `hud` inside every frame's HUD view (SageFrame::set_hud) with this renderer's D3D8 device and its
+  // texture-name table (HUD textures are appended there, handle = index + 1). Needs a successful upload(); false otherwise.
+  bool set_hud(std::function<void(d3d::Device8&, std::vector<std::string>&)> hud);
   uint32_t pipelines() const { return pipelines_created_; }
   uint64_t uploaded_texture_bytes() const { return uploaded_texture_bytes_; }
   uint32_t textures_created() const { return textures_created_; }

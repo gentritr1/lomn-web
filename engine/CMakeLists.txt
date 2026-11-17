@@ -61,7 +61,7 @@ target_compile_options(lomn_d3d PRIVATE -Wall -Wextra)
 
 # M1a-2 first pixels + M1a-3: CPU mips, area loader, the SAGE frame replay on the shim, the A7/A9 synthetic scene.
 add_library(lomn_area STATIC src/view/mips.cpp src/view/area.cpp src/view/sage_frame.cpp src/view/synthetic.cpp
-            src/view/texture_cache.cpp
+            src/view/texture_cache.cpp src/view/hud_frame.cpp  # M2a-3 T8: the HUD viewport pass
             src/view/fly_camera.cpp src/view/prefetch.cpp)  # M1b: free-fly camera, prefetch helpers
 target_link_libraries(lomn_area PUBLIC lomn_sage lomn_d3d)
 target_compile_options(lomn_area PRIVATE -Wall -Wextra)
@@ -336,7 +336,7 @@ add_executable(lomn_tests tests/test_main.cpp tests/test_fs.cpp tests/test_rhi_n
                tests/test_rhi_mesh.cpp tests/test_view_mips.cpp tests/test_view_area.cpp tests/test_d3d.cpp tests/test_sage_osi.cpp
                tests/test_area_states.cpp tests/test_sage_frame.cpp tests/test_view_texture_cache.cpp tests/test_fuzz_fragments.cpp
                tests/test_rhi_destroy.cpp tests/test_prefetch_fs.cpp tests/test_fly_camera.cpp  # M1b
-               tests/test_osi_vm.cpp tests/test_osi_natives.cpp tests/test_osi_services.cpp tests/test_osi_directors.cpp tests/test_osi_objects.cpp tests/test_osi_host_sources.cpp tests/test_osi_hud.cpp
+               tests/test_osi_vm.cpp tests/test_osi_natives.cpp tests/test_osi_services.cpp tests/test_osi_directors.cpp tests/test_osi_objects.cpp tests/test_osi_host_sources.cpp tests/test_osi_hud.cpp tests/test_hud_frame.cpp
                tests/test_ini.cpp tests/test_sage_colfont.cpp)  # M2a-1, M2a-2 T3, T7a, T8a, T9a; M2a-3 T4a, T5a, T7a
 # wasm32 stack for the OSI VM (I2): a native re-entering the VM costs 1,648 bytes of C++ stack per engine call
 # (measured 2026-10-09, Vm::call -> call_impl -> run -> dispatch -> 0x82 -> native -> Vm::call), 116,240 bytes in use at

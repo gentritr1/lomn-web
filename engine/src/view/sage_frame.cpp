@@ -410,8 +410,10 @@ void SageFrame::frame(const AreaData& a, const Camera& cam, uint32_t frame_index
   }
   d.note("main view: ScRenderer::Finish");
   finish();
+  if (hud_) d.note("viewport HdDr");
   d.note("HUD view: ScRenderer::Start");
   push_render_mode(kModeHud);
+  if (hud_) hud_();
   d.note("HUD view: ScRenderer::Finish");
   finish();
   d.end_scene();

@@ -20,6 +20,7 @@
 // (0x0048eb40) when sUseSpecialLightColor (night vision) is on. SageFrameOptions::force_area_lighting models that.
 #pragma once
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -54,6 +55,9 @@ class SageFrame {
   void set_fog_value(uint32_t color, float start, float end, float density);  // GcGraphicsOptions::SetFogValue 0x005e5450
   // One frame. Textures are device handles (AreaData::textures index + 1).
   void frame(const AreaData& area, const Camera& cam, uint32_t frame_index);
+  // M2a-3 T8: the HUD view's draws (lomn/view/hud_frame.h), run after its SrPushRenderMode(0x8c034). With a HUD set,
+  // the frame also writes "# viewport HdDr" (hud.md §10.1); without one the log is exactly the area-only log.
+  void set_hud(std::function<void()> hud) { hud_ = std::move(hud); }
 
   // Building blocks (public for unit tests).
   void push_render_mode(uint32_t mode);  // SrPushRenderMode 0x00531100
@@ -72,6 +76,7 @@ class SageFrame {
   d3d::Device8& dev_;
   SageCaps caps_;
   SageFrameOptions opt_;
+  std::function<void()> hud_;
   uint32_t last_mode_ = 0;   // gLastRenderMode
   bool fog_on_ = false;      // GcGraphicsOptions::mFogOn
   uint32_t fog_color_ = 0xffffffffu;

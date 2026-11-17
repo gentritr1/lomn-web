@@ -1131,6 +1131,14 @@ bool AreaRenderer::render(rhi::Device& dev, rhi::TextureId target, const AreaDat
   return true;
 }
 
+bool AreaRenderer::set_hud(std::function<void(d3d::Device8&, std::vector<std::string>&)> hud) {
+  if (!impl_) return false;
+  Impl* im = impl_.get();
+  if (hud) im->sage.set_hud([im, h = std::move(hud)] { h(im->dev8, im->names); });
+  else im->sage.set_hud(nullptr);
+  return true;
+}
+
 // ---- M1b: area switching ----
 // Destroys every rhi object this renderer created, in dependency order: bind groups first (they reference the uniform
 // buffer, textures and samplers; rhi rejects destroying a referenced object), then pipelines, samplers, textures and
