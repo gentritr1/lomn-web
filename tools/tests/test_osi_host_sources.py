@@ -1001,7 +1001,7 @@ def test_mode_3_with_no_spline_held_is_undefined_behaviour():
     assert vm.call("main", []).ok
     host = hsm.FrameHost(vm, tr, ctx, {}, camera_model=True)
     assert host.frame(0) and host.frame(1) and not host.frame(2)
-    assert host.error.message.startswith("Undefined behaviour")
+    assert host.error.message == "Undefined: camera spline step with no spline held (0x61a6e0)"
 
 
 def _file_bytes(count, nrec):
@@ -1018,10 +1018,10 @@ def test_spline_index_beyond_the_accelerated_count_or_the_records_is_undefined()
     f = hsm.SplineFile(_file_bytes(257, 257))                               # count & 0xff = 1: all 257 records load, one is accelerated
     assert len(f.splines) == 257 and f.count == 1
     assert f.interpolate(0, tof(0.5), 24) == tof(0.5)
-    with pytest.raises(osi_vm.VmError, match="Undefined behaviour"):
+    with pytest.raises(osi_vm.VmError, match=r"^Undefined: camera spline index 1 past the 1 accelerated records \(0x61a6e0\)$"):
         f.interpolate(1, tof(0.5), 24)
     g = hsm.SplineFile(_file_bytes(3, 3))
-    with pytest.raises(osi_vm.VmError, match="Undefined behaviour"):
+    with pytest.raises(osi_vm.VmError, match=r"^Undefined: camera spline index 3 past the 3 accelerated records \(0x61a6e0\)$"):
         g.interpolate(3, tof(0.5), 24)
     assert not any(s.y2 for s in f.splines[1:])                             # nothing past the first record was accelerated
 

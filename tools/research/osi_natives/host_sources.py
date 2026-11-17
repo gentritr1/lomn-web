@@ -212,8 +212,8 @@ class SplineFile:
     def interpolate(self, index: int, t_bits: int, pc: int) -> int:
         i = index & 0xFF                                       # the wrapper takes the low byte (0x61a6e8)
         if i >= self.count or i >= len(self.splines):     # beyond the accelerated count (a byte) or the records loaded (hud.md §1.5a)
-            raise VmError("Undefined behaviour: spline index %d is outside the file (%d accelerated, %d loaded)"
-                          % (i, self.count, len(self.splines)))
+            raise VmError("Undefined: camera spline index %d past the %d accelerated records (0x61a6e0)"
+                          % (i, min(self.count, len(self.splines))))
         sp = self.splines[i]
         if sp.y2 is None:
             sp.accelerate(self.pc)                             # tabulated once, at construction
@@ -406,7 +406,7 @@ def camera_step(hs: HostSources, cam, time: float, pc: int) -> CameraStep:
     if mode not in (2, 3):
         return CameraStep(False)
     if cam.spline_holder is None:                                                    # the wrapper 0x61a6e0 reads [[null+8]+0x9c]
-        raise VmError("Undefined behaviour: camera AI mode %d with no spline held" % mode)
+        raise VmError("Undefined: camera spline step with no spline held (0x61a6e0)")
     if st.duration is None:
         return CameraStep(False)
     if pc not in (24, 53):
