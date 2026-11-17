@@ -12,6 +12,7 @@
 #include "lomn/osi/directors.h"
 #include "lomn/osi/heap.h"
 #include "lomn/osi/host.h"
+#include "lomn/osi/hud.h"
 #include "lomn/osi/objects.h"
 #include "lomn/sage/blockchain.h"
 #include "lomn/sage/slb.h"
@@ -306,6 +307,7 @@ std::vector<std::string> snapshot_lines(HostContext& ctx) {
   }
   const CinematicState& cs = ctx.subsystem<CinematicState>();
   if (cs.completed > 0) z.push_back(std::string("Z cs.playing ") + (cs.playing ? "1" : "0"));
+  for (std::string& l : hud_snapshot_lines(ctx)) z.push_back(std::move(l));  // M2a-3 T6a
   std::sort(z.begin(), z.end());
   return z;
 }

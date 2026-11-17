@@ -10,6 +10,7 @@ void bind_selftest_group(NativeRegistry& reg, HostContext& ctx);  // natives/sel
 void bind_services_group(NativeRegistry& reg, HostContext& ctx);  // natives/services.cpp (M2a-2 T7a)
 void bind_directors_group(NativeRegistry& reg, HostContext& ctx);  // natives/directors.cpp (M2a-2 T8a)
 void bind_objects_group(NativeRegistry& reg, HostContext& ctx);   // natives/objects.cpp (M2a-2 T9a)
+void bind_hud_group(NativeRegistry& reg, HostContext& ctx);       // natives/hud.cpp (M2a-3 T6a)
 
 const std::vector<NativeGroup>& native_groups() {
   static const std::vector<NativeGroup> g = {
@@ -17,6 +18,7 @@ const std::vector<NativeGroup>& native_groups() {
       {"services", bind_services_group, false},  // M2a-2 T7a: strings, file-exists, GcTimer.create, time, resolution
       {"directors", bind_directors_group, false},  // M2a-2 T8a: singletons, area director, saver, cinematics, BetterSaver
       {"objects", bind_objects_group, false},    // M2a-2 T9a: objects, model director, camera, HUD
+      {"hud", bind_hud_group, false},            // M2a-3 T6a: the HUD setters, show/hide, the Z hud lines
   };
   return g;
 }

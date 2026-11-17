@@ -39,6 +39,7 @@ class ScTextObject : public GameObject {
   ScTextObject(uint16_t type, float x, float y, float z, ScTileFont* font, std::string text)
       : GameObject(type, 0), x_(x), y_(y), z_(z), font_(font), text_(std::move(text)) {}
   ScTileFont* font() const { return font_; }
+  void set_font(ScTileFont* f) { font_ = f; }  // sctextobject.setfont stores +0x2c (0x611fce); refs in hud.cpp
   const std::string& text() const { return text_; }
   float x() const { return x_; }
   float y() const { return y_; }

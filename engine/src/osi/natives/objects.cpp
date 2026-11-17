@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "lomn/osi/directors.h"
+#include "lomn/osi/hud.h"
 #include "lomn/osi/services.h"
 
 namespace lomn::osi {
@@ -88,7 +89,10 @@ std::vector<Variant> event_args(int32_t a0, int32_t a1) {
 // missing font file, its throw at 0x627230) are M2a-3 (not ported).
 Variant n_sctilefont_create(NativeCall& c, void* user) {
   HostContext& ctx = host(user);
-  return ctx.create_variant(ctx.make<ScTileFont>(c.entry.ret_type, string_arg(ctx, c, 0)));
+  ScTileFont* f = ctx.make<ScTileFont>(c.entry.ret_type, string_arg(ctx, c, 0));
+  const Variant v = ctx.create_variant(f);
+  hud_created_font(ctx, f->handle(), f->name());  // M2a-3 T6a: Z font.file (hud.md §9.2)
+  return v;
 }
 
 // body 0x611cd0, method 0x610c40 <ScTextObject::ScTextObject> (the 5-argument constructor, called at 0x611d17); asm pin:
@@ -100,7 +104,10 @@ Variant n_sctextobject_create(NativeCall& c, void* user) {
   const std::string text = string_arg(ctx, c, 4);  // ScFixedString::Init(p, npos) at 0x610cce
   ScTextObject* t = ctx.make<ScTextObject>(c.entry.ret_type, wf(c, 0), wf(c, 1), wf(c, 2), font, text);
   if (font) ctx.add_ref(font);  // inc [font+4] (0x610c92)
-  return ctx.create_variant(t);
+  const Variant v = ctx.create_variant(t);
+  const uint32_t pos[3] = {w(c, 0), w(c, 1), w(c, 2)};
+  hud_created_text(ctx, t->handle(), pos, font, text);  // M2a-3 T6a: Z text.pos/font/string (hud.md §9.2)
+  return v;
 }
 
 // body 0x43dad0, method 0x440460 <GcBigSprite::LoadHudSprite> -> 0x43f210 <GcBigSprite::GcBigSprite>; asm pin: 0x44048a
@@ -113,7 +120,10 @@ Variant n_gcbigsprite_loadhudsprite(NativeCall& c, void* user) {
   const std::string name = string_arg(ctx, c, 4);
   GcBigSprite* s = ctx.make<GcBigSprite>(c.entry.ret_type, wf(c, 0), wf(c, 1), wf(c, 2), wf(c, 3), name,
                                          static_cast<uint8_t>(w(c, 5)), static_cast<uint8_t>(w(c, 6)));
-  return ctx.create_variant(s);
+  const Variant v = ctx.create_variant(s);
+  const uint32_t rect[4] = {w(c, 0), w(c, 1), w(c, 2), w(c, 3)};
+  hud_created_sprite(ctx, s->handle(), rect, name, s->b5());  // M2a-3 T6a: Z sprite.rect/file/b6 (b6 = w5, hud.md §4.1)
+  return v;
 }
 
 // body 0x61a2e0, method 0x61a4d0 <ScSLOSISLKCubicSpline::ScSLOSISLKCubicSpline> (-> GetSLKFile 0x61a580, call 0x61a514);

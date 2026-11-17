@@ -481,6 +481,8 @@ def z_block(vm, ctx, camera_model: bool) -> list[str]:
             lines.append("Z camera.flags " + ("-" if fl == ["-", "-"] else " ".join(fl)))
             lines.append("Z camera.eye " + ("-" if st.eye is None else " ".join(_hexf(b) for b in st.eye)))
             lines.append("Z camera.target " + ("-" if st.target is None else " ".join(_hexf(b) for b in st.target)))
+        from . import hud
+        lines += hud.z_lines(vm, ctx)                                              # M2a-3 T6b
     return sorted(lines, key=lambda s: s.encode("ascii"))
 
 

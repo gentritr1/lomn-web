@@ -5,7 +5,6 @@
   ],
   "falsifier": "the tier-1 ScTextObject setters store raw f32 positions/scales and the LOW 16 bits of setjustification's int (hud.md 4.3, a word store at +0x2a), and Z prints never-written fields as '-' (hud.md 9.2)",
   "alternative": "the whole int stored: just 00010002; unwritten fields printed as zeros: Z text.font ... 0000:00000000 and Z text.juston ... 00",
-  "pending": "T4a/T4b/T6a/T6b",
   "entry": "main",
   "args": [],
   "frames": 1,

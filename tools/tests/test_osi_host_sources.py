@@ -840,17 +840,17 @@ def test_group_h_programs_pass_on_the_python_runner(name):
     assert run_h(name) == []
 
 
-def test_group_h_conform_summary_runs_three_and_leaves_h_z_hud_pending(capsys):
+def test_group_h_conform_summary_runs_all_four(capsys):
     assert osi_vm.conform(H_DIR) == 0
     out = capsys.readouterr().out.splitlines()
-    assert out == ["PENDING h-z-hud (T4a/T4b/T6a/T6b)", "conformance: 3/3 pass, 1 pending"]
+    assert out == ["conformance: 4/4 pass, 0 pending"]                       # h-z-hud active since M2a-3 T6
 
 
-def test_the_t4_marks_are_removed_and_h_z_hud_waits_for_t6():
-    """Merge of T4a+T4b: the three group-h programs run on both runners; h-z-hud keeps its mark until T6a/T6b."""
+def test_no_group_h_program_is_pending():
+    """T4 removed three marks, T6 the last one (h-z-hud)."""
     import conform_pending
-    assert [conform_pending.pending_task(H_DIR / (n + ".expect.json")) for n in H_RUNNABLE] == [None] * 3
-    assert conform_pending.pending_task(H_DIR / "h-z-hud.expect.json") == "T4a/T4b/T6a/T6b"
+    names = list(H_RUNNABLE) + ["h-z-hud"]
+    assert [conform_pending.pending_task(H_DIR / (n + ".expect.json")) for n in names] == [None] * 4
 
 
 def test_group_h_natives_log_order_of_one_frame():

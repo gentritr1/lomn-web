@@ -108,16 +108,13 @@ CITES = {
 # The on-path natives of these classes that stay typed stubs: their return never reaches a sink (osi_taint verdict
 # safe on the merged run) and they hold no engine reference on a game object.
 TIER2_KEYS = [
-    "gcbigsprite.enablealphachannel", "gcbigsprite.setcolor", "gcbigsprite.sethudposition", "gcbigsprite.setzdepth",
+    # gcbigsprite.*, gchuddirector.show/hide, sctextobject.*, sctilefont.* setters: tier1 since M2a-3 T6 (hud.py)
     "gc3dsound.synclistenertocamera", "gccharacter.disableallraycollisions", "gccharacter.initmotionsystem",
     "gccharacter.setbounce", "gccollisionphysicsgroup.settoaposition", "gcstatusscreen.hideinventory",
-    "gchuddirector.hide", "gchuddirector.show",
     # gclegocamera.setcampos / settargpos: tier1 since M2a-3 T4 (host_sources.py)
     "gclightdirector.setcavelighting", "gclightdirector.toggleconstantlights",
     "gcmodeldirector.setnearestmax",
     "gctoa.addmask", "gctoa.setcodelife", "gctoa.switchmask",
-    "sctextobject.enablejustification", "sctextobject.setjustification", "sctextobject.setscale", "sctextobject.setstring",
-    "sctilefont.setcolor",
 ]
 
 
@@ -564,7 +561,11 @@ def _byte(call, i: int) -> int:
 def _sctilefont_create(ctx, type_id):
     def fn(call):
         name = font_name(call.vm.heap.text(call.arg(0).value))                    # 0x626c24
-        return ctx.create_variant(ScTileFont(type_id, name), type_id)              # 0x611936 -> 0x611950
+        obj = ScTileFont(type_id, name)
+        v = ctx.create_variant(obj, type_id)                                       # 0x611936 -> 0x611950
+        from . import hud
+        hud.created_font(ctx, obj.handle, name)                                    # M2a-3 T6b: Z font.file
+        return v
     return fn
 
 
@@ -576,7 +577,10 @@ def _sctextobject_create(ctx, type_id):
         obj = ScTextObject(ctx, type_id, x, y, z, font, text)
         if font is not None:
             ctx.add_ref(font)                                                      # 0x610c92: inc [font+4]
-        return ctx.create_variant(obj, type_id)                                    # 0x611d21 -> 0x611d40
+        v = ctx.create_variant(obj, type_id)                                       # 0x611d21 -> 0x611d40
+        from . import hud
+        hud.created_text(ctx, call.vm, obj.handle, [call.arg(i).value for i in range(3)], font, text)   # M2a-3 T6b
+        return v
     return fn
 
 
@@ -591,7 +595,10 @@ def _loadhudsprite(ctx, type_id):
         finally:
             slots.current = saved                                                  # 0x4404be: restored (a freed pointer is never read)
         obj = GcBigSprite(type_id, rect, name, _byte(call, 5), _byte(call, 6), present)
-        return ctx.create_variant(obj, type_id)                                    # 0x43db16 -> 0x43da20
+        v = ctx.create_variant(obj, type_id)                                       # 0x43db16 -> 0x43da20
+        from . import hud
+        hud.created_sprite(ctx, obj.handle, [call.arg(i).value for i in range(4)], name, _byte(call, 5))   # M2a-3 T6b: b6 = w5
+        return v
     return fn
 
 

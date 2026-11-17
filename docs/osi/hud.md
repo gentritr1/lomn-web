@@ -644,6 +644,15 @@ The ctor defaults for +0xb0, +0xb1, +0xb2, +0xc8 and the colour were **not read*
 - **Result:** truncated (x87 RC chop 0x628ccd, `fistp qword`, low dword), not rounded.
 - `'\n'` returns early (0x628cc0), and 0xFF skips itself plus the next character (0x628c6c).
 
+### §4.10 Port rulings for Task 6 (2026-11-17, both engines; EXECUTED objdump unless marked)
+
+- **Show 0x47b320 / Hide 0x47b3e0.** The id is found in the item table 0x782458 by a linear search (0x47ba00 → 0x650640); a miss returns 0 (0x650673) and the caller then reads [0+0x10]: **Undefined**. The "already shown" test asks mainHud ([0x83a534]) vfunc +0x40 about the node's **held object** ([node+0x10], stored by the ScRenderNode ctor at 0x4ac784/0x4ac786), not the node. Show: held → nothing (0x47b36f), else push_back on the child vector +0x44 (0x47b3a6) and byte node+8 = 0xff (0x47b3c5). Hide: not held → nothing (0x47b42f), else the node itself is searched in the vector (0x47b46b–0x47b471) and erased if present (0x4197c0 at 0x47b4a7). The port's `order` is the index among the script's shown nodes (engine-own HUD nodes are not modelled, §3.1).
+- **SetFont 0x611f90.** The same font → nothing (0x611fa9). Otherwise +1 on the new font (0x611fb1, skipped for null), then −1 on the old one (0x611fbd, freed at 0 by vfunc +4 0x611fc8, skipped for null), then the store at +0x2c (0x611fce). No null test on `this`.
+- **Colours.** A sprite component is a byte, a font component an int (fild); the product with f32 0x3b808081 is exact in a double while |x| < 2^29, so one f32 rounding gives the stored value at pc24 and pc53. A font component with |x| ≥ 2^29 fails closed ("unmodelled: sctilefont.setcolor component beyond 2^29").
+- **Printing.** A null font (written or from the constructor) prints `text.font … -`; a HUD node holding a null object prints `Z hud.node <id> - - <order>`. Neither occurs on M1.
+- **Not modelled (no HUD effect, stay tier 2):** `gcareadirector.setfog`, `gclightdirector.setcavelighting`, `gclightdirector.toggleconstantlights`, `gcmodeldirector.setnearestmax` (§4.5).
+- **Missing files (§7) are not yet modelled:** `loadhudsprite` and `sctilefont.create` still succeed whatever the files. On the menu runs every file exists. Open item for Task 8, which loads the files.
+
 ## §5 Input tuples (EXECUTED unless marked)
 
 ### §5.1 Mouse: `GcMouseDriver::Process` 0x55c160
