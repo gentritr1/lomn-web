@@ -56,6 +56,14 @@ float wf(NativeCall& c, size_t i) {
   std::memcpy(&f, &b, 4);
   return f;
 }
+// M2a-3 T4a fix 1 (hud.md §1.5a): an f32 argument through `fld dword` / `fstp dword`, which quiets an SNaN (bit 22 set)
+float wf_quiet(NativeCall& c, size_t i) {
+  uint32_t b = w(c, i);
+  if ((b & 0x7f800000u) == 0x7f800000u && (b & 0x007fffffu) && !(b & 0x00400000u)) b |= 0x00400000u;
+  float f;
+  std::memcpy(&f, &b, 4);
+  return f;
+}
 // a `string` argument as the constructors copy it: ScFixedString::Init(p, npos) = the bytes up to the first NUL
 std::string string_arg(HostContext& ctx, NativeCall& c, size_t i) {
   if (i >= c.args.size() || c.args[i]->type != kString) throw VmError("Undefined: string argument expected");
@@ -407,7 +415,7 @@ Variant n_settargetspline(NativeCall& c, void* user) {
 // +0x174 and the dirty byte are not modelled (no reader). Returns nothing.
 Variant n_setcampos(NativeCall& c, void* user) {
   CameraState& cam = camera(host(user), c, "GcLegoCamera::SetCameraPosition (0x44e8e3)");
-  cam.eye = {wf(c, 1), wf(c, 2), wf(c, 3)};
+  cam.eye = {wf_quiet(c, 1), wf_quiet(c, 2), wf_quiet(c, 3)};
   cam.eye_set = true;
   return nothing();
 }
@@ -415,7 +423,7 @@ Variant n_setcampos(NativeCall& c, void* user) {
 // M2a-3 T4a. body 0x44e900 -> SetTargetPosition 0x405f00 (call 0x44e943): target +0x15c.. = (x, y, z) as f32.
 Variant n_settargpos(NativeCall& c, void* user) {
   CameraState& cam = camera(host(user), c, "GcLegoCamera::SetTargetPosition (0x44e943)");
-  cam.target = {wf(c, 1), wf(c, 2), wf(c, 3)};
+  cam.target = {wf_quiet(c, 1), wf_quiet(c, 2), wf_quiet(c, 3)};
   cam.target_set = true;
   return nothing();
 }
@@ -428,7 +436,11 @@ Variant n_addyaw(NativeCall& c, void* user) {
 }
 
 // M2a-3 T4a. body 0x618290 <ScSLOSIMath::Abs>: the CRT's fabs 0x657d46 (call 0x6182a8, `fabs` 0x657d4a) -> a float.
-Variant n_abs(NativeCall& c, void*) { return make_float(std::fabs(wf(c, 0))); }
+// A NaN result is stored as 0xffc00000 (D9, hud.md §1.5a; the original's fabs would give 7fc00000).
+Variant n_abs(NativeCall& c, void*) {
+  const float a = std::fabs(wf(c, 0));
+  return std::isnan(a) ? make_float_bits(kCanonicalNaN) : make_float(a);
+}
 
 // ---- the HUD ----
 
