@@ -272,7 +272,8 @@ osi-a9: native wasm $(VENV)/.ok
 # `backspace` (Decision 2) has no KEYSPEC key (keys.py models no such key-mapper site): left out. Legs per run: native and
 # wasm32 lomn_view (digest, natives.log, null-backend state log, stdout with the `hud box` lines); the Python oracle with
 # its own natives; the Python oracle replaying the native natives.log. cmp 1/4..4/4 on the D lines, then the Z lines
-# (native == wasm32 == Python own), the state logs native == wasm32, and the I2/F22 box checks. Controller-only (heavy).
+# (native == wasm32 == Python own), the state logs native == wasm32, and the I2/F22 box checks. T9: the independent HUD
+# oracle (hud_oracle.py) on the first shot frame, against a native log that keeps every frame up to it (dx gating). Controller-only (heavy).
 OSI_MENU := build/osi-menu
 OSI_M1 := 905|down@700 down@760|450,330@0 450,370@755|665,904
 OSI_M2 := 1761|esc@1580|450,330@0 450,370@665 lmb+@670 lmb-@672 rmb+@1700 rmb-@1702|1520
@@ -304,6 +305,12 @@ osi-menu: native wasm $(VENV)/.ok
 	  cmp $$d/native.state $$d/wasm.state && cmp $$d/native.summary $$d/wasm.summary && \
 	    echo "$$r A12 state log native == wasm32 ($$(wc -l < $$d/native.state) lines; stdout identical): OK"; \
 	  timeout 60 $(PY) tools/osi/menu_boxes.py $$r $$d/native.summary; \
+	  of=$${s%%,*}; timeout 300 build/native/lomn_view --install "$(LOMN_DATA)/install" --script 1 --natives real \
+	    --frames $$((of + 1)) --keys "$$k" --mouse "$$m" --state-log $$d/oracle.state --shot-frames $$(seq -s, 0 $$of) \
+	    > $$d/oracle.summary; \
+	  timeout 600 $(PY) tools/research/oracle/hud_oracle.py --osi "$(LOMN_DATA)/install/data/Base.osi" \
+	    --install "$(LOMN_DATA)/install" --frames $$((of + 1)) --keys "$$k" --mouse "$$m" --frame $$of \
+	    --state-log $$d/oracle.state --out $$d/oracle.hud --native-boxes $$d/native.summary --check | tail -3; \
 	done
 	@echo "summary (M1 native):"; tail -3 $(OSI_MENU)/M1/native.summary
 
